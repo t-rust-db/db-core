@@ -3,16 +3,6 @@
 //! (`db-storage#4`) so `column-rs` depends on a single crate instead of
 //! two separately-versioned ones.
 
-// column-rs/db-parquet-derived code predates the crate-wide lint bar (#9).
-// `unwrap`/`expect`/`panic` are held to it; these three are allowed at module
-// scope until #15 burns them down site by site.
-#![allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "column::* lint burn-down tracked in #15"
-)]
-
 #[cfg(feature = "vm-batch")]
 pub mod decode;
 pub mod memory;

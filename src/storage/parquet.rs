@@ -10,28 +10,10 @@
 // allowed per reader module (moved from `storage::column`, where they were
 // module-wide) until the burn-down lands. Per module, not here at the
 // top, so new modules in `parquet` (the writer, #566) get the full bar.
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod compression;
 pub mod decimal;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod encoding;
 pub mod footer;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod nested;
 pub mod page;
 pub mod parquet_file;

@@ -23942,7 +23942,7 @@
   {
     "id": "storage_column_decode_annotation_11872427",
     "file": "src/storage/column/decode.rs",
-    "line": 51,
+    "line": 52,
     "decision": "match (element.physical_type, element.converted_type) {\n        (_, Some(ConvertedType::Decimal)) => Annotation::Decimal,\n        (Some(PhysicalType::Int32), Some(ConvertedType::Uint32)) => Annotation::UInt32,\n        (Some(PhysicalType::Int64), Some(ConvertedType::Uint64)) => Annotation::UInt64,\n        (Some(PhysicalType::ByteArray), None) | (Some(PhysicalType::FixedLenByteArray), _) => {\n            Annotation::Bytes\n        }\n        _ => Annotation::Plain,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -23952,7 +23952,7 @@
   {
     "id": "storage_column_decode_decode_annotated_b7f5c375",
     "file": "src/storage/column/decode.rs",
-    "line": 69,
+    "line": 70,
     "decision": "match annotation(rg, index) {\n        Annotation::Plain => return Ok(None),\n        Annotation::UInt32 => int_column(\n            rg.read_int32_column(index)?\n                .into_iter()\n                .map(|v| v.map(|x| i64::from(x.cast_unsigned())))\n                .collect(),\n        ),\n        Annotation::UInt64 => int_column(\n            rg.read_int64_column(index)?\n                .into_iter()\n                .map(|v| match v {\n                    // A negative bit pattern is a value above i64::MAX.\n                    Some(x) if x < 0 => Err(FileError::UnsignedOutOfRange(x.cast_unsigned())),\n                    other => Ok(other),\n                })\n                .collect::<Result<_, _>>()?,\n        ),\n        Annotation::Decimal => float_column(\n            rg.read_decimal_column(index)?\n                .into_iter()\n                .map(|v| v.map(|d| d.to_f64()))\n                .collect(),\n        ),\n        Annotation::Bytes => {\n            let bytes = if physical_type == PhysicalType::FixedLenByteArray {\n                rg.read_fixed_len_byte_array_column(index)?\n            } else {\n                rg.read_binary_column(index)?\n            };\n            str_column(bytes.into_iter().map(|v| v.map(|b| hex(&b))).collect())\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -23962,7 +23962,7 @@
   {
     "id": "storage_column_decode_decode_annotated_aa4d2703",
     "file": "src/storage/column/decode.rs",
-    "line": 80,
+    "line": 81,
     "decision": "match v {\n                    // A negative bit pattern is a value above i64::MAX.\n                    Some(x) if x < 0 => Err(FileError::UnsignedOutOfRange(x.cast_unsigned())),\n                    other => Ok(other),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -23972,7 +23972,7 @@
   {
     "id": "storage_column_decode_decode_annotated_39925cb3",
     "file": "src/storage/column/decode.rs",
-    "line": 82,
+    "line": 83,
     "decision": "x < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -23982,7 +23982,7 @@
   {
     "id": "storage_column_decode_decode_annotated_0089b272",
     "file": "src/storage/column/decode.rs",
-    "line": 94,
+    "line": 95,
     "decision": "physical_type == PhysicalType::FixedLenByteArray",
     "conditions": 1,
     "vectors_required": 2,
@@ -23992,7 +23992,7 @@
   {
     "id": "storage_column_decode_decode_column_full_f0625abb",
     "file": "src/storage/column/decode.rs",
-    "line": 131,
+    "line": 134,
     "decision": "let Some(column) = decode_annotated(rg, index, physical_type)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -24002,7 +24002,7 @@
   {
     "id": "storage_column_decode_decode_column_full_b1139ad3",
     "file": "src/storage/column/decode.rs",
-    "line": 134,
+    "line": 137,
     "decision": "match physical_type {\n        PhysicalType::Int64 => match rg.read_plain_fixed_column(index, i64::from_le_bytes)? {\n            Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n            None => rg\n                .read_int64_column(index)\n                .map(|col| Decoded::Column(int_column(col))),\n        },\n        PhysicalType::Int32 => {\n            match rg.read_plain_fixed_column(index, |b| i64::from(i32::from_le_bytes(b)))? {\n                Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n                None => rg.read_int32_column(index).map(|col| {\n                    Decoded::Column(int_column(\n                        col.into_iter().map(|v| v.map(i64::from)).collect(),\n                    ))\n                }),\n            }\n        }\n        PhysicalType::Double => match rg.read_plain_fixed_column(index, f64::from_le_bytes)? {\n            Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n            None => rg\n                .read_double_column(index)\n                .map(|col| Decoded::Column(float_column(col))),\n        },\n        PhysicalType::Float => {\n            match rg.read_plain_fixed_column(index, |b| f64::from(f32::from_le_bytes(b)))? {\n                Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n                None => rg.read_float_column(index).map(|col| {\n                    Decoded::Column(float_column(\n                        col.into_iter().map(|v| v.map(f64::from)).collect(),\n                    ))\n                }),\n            }\n        }\n        PhysicalType::Boolean => rg\n            .read_boolean_column(index)\n            .map(|col| Decoded::Column(bool_column(col))),\n        // #457: a `PLAIN_DICTIONARY`-encoded string column materializes\n        // as `Column::Dict` (one dict entry per distinct value, one\n        // `u32` code per row) instead of decoding every row to its own\n        // owned `String` -- the dictionary case column-rs's\n        // `GroupReduce`/`Map` dict fast paths were already built to\n        // consume. A column with no dictionary page, or one that falls\n        // back to `PLAIN` partway through (`Ok(None)`), decodes into\n        // `Column::Str` directly instead (#461).\n        _ => rg.read_string_column_dictionary_indices(index).and_then(\n            |maybe_dict| match maybe_dict {\n                Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),\n                None => rg\n                    .read_string_column(index)\n                    .map(|col| Decoded::Column(str_column(col))),\n            },\n        ),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24012,7 +24012,7 @@
   {
     "id": "storage_column_decode_decode_column_full_34d9d092",
     "file": "src/storage/column/decode.rs",
-    "line": 135,
+    "line": 138,
     "decision": "match rg.read_plain_fixed_column(index, i64::from_le_bytes)? {\n            Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n            None => rg\n                .read_int64_column(index)\n                .map(|col| Decoded::Column(int_column(col))),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24022,7 +24022,7 @@
   {
     "id": "storage_column_decode_decode_column_full_5a53d10b",
     "file": "src/storage/column/decode.rs",
-    "line": 142,
+    "line": 145,
     "decision": "match rg.read_plain_fixed_column(index, |b| i64::from(i32::from_le_bytes(b)))? {\n                Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n                None => rg.read_int32_column(index).map(|col| {\n                    Decoded::Column(int_column(\n                        col.into_iter().map(|v| v.map(i64::from)).collect(),\n                    ))\n                }),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24032,7 +24032,7 @@
   {
     "id": "storage_column_decode_decode_column_full_d40fb919",
     "file": "src/storage/column/decode.rs",
-    "line": 151,
+    "line": 154,
     "decision": "match rg.read_plain_fixed_column(index, f64::from_le_bytes)? {\n            Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n            None => rg\n                .read_double_column(index)\n                .map(|col| Decoded::Column(float_column(col))),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24042,7 +24042,7 @@
   {
     "id": "storage_column_decode_decode_column_full_bce40493",
     "file": "src/storage/column/decode.rs",
-    "line": 158,
+    "line": 161,
     "decision": "match rg.read_plain_fixed_column(index, |b| f64::from(f32::from_le_bytes(b)))? {\n                Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n                None => rg.read_float_column(index).map(|col| {\n                    Decoded::Column(float_column(\n                        col.into_iter().map(|v| v.map(f64::from)).collect(),\n                    ))\n                }),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24052,7 +24052,7 @@
   {
     "id": "storage_column_decode_decode_column_full_8a479ab6",
     "file": "src/storage/column/decode.rs",
-    "line": 179,
+    "line": 182,
     "decision": "match maybe_dict {\n                Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),\n                None => rg\n                    .read_string_column(index)\n                    .map(|col| Decoded::Column(str_column(col))),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24062,7 +24062,7 @@
   {
     "id": "storage_column_decode_decode_column_at_f0625abb",
     "file": "src/storage/column/decode.rs",
-    "line": 208,
+    "line": 211,
     "decision": "let Some(column) = decode_annotated(rg, index, physical_type)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -24072,7 +24072,7 @@
   {
     "id": "storage_column_decode_decode_column_at_21fbbbc5",
     "file": "src/storage/column/decode.rs",
-    "line": 221,
+    "line": 224,
     "decision": "match physical_type {\n        PhysicalType::Int64 => {\n            match rg.read_plain_fixed_column_at(index, i64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n                None => rg\n                    .read_int64_column_at(index, positions)\n                    .map(|col| Decoded::Column(int_column(col))),\n            }\n        }\n        PhysicalType::Int32 => match rg.read_plain_fixed_column_at(\n            index,\n            |b| i64::from(i32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n            None => rg.read_int32_column_at(index, positions).map(|col| {\n                Decoded::Column(int_column(\n                    col.into_iter().map(|v| v.map(i64::from)).collect(),\n                ))\n            }),\n        },\n        PhysicalType::Double => {\n            match rg.read_plain_fixed_column_at(index, f64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n                None => rg\n                    .read_double_column_at(index, positions)\n                    .map(|col| Decoded::Column(float_column(col))),\n            }\n        }\n        PhysicalType::Float => match rg.read_plain_fixed_column_at(\n            index,\n            |b| f64::from(f32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n            None => rg.read_float_column_at(index, positions).map(|col| {\n                Decoded::Column(float_column(\n                    col.into_iter().map(|v| v.map(f64::from)).collect(),\n                ))\n            }),\n        },\n        PhysicalType::Boolean => rg\n            .read_boolean_column_at(index, positions)\n            .map(|col| Decoded::Column(bool_column(col))),\n        _ => rg\n            .read_string_column_at(index, positions)\n            .map(|col| Decoded::Column(str_column(col))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24082,7 +24082,7 @@
   {
     "id": "storage_column_decode_decode_column_at_65161c71",
     "file": "src/storage/column/decode.rs",
-    "line": 223,
+    "line": 226,
     "decision": "match rg.read_plain_fixed_column_at(index, i64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n                None => rg\n                    .read_int64_column_at(index, positions)\n                    .map(|col| Decoded::Column(int_column(col))),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24092,7 +24092,7 @@
   {
     "id": "storage_column_decode_decode_column_at_3cbbc943",
     "file": "src/storage/column/decode.rs",
-    "line": 230,
+    "line": 233,
     "decision": "match rg.read_plain_fixed_column_at(\n            index,\n            |b| i64::from(i32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_int(typed))),\n            None => rg.read_int32_column_at(index, positions).map(|col| {\n                Decoded::Column(int_column(\n                    col.into_iter().map(|v| v.map(i64::from)).collect(),\n                ))\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24102,7 +24102,7 @@
   {
     "id": "storage_column_decode_decode_column_at_3a678b08",
     "file": "src/storage/column/decode.rs",
-    "line": 243,
+    "line": 246,
     "decision": "match rg.read_plain_fixed_column_at(index, f64::from_le_bytes, positions)? {\n                Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n                None => rg\n                    .read_double_column_at(index, positions)\n                    .map(|col| Decoded::Column(float_column(col))),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24112,7 +24112,7 @@
   {
     "id": "storage_column_decode_decode_column_at_fdc76108",
     "file": "src/storage/column/decode.rs",
-    "line": 250,
+    "line": 253,
     "decision": "match rg.read_plain_fixed_column_at(\n            index,\n            |b| f64::from(f32::from_le_bytes(b)),\n            positions,\n        )? {\n            Some(typed) => Ok(Decoded::Column(typed_float(typed))),\n            None => rg.read_float_column_at(index, positions).map(|col| {\n                Decoded::Column(float_column(\n                    col.into_iter().map(|v| v.map(f64::from)).collect(),\n                ))\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24122,7 +24122,7 @@
   {
     "id": "storage_column_decode_validity_9c9d171f",
     "file": "src/storage/column/decode.rs",
-    "line": 291,
+    "line": 294,
     "decision": "present.is_empty() || present.iter().all(|&p| p)",
     "conditions": 2,
     "vectors_required": 3,
@@ -24132,7 +24132,7 @@
   {
     "id": "storage_column_decode_dict_column_carries_codes_through_unchanged_adc30411",
     "file": "src/storage/column/decode.rs",
-    "line": 366,
+    "line": 369,
     "decision": "match column {\n            Column::Dict {\n                dict,\n                indices,\n                valid,\n            } => {\n                assert_eq!(\n                    dict.iter().map(AsRef::as_ref).collect::<Vec<_>>(),\n                    [\"east\", \"west\"]\n                );\n                assert_eq!(indices, vec![0, 1, 0]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24142,7 +24142,7 @@
   {
     "id": "storage_column_decode_dict_column_defaults_a_null_rows_code_to_zero_but_marks_it_invalid_7147f221",
     "file": "src/storage/column/decode.rs",
-    "line": 391,
+    "line": 394,
     "decision": "match &column {\n            Column::Dict { indices, valid, .. } => {\n                assert_eq!(*indices, vec![0, 0, 0]);\n                assert!(valid.get(0));\n                assert!(!valid.get(1));\n                assert!(valid.get(2));\n            }\n            other => panic!(\"expected Column::Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24152,7 +24152,7 @@
   {
     "id": "storage_column_decode_write_varint_2427714d",
     "file": "src/storage/column/decode.rs",
-    "line": 541,
+    "line": 544,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -24162,7 +24162,7 @@
   {
     "id": "storage_column_decode_write_varint_a5b1bbc4",
     "file": "src/storage/column/decode.rs",
-    "line": 545,
+    "line": 548,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -24172,7 +24172,7 @@
   {
     "id": "storage_column_decode_list_of_structs_field_b09c4ad2",
     "file": "src/storage/column/decode.rs",
-    "line": 579,
+    "line": 582,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -24182,7 +24182,7 @@
   {
     "id": "storage_column_decode_decode_column_full_widens_int32_to_column_int_ef0f624c",
     "file": "src/storage/column/decode.rs",
-    "line": 690,
+    "line": 693,
     "decision": "match column {\n            Column::Int { data, valid } => {\n                assert_eq!(data, vec![1, -2, 3]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Int, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24192,7 +24192,7 @@
   {
     "id": "storage_column_decode_decode_column_full_widens_float_to_column_float_ef9139a1",
     "file": "src/storage/column/decode.rs",
-    "line": 712,
+    "line": 715,
     "decision": "match column {\n            Column::Float { data, valid } => {\n                assert_eq!(data, vec![1.5, -2.5]);\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Float, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24202,7 +24202,7 @@
   {
     "id": "storage_column_decode_decode_column_full_decodes_boolean_to_column_bool_b34c7ab6",
     "file": "src/storage/column/decode.rs",
-    "line": 728,
+    "line": 731,
     "decision": "*v",
     "conditions": 1,
     "vectors_required": 2,
@@ -24212,7 +24212,7 @@
   {
     "id": "storage_column_decode_decode_column_full_decodes_boolean_to_column_bool_186e79d1",
     "file": "src/storage/column/decode.rs",
-    "line": 737,
+    "line": 740,
     "decision": "match column {\n            Column::Bool { data, valid } => {\n                assert_eq!(data, values.to_vec());\n                assert!(valid.all_valid());\n            }\n            other => panic!(\"expected Column::Bool, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24222,7 +24222,7 @@
   {
     "id": "storage_column_decode_decode_column_at_int32_and_boolean_match_the_eager_path_at_selected_positions_b34c7ab6",
     "file": "src/storage/column/decode.rs",
-    "line": 769,
+    "line": 772,
     "decision": "*v",
     "conditions": 1,
     "vectors_required": 2,
@@ -24230,10 +24230,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_column_memory_read_at_01549923",
+    "id": "storage_column_memory_read_at_d58dd1b3",
     "file": "src/storage/column/memory.rs",
-    "line": 61,
-    "decision": "offset >= self.contents.len()",
+    "line": 67,
+    "decision": "let (Some(to), Some(from)) = (buf.get_mut(..n), available.get(..n))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -24242,7 +24242,7 @@
   {
     "id": "storage_column_vfs_deref_7821174a",
     "file": "src/storage/column/vfs.rs",
-    "line": 43,
+    "line": 50,
     "decision": "match self {\n            MmapRegion::Mapped(m) => m,\n            MmapRegion::Owned(b) => b,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26952,7 +26952,7 @@
   {
     "id": "storage_parquet_compression_fmt_6f8b144c",
     "file": "src/storage/parquet/compression.rs",
-    "line": 25,
+    "line": 31,
     "decision": "match self {\n            CompressionError::UnsupportedCodec(c) => {\n                write!(f, \"unsupported compression codec: {c}\")\n            }\n            CompressionError::Snappy(e) => write!(f, \"{e}\"),\n            CompressionError::Zstd(e) => write!(f, \"{e}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26960,19 +26960,129 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_decompress_03e6330a",
+    "id": "storage_parquet_compression_decompress_63baa9d9",
     "file": "src/storage/parquet/compression.rs",
-    "line": 59,
-    "decision": "match codec {\n        Codec::Uncompressed => Ok(Cow::Borrowed(compressed)),\n        Codec::Snappy => Ok(Cow::Owned(snappy::decompress(\n            compressed,\n            uncompressed_size,\n        )?)),\n        Codec::Zstd => Ok(Cow::Owned(zstd::decompress(compressed, uncompressed_size)?)),\n        Codec::Other(c) => Err(CompressionError::UnsupportedCodec(c)),\n    }",
+    "line": 66,
+    "decision": "match codec {\n        Codec::Uncompressed => Ok(Cow::Borrowed(compressed)),\n        Codec::Snappy => Ok(Cow::Owned(snappy::decompress(compressed)?)),\n        Codec::Zstd => Ok(Cow::Owned(zstd::decompress(compressed, uncompressed_size)?)),\n        Codec::Other(c) => Err(CompressionError::UnsupportedCodec(c)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_compression_decoder_fuzz_mutate_fd589b37",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 51,
+    "decision": "match rng.below(5) {\n        0 => v.truncate(rng.below(v.len() + 1)),\n        1 => {\n            for _ in 0..=rng.below(4) {\n                if !v.is_empty() {\n                    let i = rng.below(v.len());\n                    v[i] ^= 1 << rng.below(8);\n                }\n            }\n        }\n        2 => {\n            for _ in 0..=rng.below(4) {\n                if !v.is_empty() {\n                    let i = rng.below(v.len());\n                    v[i] = rng.next() as u8;\n                }\n            }\n        }\n        3 => {\n            let i = rng.below(v.len() + 1);\n            let n = 1 + rng.below(8);\n            v.splice(i..i, std::iter::repeat_n(0xff, n));\n        }\n        _ => {\n            // A maximal 5-byte varint: a ~34-bit length or count.\n            let i = rng.below(v.len() + 1);\n            v.splice(i..i, [0xff, 0xff, 0xff, 0xff, 0x0f]);\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_mutate_1e80eea2",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 55,
+    "decision": "!v.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_mutate_1e80eea2_2",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 63,
+    "decision": "!v.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_fuzz_b0796238",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 93,
+    "decision": "catch_unwind(AssertUnwindSafe(|| decode(&input))).is_err()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_pages_of_f72a7bdc",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 123,
+    "decision": "pos < end",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_level_seeds_5eac4fc2",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 228,
+    "decision": "!page.optional",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_level_seeds_aff0ceca",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 237,
+    "decision": "matches!(\n            header.encoding,\n            Encoding::PlainDictionary | Encoding::RleDictionary\n        )",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_mutated_dictionary_indices_never_panic_9738890e",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 296,
+    "decision": "let Some((&width, stream)) = input.split_first()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_varint_364d7716",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 307,
+    "decision": "v >= 0x80",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_delta_encode_43a60d5c",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 342,
+    "decision": "bits >= 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_decoder_fuzz_delta_encode_3963ca8b",
+    "file": "src/storage/parquet/compression/decoder_fuzz.rs",
+    "line": 348,
+    "decision": "bits > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_compression_snappy_fmt_8a23f45b",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 23,
+    "line": 34,
     "decision": "match self {\n            SnappyError::UnexpectedEof => write!(f, \"unexpected end of snappy input\"),\n            SnappyError::InvalidVarint => write!(f, \"invalid snappy varint\"),\n            SnappyError::InvalidLength(n) => write!(f, \"declared snappy length out of range: {n}\"),\n            SnappyError::InvalidCopyOffset => write!(\n                f,\n                \"snappy copy references data before the start of the buffer\"\n            ),\n            SnappyError::SizeMismatch { expected, actual } => {\n                write!(\n                    f,\n                    \"snappy decompressed size mismatch: expected {expected}, got {actual}\"\n                )\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26982,7 +27092,7 @@
   {
     "id": "storage_parquet_compression_snappy_read_varint_a63ed6f6",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 51,
+    "line": 63,
     "decision": "shift >= 35",
     "conditions": 1,
     "vectors_required": 2,
@@ -26992,7 +27102,7 @@
   {
     "id": "storage_parquet_compression_snappy_read_varint_49382c19",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 57,
+    "line": 69,
     "decision": "byte & 0x80 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27000,49 +27110,39 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_snappy_decompress_e9e7694b",
+    "id": "storage_parquet_compression_snappy_decompress_1f2f22e3",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 96,
-    "decision": "pos < data.len()",
+    "line": 112,
+    "decision": "let Some((&tag, tail)) = rest.split_first()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_snappy_decompress_880a9bd7",
+    "id": "storage_parquet_compression_snappy_decompress_f3a7a65d",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 99,
-    "decision": "match tag & 0x03 {\n            0 => {\n                // Literal: length encoded in the tag's upper 6 bits, or\n                // in 1-4 following little-endian bytes when that field\n                // is >= 60 (tag value 60+n means \"length follows in the\n                // next n+1 bytes\").\n                let len_tag = (tag >> 2) as usize;\n                let len = if len_tag < 60 {\n                    len_tag + 1\n                } else {\n                    let extra_bytes = len_tag - 59;\n                    let mut len = 0usize;\n                    for i in 0..extra_bytes {\n                        let b = *data.get(pos + i).ok_or(SnappyError::UnexpectedEof)?;\n                        len |= (b as usize) << (8 * i);\n                    }\n                    pos += extra_bytes;\n                    len + 1\n                };\n                if len <= WIDE && pos + WIDE <= data.len() && dst + WIDE <= out.len() {\n                    let wide: [u8; WIDE] = data[pos..pos + WIDE]\n                        .try_into()\n                        .map_err(|_| SnappyError::UnexpectedEof)?;\n                    out[dst..dst + WIDE].copy_from_slice(&wide);\n                } else {\n                    let bytes = data.get(pos..pos + len).ok_or(SnappyError::UnexpectedEof)?;\n                    out.get_mut(dst..dst + len)\n                        .ok_or(SnappyError::SizeMismatch {\n                            expected: declared_len,\n                            actual: dst + len,\n                        })?\n                        .copy_from_slice(bytes);\n                }\n                dst += len;\n                pos += len;\n                continue;\n            }\n            1 => {\n                // Copy with 1-byte offset: length in bits 2-4 (+4), offset\n                // is 3 bits from the tag (top) plus 1 following byte.\n                let len = ((tag >> 2) & 0x07) as usize + 4;\n                let offset_hi = ((tag >> 5) & 0x07) as usize;\n                let offset_lo = *data.get(pos).ok_or(SnappyError::UnexpectedEof)? as usize;\n                pos += 1;\n                (len, (offset_hi << 8) | offset_lo)\n            }\n            2 => {\n                // Copy with 2-byte little-endian offset, length in the\n                // tag's upper 6 bits (+1).\n                let len = (tag >> 2) as usize + 1;\n                let lo = *data.get(pos).ok_or(SnappyError::UnexpectedEof)? as usize;\n                let hi = *data.get(pos + 1).ok_or(SnappyError::UnexpectedEof)? as usize;\n                pos += 2;\n                (len, lo | (hi << 8))\n            }\n            _ => {\n                // Copy with 4-byte little-endian offset (tag & 0x03 == 3).\n                let len = (tag >> 2) as usize + 1;\n                let bytes: [u8; 4] = data\n                    .get(pos..pos + 4)\n                    .and_then(|b| b.try_into().ok())\n                    .ok_or(SnappyError::UnexpectedEof)?;\n                pos += 4;\n                (len, u32::from_le_bytes(bytes) as usize)\n            }\n        }",
+    "line": 116,
+    "decision": "match tag & 0x03 {\n            0 => {\n                let len = literal_len(tag, &mut rest)?;\n                if len <= WIDE && copy_wide(&mut out, dst, rest) {\n                    // `copy_wide` found at least `WIDE >= len` bytes both\n                    // in `rest` and in `out[dst..]`: neither step can fail.\n                    rest = rest.get(len..).unwrap_or_default();\n                    dst = dst.saturating_add(len);\n                    continue;\n                }\n                let (bytes, tail) = rest\n                    .split_at_checked(len)\n                    .ok_or(SnappyError::UnexpectedEof)?;\n                let end = advance(dst, len, declared_len)?;\n                out.get_mut(dst..end)\n                    .ok_or(SnappyError::SizeMismatch {\n                        expected: declared_len,\n                        actual: end,\n                    })?\n                    .copy_from_slice(bytes);\n                rest = tail;\n                dst = end;\n                continue;\n            }\n            1 => {\n                // Copy with 1-byte offset: length in bits 2-4 (+4), offset\n                // is 3 bits from the tag (top) plus 1 following byte.\n                let (&lo, tail) = rest.split_first().ok_or(SnappyError::UnexpectedEof)?;\n                rest = tail;\n                let len = usize::from((tag >> 2) & 0x07).saturating_add(4);\n                (len, (usize::from(tag >> 5) << 8) | usize::from(lo))\n            }\n            2 => {\n                // Copy with 2-byte little-endian offset, length in the\n                // tag's upper 6 bits (+1).\n                let (bytes, tail) = rest\n                    .split_first_chunk::<2>()\n                    .ok_or(SnappyError::UnexpectedEof)?;\n                rest = tail;\n                let len = usize::from(tag >> 2).saturating_add(1);\n                (len, usize::from(u16::from_le_bytes(*bytes)))\n            }\n            _ => {\n                // Copy with 4-byte little-endian offset (tag & 0x03 == 3).\n                let (bytes, tail) = rest\n                    .split_first_chunk::<4>()\n                    .ok_or(SnappyError::UnexpectedEof)?;\n                rest = tail;\n                let len = usize::from(tag >> 2).saturating_add(1);\n                let offset = usize::try_from(u32::from_le_bytes(*bytes))\n                    .map_err(|_| SnappyError::InvalidCopyOffset)?;\n                (len, offset)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "storage_parquet_compression_snappy_decompress_ec09ad8a",
+    "id": "storage_parquet_compression_snappy_decompress_5a62d17b",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 106,
-    "decision": "len_tag < 60",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_parquet_compression_snappy_decompress_116ba85b",
-    "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 118,
-    "decision": "len <= WIDE && pos + WIDE <= data.len() && dst + WIDE <= out.len()",
-    "conditions": 3,
-    "vectors_required": 4,
+    "line": 119,
+    "decision": "len <= WIDE && copy_wide(&mut out, dst, rest)",
+    "conditions": 2,
+    "vectors_required": 3,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "storage_parquet_compression_snappy_decompress_d541d5eb",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 165,
+    "line": 170,
     "decision": "offset == 0 || offset > dst",
     "conditions": 2,
     "vectors_required": 3,
@@ -27050,10 +27150,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_snappy_decompress_8a5f3137",
+    "id": "storage_parquet_compression_snappy_decompress_0bc0cf35",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 169,
-    "decision": "len <= WIDE && offset >= len && dst + WIDE <= out.len()",
+    "line": 178,
+    "decision": "len <= WIDE && offset >= len && copy_wide_within(&mut out, src, dst)",
     "conditions": 3,
     "vectors_required": 4,
     "compiler_void": false,
@@ -27062,7 +27162,7 @@
   {
     "id": "storage_parquet_compression_snappy_decompress_9292eb07",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 183,
+    "line": 187,
     "decision": "dst != declared_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -27070,9 +27170,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_snappy_copy_from_offset_d541d5eb",
+    "id": "storage_parquet_compression_snappy_literal_len_754ab721",
     "file": "src/storage/parquet/compression/snappy.rs",
     "line": 203,
+    "decision": "match len_tag {\n        // At most 59 + 1: cannot saturate.\n        0..=59 => return Ok(usize::from(len_tag).saturating_add(1)),\n        60 => 1,\n        61 => 2,\n        62 => 3,\n        _ => 4,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_compression_snappy_copy_wide_94d247b0",
+    "file": "src/storage/parquet/compression/snappy.rs",
+    "line": 239,
+    "decision": "match (\n        src.first_chunk::<WIDE>(),\n        out.get_mut(dst..).and_then(<[u8]>::first_chunk_mut::<WIDE>),\n    ) {\n        (Some(from), Some(to)) => {\n            *to = *from;\n            true\n        }\n        _ => false,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_compression_snappy_copy_from_offset_d541d5eb",
+    "file": "src/storage/parquet/compression/snappy.rs",
+    "line": 273,
     "decision": "offset == 0 || offset > dst",
     "conditions": 2,
     "vectors_required": 3,
@@ -27080,30 +27200,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_snappy_copy_from_offset_be9ec9a7",
+    "id": "storage_parquet_compression_snappy_copy_from_offset_fb57b23f",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 207,
-    "decision": "end > out.len()",
+    "line": 289,
+    "decision": "let (Some(to), Some(from)) = (target.get_mut(..first), pattern.get(..first))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_snappy_copy_from_offset_e8a3b1ad",
+    "id": "storage_parquet_compression_snappy_copy_from_offset_c85cb358",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 214,
-    "decision": "offset >= len",
+    "line": 293,
+    "decision": "filled < len",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_snappy_copy_from_offset_9eca99f6",
+    "id": "storage_parquet_compression_snappy_a_block_of_maximal_copies_is_within_the_expansion_bound_364d7716",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 219,
-    "decision": "done < len",
+    "line": 472,
+    "decision": "v >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -27112,7 +27232,7 @@
   {
     "id": "storage_parquet_compression_zstd_fmt_416a6666",
     "file": "src/storage/parquet/compression/zstd.rs",
-    "line": 20,
+    "line": 29,
     "decision": "match self {\n            ZstdError::Frame(e) => write!(f, \"zstd frame error: {e}\"),\n            ZstdError::Read(e) => write!(f, \"zstd read error: {e}\"),\n            ZstdError::SizeMismatch { expected, actual } => {\n                write!(\n                    f,\n                    \"zstd decompressed size mismatch: expected {expected}, got {actual}\"\n                )\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27122,7 +27242,7 @@
   {
     "id": "storage_parquet_compression_zstd_decompress_9e26cd96",
     "file": "src/storage/parquet/compression/zstd.rs",
-    "line": 48,
+    "line": 66,
     "decision": "out.len() != uncompressed_size",
     "conditions": 1,
     "vectors_required": 2,
@@ -27180,19 +27300,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_encoding_fmt_dc3b2820",
+    "id": "storage_parquet_encoding_fmt_8831892b",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 17,
-    "decision": "match self {\n            EncodingError::UnexpectedEof => write!(f, \"unexpected end of input\"),\n            EncodingError::InvalidVarint => write!(f, \"varint too long\"),\n            EncodingError::InvalidLength(n) => write!(f, \"length out of range: {n}\"),\n        }",
+    "line": 25,
+    "decision": "match self {\n            EncodingError::UnexpectedEof => write!(f, \"unexpected end of input\"),\n            EncodingError::InvalidVarint => write!(f, \"varint too long\"),\n            EncodingError::InvalidLength(n) => write!(f, \"length out of range: {n}\"),\n            EncodingError::InvalidBitWidth(w) => write!(f, \"bit width out of range: {w}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_encoding_bounded_3fce5cb8",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 58,
+    "decision": "v > max",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_encoding_read_unsigned_varint_a627ad9d",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 55,
+    "line": 93,
     "decision": "shift >= 70",
     "conditions": 1,
     "vectors_required": 2,
@@ -27202,8 +27332,58 @@
   {
     "id": "storage_parquet_encoding_read_unsigned_varint_4f87fce9",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 61,
+    "line": 99,
     "decision": "b & 0x80 == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_encoding_unpack_bits_f8b860b4",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 120,
+    "decision": "!(1..=64).contains(&bit_width)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_encoding_unpack_bits_9981b3be",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 124,
+    "decision": "bit_width <= 56",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_encoding_unpack_bits_c8807761",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 131,
+    "decision": "bits >= bit_width",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_encoding_unpack_bits_c8807761_2",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 143,
+    "decision": "bits >= bit_width",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_encoding_decode_hybrid_rle_bitpacked_26ec5816",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 179,
+    "decision": "bit_width > 32",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -27212,7 +27392,7 @@
   {
     "id": "storage_parquet_encoding_decode_hybrid_rle_bitpacked_6249d37f",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 81,
+    "line": 183,
     "decision": "bit_width == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27222,7 +27402,7 @@
   {
     "id": "storage_parquet_encoding_decode_hybrid_rle_bitpacked_09504eb8",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 87,
+    "line": 190,
     "decision": "out.len() < num_values",
     "conditions": 1,
     "vectors_required": 2,
@@ -27230,30 +27410,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_encoding_decode_hybrid_rle_bitpacked_71346e02",
+    "id": "storage_parquet_encoding_decode_hybrid_rle_bitpacked_c081fc50",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 92,
-    "decision": "is_bit_packed",
+    "line": 195,
+    "decision": "header & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_encoding_decode_hybrid_rle_bitpacked_48ba63cd",
+    "id": "storage_parquet_encoding_decode_hybrid_rle_bitpacked_e631f4dc",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 104,
-    "decision": "out.len() >= num_values",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_parquet_encoding_unpack_bit_packed_6249d37f",
-    "file": "src/storage/parquet/encoding.rs",
-    "line": 147,
-    "decision": "bit_width == 0",
+    "line": 209,
+    "decision": "width <= 8",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -27262,7 +27432,7 @@
   {
     "id": "storage_parquet_encoding_decode_delta_binary_packed_c16e83b7",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 187,
+    "line": 272,
     "decision": "total_count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27272,7 +27442,7 @@
   {
     "id": "storage_parquet_encoding_decode_delta_binary_packed_cba90171",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 194,
+    "line": 280,
     "decision": "out.len() < total_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -27282,7 +27452,7 @@
   {
     "id": "storage_parquet_encoding_decode_delta_binary_packed_e3e20ddd",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 202,
+    "line": 287,
     "decision": "out.len() >= total_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -27290,10 +27460,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_encoding_decode_delta_binary_packed_e3e20ddd_2",
+    "id": "storage_parquet_encoding_decode_delta_binary_packed_26aeb291",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 208,
-    "decision": "out.len() >= total_count",
+    "line": 291,
+    "decision": "bit_width > 64",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_encoding_decode_delta_binary_packed_6249d37f",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 305,
+    "decision": "bit_width == 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -27302,7 +27482,7 @@
   {
     "id": "storage_parquet_encoding_write_varint_2427714d",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 256,
+    "line": 359,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27312,7 +27492,7 @@
   {
     "id": "storage_parquet_encoding_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 260,
+    "line": 363,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27322,7 +27502,7 @@
   {
     "id": "storage_parquet_encoding_pack_bits_6249d37f",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 354,
+    "line": 457,
     "decision": "bit_width == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27332,8 +27512,28 @@
   {
     "id": "storage_parquet_encoding_pack_bits_9466a82b",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 361,
+    "line": 464,
     "decision": "(value >> bit) & 1 == 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_encoding_a_bit_packed_run_whose_byte_size_overflows_is_invalid_length_43333d26",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 563,
+    "decision": "header >= 0x80",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_encoding_varints_364d7716",
+    "file": "src/storage/parquet/encoding.rs",
+    "line": 620,
+    "decision": "v >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -27510,10 +27710,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_nested_fmt_ead95a0a",
+    "id": "storage_parquet_nested_fmt_42717db7",
     "file": "src/storage/parquet/nested.rs",
-    "line": 43,
-    "decision": "match self {\n            NestedError::MissingLeafData(path) => {\n                write!(f, \"no decoded data for leaf column '{path}'\")\n            }\n            NestedError::UnsupportedListElement(path) => write!(\n                f,\n                \"list element at '{path}' is not a supported shape (scalar or flat struct)\"\n            ),\n            NestedError::UnsupportedMapShape(path) => write!(\n                f,\n                \"MAP at '{path}' does not have the expected key_value(key, value) shape\"\n            ),\n        }",
+    "line": 58,
+    "decision": "match self {\n            NestedError::MissingLeafData(path) => {\n                write!(f, \"no decoded data for leaf column '{path}'\")\n            }\n            NestedError::UnsupportedListElement(path) => write!(\n                f,\n                \"list element at '{path}' is not a supported shape (scalar or flat struct)\"\n            ),\n            NestedError::UnsupportedMapShape(path) => write!(\n                f,\n                \"MAP at '{path}' does not have the expected key_value(key, value) shape\"\n            ),\n            NestedError::TruncatedLeafData(path) => write!(\n                f,\n                \"leaf data under '{path}' has fewer levels or values than its rows\"\n            ),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -27522,7 +27722,7 @@
   {
     "id": "storage_parquet_nested_build_field_12c7f8f3",
     "file": "src/storage/parquet/nested.rs",
-    "line": 91,
+    "line": 111,
     "decision": "node.is_leaf()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27532,7 +27732,7 @@
   {
     "id": "storage_parquet_nested_build_field_3600ea7f",
     "file": "src/storage/parquet/nested.rs",
-    "line": 102,
+    "line": 122,
     "decision": "node.element.repetition == Some(crate::storage::parquet::footer::Repetition::Repeated)",
     "conditions": 1,
     "vectors_required": 2,
@@ -27542,7 +27742,7 @@
   {
     "id": "storage_parquet_nested_build_field_d8bd99ee",
     "file": "src/storage/parquet/nested.rs",
-    "line": 109,
+    "line": 129,
     "decision": "is_map(node)",
     "conditions": 1,
     "vectors_required": 2,
@@ -27550,49 +27750,49 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_nested_build_field_efa6f575",
+    "id": "storage_parquet_nested_build_field_36f864d7",
     "file": "src/storage/parquet/nested.rs",
-    "line": 112,
-    "decision": "node.children.len() == 1\n        && node.children[0].element.repetition\n            == Some(crate::storage::parquet::footer::Repetition::Repeated)",
+    "line": 132,
+    "decision": "node.children.len() == 1\n        && node.children.first().is_some_and(|child| {\n            child.element.repetition == Some(crate::storage::parquet::footer::Repetition::Repeated)\n        })",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_nested_build_field_28b91425",
+    "id": "storage_parquet_nested_build_field_8eeb7225",
     "file": "src/storage/parquet/nested.rs",
-    "line": 138,
-    "decision": "driver.def_levels[row] < node.max_def_level",
+    "line": 160,
+    "decision": "driver.def_levels.len() < num_rows",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_nested_first_leaf_path_12c7f8f3",
+    "id": "storage_parquet_nested_build_field_98f57d4f",
     "file": "src/storage/parquet/nested.rs",
-    "line": 152,
-    "decision": "node.is_leaf()",
+    "line": 165,
+    "decision": "def < node.max_def_level",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_nested_build_map_field_e5e1ae67",
+    "id": "storage_parquet_nested_first_leaf_path_b6b8e582",
     "file": "src/storage/parquet/nested.rs",
-    "line": 171,
-    "decision": "key_value.children.len() != 2",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
+    "line": 182,
+    "decision": "match node.children.first() {\n        None => path.to_string(),\n        Some(child) => first_leaf_path(child, &format!(\"{path}.{}\", child.name)),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {
     "id": "storage_parquet_nested_build_map_field_dd34e07a",
     "file": "src/storage/parquet/nested.rs",
-    "line": 176,
+    "line": 205,
     "decision": "!key_node.is_leaf() || !value_node.is_leaf()",
     "conditions": 2,
     "vectors_required": 3,
@@ -27600,19 +27800,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_nested_build_list_field_4a2a7ef6",
-    "file": "src/storage/parquet/nested.rs",
-    "line": 222,
-    "decision": "repeated.is_leaf()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "storage_parquet_nested_build_list_field_a18558ef",
     "file": "src/storage/parquet/nested.rs",
-    "line": 227,
+    "line": 248,
     "decision": "!element.is_leaf()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27620,9 +27810,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_nested_build_list_field_4a2a7ef6_2",
+    "id": "storage_parquet_nested_build_list_field_4a2a7ef6",
     "file": "src/storage/parquet/nested.rs",
-    "line": 230,
+    "line": 251,
     "decision": "repeated.is_leaf()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27632,7 +27822,7 @@
   {
     "id": "storage_parquet_nested_build_repeated_d6786966",
     "file": "src/storage/parquet/nested.rs",
-    "line": 272,
+    "line": 302,
     "decision": "d < wrapper_def",
     "conditions": 1,
     "vectors_required": 2,
@@ -27642,7 +27832,7 @@
   {
     "id": "storage_parquet_nested_build_repeated_859c2c3a",
     "file": "src/storage/parquet/nested.rs",
-    "line": 275,
+    "line": 305,
     "decision": "d < repeated_def",
     "conditions": 1,
     "vectors_required": 2,
@@ -27650,10 +27840,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_nested_build_repeated_f1168f62",
+    "id": "storage_parquet_nested_build_repeated_f001886e",
     "file": "src/storage/parquet/nested.rs",
-    "line": 283,
-    "decision": "i >= rep_levels.len() || rep_levels[i] == 0",
+    "line": 313,
+    "decision": "i >= rep_levels.len() || rep_levels.get(i) == Some(&0)",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,

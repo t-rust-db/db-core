@@ -3,6 +3,8 @@
 //! crate (see `zstd.rs` for why ZSTD isn't hand-rolled too).
 //! `Codec::Uncompressed` is a zero-copy passthrough.
 
+#[cfg(test)]
+mod decoder_fuzz;
 mod snappy;
 mod zstd;
 
@@ -13,10 +15,14 @@ use crate::storage::parquet::footer::Codec;
 use std::borrow::Cow;
 use std::fmt;
 
+/// Why a page body could not be decompressed.
 #[derive(Debug)]
 pub enum CompressionError {
+    /// A codec this reader does not implement (the raw Thrift codec id).
     UnsupportedCodec(i32),
+    /// A malformed Snappy block.
     Snappy(SnappyError),
+    /// A malformed or wrongly-sized ZSTD frame.
     Zstd(ZstdError),
 }
 
@@ -46,11 +52,12 @@ impl From<ZstdError> for CompressionError {
     }
 }
 
+/// Result alias for page decompression.
 pub type Result<T> = std::result::Result<T, CompressionError>;
 
 /// Decompress one page body. `uncompressed_size` is the page header's
-/// declared uncompressed size, used to size the output buffer and validated
-/// against the actual decompressed length.
+/// declared uncompressed size: ZSTD output is validated against it, while a
+/// Snappy block carries (and is validated against) its own length preamble.
 pub fn decompress<'a>(
     codec: Codec,
     compressed: &'a [u8],
@@ -58,10 +65,7 @@ pub fn decompress<'a>(
 ) -> Result<Cow<'a, [u8]>> {
     match codec {
         Codec::Uncompressed => Ok(Cow::Borrowed(compressed)),
-        Codec::Snappy => Ok(Cow::Owned(snappy::decompress(
-            compressed,
-            uncompressed_size,
-        )?)),
+        Codec::Snappy => Ok(Cow::Owned(snappy::decompress(compressed)?)),
         Codec::Zstd => Ok(Cow::Owned(zstd::decompress(compressed, uncompressed_size)?)),
         Codec::Other(c) => Err(CompressionError::UnsupportedCodec(c)),
     }
