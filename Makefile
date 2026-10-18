@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help bench-events check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -387,6 +387,9 @@ perf: ## Run the parser/codegen/vm_opcodes benchmarks (report only, not a CI gat
 	cargo bench --bench stream_materialize
 	cargo bench --bench cross_mode_lookup
 	cargo bench --bench wal_commit
+
+bench-events: ## Local-only: 10M-event workload, db-core vs SQLite and DuckDB, every query checked against DuckDB (tools/bench_events.sh; EVENTS=200000 for a quick run -- #602)
+	@tools/bench_events.sh
 
 BENCH ?= codegen
 
