@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bench-events check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help bench-events check-row-functions-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -215,6 +215,9 @@ check-column-profile: ## Charter gate: the column profile carries exactly its na
 # https://duckdb.org/docs/installation).
 check-column-oracle: ## Local-only: column engine query results agree with DuckDB over Parquet fixtures (tools/check_column_oracle.sh)
 	@tools/check_column_oracle.sh
+
+check-row-functions-oracle: ## Local-only: row engine scalar functions agree with sqlite3 3.53.4 (Homebrew's, on PATH) -- tools/row_functions_cases*.sql (#651)
+	@for f in tools/row_functions_cases*.sql; do python3 tools/check_row_functions_oracle.py $$f || exit 1; done
 
 # #566: the Parquet writer's interoperability check -- files it writes
 # (examples/parquet_write_oracle.rs: every type, nulls, edge values, both
