@@ -37,6 +37,13 @@ QUERIES=(
   "SELECT count(DISTINCT region) FROM __TABLE__|SELECT count(DISTINCT region) FROM __TABLE__"
   "SELECT region, count(DISTINCT amount), count(*) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, count(DISTINCT amount), count(*) FROM __TABLE__ GROUP BY region ORDER BY region"
   "SELECT region, count(DISTINCT id) FROM __TABLE__ WHERE id > 2500 GROUP BY region ORDER BY region|SELECT region, count(DISTINCT id) FROM __TABLE__ WHERE id > 2500 GROUP BY region ORDER BY region"
+  # #623: GROUP BY a real column that an alias shadows, expressions over
+  # keys and aggregates, and a select list that is not keys-first.
+  "SELECT id - id AS id, count(*) FROM __TABLE__ WHERE id <= 5 GROUP BY id|SELECT id - id AS id, count(*) FROM __TABLE__ WHERE id <= 5 GROUP BY id"
+  "SELECT count(*), region FROM __TABLE__ GROUP BY region ORDER BY region|SELECT count(*), region FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT region, sum(id) * 2, count(*) + 1 FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, sum(id) * 2, count(*) + 1 FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT region, max(id) - min(id) + count(*) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, max(id) - min(id) + count(*) FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT count(*) * 2 + sum(id) FROM __TABLE__|SELECT count(*) * 2 + sum(id) FROM __TABLE__"
 )
 
 echo "building examples/column_oracle (release)..."

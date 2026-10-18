@@ -486,10 +486,10 @@ fn batch_aggregate_arithmetic_matches_the_expected_value() {
     // (sum = 780, count = 12).
     let (grp, amt) = synthetic_dataset();
     let cases: [(&str, Value); 4] = [
-        // An integer SUM is exact (#631); a literal in an aggregate
-        // expression is still a float, so `* 2` and `+ 1` are DOUBLE.
-        ("SELECT sum(amt) * 2 FROM t", Value::Float(1560.0)),
-        ("SELECT sum(amt) + 1 FROM t", Value::Float(781.0)),
+        // An integer SUM is exact (#631), and an integer literal keeps
+        // the expression an integer (#623), as in DuckDB.
+        ("SELECT sum(amt) * 2 FROM t", Value::Int(1560)),
+        ("SELECT sum(amt) + 1 FROM t", Value::Int(781)),
         ("SELECT sum(amt) + sum(amt) FROM t", Value::Int(1560)),
         ("SELECT sum(amt) / count(*) FROM t", Value::Float(65.0)),
     ];

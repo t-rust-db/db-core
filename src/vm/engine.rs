@@ -21,9 +21,9 @@
 //! it isn't. And [`semi_filter`].
 
 use super::batch::{
-    compare_for_order, hash_group_key, run_morsels_fold, run_parallel, run_parallel_streaming,
-    run_parallel_top_n, AggPart, Batch, Chunk, GroupKey, JoinTables, Opcode, Program, QueryOutput,
-    Result, ScanSource, Segment, TopN, Value, Vm, VmError,
+    chunk_len, compare_for_order, hash_group_key, run_morsels_fold, run_parallel,
+    run_parallel_streaming, run_parallel_top_n, AggPart, Batch, Chunk, GroupKey, JoinTables,
+    Opcode, Program, QueryOutput, Result, ScanSource, Segment, TopN, Value, Vm, VmError,
 };
 use super::combine::{
     combine_chunks, combine_partials, eval_agg_expr, finish_avg, merge_slot, order_key, slot_ops,
@@ -117,6 +117,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         num_group_keys,
         distinct,
         output_order,
+        project,
     }) = combine
     else {
         return run_parallel(segments, &body);
@@ -138,7 +139,14 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
     // Return the chunked output as-is rather than transposing every
     // surviving row into a `Vec` and back (which is what the reverted
     // first attempt did on exactly this path, the one the issue is about).
-    if is_identity_finalize(agg_parts, *distinct, output_order, &order_by, limit) {
+    if is_identity_finalize(
+        agg_parts,
+        *distinct,
+        output_order,
+        project,
+        &order_by,
+        limit,
+    ) {
         return run_parallel(segments, &body);
     }
     // #478/#488: aggregates never go through `run_parallel` + a row
@@ -169,7 +177,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
             let output = run_parallel(segments, &body)?;
             combine_chunks(agg_parts, *num_group_keys, output.chunks())?
         };
-        let combined = combined.project(output_order)?;
+        let combined = apply_projection(combined.project(output_order)?, project)?;
         if !*distinct && order_by.is_none() && limit.is_none() {
             return Ok(combined);
         }
@@ -188,6 +196,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         _ => run_parallel(segments, &body)?,
     }
     .project(output_order)?;
+    let output = apply_projection(output, project)?;
     finalize(
         agg_parts,
         *num_group_keys,
@@ -256,14 +265,37 @@ fn is_identity_finalize(
     agg_parts: &[AggPart],
     distinct: bool,
     output_order: &[usize],
+    project: &[Opcode],
     order_by: &Option<(usize, bool)>,
     limit: Option<usize>,
 ) -> bool {
     agg_parts.is_empty()
         && !distinct
         && output_order.is_empty()
+        && project.is_empty()
         && order_by.is_none()
         && limit.is_none()
+}
+
+/// Runs `Combine`'s post-aggregation `project` program (#623) over every
+/// merged chunk: the chunk's columns become a batch named `#0`, `#1`, ...
+/// by position, and the program's `Emit` is the output. Empty `project` is
+/// the identity. The columns are shared (`Arc`), not copied.
+fn apply_projection(output: QueryOutput, project: &[Opcode]) -> Result<QueryOutput> {
+    if project.is_empty() {
+        return Ok(output);
+    }
+    let mut projected = QueryOutput::default();
+    for chunk in output.into_chunks() {
+        let mut batch = Batch::new(chunk_len(&chunk));
+        for (i, column) in chunk.into_iter().enumerate() {
+            batch.columns.insert(format!("#{i}"), column);
+        }
+        let mut vm = Vm::new();
+        vm.execute(&batch, project)?;
+        projected.extend(vm.take_output());
+    }
+    Ok(projected)
 }
 
 /// Whether [`run_streaming`] can stream `program` at all -- i.e. whether
@@ -280,6 +312,7 @@ pub fn is_streamable(program: &Program) -> bool {
         agg_parts,
         distinct,
         output_order,
+        project,
         ..
     }) = combine
     else {
@@ -293,7 +326,14 @@ pub fn is_streamable(program: &Program) -> bool {
         Some(Opcode::Limit { n }) => Some(*n),
         _ => None,
     };
-    is_identity_finalize(agg_parts, *distinct, output_order, &order_by, limit)
+    is_identity_finalize(
+        agg_parts,
+        *distinct,
+        output_order,
+        project,
+        &order_by,
+        limit,
+    )
 }
 
 /// Streaming counterpart to [`run`] (#456): hands each segment's chunks to
@@ -320,6 +360,7 @@ pub fn run_streaming<S: Segment>(
         agg_parts,
         distinct,
         output_order,
+        project,
         ..
     }) = combine
     else {
@@ -333,7 +374,14 @@ pub fn run_streaming<S: Segment>(
         Some(Opcode::Limit { n }) => Some(*n),
         _ => None,
     };
-    if !is_identity_finalize(agg_parts, *distinct, output_order, &order_by, limit) {
+    if !is_identity_finalize(
+        agg_parts,
+        *distinct,
+        output_order,
+        project,
+        &order_by,
+        limit,
+    ) {
         let reason = if !agg_parts.is_empty() {
             "query has aggregates".to_string()
         } else if *distinct {
@@ -343,8 +391,8 @@ pub fn run_streaming<S: Segment>(
                 (Some(_), Some(_)) => "query has ORDER BY ... LIMIT".to_string(),
                 (Some(_), None) => "query has ORDER BY".to_string(),
                 (None, Some(_)) => "query has LIMIT".to_string(),
-                // Only a non-empty `output_order` is left (#585); codegen
-                // sets one only alongside aggregates, but a hand-built
+                // Only a non-empty `output_order` or `project` is left
+                // (#585, #623); codegen                // sets one only alongside aggregates, but a hand-built
                 // program can carry one on its own.
                 (None, None) => "query reorders its output columns".to_string(),
             }
@@ -929,6 +977,7 @@ mod tests {
                 num_group_keys: 1,
                 distinct: false,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             },
             Opcode::Sort {
                 col: 0,
@@ -979,6 +1028,7 @@ mod tests {
                     num_group_keys: 0,
                     distinct: true,
                     output_order: Vec::new().into(),
+                    project: Vec::new().into(),
                 },
                 Opcode::Limit { n: 5 },
             ],
@@ -998,6 +1048,7 @@ mod tests {
                     num_group_keys: 0,
                     distinct: false,
                     output_order: Vec::new().into(),
+                    project: Vec::new().into(),
                 },
                 Opcode::Limit { n: 5 },
             ],
@@ -1016,6 +1067,7 @@ mod tests {
                     num_group_keys: 0,
                     distinct: false,
                     output_order: Vec::new().into(),
+                    project: Vec::new().into(),
                 },
                 Opcode::Limit { n: 5 },
             ],
@@ -1035,6 +1087,7 @@ mod tests {
                     num_group_keys: 0,
                     distinct: false,
                     output_order: Vec::new().into(),
+                    project: Vec::new().into(),
                 },
                 Opcode::Limit { n: 5 },
             ],
@@ -1071,6 +1124,7 @@ mod tests {
                 num_group_keys: 0,
                 distinct: false,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             }),
             Instruction::new(Opcode::Limit { n: 3 }),
         ]);
@@ -1101,6 +1155,7 @@ mod tests {
                 num_group_keys: 0,
                 distinct: true,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
                 col: 0,
@@ -1137,6 +1192,7 @@ mod tests {
                 num_group_keys: 0,
                 distinct: true,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
                 col: 0,
@@ -1161,6 +1217,7 @@ mod tests {
                 num_group_keys: 1,
                 distinct: true,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             },
             Opcode::Sort {
                 col: 0,
@@ -1193,6 +1250,7 @@ mod tests {
                 num_group_keys: 0,
                 distinct: false,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
                 col: 0,
@@ -1229,6 +1287,7 @@ mod tests {
             num_group_keys: 1,
             distinct: false,
             output_order: Vec::new().into(),
+            project: Vec::new().into(),
         }]);
         assert_eq!(program.columns_to_load(), vec!["k", "v"]);
         let (body, combine, sort, limit) = program.split_finalize();
@@ -1261,6 +1320,7 @@ mod tests {
                     num_group_keys: 0,
                     distinct: false,
                     output_order: Vec::new().into(),
+                    project: Vec::new().into(),
                 },
                 Opcode::Sort {
                     col: 0,
@@ -1294,6 +1354,7 @@ mod tests {
             num_group_keys: 1,
             distinct,
             output_order: Vec::new().into(),
+            project: Vec::new().into(),
         }
     }
 
@@ -1407,6 +1468,7 @@ mod preaggregation_tests {
                 num_group_keys: 1,
                 distinct: false,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             }),
         ])
     }
@@ -1509,6 +1571,7 @@ mod mcdc_vectors {
                 num_group_keys: keys,
                 distinct: false,
                 output_order: Vec::new().into(),
+                project: Vec::new().into(),
             }),
         ])
     }

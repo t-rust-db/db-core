@@ -595,6 +595,7 @@ fn count_merged_across_segments_stays_an_integer() {
             num_group_keys: 1,
             distinct: false,
             output_order: Vec::new().into(),
+            project: Vec::new().into(),
         }),
     ]);
     let mut rows = run(&segments, &program).unwrap().into_rows();
@@ -813,6 +814,7 @@ fn run_returns_one_chunk_per_segment_for_a_plain_projection() {
             num_group_keys: 0,
             distinct: false,
             output_order: Vec::new().into(),
+            project: Vec::new().into(),
         }),
     ]);
 

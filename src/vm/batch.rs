@@ -707,6 +707,16 @@ pub enum Opcode {
         /// select order. Applied before `DISTINCT`/[`Opcode::Sort`], whose
         /// column positions are select-list positions.
         output_order: Cow<'static, [usize]>,
+        /// Post-aggregation projection (#623): a program of
+        /// [`Opcode::LoadColumn`]/[`Opcode::LoadConst`]/[`Opcode::Map`]/
+        /// [`Opcode::Call`] ending in [`Opcode::Emit`], run over the merged
+        /// rows as one batch whose columns are named `#0`, `#1`, ... after
+        /// their position. It computes select items that are expressions
+        /// over the group keys and aggregates (`b - b`, `SUM(x) * 2`,
+        /// `region || ':' || COUNT(*)`). Empty when the merged columns
+        /// already are the output. Applied after `output_order` and before
+        /// `DISTINCT`/[`Opcode::Sort`].
+        project: Cow<'static, [Opcode]>,
     },
     /// Final `ORDER BY` over the whole (already merged) result: sorts by
     /// output column `col`, `descending` or ascending. A sequential-phase

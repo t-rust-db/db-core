@@ -4,6 +4,23 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.138.0] - 2026-10-18
+
+### Fixed
+
+- **`GROUP BY` a column that a select item's alias shadows groups by the column** (#623). `SELECT b - b AS b, count(*) FROM g GROUP BY b` grouped by the alias's expression and returned one group where SQLite and DuckDB return one per value of `b`. A real column now wins; only a name that is no column of the table resolves to a `SELECT`-list alias (#307). `planner::expand_star` does this resolution, so a caller must run it before `planner::compile` for an alias in `GROUP BY` to resolve (every engine path and column-rs already do).
+
+### Changed
+
+- **Grouped select lists follow standard SQL** (#623). Every column a select item reads outside an aggregate must be a `GROUP BY` key, and that is the only rule: keys may be left out, reordered, repeated or computed on (`SELECT year - 1 AS y, SUM(x) FROM t GROUP BY year`), and an item may combine keys and aggregates with any operator or function (`region || ':' || COUNT(*)`, `MAX(x) - MIN(x) + COUNT(*)`). A column that is neither grouped nor aggregated is refused with ``column `x` must be a GROUP BY key or inside an aggregate``. Results match DuckDB (`make check-column-oracle`, five new cases).
+- **Arithmetic on aggregates keeps integer results** (#623, the literal half of #635). `SUM(x) * 2` and `SUM(x) + 1` over integers are `BIGINT`, not `DOUBLE`, as in DuckDB. The integer kernel still computes through `f64` (exact up to 2^53); #635 makes it exact.
+- **`Opcode::Combine` has a new `project` field**: a post-aggregation program over the merged rows (columns `#0`, `#1`, ...) that computes the select list; empty when the merged columns already are the output. It runs after `output_order` and before `DISTINCT`/`ORDER BY`/`LIMIT`, in every engine path and in AOT-emitted programs. A client that builds `Opcode::Combine` itself needs `project: Vec::new().into()` (or `Cow::Borrowed(&[])`). The planner no longer emits `AggPart::Expr` or `AggPart::Hidden`; both stay in the VM.
+
+### Known limits
+
+- `COUNT(DISTINCT ...)` together with a computed select item (one that needs the projection) is refused with a clear error.
+- The ahead-of-time emitter (`emit::generate`) refuses `GROUP BY` a `SELECT` alias: it plans from SQL alone, with no table schema to tell an alias from a column. Before, it grouped by the alias, which was wrong when a real column had the same name. Grouping by a column, with computed select items, emits as usual.
+
 ## [0.137.0] - 2026-10-17
 
 ### Added

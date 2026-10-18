@@ -583,9 +583,9 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
 }
 
 /// A `SELECT`-list item's classification, just enough to check the
-/// "bare columns must match GROUP BY keys" rule below.
+/// "columns outside an aggregate must be GROUP BY keys" rule below.
 enum ItemKind {
-    Column(String),
+    Column,
     Star,
     Agg,
     Window,
@@ -614,6 +614,43 @@ fn expr_contains_agg(expr: &AstExpr) -> bool {
     }
 }
 
+/// The first column `expr` reads outside an aggregate call that is not one
+/// of `group_by` (#623), if any.
+fn ungrouped_column(expr: &AstExpr, group_by: &[String]) -> Result<Option<String>> {
+    Ok(match &expr.kind {
+        ExprKind::Column { .. } => {
+            let name = column_name(expr)?;
+            (!group_by.contains(&name)).then_some(name)
+        }
+        ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => None,
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        } => {
+            for arg in list {
+                if let Some(name) = ungrouped_column(arg, group_by)? {
+                    return Ok(Some(name));
+                }
+            }
+            None
+        }
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Is { lhs, rhs, .. }
+        | ExprKind::Like {
+            expr: lhs,
+            pattern: rhs,
+            ..
+        } => match ungrouped_column(lhs, group_by)? {
+            Some(name) => Some(name),
+            None => ungrouped_column(rhs, group_by)?,
+        },
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Paren(inner) => ungrouped_column(inner, group_by)?,
+        _ => None,
+    })
+}
+
 fn item_kind(col: &crate::parser::ast::ResultColumn) -> Result<ItemKind> {
     use crate::parser::ast::ResultColumn;
     Ok(match col {
@@ -622,7 +659,10 @@ fn item_kind(col: &crate::parser::ast::ResultColumn) -> Result<ItemKind> {
             // A catalog-qualified column is rejected here with its span,
             // not folded into an empty name that the GROUP BY check would
             // then compare against (db-core#232).
-            ExprKind::Column { .. } => ItemKind::Column(column_name(expr)?),
+            ExprKind::Column { .. } => {
+                column_name(expr)?;
+                ItemKind::Column
+            }
             ExprKind::FunctionCall { tail, .. } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
                 ItemKind::Window
             }
@@ -947,46 +987,40 @@ fn validate_select(select: &mut Select) -> Result<()> {
         ));
     }
     if has_agg && !has_window {
-        // Every non-aggregated SELECT item must resolve to one of
-        // `GROUP BY`'s keys, in the same order: a plain column by name,
-        // or (#307) a computed expression by its `AS <alias>` -- exactly
-        // the alias `codegen::batch::group_by_key_expr` resolves back to
-        // that expression. An unaliased computed expression has nothing
-        // for `GROUP BY` to name it by, so it stays rejected outright
-        // (db-core#232: silently dropping it from the comparison used to
-        // accept the wrong queries).
-        let mut select_keys = Vec::with_capacity(items.len());
-        for (col, item) in select.columns.iter().zip(&items) {
-            match item {
-                ItemKind::Column(name) => select_keys.push(name.clone()),
-                ItemKind::Expr => match col {
-                    crate::parser::ast::ResultColumn::Expr {
-                        alias: Some(alias), ..
-                    } => select_keys.push(alias.clone()),
-                    _ => {
-                        return Err(unsupported(
-                            select.span,
-                            "a computed expression alongside an aggregate requires GROUP BY \
-                             and an AS alias"
-                                .into(),
-                        ))
-                    }
-                },
-                ItemKind::Agg | ItemKind::Star | ItemKind::Window => {}
-            }
-        }
+        // Standard SQL (#623): every column a select item reads outside an
+        // aggregate must be a `GROUP BY` key, so the item is a function of
+        // its group. A computed expression may also be grouped by its own
+        // `AS <alias>` (#307). Order and repetition are free; the planner
+        // projects the select list from the merged keys and aggregates.
+        // Without `GROUP BY` the whole input is one group, and only
+        // aggregates (and expressions over them) describe it.
         let group_by: Vec<String> = select
             .group_by
             .iter()
             .map(column_name)
             .collect::<Result<_>>()?;
-        if select_keys != group_by {
-            let message = if group_by.is_empty() {
-                "a plain column alongside an aggregate requires GROUP BY".to_string()
-            } else {
-                "every non-aggregated SELECT column must be a GROUP BY key, listed in the \
-                 same order as GROUP BY"
-                    .to_string()
+        for (col, item) in select.columns.iter().zip(&items) {
+            let crate::parser::ast::ResultColumn::Expr { expr, alias } = col else {
+                continue;
+            };
+            let grouped_by_alias = alias.as_ref().is_some_and(|a| group_by.contains(a));
+            let message = match item {
+                ItemKind::Star | ItemKind::Window => continue,
+                ItemKind::Expr if grouped_by_alias => continue,
+                ItemKind::Column if group_by.is_empty() => {
+                    "a plain column alongside an aggregate requires GROUP BY".to_string()
+                }
+                ItemKind::Expr if group_by.is_empty() => {
+                    "a computed expression alongside an aggregate requires GROUP BY".to_string()
+                }
+                ItemKind::Column | ItemKind::Expr | ItemKind::Agg => {
+                    match ungrouped_column(expr, &group_by)? {
+                        Some(name) => {
+                            format!("column `{name}` must be a GROUP BY key or inside an aggregate")
+                        }
+                        None => continue,
+                    }
+                }
             };
             return Err(unsupported(select.span, message));
         }
@@ -1323,11 +1357,12 @@ mod tests {
         assert!(matches!(err, ParseError::Unexpected { .. }));
     }
 
+    /// #623: the select list may name the keys in any order, and compute
+    /// on them.
     #[test]
-    fn select_list_group_by_keys_in_a_different_order_than_group_by_is_rejected() {
-        let err =
-            parse("SELECT year, region, SUM(amount) FROM t GROUP BY region, year").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+    fn select_list_group_by_keys_in_any_order_or_computed_are_accepted() {
+        assert!(parse("SELECT year, region, SUM(amount) FROM t GROUP BY region, year").is_ok());
+        assert!(parse("SELECT year - 1 AS y, SUM(amount) FROM t GROUP BY year").is_ok());
     }
 
     // parser_column_validate_distinct_eac99047 (`validate_distinct`):
@@ -1383,10 +1418,10 @@ mod tests {
         }
     }
 
+    /// #623: standard SQL; a key need not be selected.
     #[test]
-    fn group_by_key_omitted_from_select_list_is_rejected() {
-        let err = parse("SELECT SUM(amount) FROM t GROUP BY region").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+    fn group_by_key_omitted_from_select_list_is_accepted() {
+        assert!(parse("SELECT SUM(amount) FROM t GROUP BY region").is_ok());
     }
 
     #[test]
