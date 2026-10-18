@@ -117,6 +117,28 @@ impl Bitmap {
         }
     }
 
+    /// Bits `start..end` (clamped) as a bitmap of their own: whole words
+    /// when `start` is word-aligned, as every `SLICE_ROWS` slice is
+    /// (#643), bit by bit otherwise.
+    #[allow(
+        clippy::arithmetic_side_effects,
+        reason = "`start / 64` and `start % 64` divide/mod by a fixed non-zero power of two"
+    )]
+    pub(crate) fn slice(&self, start: usize, end: usize) -> Bitmap {
+        let end = end.min(self.len);
+        let start = start.min(end);
+        let len = end.saturating_sub(start);
+        if start.is_multiple_of(64) {
+            let first = start / 64;
+            let last = first.saturating_add(len.div_ceil(64)).min(self.bits.len());
+            return Bitmap {
+                bits: self.bits.get(first..last).unwrap_or_default().to_vec(),
+                len,
+            };
+        }
+        Bitmap::from_bools((start..end).map(|i| self.get(i)))
+    }
+
     /// Builds a bitmap from a validity sequence (`true` = not NULL).
     pub fn from_bools(valid: impl ExactSizeIterator<Item = bool>) -> Self {
         let mut bitmap = Bitmap::new(valid.len(), true);
@@ -248,47 +270,76 @@ impl Column {
         let end = start.saturating_add(len).min(self.len());
         let start = start.min(end);
         let range = start..end;
-        let valid = |v: &Bitmap| Bitmap::from_bools(range.clone().map(|i| v.get(i)));
         match self {
-            Column::Int { data, valid: v } => Column::Int {
-                data: data.get(range.clone()).unwrap_or_default().to_vec(),
-                valid: valid(v),
+            Column::Int { data, valid } => Column::Int {
+                data: data.get(range).unwrap_or_default().to_vec(),
+                valid: valid.slice(start, end),
             },
-            Column::Float { data, valid: v } => Column::Float {
-                data: data.get(range.clone()).unwrap_or_default().to_vec(),
-                valid: valid(v),
+            Column::Float { data, valid } => Column::Float {
+                data: data.get(range).unwrap_or_default().to_vec(),
+                valid: valid.slice(start, end),
             },
-            Column::Bool { data, valid: v } => Column::Bool {
-                data: data.get(range.clone()).unwrap_or_default().to_vec(),
-                valid: valid(v),
+            Column::Bool { data, valid } => Column::Bool {
+                data: data.get(range).unwrap_or_default().to_vec(),
+                valid: valid.slice(start, end),
             },
+            // One copy of the slice's bytes, offsets rebased to it.
+            Column::Str {
+                offsets,
+                data,
+                valid,
+            } => {
+                let at = |i: usize| {
+                    offsets
+                        .get(i)
+                        .and_then(|o| usize::try_from(*o).ok())
+                        .unwrap_or(0)
+                };
+                let (lo, hi) = (at(start), at(end));
+                let base = offsets.get(start).copied().unwrap_or(0);
+                Column::Str {
+                    offsets: offsets
+                        .get(start..=end)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|o| o.saturating_sub(base))
+                        .collect(),
+                    data: data.get(lo..hi).unwrap_or_default().to_string(),
+                    valid: valid.slice(start, end),
+                }
+            }
             Column::Dict {
                 dict,
                 indices,
-                valid: v,
+                valid,
             } if dict.len() <= end.saturating_sub(start).saturating_mul(4) => Column::Dict {
                 dict: dict.clone(),
-                indices: indices.get(range.clone()).unwrap_or_default().to_vec(),
-                valid: valid(v),
+                indices: indices.get(range).unwrap_or_default().to_vec(),
+                valid: valid.slice(start, end),
             },
-            Column::Str { .. } | Column::Dict { .. } => {
-                let mut offsets = Vec::with_capacity(end.saturating_sub(start).saturating_add(1));
+            // A dictionary large next to the slice: its strings, copied
+            // once each, instead of the whole dictionary per slice.
+            Column::Dict {
+                dict,
+                indices,
+                valid,
+            } => {
+                let mut offsets = Vec::with_capacity(range.len().saturating_add(1));
                 let mut data = String::new();
                 offsets.push(0);
-                for i in range.clone() {
-                    if let Value::Str(s) = self.get(i) {
-                        data.push_str(&s);
+                for i in range {
+                    if valid.get(i) {
+                        let code = indices.get(i).and_then(|c| usize::try_from(*c).ok());
+                        if let Some(s) = code.and_then(|c| dict.get(c)) {
+                            data.push_str(s);
+                        }
                     }
                     offsets.push(u32::try_from(data.len()).unwrap_or(u32::MAX));
                 }
-                let v = match self {
-                    Column::Str { valid: v, .. } | Column::Dict { valid: v, .. } => valid(v),
-                    _ => Bitmap::new(0, true),
-                };
                 Column::Str {
                     offsets,
                     data,
-                    valid: v,
+                    valid: valid.slice(start, end),
                 }
             }
         }

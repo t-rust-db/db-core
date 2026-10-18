@@ -1424,7 +1424,7 @@ pub trait Segment: Send + Sync {
 /// sitting on a statically pre-assigned share -- the morsel-driven property
 /// `run_parallel`/`run_parallel_top_n`'s doc comments require, without a
 /// work-stealing dependency.
-fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -1646,24 +1646,39 @@ fn run_morsels_ordered<I: Sync, T: Send>(
 pub(crate) const SLICE_ROWS: usize = 16_384;
 
 /// Whether running `program` over a segment slice by slice gives the
-/// same rows as over the whole segment: true for row-wise opcodes and
-/// partial aggregates (`Reduce`/`GroupReduce`, whose per-slice partials
-/// `Combine` merges as it merges per-segment ones). Joins, windows and
-/// sources see the segment whole.
+/// same rows as over the whole segment, and is worth it: row-wise
+/// opcodes and partial aggregates only (`Reduce`/`GroupReduce`, whose
+/// per-slice partials `Combine` merges as it merges per-segment ones --
+/// every aggregate body codegen emits ends in such a `Combine`), and at
+/// least one opcode that materializes registers. A pure projection
+/// (`LoadColumn ... Emit`) hands out the batch's own columns, so slicing
+/// it would only copy them. Joins, windows and sources see the segment
+/// whole.
 pub(crate) fn sliceable(program: &[Opcode]) -> bool {
-    program.iter().all(|op| {
+    let materializes = program.iter().any(|op| {
         matches!(
             op,
-            Opcode::LoadColumn { .. }
-                | Opcode::LoadConst { .. }
-                | Opcode::Map { .. }
+            Opcode::Map { .. }
                 | Opcode::Call { .. }
                 | Opcode::Filter { .. }
                 | Opcode::Reduce { .. }
                 | Opcode::GroupReduce { .. }
-                | Opcode::Emit { .. }
         )
-    })
+    });
+    materializes
+        && program.iter().all(|op| {
+            matches!(
+                op,
+                Opcode::LoadColumn { .. }
+                    | Opcode::LoadConst { .. }
+                    | Opcode::Map { .. }
+                    | Opcode::Call { .. }
+                    | Opcode::Filter { .. }
+                    | Opcode::Reduce { .. }
+                    | Opcode::GroupReduce { .. }
+                    | Opcode::Emit { .. }
+            )
+        })
 }
 
 /// Runs `program` over `batch`, in [`SLICE_ROWS`]-row slices when

@@ -333,15 +333,15 @@ pub(crate) fn combine_partials(
     partials: Vec<(Chunk, Vec<u64>)>,
 ) -> Result<QueryOutput> {
     let mut combiner = Combiner::new(parts, num_group_keys);
-    // Sized once for every partial row (an upper bound on the groups), so
-    // the accumulators never double-and-copy past their final size while
-    // the partials are still live (#643).
-    combiner.expect_groups(
-        partials
-            .iter()
-            .map(|(_, first_seen)| first_seen.len())
-            .sum(),
-    );
+    // Sized once, so the accumulators rarely double-and-copy while the
+    // partials are still live (#643). The groups are at least the largest
+    // partial and at most the sum of them; workers sharing keys make the
+    // sum an overestimate up to `threads` times, and a key table sized
+    // for it is written in full, so take the middle.
+    let sizes = partials.iter().map(|(_, first_seen)| first_seen.len());
+    let largest = sizes.clone().max().unwrap_or(0);
+    let total: usize = sizes.sum();
+    combiner.expect_groups(largest.max(total / 2));
     // By value: each worker's partial is dropped as soon as it is merged,
     // not held until the last one is (#643).
     for (chunk, first_seen) in partials {
@@ -867,6 +867,31 @@ mod tests {
 
     use super::super::engine::finalize;
     use super::*;
+
+    /// #643 review: the in-place reorder handles a fixed point, a
+    /// 2-cycle and a longer cycle, moving every column together.
+    #[test]
+    fn reorder_by_first_seen_permutes_every_column_in_place() {
+        // Groups 0..6 in creation order; their first-seen keys put them in
+        // the order 1, 0, 2, 5, 3, 4: a 2-cycle (0 1), a fixed point (2),
+        // and a 3-cycle (3 4 5).
+        let first_seen = [10, 5, 20, 40, 50, 30];
+        let col = |tag: &str| -> Vec<Value> {
+            (0..6)
+                .map(|g| Value::Str(format!("{tag}{g}").into()))
+                .collect()
+        };
+        let out = reorder_by_first_seen(vec![col("a"), col("b")], &first_seen);
+        let want = |tag: &str| -> Vec<Value> {
+            [1, 0, 2, 5, 3, 4]
+                .iter()
+                .map(|g| Value::Str(format!("{tag}{g}").into()))
+                .collect()
+        };
+        assert_eq!(out, vec![want("a"), want("b")]);
+        let sorted = reorder_by_first_seen(vec![col("a")], &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(sorted, vec![col("a")]);
+    }
 
     fn chunk(columns: Vec<Vec<Value>>) -> Chunk {
         columns.into_iter().map(Arc::new).collect()
