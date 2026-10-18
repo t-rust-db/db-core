@@ -71,7 +71,7 @@ fn mutate(rng: &mut Rng, seed: &[u8]) -> Vec<u8> {
 }
 
 /// Run `decode` on `MUTANTS` mutants of every seed; any panic fails the
-/// test with the offending input.
+/// test, naming the input's length and first bytes.
 fn fuzz(what: &str, seeds: &[Vec<u8>], mut decode: impl FnMut(&[u8])) {
     assert!(!seeds.is_empty(), "{what}: no seeds");
     let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
@@ -81,7 +81,11 @@ fn fuzz(what: &str, seeds: &[Vec<u8>], mut decode: impl FnMut(&[u8])) {
         for _ in 0..MUTANTS {
             let input = mutate(&mut rng, seed);
             if catch_unwind(AssertUnwindSafe(|| decode(&input))).is_err() {
-                panic!("{what} panicked on input {input:02x?}");
+                let head = &input[..input.len().min(64)];
+                panic!(
+                    "{what} panicked on a {}-byte input starting {head:02x?}",
+                    input.len()
+                );
             }
         }
     }
@@ -347,7 +351,7 @@ fn delta_encode(values: &[i64]) -> Vec<u8> {
 fn the_delta_seed_encoder_round_trips() {
     let values: Vec<i64> = (0..300).map(|i| i * i - 7 * i).collect();
     assert_eq!(
-        decode_delta_binary_packed(&delta_encode(&values)).unwrap(),
+        decode_delta_binary_packed(&delta_encode(&values), values.len()).unwrap(),
         values
     );
 }
@@ -364,6 +368,6 @@ fn mutated_delta_streams_never_panic() {
     .map(|v| delta_encode(v))
     .collect();
     fuzz("delta", &seeds, |input| {
-        let _outcome = decode_delta_binary_packed(input);
+        let _outcome = decode_delta_binary_packed(input, 1 << 16);
     });
 }

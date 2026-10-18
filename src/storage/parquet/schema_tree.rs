@@ -51,25 +51,42 @@ impl SchemaNode {
     }
 }
 
+/// The most bytes [`leaf_paths`] builds. Every leaf repeats its ancestors'
+/// names, so a small footer (a deep chain of long names over many empty
+/// leaves) could otherwise ask for gigabytes of paths.
+pub const MAX_LEAF_PATH_BYTES: usize = 64 << 20;
+
 /// Dot-joined path (from each root child's own name down to the leaf) for
 /// every leaf, in the same order as [`SchemaNode::leaves`] (i.e. on-disk
-/// column order).
-pub fn leaf_paths(root: &SchemaNode) -> Vec<String> {
+/// column order). `None` when the paths would pass
+/// [`MAX_LEAF_PATH_BYTES`] in all.
+pub fn leaf_paths(root: &SchemaNode) -> Option<Vec<String>> {
     let mut out = Vec::new();
+    let mut budget = MAX_LEAF_PATH_BYTES;
     for child in &root.children {
-        collect_paths(child, child.name.clone(), &mut out);
+        budget = budget.checked_sub(child.name.len())?;
+        collect_paths(child, child.name.clone(), &mut out, &mut budget)?;
     }
-    out
+    Some(out)
 }
 
-fn collect_paths(node: &SchemaNode, path: String, out: &mut Vec<String>) {
+fn collect_paths(
+    node: &SchemaNode,
+    path: String,
+    out: &mut Vec<String>,
+    budget: &mut usize,
+) -> Option<()> {
     if node.is_leaf() {
         out.push(path);
     } else {
         for child in &node.children {
-            collect_paths(child, format!("{path}.{}", child.name), out);
+            // Charged before the path is built: `path.child`.
+            let len = path.len().checked_add(child.name.len())?.checked_add(1)?;
+            *budget = budget.checked_sub(len)?;
+            collect_paths(child, format!("{path}.{}", child.name), out, budget)?;
         }
     }
+    Some(())
 }
 
 /// A node's child count as [`build_schema_tree`] reads it: absent or
@@ -310,5 +327,31 @@ mod tests {
         let leaves = tree.leaves();
         assert_eq!(leaves.len(), 1);
         assert_eq!(leaves[0].max_def_level, MAX_SCHEMA_DEPTH as u32);
+    }
+
+    #[test]
+    fn leaf_paths_name_every_leaf() {
+        let schema = vec![
+            group("root", Repetition::Required, 2),
+            group("a", Repetition::Optional, 1),
+            leaf("b", Repetition::Required, PhysicalType::Int64),
+            leaf("c", Repetition::Required, PhysicalType::Int64),
+        ];
+        let tree = build_schema_tree(&schema);
+        assert_eq!(leaf_paths(&tree).unwrap(), vec!["a.b", "c"]);
+    }
+
+    /// A deep chain of long names over many leaves repeats the names in
+    /// every path: about 2 MB of schema asks for 16 GB of paths.
+    #[test]
+    fn leaf_paths_past_the_byte_budget_are_refused() {
+        let long = "n".repeat(4096);
+        let mut schema = vec![group("root", Repetition::Required, 1)];
+        schema.extend((0..60).map(|_| group(&long, Repetition::Optional, 1)));
+        schema.push(group(&long, Repetition::Optional, 65_536));
+        schema.extend((0..65_536).map(|_| leaf("x", Repetition::Required, PhysicalType::Int64)));
+        let tree = build_schema_tree(&schema);
+        assert_eq!(tree.leaves().len(), 65_536);
+        assert!(leaf_paths(&tree).is_none());
     }
 }

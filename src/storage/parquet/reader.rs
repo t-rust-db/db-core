@@ -447,7 +447,8 @@ pub fn read_int64_column(
     }
     let (levels, values) = split_definition_levels(page_body, header, max_def_level)?;
     if header.encoding == Encoding::DeltaBinaryPacked {
-        let decoded = encoding::decode_delta_binary_packed(values)?;
+        let num_values = value_count(header.num_values)?;
+        let decoded = encoding::decode_delta_binary_packed(values, num_values)?;
         let mut decoded = decoded.into_iter();
         presence(&levels, max_def_level, value_count(header.num_values)?)
             .map(|present| {

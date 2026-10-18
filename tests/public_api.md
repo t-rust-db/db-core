@@ -2623,7 +2623,7 @@ pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core:
 impl core::fmt::Display for db_core::storage::parquet::encoding::EncodingError
 pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::storage::column::parquet::encoding::bit_width_for_max_level(u32) -> u32
-pub fn db_core::storage::column::parquet::encoding::decode_delta_binary_packed(&[u8]) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
+pub fn db_core::storage::column::parquet::encoding::decode_delta_binary_packed(&[u8], usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
 pub fn db_core::storage::column::parquet::encoding::decode_hybrid_rle_bitpacked(&[u8], u32, usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<u32>>
 pub fn db_core::storage::column::parquet::encoding::null_mask(&[u32], u32) -> alloc::vec::Vec<bool>
 pub type db_core::storage::column::parquet::encoding::Result<T> = core::result::Result<T, db_core::storage::parquet::encoding::EncodingError>
@@ -3176,10 +3176,11 @@ impl core::clone::Clone for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const db_core::storage::column::parquet::schema_tree::MAX_LEAF_PATH_BYTES: usize
 pub const db_core::storage::column::parquet::schema_tree::MAX_SCHEMA_DEPTH: usize
 pub fn db_core::storage::column::parquet::schema_tree::build_schema_tree(&[db_core::storage::parquet::footer::SchemaElement]) -> db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::column::parquet::schema_tree::check_schema(&[db_core::storage::parquet::footer::SchemaElement]) -> core::result::Result<(), db_core::storage::parquet::footer::FooterError>
-pub fn db_core::storage::column::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> alloc::vec::Vec<alloc::string::String>
+pub fn db_core::storage::column::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub mod db_core::storage::column::parquet::thrift
 pub enum db_core::storage::column::parquet::thrift::ThriftError
 pub db_core::storage::column::parquet::thrift::ThriftError::DepthExceeded
@@ -4524,7 +4525,7 @@ pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core:
 impl core::fmt::Display for db_core::storage::parquet::encoding::EncodingError
 pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::storage::parquet::encoding::bit_width_for_max_level(u32) -> u32
-pub fn db_core::storage::parquet::encoding::decode_delta_binary_packed(&[u8]) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
+pub fn db_core::storage::parquet::encoding::decode_delta_binary_packed(&[u8], usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
 pub fn db_core::storage::parquet::encoding::decode_hybrid_rle_bitpacked(&[u8], u32, usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<u32>>
 pub fn db_core::storage::parquet::encoding::null_mask(&[u32], u32) -> alloc::vec::Vec<bool>
 pub type db_core::storage::parquet::encoding::Result<T> = core::result::Result<T, db_core::storage::parquet::encoding::EncodingError>
@@ -5077,10 +5078,11 @@ impl core::clone::Clone for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const db_core::storage::parquet::schema_tree::MAX_LEAF_PATH_BYTES: usize
 pub const db_core::storage::parquet::schema_tree::MAX_SCHEMA_DEPTH: usize
 pub fn db_core::storage::parquet::schema_tree::build_schema_tree(&[db_core::storage::parquet::footer::SchemaElement]) -> db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::check_schema(&[db_core::storage::parquet::footer::SchemaElement]) -> core::result::Result<(), db_core::storage::parquet::footer::FooterError>
-pub fn db_core::storage::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> alloc::vec::Vec<alloc::string::String>
+pub fn db_core::storage::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub mod db_core::storage::parquet::thrift
 pub enum db_core::storage::parquet::thrift::ThriftError
 pub db_core::storage::parquet::thrift::ThriftError::DepthExceeded

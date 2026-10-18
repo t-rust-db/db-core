@@ -44,7 +44,7 @@ pub enum FileError {
     UnexpectedDictionaryPage,
     /// A dictionary-encoded data page with no dictionary page before it.
     MissingDictionaryPage,
-    /// A `FIXED_LEN_BYTE_ARRAY` column whose schema has no `type_length`.
+    /// A `FIXED_LEN_BYTE_ARRAY` column whose schema has no positive `type_length`.
     MissingTypeLength,
     /// A `DECIMAL` column whose schema has no `scale`.
     MissingDecimalScale,
@@ -92,7 +92,7 @@ impl fmt::Display for FileError {
             ),
             FileError::MissingTypeLength => write!(
                 f,
-                "FIXED_LEN_BYTE_ARRAY column has no type_length in its schema"
+                "FIXED_LEN_BYTE_ARRAY column has no positive type_length in its schema"
             ),
             FileError::MissingDecimalScale => {
                 write!(f, "DECIMAL column has no scale in its schema")
@@ -355,7 +355,11 @@ impl<'a> ParquetFile<'a> {
 
         let mut leaf_data: LeafData = HashMap::new();
         let leaves = self.schema_tree.leaves();
-        let paths = schema_tree::leaf_paths(&self.schema_tree);
+        let paths =
+            schema_tree::leaf_paths(&self.schema_tree).ok_or(FileError::InvalidMetadata {
+                field: "schema (leaf paths too long)",
+                value: i64::try_from(leaves.len()).unwrap_or(i64::MAX),
+            })?;
         for (column_index, (leaf, path)) in leaves.iter().zip(paths.iter()).enumerate() {
             let entries = row_group.read_leaf_entries(column_index, leaf)?;
             leaf_data.insert(path.clone(), entries);
@@ -414,11 +418,14 @@ impl<'a> ParquetFile<'a> {
         self.leaf_max_def.get(column_index).copied().unwrap_or(0)
     }
 
-    /// Fixed byte width for a `FIXED_LEN_BYTE_ARRAY` leaf column.
+    /// Fixed byte width for a `FIXED_LEN_BYTE_ARRAY` leaf column. Zero is
+    /// refused like a missing width: every value would read no bytes, so a
+    /// corrupt page could claim `i32::MAX` values from an empty body.
     fn type_length(&self, column_index: usize) -> Result<usize> {
         self.leaf_element(column_index)
             .and_then(|s| s.type_length)
             .and_then(|len| usize::try_from(len).ok())
+            .filter(|&len| len > 0)
             .ok_or(FileError::MissingTypeLength)
     }
 

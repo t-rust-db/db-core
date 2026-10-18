@@ -260,12 +260,18 @@ fn read_zigzag_varint(rest: &mut &[u8]) -> Result<i64> {
 /// header -- the packed value plus `min_delta` is the delta from the
 /// previous value).
 ///
+/// `max_values` is the page's value count: a stream claiming more is
+/// corrupt.
+///
 /// Spec: https://parquet.apache.org/docs/file-format/data-pages/encodings/#delta-encoding-delta_binary_packed--5
-pub fn decode_delta_binary_packed(data: &[u8]) -> Result<Vec<i64>> {
+pub fn decode_delta_binary_packed(data: &[u8], max_values: usize) -> Result<Vec<i64>> {
     let mut rest = data;
     let block_size = bounded(read_unsigned_varint(&mut rest)?, MAX_DELTA_BLOCK_SIZE)?;
     let miniblocks_per_block = length(read_unsigned_varint(&mut rest)?)?;
-    let total_count = bounded(read_unsigned_varint(&mut rest)?, MAX_DELTA_VALUES)?;
+    // The stream's own count may not pass the page's: it alone would
+    // otherwise size the output (zero-width miniblocks cost no bytes).
+    let max = MAX_DELTA_VALUES.min(u64::try_from(max_values).unwrap_or(u64::MAX));
+    let total_count = bounded(read_unsigned_varint(&mut rest)?, max)?;
     let first_value = read_zigzag_varint(&mut rest)?;
 
     let mut out = Vec::with_capacity(total_count.min(MAX_PREALLOC_VALUES));
@@ -488,7 +494,7 @@ mod tests {
         buf.push(0); // miniblock 2 bit width (unused padding, decoder stops before reading it)
         pack_bits(&mut buf, &[7, 0, 9, 12], 4);
 
-        let values = decode_delta_binary_packed(&buf).unwrap();
+        let values = decode_delta_binary_packed(&buf, usize::MAX).unwrap();
         assert_eq!(values, vec![100, 105, 103, 110, 120]);
     }
 
@@ -499,7 +505,7 @@ mod tests {
         write_varint(&mut buf, 2);
         write_varint(&mut buf, 0);
         write_zigzag(&mut buf, 0);
-        let values = decode_delta_binary_packed(&buf).unwrap();
+        let values = decode_delta_binary_packed(&buf, usize::MAX).unwrap();
         assert!(values.is_empty());
     }
 
@@ -510,7 +516,7 @@ mod tests {
         write_varint(&mut buf, 2);
         write_varint(&mut buf, 1);
         write_zigzag(&mut buf, 42);
-        let values = decode_delta_binary_packed(&buf).unwrap();
+        let values = decode_delta_binary_packed(&buf, usize::MAX).unwrap();
         assert_eq!(values, vec![42]);
     }
 }
@@ -633,8 +639,20 @@ mod malformed_input {
     fn a_delta_total_count_past_a_page_count_is_invalid_length() {
         let data = varints(&[128, 4, 1 << 62, 0]);
         assert!(matches!(
-            decode_delta_binary_packed(&data),
+            decode_delta_binary_packed(&data, usize::MAX),
             Err(EncodingError::InvalidLength(n)) if n == 1 << 62
+        ));
+    }
+
+    /// A stream claiming more values than its page: zero-width miniblocks
+    /// cost no bytes, so the stream's own count alone would size the output.
+    #[test]
+    fn a_delta_total_count_past_the_page_is_invalid_length() {
+        let mut data = varints(&[128, 1, 1_000_000, 0, 0]);
+        data.push(0);
+        assert!(matches!(
+            decode_delta_binary_packed(&data, 10),
+            Err(EncodingError::InvalidLength(1_000_000))
         ));
     }
 
@@ -644,7 +662,7 @@ mod malformed_input {
     fn a_delta_miniblock_count_past_the_input_is_unexpected_eof() {
         let data = varints(&[128, 1 << 40, 10, 0, 0]);
         assert!(matches!(
-            decode_delta_binary_packed(&data),
+            decode_delta_binary_packed(&data, usize::MAX),
             Err(EncodingError::UnexpectedEof)
         ));
     }
@@ -656,7 +674,7 @@ mod malformed_input {
         let mut data = varints(&[1 << 40, 1, 1 << 30, 0, 0]);
         data.push(0);
         assert!(matches!(
-            decode_delta_binary_packed(&data),
+            decode_delta_binary_packed(&data, usize::MAX),
             Err(EncodingError::InvalidLength(n)) if n == 1 << 40
         ));
     }
@@ -668,7 +686,7 @@ mod malformed_input {
         data.extend_from_slice(&[65, 0, 0, 0]);
         data.extend_from_slice(&[0; 300]);
         assert!(matches!(
-            decode_delta_binary_packed(&data),
+            decode_delta_binary_packed(&data, usize::MAX),
             Err(EncodingError::InvalidBitWidth(65))
         ));
     }
@@ -683,6 +701,9 @@ mod malformed_input {
         for _ in 0..32 {
             data.extend_from_slice(&u64::MAX.to_le_bytes());
         }
-        assert_eq!(decode_delta_binary_packed(&data).unwrap(), vec![0, -1, -2]);
+        assert_eq!(
+            decode_delta_binary_packed(&data, usize::MAX).unwrap(),
+            vec![0, -1, -2]
+        );
     }
 }

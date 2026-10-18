@@ -21,6 +21,10 @@
 //! of the wrong type must fail cleanly too), then every top-level field as
 //! nested values. Panics are caught and collected, so a failure lists every
 //! mutation that panicked and where, not just the first.
+//!
+//! Run it in a debug build (the default for `cargo test`): arithmetic
+//! overflow panics only with overflow checks on, so a release build
+//! would let a wrapping bug through.
 
 #![cfg(feature = "storage-column")]
 #![allow(
