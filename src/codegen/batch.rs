@@ -4625,6 +4625,35 @@ mod tests {
         );
     }
 
+    /// #655: the column engine runs an expression at the height limit
+    /// (1000) -- validation, planning and the VM all recurse over it. Its
+    /// own thread: debug frames are about ten times release ones (see
+    /// the row engine's twin in `sqlite_parity_test`).
+    #[test]
+    fn an_expression_at_the_height_limit_runs_in_the_column_engine() {
+        std::thread::Builder::new()
+            .stack_size(256 << 20)
+            .spawn(|| {
+                let sum = vec!["amount"; 1000].join(" + ");
+                let filter = vec!["amount > 0"; 999].join(" AND ");
+                let rows = run_batches(
+                    &format!("SELECT {sum} FROM t WHERE {filter}"),
+                    vec![amounts(vec![Value::Int(2)])],
+                )
+                .unwrap();
+                assert_eq!(rows, vec![vec![Value::Int(2000)]]);
+                let over = format!("SELECT {} FROM t", vec!["amount"; 1001].join(" + "));
+                let err = sql::parse(&over).unwrap_err();
+                assert!(
+                    err.to_string().contains("Expression tree is too large"),
+                    "{err}"
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
     /// #635: an integer overflow is a query error -- in a row expression
     /// (also when only a later segment overflows), and in an expression
     /// over an aggregate -- never a wrapped or saturated value. A row the
