@@ -10,8 +10,10 @@ use crate::storage::parquet::schema_tree::{self, SchemaNode};
 use std::collections::HashMap;
 use std::fmt;
 
+/// Why a Parquet file, or one of its column chunks, could not be read.
 #[derive(Debug)]
 pub enum FileError {
+    /// The footer (file metadata) is missing or malformed.
     Footer(FooterError),
     /// A footer/page-header integer is outside the range the file format
     /// allows (negative count, negative or oversize offset/size) -- corrupt
@@ -22,28 +24,48 @@ pub enum FileError {
         /// The value as read.
         value: i64,
     },
+    /// A page header is malformed or of an unsupported type.
     Page(PageError),
+    /// A page body does not decode.
     Read(ReadError),
+    /// A page body does not decompress.
     Compression(CompressionError),
+    /// A column (or row group, or field) index past the file's last one.
     ColumnIndexOutOfRange(usize),
     /// A positional read (`read_*_column_at`, ADR-0026) named a row
     /// position past the column's decoded length.
     RowPositionOutOfRange(u32),
+    /// A column chunk's byte range, or a page within it, runs past the end
+    /// of the file (or chunk).
     ChunkOutOfBounds,
+    /// A column chunk without `meta_data`, or a leaf without a physical type.
     MissingColumnMetadata,
+    /// A second `DICTIONARY_PAGE` in one column chunk.
     UnexpectedDictionaryPage,
+    /// A dictionary-encoded data page with no dictionary page before it.
     MissingDictionaryPage,
+    /// A `FIXED_LEN_BYTE_ARRAY` column whose schema has no positive `type_length`.
     MissingTypeLength,
+    /// A `DECIMAL` column whose schema has no `scale`.
     MissingDecimalScale,
     /// A `UINT_64` value above `i64::MAX`, which the engine's integers
     /// cannot hold.
     UnsignedOutOfRange(u64),
+    /// A timestamp whose value in microseconds since the Unix epoch does not
+    /// fit an `i64`.
+    TimestampOutOfRange,
+    /// A timestamp column stored as neither `INT64` nor `INT96`.
     UnsupportedTimestampPhysicalType(footer::PhysicalType),
+    /// A `DECIMAL` column stored as neither `INT32`, `INT64` nor
+    /// `FIXED_LEN_BYTE_ARRAY`.
     UnsupportedDecimalPhysicalType(footer::PhysicalType),
+    /// A dictionary-encoded nested leaf column the reader cannot decode.
     UnsupportedNestedDictionary,
+    /// A nested leaf column encoded other than `PLAIN` or dictionary.
     UnsupportedNestedEncoding(page::Encoding),
     /// A field read as a `MAP<UTF8, UTF8>` that is not one.
     NotAStringMap(String),
+    /// Nested values could not be rebuilt from a leaf's levels.
     Nested(NestedError),
 }
 
@@ -70,7 +92,7 @@ impl fmt::Display for FileError {
             ),
             FileError::MissingTypeLength => write!(
                 f,
-                "FIXED_LEN_BYTE_ARRAY column has no type_length in its schema"
+                "FIXED_LEN_BYTE_ARRAY column has no positive type_length in its schema"
             ),
             FileError::MissingDecimalScale => {
                 write!(f, "DECIMAL column has no scale in its schema")
@@ -79,6 +101,10 @@ impl fmt::Display for FileError {
                 f,
                 "unsigned value {v} is above the largest supported integer ({})",
                 i64::MAX
+            ),
+            FileError::TimestampOutOfRange => write!(
+                f,
+                "timestamp is outside the range of microseconds since the epoch"
             ),
             FileError::UnsupportedTimestampPhysicalType(t) => {
                 write!(f, "unsupported physical type for a timestamp column: {t:?}")
@@ -131,6 +157,7 @@ impl From<CompressionError> for FileError {
     }
 }
 
+/// Result of reading a Parquet file.
 pub type Result<T> = std::result::Result<T, FileError>;
 
 /// A dictionary-encoded column's dictionary plus one raw index per row
@@ -156,6 +183,28 @@ fn page_size(field: &'static str, value: i32) -> Result<usize> {
     })
 }
 
+/// Decodes the page header at `pos` in `chunk_bytes` and returns it with
+/// the page's (still compressed) body and the offset just past that body,
+/// where the next page starts. A header or body running past the chunk is
+/// an error, never a panic: every offset and size here comes from the file.
+fn next_page(chunk_bytes: &[u8], pos: usize) -> Result<(page::PageHeader, &[u8], usize)> {
+    let rest = chunk_bytes.get(pos..).ok_or(FileError::ChunkOutOfBounds)?;
+    let (header, consumed) = page::decode_page_header(rest)?;
+    let page_start = pos
+        .checked_add(consumed)
+        .ok_or(FileError::ChunkOutOfBounds)?;
+    let page_end = page_start
+        .checked_add(page_size(
+            "compressed_page_size",
+            header.compressed_page_size,
+        )?)
+        .ok_or(FileError::ChunkOutOfBounds)?;
+    let compressed = chunk_bytes
+        .get(page_start..page_end)
+        .ok_or(FileError::ChunkOutOfBounds)?;
+    Ok((header, compressed, page_end))
+}
+
 /// ADR-0026 v1 positional read: gathers `positions` out of an
 /// already-decoded whole column, in the order given. `positions` are row
 /// indices into `full`'s own numbering (0-based within the row group).
@@ -175,8 +224,9 @@ fn is_flat_schema(schema: &[footer::SchemaElement]) -> bool {
         return true;
     };
     let expected_leaves = usize::try_from(root.num_children.unwrap_or(0)).unwrap_or(0);
-    schema.len() == expected_leaves + 1
-        && schema[1..]
+    let leaves = schema.get(1..).unwrap_or_default();
+    leaves.len() == expected_leaves
+        && leaves
             .iter()
             .all(|s| s.physical_type.is_some() && s.repetition != Some(Repetition::Repeated))
 }
@@ -305,7 +355,11 @@ impl<'a> ParquetFile<'a> {
 
         let mut leaf_data: LeafData = HashMap::new();
         let leaves = self.schema_tree.leaves();
-        let paths = schema_tree::leaf_paths(&self.schema_tree);
+        let paths =
+            schema_tree::leaf_paths(&self.schema_tree).ok_or(FileError::InvalidMetadata {
+                field: "schema (leaf paths too long)",
+                value: i64::try_from(leaves.len()).unwrap_or(i64::MAX),
+            })?;
         for (column_index, (leaf, path)) in leaves.iter().zip(paths.iter()).enumerate() {
             let entries = row_group.read_leaf_entries(column_index, leaf)?;
             leaf_data.insert(path.clone(), entries);
@@ -324,14 +378,17 @@ impl<'a> ParquetFile<'a> {
         Ok(columns.remove(idx).1)
     }
 
+    /// The parsed footer.
     pub fn metadata(&self) -> &FileMetaData {
         &self.metadata
     }
 
+    /// Total row count, as the footer states it.
     pub fn num_rows(&self) -> i64 {
         self.metadata.num_rows
     }
 
+    /// Number of row groups.
     pub fn num_row_groups(&self) -> usize {
         self.metadata.row_groups.len()
     }
@@ -361,11 +418,14 @@ impl<'a> ParquetFile<'a> {
         self.leaf_max_def.get(column_index).copied().unwrap_or(0)
     }
 
-    /// Fixed byte width for a `FIXED_LEN_BYTE_ARRAY` leaf column.
+    /// Fixed byte width for a `FIXED_LEN_BYTE_ARRAY` leaf column. Zero is
+    /// refused like a missing width: every value would read no bytes, so a
+    /// corrupt page could claim `i32::MAX` values from an empty body.
     fn type_length(&self, column_index: usize) -> Result<usize> {
         self.leaf_element(column_index)
             .and_then(|s| s.type_length)
             .and_then(|len| usize::try_from(len).ok())
+            .filter(|&len| len > 0)
             .ok_or(FileError::MissingTypeLength)
     }
 
@@ -389,6 +449,7 @@ pub struct RowGroupReader<'a, 'm> {
 }
 
 impl<'a, 'm> RowGroupReader<'a, 'm> {
+    /// This row group's row count, as the footer states it.
     pub fn num_rows(&self) -> i64 {
         self.row_group.num_rows
     }
@@ -408,6 +469,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             .find(|f| f.nested && f.leaves.start == column_index)
     }
 
+    /// Number of column chunks (leaf columns) in this row group.
     pub fn num_columns(&self) -> usize {
         self.row_group.columns.len()
     }
@@ -482,17 +544,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         let mut out: Vec<Option<T>> = Vec::new();
 
         while pos < chunk_bytes.len() {
-            let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
-            let page_start = pos + consumed;
-            let page_end = page_start
-                .checked_add(page_size(
-                    "compressed_page_size",
-                    header.compressed_page_size,
-                )?)
-                .ok_or(FileError::ChunkOutOfBounds)?;
-            let compressed = chunk_bytes
-                .get(page_start..page_end)
-                .ok_or(FileError::ChunkOutOfBounds)?;
+            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
 
             match header.page_type {
                 PageType::Data(data_page_header) => {
@@ -543,7 +595,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// first such page, and the caller falls back to the `Vec<Option<T>>`
     /// readers ([`Self::read_int64_column`] and friends), which handle
     /// every encoding. Page layout and decompression are exactly
-    /// [`Self::read_column`]'s.
+    /// `Self::read_column`'s.
     pub fn read_plain_fixed_column<T: Copy + Default, const N: usize>(
         &self,
         column_index: usize,
@@ -557,17 +609,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         let mut values = Vec::new();
         let mut present = Vec::new();
         while pos < chunk_bytes.len() {
-            let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
-            let page_start = pos + consumed;
-            let page_end = page_start
-                .checked_add(page_size(
-                    "compressed_page_size",
-                    header.compressed_page_size,
-                )?)
-                .ok_or(FileError::ChunkOutOfBounds)?;
-            let compressed = chunk_bytes
-                .get(page_start..page_end)
-                .ok_or(FileError::ChunkOutOfBounds)?;
+            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
             let PageType::Data(data_page_header) = header.page_type else {
                 return Ok(None);
             };
@@ -624,19 +666,10 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
 
         let mut pos = 0usize;
         let mut row_base = 0u32;
-        let mut next = 0usize;
-        while pos < chunk_bytes.len() && next < wanted.len() {
-            let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
-            let page_start = pos + consumed;
-            let page_end = page_start
-                .checked_add(page_size(
-                    "compressed_page_size",
-                    header.compressed_page_size,
-                )?)
-                .ok_or(FileError::ChunkOutOfBounds)?;
-            let compressed = chunk_bytes
-                .get(page_start..page_end)
-                .ok_or(FileError::ChunkOutOfBounds)?;
+        // The wanted rows not yet read, still sorted by position.
+        let mut remaining: &[(u32, usize)] = &wanted;
+        while pos < chunk_bytes.len() && !remaining.is_empty() {
+            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
             let PageType::Data(data_page_header) = header.page_type else {
                 return Ok(None);
             };
@@ -652,14 +685,22 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             let page_end_row = row_base
                 .checked_add(page_rows)
                 .ok_or(FileError::ChunkOutOfBounds)?;
-            let mut rows: Vec<(u32, usize)> = Vec::new();
-            while let Some(&(position, slot)) = wanted.get(next) {
-                if position >= page_end_row {
-                    break;
-                }
-                rows.push((position - row_base, slot));
-                next += 1;
-            }
+            let in_page = remaining.partition_point(|&(position, _)| position < page_end_row);
+            let (page_wanted, rest) = remaining
+                .split_at_checked(in_page)
+                .ok_or(FileError::ChunkOutOfBounds)?;
+            remaining = rest;
+            // Every earlier position went to an earlier page, so none is
+            // below `row_base`.
+            let rows = page_wanted
+                .iter()
+                .map(|&(position, slot)| {
+                    position
+                        .checked_sub(row_base)
+                        .map(|row| (row, slot))
+                        .ok_or(FileError::RowPositionOutOfRange(position))
+                })
+                .collect::<Result<Vec<(u32, usize)>>>()?;
             if !rows.is_empty() {
                 let page_body = compression::decompress(
                     codec,
@@ -679,7 +720,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             row_base = page_end_row;
             pos = page_end;
         }
-        if let Some(&(position, _)) = wanted.get(next) {
+        if let Some(&(position, _)) = remaining.first() {
             return Err(FileError::RowPositionOutOfRange(position));
         }
         if max_def_level == 0 {
@@ -713,17 +754,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         let mut indices: Vec<Option<u32>> = Vec::new();
 
         while pos < chunk_bytes.len() {
-            let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
-            let page_start = pos + consumed;
-            let page_end = page_start
-                .checked_add(page_size(
-                    "compressed_page_size",
-                    header.compressed_page_size,
-                )?)
-                .ok_or(FileError::ChunkOutOfBounds)?;
-            let compressed = chunk_bytes
-                .get(page_start..page_end)
-                .ok_or(FileError::ChunkOutOfBounds)?;
+            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
 
             match header.page_type {
                 PageType::Data(data_page_header) => {
@@ -783,17 +814,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         let mut dictionary: Option<Vec<reader::LeafScalar>> = None;
 
         while pos < chunk_bytes.len() {
-            let (header, consumed) = page::decode_page_header(&chunk_bytes[pos..])?;
-            let page_start = pos + consumed;
-            let page_end = page_start
-                .checked_add(page_size(
-                    "compressed_page_size",
-                    header.compressed_page_size,
-                )?)
-                .ok_or(FileError::ChunkOutOfBounds)?;
-            let compressed = chunk_bytes
-                .get(page_start..page_end)
-                .ok_or(FileError::ChunkOutOfBounds)?;
+            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
 
             match header.page_type {
                 // #621: DuckDB and pyarrow dictionary-encode nested leaves
@@ -961,6 +982,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         Ok(rows)
     }
 
+    /// A dictionary-encoded INT64 column's dictionary and per-row indices,
+    /// or `None` when the chunk is not dictionary-encoded throughout.
     pub fn read_int64_column_dictionary_indices(
         &self,
         column_index: usize,
@@ -968,6 +991,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         self.read_column_dictionary_indices(column_index, reader::decode_dictionary_int64)
     }
 
+    /// A dictionary-encoded DOUBLE column's dictionary and per-row indices,
+    /// or `None` when the chunk is not dictionary-encoded throughout.
     pub fn read_double_column_dictionary_indices(
         &self,
         column_index: usize,
@@ -975,6 +1000,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         self.read_column_dictionary_indices(column_index, reader::decode_dictionary_double)
     }
 
+    /// A dictionary-encoded BOOLEAN column's dictionary and per-row indices,
+    /// or `None` when the chunk is not dictionary-encoded throughout.
     pub fn read_boolean_column_dictionary_indices(
         &self,
         column_index: usize,
@@ -982,6 +1009,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         self.read_column_dictionary_indices(column_index, reader::decode_dictionary_boolean)
     }
 
+    /// A dictionary-encoded BYTE_ARRAY (UTF-8 string) column's dictionary and per-row indices,
+    /// or `None` when the chunk is not dictionary-encoded throughout.
     pub fn read_string_column_dictionary_indices(
         &self,
         column_index: usize,
@@ -989,6 +1018,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         self.read_column_dictionary_indices(column_index, reader::decode_dictionary_string)
     }
 
+    /// Every value of an INT64 column, one per row (`None` for null).
     pub fn read_int64_column(&self, column_index: usize) -> Result<Vec<Option<i64>>> {
         self.read_column(
             column_index,
@@ -998,6 +1028,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         )
     }
 
+    /// Every value of a DOUBLE column, one per row (`None` for null).
     pub fn read_double_column(&self, column_index: usize) -> Result<Vec<Option<f64>>> {
         self.read_column(
             column_index,
@@ -1007,6 +1038,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         )
     }
 
+    /// Every value of a BOOLEAN column, one per row (`None` for null).
     pub fn read_boolean_column(&self, column_index: usize) -> Result<Vec<Option<bool>>> {
         self.read_column(
             column_index,
@@ -1016,6 +1048,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         )
     }
 
+    /// Every value of a BYTE_ARRAY column as a UTF-8 string, one per row
+    /// (`None` for null).
     pub fn read_string_column(&self, column_index: usize) -> Result<Vec<Option<String>>> {
         self.read_column(
             column_index,
@@ -1025,6 +1059,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         )
     }
 
+    /// Every value of an INT32 column, one per row (`None` for null).
     pub fn read_int32_column(&self, column_index: usize) -> Result<Vec<Option<i32>>> {
         self.read_column(
             column_index,
@@ -1034,6 +1069,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         )
     }
 
+    /// Every value of a FLOAT column, one per row (`None` for null).
     pub fn read_float_column(&self, column_index: usize) -> Result<Vec<Option<f32>>> {
         self.read_column(
             column_index,
@@ -1114,6 +1150,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         gather(&full, positions)
     }
 
+    /// Every value of a FIXED_LEN_BYTE_ARRAY column, one per row (`None`
+    /// for null).
     pub fn read_fixed_len_byte_array_column(
         &self,
         column_index: usize,
@@ -1142,6 +1180,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         )
     }
 
+    /// Every raw value of an INT96 column, one per row (`None` for null);
+    /// [`Self::read_timestamp_column`] converts them to microseconds.
     pub fn read_int96_column(&self, column_index: usize) -> Result<Vec<Option<reader::Int96>>> {
         self.read_column(
             column_index,
@@ -1166,17 +1206,24 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     Some(footer::ConvertedType::TimestampMillis)
                 );
                 let raw = self.read_int64_column(column_index)?;
-                Ok(raw
-                    .into_iter()
-                    .map(|v| v.map(|v| if is_millis { v * 1000 } else { v }))
-                    .collect())
+                if !is_millis {
+                    return Ok(raw);
+                }
+                raw.into_iter()
+                    .map(|v| {
+                        v.map(|v| v.checked_mul(1000).ok_or(FileError::TimestampOutOfRange))
+                            .transpose()
+                    })
+                    .collect()
             }
             footer::PhysicalType::Int96 => {
                 let raw = self.read_int96_column(column_index)?;
-                Ok(raw
-                    .into_iter()
-                    .map(|v| v.map(int96_to_epoch_micros))
-                    .collect())
+                raw.into_iter()
+                    .map(|v| {
+                        v.map(|v| int96_to_epoch_micros(v).ok_or(FileError::TimestampOutOfRange))
+                            .transpose()
+                    })
+                    .collect()
             }
             other => Err(FileError::UnsupportedTimestampPhysicalType(other)),
         }
@@ -1246,9 +1293,13 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
 const JULIAN_DAY_UNIX_EPOCH: i64 = 2_440_588;
 
 /// INT96 = 8-byte nanoseconds-within-day + 4-byte Julian day number.
-fn int96_to_epoch_micros(v: reader::Int96) -> i64 {
-    let days_since_epoch = v.julian_day as i64 - JULIAN_DAY_UNIX_EPOCH;
-    days_since_epoch * 86_400_000_000 + v.time_nanos / 1000
+/// `None` when the instant does not fit `i64` microseconds (only a corrupt
+/// or far-off value: about 292,000 years from the epoch).
+fn int96_to_epoch_micros(v: reader::Int96) -> Option<i64> {
+    let days_since_epoch = i64::from(v.julian_day).checked_sub(JULIAN_DAY_UNIX_EPOCH)?;
+    days_since_epoch
+        .checked_mul(86_400_000_000)?
+        .checked_add(v.time_nanos / 1000)
 }
 
 #[cfg(test)]
@@ -1886,10 +1937,10 @@ mod tests {
         file
     }
 
-    // storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1: `pos < chunk_bytes.len() && next < wanted.len()`
+    // storage_parquet_parquet_file_read_plain_fixed_column_at_b943ac78: `pos < chunk_bytes.len() && !remaining.is_empty()`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v1_pages_and_wanted_rows_remain_reads_across_pages_in_positions_order(
+    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_b943ac78__v1_pages_and_wanted_rows_remain_reads_across_pages_in_positions_order(
     ) {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
@@ -1910,7 +1961,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v2_pages_run_out_with_a_row_still_wanted_is_out_of_range(
+    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_b943ac78__v2_pages_run_out_with_a_row_still_wanted_is_out_of_range(
     ) {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
@@ -1926,7 +1977,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_f95568f1__v3_wanted_rows_run_out_first_stops_before_the_remaining_pages(
+    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_b943ac78__v3_wanted_rows_run_out_first_stops_before_the_remaining_pages(
     ) {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
@@ -2364,6 +2415,7 @@ mod tests_289 {
             (FileError::MissingDictionaryPage, "DICTIONARY_PAGE"),
             (FileError::MissingTypeLength, "type_length"),
             (FileError::MissingDecimalScale, "DECIMAL"),
+            (FileError::TimestampOutOfRange, "timestamp"),
             (
                 FileError::UnsupportedTimestampPhysicalType(footer::PhysicalType::Boolean),
                 "timestamp",
@@ -2401,5 +2453,86 @@ mod tests_289 {
             ParquetFile::open(&[]),
             Err(FileError::Footer(FooterError::FileTooShort))
         ));
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test code fails fast (db-core#230)"
+)]
+mod tests_657 {
+    use super::*;
+
+    /// A data page header: `DATA_PAGE`, both sizes `size`, one value.
+    fn page_header_bytes(size: u8) -> Vec<u8> {
+        // Thrift compact: field 1 i32 0, field 2 i32 size, field 3 i32
+        // size, field 5 struct { field 1 i32 1 }, stop. Sizes are zigzag
+        // varints, so `size` must stay below 64.
+        vec![
+            0x15,
+            0x00,
+            0x15,
+            size * 2,
+            0x15,
+            size * 2,
+            0x2c,
+            0x15,
+            0x02,
+            0x00,
+            0x00,
+        ]
+    }
+
+    /// #657: a page header past the chunk end, or a page body running past
+    /// it, is `ChunkOutOfBounds`, never a slice panic.
+    #[test]
+    fn next_page_bounds_every_offset_by_the_chunk() {
+        let mut chunk = page_header_bytes(4);
+        chunk.extend_from_slice(&[1, 2, 3, 4]);
+        let (header, body, end) = next_page(&chunk, 0).unwrap();
+        assert_eq!(header.compressed_page_size, 4);
+        assert_eq!(body, [1, 2, 3, 4]);
+        assert_eq!(end, chunk.len());
+
+        assert!(matches!(
+            next_page(&chunk, chunk.len() + 1),
+            Err(FileError::ChunkOutOfBounds)
+        ));
+        chunk.pop();
+        assert!(matches!(
+            next_page(&chunk, 0),
+            Err(FileError::ChunkOutOfBounds)
+        ));
+    }
+
+    /// #657: an INT96 or `TIMESTAMP_MILLIS` value whose microseconds do not
+    /// fit `i64` was an arithmetic-overflow panic (debug) or a silently
+    /// wrapped timestamp (release); now `None`, i.e. `TimestampOutOfRange`.
+    #[test]
+    fn int96_overflow_is_none_not_a_panic() {
+        let epoch = reader::Int96 {
+            julian_day: 2_440_588,
+            time_nanos: 1_000,
+        };
+        assert_eq!(int96_to_epoch_micros(epoch), Some(1));
+        let far = reader::Int96 {
+            julian_day: i32::MAX,
+            time_nanos: 0,
+        };
+        assert_eq!(int96_to_epoch_micros(far), None);
+        let before = reader::Int96 {
+            julian_day: i32::MIN,
+            time_nanos: i64::MIN,
+        };
+        assert_eq!(int96_to_epoch_micros(before), None);
+    }
+
+    /// #657: the flat check reads the leaves with `get(1..)`, not a slice
+    /// index; an empty schema (no root) has no leaves and is flat.
+    #[test]
+    fn is_flat_schema_on_an_empty_schema() {
+        assert!(is_flat_schema(&[]));
     }
 }

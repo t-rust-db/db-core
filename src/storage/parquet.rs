@@ -6,80 +6,19 @@
 
 #![forbid(unsafe_code)]
 
-// The reader predates the crate-wide lint bar (#9): these three lints are
-// allowed per reader module (moved from `storage::column`, where they were
-// module-wide) until the burn-down lands. Per module, not here at the
-// top, so new modules in `parquet` (the writer, #566) get the full bar.
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
+// Every module meets the crate-wide lint bar (#9, burned down in #657):
+// file bytes are untrusted, so corrupt input returns an error, never a
+// panic (`tests/unit/parquet_file_corruption_test.rs`).
 pub mod compression;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod decimal;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod encoding;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod footer;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod nested;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod page;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod parquet_file;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod reader;
 pub mod schema;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod schema_tree;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod thrift;
 #[cfg(feature = "storage-column-write")]
 pub mod writer;
