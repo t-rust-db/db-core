@@ -8007,6 +8007,8 @@ pub fn db_core::vm::batch::ValueSource::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::marker::Copy for db_core::vm::batch::ValueSource
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ValueSource
 pub enum db_core::vm::batch::VmError
+pub db_core::vm::batch::VmError::DecimalOverflow
+pub db_core::vm::batch::VmError::DecimalOverflow::opcode: &'static str
 pub db_core::vm::batch::VmError::IntegerOverflow
 pub db_core::vm::batch::VmError::IntegerOverflow::opcode: &'static str
 pub db_core::vm::batch::VmError::MalformedProgram

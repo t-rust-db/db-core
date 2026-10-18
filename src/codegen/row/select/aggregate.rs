@@ -17,9 +17,6 @@ pub(super) use accum::{
     collect_aggregates, emit_agg_step, find_aggregates, flush_group, map_subexprs,
     read_pseudo_column, read_row_columns_into, AggSlot,
 };
-// #631 spike: no longer wired into GROUP BY dispatch (see entry.rs),
-// kept for possible reuse; `allow` avoids `-D warnings` failing lint.
-#[allow(unused_imports)]
 pub(crate) use join::compile_joined_grouped_scan;
 
 /// The index-only `count(*)` plan [`try_compile_index_only_count`]

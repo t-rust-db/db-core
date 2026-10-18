@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.145.0] - 2026-10-18
+
+### Changed
+
+- **Decimal overflow has its own error** (#660). A decimal `SUM` or decimal arithmetic past DECIMAL(38) is now `VmError::DecimalOverflow` ("decimal overflow (past DECIMAL(38))"), not "integer overflow". A client that matched `VmError::IntegerOverflow` for decimal overflow must also match the new variant.
+
+### Fixed
+
+- **Stale docs** (#660). `storage::row::vfs` no longer claims `unsafe` has "no local override anywhere": `fcntl` has ADR 0016's documented carve-out. A stale `#[allow(unused_imports)]` on an import that is in use is gone.
+
 ## [0.144.0] - 2026-10-18
 
 ### Fixed
