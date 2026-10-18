@@ -1354,8 +1354,117 @@ pub const SCALAR_FUNCTION_NAMES: &[&str] = &[
 /// Dispatches `name(args)` by name and arity into this module's
 /// registry, per `Opcode::Function`.
 pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {
-    let arity = args.len();
-    let f: Option<ScalarFn> = match (name.to_ascii_lowercase().as_str(), arity) {
+    match lookup(name, args.len()) {
+        Some(f) => f(args),
+        None => Err(FunctionError::Unknown {
+            name: name.to_string(),
+            arity: args.len(),
+        }),
+    }
+}
+
+/// Whether [`call`] knows `name` at `arity`: codegen refuses an unknown
+/// call up front, as sqlite3 does when it prepares the statement (#562).
+pub fn exists(name: &str, arity: usize) -> bool {
+    lookup(name, arity).is_some()
+}
+
+/// sqlite3 built-in scalar functions [`call`] does not implement yet. A
+/// call to one is not refused when the statement compiles -- sqlite3
+/// would run it -- but fails if a row reaches it, as before #562.
+const SQLITE_ONLY_FUNCTION_NAMES: &[&str] = &[
+    "changes",
+    "char",
+    "concat",
+    "concat_ws",
+    "date",
+    "datetime",
+    "format",
+    "julianday",
+    "last_insert_rowid",
+    "likelihood",
+    "likely",
+    "octet_length",
+    "printf",
+    "random",
+    "randomblob",
+    "soundex",
+    "sqlite_compileoption_get",
+    "sqlite_compileoption_used",
+    "sqlite_offset",
+    "sqlite_source_id",
+    "strftime",
+    "substring",
+    "time",
+    "timediff",
+    "total_changes",
+    "unicode",
+    "unistr",
+    "unixepoch",
+    "unlikely",
+    "acos",
+    "acosh",
+    "asin",
+    "asinh",
+    "atan",
+    "atan2",
+    "atanh",
+    "ceil",
+    "ceiling",
+    "cos",
+    "cosh",
+    "degrees",
+    "exp",
+    "floor",
+    "ln",
+    "log",
+    "log10",
+    "log2",
+    "mod",
+    "pi",
+    "pow",
+    "power",
+    "radians",
+    "sin",
+    "sinh",
+    "sqrt",
+    "tan",
+    "tanh",
+    "trunc",
+    "json",
+    "json_array",
+    "json_array_length",
+    "json_error_position",
+    "json_insert",
+    "json_object",
+    "json_patch",
+    "json_quote",
+    "json_remove",
+    "json_replace",
+    "json_set",
+    "json_type",
+    "json_valid",
+];
+
+/// What sqlite3 says when it prepares a call to `name` with `arity`
+/// arguments, if it refuses it (#562): `None` for a function [`call`]
+/// implements at that arity, or an sqlite3 built-in it does not (left to
+/// fail at run time).
+pub fn prepare_error(name: &str, arity: usize) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    if exists(name, arity) || SQLITE_ONLY_FUNCTION_NAMES.contains(&lower.as_str()) {
+        return None;
+    }
+    Some(if SCALAR_FUNCTION_NAMES.contains(&lower.as_str()) {
+        format!("wrong number of arguments to function {lower}()")
+    } else {
+        format!("no such function: {name}")
+    })
+}
+
+/// The registry entry for `name` (any case) at `arity`.
+fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
+    match (name.to_ascii_lowercase().as_str(), arity) {
         ("length", 1) => Some(length),
         ("upper", 1) => Some(upper),
         ("lower", 1) => Some(lower),
@@ -1386,13 +1495,6 @@ pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {
         ("logfmt_extract", 2) => Some(logfmt_extract),
         ("regexp_extract", 3) => Some(regexp_extract),
         _ => None,
-    };
-    match f {
-        Some(f) => f(args),
-        None => Err(FunctionError::Unknown {
-            name: name.to_string(),
-            arity,
-        }),
     }
 }
 
@@ -1402,6 +1504,29 @@ mod tests {
 
     fn v(name: &str, args: &[Value]) -> Value {
         call(name, args).unwrap()
+    }
+
+    #[test]
+    fn exists_matches_call_by_name_and_arity() {
+        assert!(exists("UPPER", 1));
+        assert!(!exists("upper", 2));
+        assert!(!exists("nosuch", 0));
+        assert!(exists("coalesce", 5));
+    }
+
+    #[test]
+    fn prepare_error_refuses_unknown_names_and_arities_only() {
+        assert_eq!(prepare_error("upper", 1), None);
+        assert_eq!(prepare_error("random", 0), None);
+        assert_eq!(prepare_error("PRINTF", 3), None);
+        assert_eq!(
+            prepare_error("nosuch", 1).as_deref(),
+            Some("no such function: nosuch")
+        );
+        assert_eq!(
+            prepare_error("GLOB", 1).as_deref(),
+            Some("wrong number of arguments to function glob()")
+        );
     }
 
     #[test]

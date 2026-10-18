@@ -339,6 +339,15 @@ pub fn compile_insert(
         None => (0..schema.columns.len()).collect(),
     };
 
+    // sqlite3: `INSERT INTO t (cols) DEFAULT VALUES` supplies 0 values
+    // for those columns -- "0 values for N columns" (#563).
+    if let (InsertSource::DefaultValues, Some(columns)) = (&insert.source, &insert.columns) {
+        return Err(CodegenError::RowShapeMismatch {
+            table: schema.name.clone(),
+            expected: columns.len(),
+            found: 0,
+        });
+    }
     if let InsertSource::Values(rows) = &insert.source {
         for row in rows {
             if !row.is_empty() && row.len() != target_columns.len() {

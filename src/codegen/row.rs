@@ -34,7 +34,7 @@ pub mod transaction;
 pub use analyze::compile_analyze;
 pub use ddl::{
     compile_create_index, compile_create_table, compile_create_view, compile_drop_index,
-    compile_drop_table,
+    compile_drop_table, compile_drop_view,
 };
 pub use dispatch::{compile_statement, leading_keywords, DispatchError};
 pub use names::result_column_names;

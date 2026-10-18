@@ -62,6 +62,11 @@ pub enum CodegenError {
         reason: String,
     },
 
+    /// A statement sqlite3 refuses when it prepares it (#562): a DDL rule
+    /// (`duplicate column name: b`, `PRIMARY KEY missing on table t`, ...)
+    /// or an unknown function. The message is sqlite3's own.
+    Rejected(String),
+
     /// #195: an `INSERT` row supplied a different number of values than
     /// the target column list names.
     RowShapeMismatch {
@@ -115,6 +120,7 @@ impl std::fmt::Display for CodegenError {
             Self::UnknownColumn { name } => write!(f, "unknown column {name:?}"),
             Self::AmbiguousColumn { name } => write!(f, "ambiguous column name: {name:?}"),
             Self::Unsupported { reason } => write!(f, "unsupported: {reason}"),
+            Self::Rejected(message) => write!(f, "{message}"),
             Self::RowShapeMismatch {
                 table,
                 expected,

@@ -214,6 +214,7 @@ pub fn db_core::codegen::row::ddl::compile_create_table(&db_core::parser::ast::C
 pub fn db_core::codegen::row::ddl::compile_create_view(&db_core::parser::ast::CreateView, &str) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::ddl::compile_drop_index(&db_core::parser::ast::DropIndex, u32) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::ddl::compile_drop_table(&db_core::parser::ast::DropTable, &db_core::schema::TableSchema) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
+pub fn db_core::codegen::row::ddl::compile_drop_view(&str) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub mod db_core::codegen::row::delete
 pub fn db_core::codegen::row::delete::compile_delete(&db_core::parser::ast::Delete, &db_core::schema::TableSchema) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::delete::compile_delete_with_catalog(&db_core::parser::ast::Delete, &db_core::schema::TableSchema, &[db_core::schema::TableSchema]) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
@@ -221,12 +222,17 @@ pub mod db_core::codegen::row::dispatch
 pub enum db_core::codegen::row::dispatch::DispatchError
 pub db_core::codegen::row::dispatch::DispatchError::Codegen(db_core::codegen::row::select::CodegenError)
 pub db_core::codegen::row::dispatch::DispatchError::IndexAlreadyExists(alloc::string::String)
+pub db_core::codegen::row::dispatch::DispatchError::NameTakenByOtherKind
+pub db_core::codegen::row::dispatch::DispatchError::NameTakenByOtherKind::index: bool
+pub db_core::codegen::row::dispatch::DispatchError::NameTakenByOtherKind::name: alloc::string::String
 pub db_core::codegen::row::dispatch::DispatchError::NoFromClause
 pub db_core::codegen::row::dispatch::DispatchError::NoSuchIndex(alloc::string::String)
 pub db_core::codegen::row::dispatch::DispatchError::NoSuchTable(alloc::string::String)
+pub db_core::codegen::row::dispatch::DispatchError::NoSuchView(alloc::string::String)
 pub db_core::codegen::row::dispatch::DispatchError::ParseFailed(alloc::string::String)
 pub db_core::codegen::row::dispatch::DispatchError::TableAlreadyExists(alloc::string::String)
 pub db_core::codegen::row::dispatch::DispatchError::Unrecognized(alloc::string::String)
+pub db_core::codegen::row::dispatch::DispatchError::UseDropTable(alloc::string::String)
 pub db_core::codegen::row::dispatch::DispatchError::UseDropView(alloc::string::String)
 pub db_core::codegen::row::dispatch::DispatchError::ViewAlreadyExists(alloc::string::String)
 impl core::convert::From<db_core::codegen::row::select::CodegenError> for db_core::codegen::row::dispatch::DispatchError
@@ -328,6 +334,7 @@ pub db_core::codegen::row::select::CodegenError::CompoundColumnMismatch::found: 
 pub db_core::codegen::row::select::CodegenError::Internal
 pub db_core::codegen::row::select::CodegenError::Internal::reason: alloc::string::String
 pub db_core::codegen::row::select::CodegenError::NoFromClause
+pub db_core::codegen::row::select::CodegenError::Rejected(alloc::string::String)
 pub db_core::codegen::row::select::CodegenError::RowShapeMismatch
 pub db_core::codegen::row::select::CodegenError::RowShapeMismatch::expected: usize
 pub db_core::codegen::row::select::CodegenError::RowShapeMismatch::found: usize
@@ -394,6 +401,7 @@ pub db_core::codegen::row::CodegenError::CompoundColumnMismatch::found: usize
 pub db_core::codegen::row::CodegenError::Internal
 pub db_core::codegen::row::CodegenError::Internal::reason: alloc::string::String
 pub db_core::codegen::row::CodegenError::NoFromClause
+pub db_core::codegen::row::CodegenError::Rejected(alloc::string::String)
 pub db_core::codegen::row::CodegenError::RowShapeMismatch
 pub db_core::codegen::row::CodegenError::RowShapeMismatch::expected: usize
 pub db_core::codegen::row::CodegenError::RowShapeMismatch::found: usize
@@ -416,12 +424,17 @@ impl core::marker::StructuralPartialEq for db_core::codegen::row::select::Codege
 pub enum db_core::codegen::row::DispatchError
 pub db_core::codegen::row::DispatchError::Codegen(db_core::codegen::row::select::CodegenError)
 pub db_core::codegen::row::DispatchError::IndexAlreadyExists(alloc::string::String)
+pub db_core::codegen::row::DispatchError::NameTakenByOtherKind
+pub db_core::codegen::row::DispatchError::NameTakenByOtherKind::index: bool
+pub db_core::codegen::row::DispatchError::NameTakenByOtherKind::name: alloc::string::String
 pub db_core::codegen::row::DispatchError::NoFromClause
 pub db_core::codegen::row::DispatchError::NoSuchIndex(alloc::string::String)
 pub db_core::codegen::row::DispatchError::NoSuchTable(alloc::string::String)
+pub db_core::codegen::row::DispatchError::NoSuchView(alloc::string::String)
 pub db_core::codegen::row::DispatchError::ParseFailed(alloc::string::String)
 pub db_core::codegen::row::DispatchError::TableAlreadyExists(alloc::string::String)
 pub db_core::codegen::row::DispatchError::Unrecognized(alloc::string::String)
+pub db_core::codegen::row::DispatchError::UseDropTable(alloc::string::String)
 pub db_core::codegen::row::DispatchError::UseDropView(alloc::string::String)
 pub db_core::codegen::row::DispatchError::ViewAlreadyExists(alloc::string::String)
 impl core::convert::From<db_core::codegen::row::select::CodegenError> for db_core::codegen::row::dispatch::DispatchError
@@ -528,6 +541,7 @@ pub fn db_core::codegen::row::compile_delete(&db_core::parser::ast::Delete, &db_
 pub fn db_core::codegen::row::compile_delete_with_catalog(&db_core::parser::ast::Delete, &db_core::schema::TableSchema, &[db_core::schema::TableSchema]) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_drop_index(&db_core::parser::ast::DropIndex, u32) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_drop_table(&db_core::parser::ast::DropTable, &db_core::schema::TableSchema) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
+pub fn db_core::codegen::row::compile_drop_view(&str) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_insert(&db_core::parser::ast::Insert, &db_core::schema::TableSchema, core::option::Option<&[db_core::schema::TableSchema]>) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_pragma(&db_core::parser::ast::Pragma) -> db_core::vm::row::program::Program
 pub fn db_core::codegen::row::compile_rollback(&db_core::parser::ast::Rollback) -> db_core::vm::row::program::Program
@@ -1187,8 +1201,10 @@ pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'
 impl core::marker::StructuralPartialEq for db_core::functions::FunctionError
 pub const db_core::functions::SCALAR_FUNCTION_NAMES: &[&str]
 pub fn db_core::functions::call(&str, &[db_core::value::Value]) -> core::result::Result<db_core::value::Value, db_core::functions::FunctionError>
+pub fn db_core::functions::exists(&str, usize) -> bool
 pub fn db_core::functions::glob_match(&str, &str) -> bool
 pub fn db_core::functions::like_match(&str, &str, core::option::Option<char>) -> bool
+pub fn db_core::functions::prepare_error(&str, usize) -> core::option::Option<alloc::string::String>
 pub fn db_core::functions::trigram_key([u8; 3]) -> i64
 pub fn db_core::functions::trigrams(&str) -> impl core::iter::traits::iterator::Iterator<Item = [u8; 3]> + '_
 pub mod db_core::json_path
@@ -9263,6 +9279,7 @@ pub db_core::vm::row::program::Opcode::Delete
 pub db_core::vm::row::program::Opcode::Divide
 pub db_core::vm::row::program::Opcode::DropIndex
 pub db_core::vm::row::program::Opcode::DropTable
+pub db_core::vm::row::program::Opcode::DropView
 pub db_core::vm::row::program::Opcode::Eq
 pub db_core::vm::row::program::Opcode::Filter
 pub db_core::vm::row::program::Opcode::FilterAdd
@@ -9392,6 +9409,8 @@ pub db_core::vm::row::program::P4::DropTable
 pub db_core::vm::row::program::P4::DropTable::indexes: alloc::vec::Vec<(alloc::string::String, u32)>
 pub db_core::vm::row::program::P4::DropTable::name: alloc::string::String
 pub db_core::vm::row::program::P4::DropTable::root_page: u32
+pub db_core::vm::row::program::P4::DropView
+pub db_core::vm::row::program::P4::DropView::name: alloc::string::String
 pub db_core::vm::row::program::P4::GroupKey(alloc::vec::Vec<db_core::vm::row::program::GroupKeyColumn>)
 pub db_core::vm::row::program::P4::Int(i64)
 pub db_core::vm::row::program::P4::None
@@ -9640,6 +9659,7 @@ pub db_core::vm::row::vm::ExecError::SchemaStorageFailed(db_core::vm::row::schem
 pub db_core::vm::row::vm::ExecError::SchemaStorageMissing
 pub db_core::vm::row::vm::ExecError::SchemaStorageMissing::opcode: &'static str
 pub db_core::vm::row::vm::ExecError::StepLimitExceeded
+pub db_core::vm::row::vm::ExecError::SynchronousChangeDuringTransaction
 pub db_core::vm::row::vm::ExecError::TransactionAlreadyActive
 pub db_core::vm::row::vm::ExecError::TransactionFailed(db_core::vm::row::transaction::TransactionError)
 pub db_core::vm::row::vm::ExecError::TypeMismatch
@@ -9774,6 +9794,7 @@ pub db_core::vm::row::ExecError::SchemaStorageFailed(db_core::vm::row::schema_st
 pub db_core::vm::row::ExecError::SchemaStorageMissing
 pub db_core::vm::row::ExecError::SchemaStorageMissing::opcode: &'static str
 pub db_core::vm::row::ExecError::StepLimitExceeded
+pub db_core::vm::row::ExecError::SynchronousChangeDuringTransaction
 pub db_core::vm::row::ExecError::TransactionAlreadyActive
 pub db_core::vm::row::ExecError::TransactionFailed(db_core::vm::row::transaction::TransactionError)
 pub db_core::vm::row::ExecError::TypeMismatch
@@ -9831,6 +9852,7 @@ pub db_core::vm::row::Opcode::Delete
 pub db_core::vm::row::Opcode::Divide
 pub db_core::vm::row::Opcode::DropIndex
 pub db_core::vm::row::Opcode::DropTable
+pub db_core::vm::row::Opcode::DropView
 pub db_core::vm::row::Opcode::Eq
 pub db_core::vm::row::Opcode::Filter
 pub db_core::vm::row::Opcode::FilterAdd
@@ -9960,6 +9982,8 @@ pub db_core::vm::row::P4::DropTable
 pub db_core::vm::row::P4::DropTable::indexes: alloc::vec::Vec<(alloc::string::String, u32)>
 pub db_core::vm::row::P4::DropTable::name: alloc::string::String
 pub db_core::vm::row::P4::DropTable::root_page: u32
+pub db_core::vm::row::P4::DropView
+pub db_core::vm::row::P4::DropView::name: alloc::string::String
 pub db_core::vm::row::P4::GroupKey(alloc::vec::Vec<db_core::vm::row::program::GroupKeyColumn>)
 pub db_core::vm::row::P4::Int(i64)
 pub db_core::vm::row::P4::None

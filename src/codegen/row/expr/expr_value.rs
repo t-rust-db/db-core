@@ -315,6 +315,11 @@ pub(crate) fn compile_value(
                 crate::parser::ast::FunctionArgs::Star => &[][..],
                 crate::parser::ast::FunctionArgs::List(list) => list.as_slice(),
             };
+            // sqlite3 refuses an unknown function when it prepares the
+            // statement, not when a row reaches it (#562).
+            if let Some(message) = crate::functions::prepare_error(name, arg_exprs.len()) {
+                return Err(CodegenError::Rejected(message));
+            }
             // `Function` reads its arguments from a contiguous register
             // window starting at P2, so the args must land next to each
             // other. Reserving the window up front and *then* compiling

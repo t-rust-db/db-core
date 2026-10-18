@@ -98,6 +98,9 @@ pub fn render_cell(cell: &Cell) -> String {
             s.push('\'');
             s
         }
+        // The row engine never yields one (SQLite has no DECIMAL type);
+        // rendered as a number for totality (#632).
+        Cell::Decimal { .. } => cell.to_string(),
     }
 }
 
