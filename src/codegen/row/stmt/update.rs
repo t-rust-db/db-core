@@ -57,7 +57,7 @@ use crate::codegen::row::stmt::insert::{
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, Label, NullTarget, RegAlloc, Scope, Target};
 use crate::parser::ast::{ConflictAction, Expr, ExprKind, Literal, ParamKind, Update};
-use crate::vm::row::{affinity_of, Instruction, Opcode, Program, P4};
+use crate::vm::row::{affinity_of, Instruction, Opcode, Program, OPFLAG_NCHANGE, P4};
 
 const TABLE_CURSOR: i32 = 0;
 const CHECK_CURSOR: i32 = 1;
@@ -643,21 +643,18 @@ fn emit_update_row_body(
         // rowid to stay put (it rewrites the existing b-tree cell in
         // place), so this keeps the old two-op rebuild.
         em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
-        em.emit(Instruction::new(
-            Opcode::Insert,
-            TABLE_CURSOR,
-            rowid_reg,
-            record_reg,
-        ));
+        // One changed row (#651): the Insert counts, the Delete doesn't.
+        em.emit(
+            Instruction::new(Opcode::Insert, TABLE_CURSOR, rowid_reg, record_reg)
+                .with_p5(OPFLAG_NCHANGE),
+        );
     } else {
         // #524: same rowid -- one combined leaf-page rewrite instead of
         // `Delete`'s and `Insert`'s independent root-to-leaf descents.
-        em.emit(Instruction::new(
-            Opcode::Update,
-            TABLE_CURSOR,
-            rowid_reg,
-            record_reg,
-        ));
+        em.emit(
+            Instruction::new(Opcode::Update, TABLE_CURSOR, rowid_reg, record_reg)
+                .with_p5(OPFLAG_NCHANGE),
+        );
     }
 
     if !schema.indexes.is_empty() {

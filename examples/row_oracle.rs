@@ -25,7 +25,11 @@ fn quote(c: &Cell) -> String {
         Cell::Int(i) => i.to_string(),
         Cell::Real(x) => format!("{x:?}"),
         Cell::Bool(b) => i64::from(*b).to_string(),
-        Cell::Text(s) => format!("'{}'", s.replace('\'', "''")),
+        // sqlite3's CLI prints text as a C string: a NUL ends it.
+        Cell::Text(s) => {
+            let s = s.split('\0').next().unwrap_or_default();
+            format!("'{}'", s.replace('\'', "''"))
+        }
         Cell::Blob(b) => {
             let hex: String = b.iter().map(|x| format!("{x:02X}")).collect();
             format!("X'{hex}'")

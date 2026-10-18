@@ -82,7 +82,7 @@ impl std::error::Error for FunctionError {}
 /// Renders `v` the way `CAST(v AS TEXT)` would, for `length()` on
 /// non-blob arguments -- an integer/real's *text* representation, not
 /// its storage bytes.
-fn as_text(v: &Value) -> String {
+pub(super) fn as_text(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
         Value::Integer(i) => i.to_string(),
@@ -360,7 +360,7 @@ fn zeroblob(args: &[Value]) -> Result<Value, FunctionError> {
 /// of forward. Operates on bytes for a BLOB argument, characters for
 /// everything else (`CAST(x AS TEXT)` first).
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-fn substr(args: &[Value]) -> Result<Value, FunctionError> {
+pub(super) fn substr(args: &[Value]) -> Result<Value, FunctionError> {
     if matches!(args[1], Value::Null) || args.get(2).is_some_and(|v| matches!(v, Value::Null)) {
         return Ok(Value::Null);
     }

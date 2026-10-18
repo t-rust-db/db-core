@@ -302,6 +302,21 @@ pub(crate) fn is_falsy(v: &Value) -> bool {
 /// through it and that blob's parsed `(serial_type, offset)` entries.
 type PseudoHeader = (Rc<[u8]>, Vec<(u64, usize)>);
 
+/// A connection's counters that outlive one program (#651): what
+/// `changes()`, `total_changes()` and `last_insert_rowid()` report. A
+/// consumer running statements one `Vm` at a time seeds each `Vm` with
+/// [`Vm::set_connection_state`] and reads it back with
+/// [`Vm::connection_state`], as it does [`Vm::autocommit`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConnectionState {
+    /// Rows the most recent completed INSERT/UPDATE/DELETE changed.
+    pub changes: i64,
+    /// Rows every INSERT/UPDATE/DELETE so far changed.
+    pub total_changes: i64,
+    /// The rowid of the most recent successful INSERT into a rowid table.
+    pub last_insert_rowid: i64,
+}
+
 /// The VM's mutable execution state: a register file of `Value` cells,
 /// a disjoint cursor-slot table, a disjoint aggregate-context slot
 /// table (`AggStep`/`AggFinal`'s `p1`, same shape as `cursors`), plus
@@ -321,6 +336,11 @@ pub struct Vm {
     /// this flag is the only real effect `Transaction`/`AutoCommit`
     /// have, since `db-core` has no pager of its own.
     autocommit: bool,
+    /// The connection's counters as of this program's start (#651);
+    /// `last_insert_rowid` moves as rows are inserted.
+    connection: ConnectionState,
+    /// Rows this program's `OPFLAG_NCHANGE` writes changed so far.
+    statement_changes: i64,
     /// A consumer's pager, installed via
     /// [`Self::set_transaction_hook`], observing/driving real
     /// transaction semantics when `Opcode::Transaction`/`AutoCommit`
@@ -377,6 +397,8 @@ impl Default for Vm {
             once_fired: HashSet::new(),
             params: Vec::new(),
             autocommit: true,
+            connection: ConnectionState::default(),
+            statement_changes: 0,
             transaction_hook: None,
             cursor_factory: None,
             cursor_roots: Vec::new(),
@@ -434,6 +456,37 @@ impl Vm {
     /// means "a `BEGIN` from an earlier program is still open".
     pub fn set_autocommit(&mut self, autocommit: bool) {
         self.autocommit = autocommit;
+    }
+
+    /// Seeds the connection's counters (see [`ConnectionState`]).
+    pub fn set_connection_state(&mut self, state: ConnectionState) {
+        self.connection = state;
+    }
+
+    /// The connection's counters after this program. `counts_changes`
+    /// says whether it was an INSERT/UPDATE/DELETE: then `changes` becomes
+    /// the rows it changed (0 included), as in sqlite3; any other
+    /// statement leaves `changes` as it was.
+    pub fn connection_state(&self, counts_changes: bool) -> ConnectionState {
+        ConnectionState {
+            changes: if counts_changes {
+                self.statement_changes
+            } else {
+                self.connection.changes
+            },
+            total_changes: self
+                .connection
+                .total_changes
+                .saturating_add(self.statement_changes),
+            last_insert_rowid: self.connection.last_insert_rowid,
+        }
+    }
+
+    /// Counts one write toward `changes()` when `p5` says so (#651).
+    fn count_change(&mut self, p5: u16) {
+        if p5 & super::program::OPFLAG_NCHANGE != 0 {
+            self.statement_changes = self.statement_changes.saturating_add(1);
+        }
     }
 
     /// The database's text encoding (header byte 56); decoded `Insert`
@@ -1764,6 +1817,10 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     reason: "cursor slot does not support insertion".to_string(),
                 });
             }
+            vm.count_change(instr.p5);
+            if instr.p5 & super::program::OPFLAG_LASTROWID != 0 {
+                vm.connection.last_insert_rowid = rowid;
+            }
             Ok(Step::Next)
         }
 
@@ -1820,6 +1877,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     reason: "cursor slot does not support update".to_string(),
                 });
             }
+            vm.count_change(instr.p5);
             Ok(Step::Next)
         }
 
@@ -1839,6 +1897,19 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     reason: format!("malformed function descriptor {descriptor:?}"),
                 }
             })?;
+            // The connection's counters live in the VM, not the pure
+            // function registry (#651). `total_changes` includes this
+            // statement's writes so far, as in sqlite3.
+            let connection = match (name.to_ascii_lowercase().as_str(), arity) {
+                ("changes", 0) => Some(vm.connection.changes),
+                ("total_changes", 0) => Some(vm.connection_state(false).total_changes),
+                ("last_insert_rowid", 0) => Some(vm.connection.last_insert_rowid),
+                _ => None,
+            };
+            if let Some(n) = connection {
+                vm.set_register(instr.p3, Value::Integer(n))?;
+                return Ok(Step::Next);
+            }
             let mut args = Vec::with_capacity(arity);
             for i in 0..arity {
                 let reg = instr
@@ -2027,6 +2098,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     reason: "cursor slot does not support deletion".to_string(),
                 });
             }
+            vm.count_change(instr.p5);
             Ok(Step::Next)
         }
         Opcode::NewRowid => {

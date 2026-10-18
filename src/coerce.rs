@@ -25,7 +25,7 @@ fn skip_while(b: &[u8], pos: &mut usize, pred: impl Fn(u8) -> bool) -> usize {
 /// digits, and an optional exponent. Returns the byte range of the
 /// literal and whether it is float-shaped (has a `.` or exponent), or
 /// `None` if no numeric prefix exists at all.
-fn scan_number_prefix(s: &str) -> Option<(usize, usize, bool)> {
+pub(crate) fn scan_number_prefix(s: &str) -> Option<(usize, usize, bool)> {
     let b = s.as_bytes();
     let mut i = 0;
     skip_while(b, &mut i, |c| c.is_ascii_whitespace());
@@ -59,6 +59,24 @@ fn scan_number_prefix(s: &str) -> Option<(usize, usize, bool)> {
         }
     }
     Some((start, end, is_float))
+}
+
+/// `s` as a number when all of it is one (surrounding whitespace aside),
+/// as sqlite3's `sqlite3_value_numeric_type` reads text: an INTEGER when
+/// it is integer-shaped and fits, else a REAL; `None` for anything else
+/// (#651's math functions).
+pub fn numeric_text(s: &str) -> Option<Value> {
+    let (start, end, is_float) = scan_number_prefix(s)?;
+    if !s.get(end..).is_some_and(|rest| rest.trim().is_empty()) {
+        return None;
+    }
+    let literal = s.get(start..end)?;
+    if !is_float {
+        if let Ok(i) = literal.parse::<i64>() {
+            return Some(Value::Integer(i));
+        }
+    }
+    literal.parse::<f64>().ok().map(Value::Real)
 }
 
 /// Coerces `s` to a numeric `Value` by parsing its longest valid numeric

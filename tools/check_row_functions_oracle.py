@@ -36,7 +36,8 @@ def norm_cell(c):
     if c.startswith("'") or c.startswith("X'") or c == "NULL":
         return c
     try:
-        return repr(float(c)) if any(x in c for x in ".eE") or c in ("Inf", "-Inf") else c
+        real = any(x in c for x in ".eE") or c.lower().lstrip("-") in ("inf", "nan")
+        return repr(float(c)) if real else c
     except ValueError:
         return c
 
@@ -48,7 +49,10 @@ def norm(out):
 
 
 def sqlite(sql):
-    p = subprocess.run(["sqlite3", ":memory:", ".mode quote", sql], capture_output=True, text=True)
+    p = subprocess.run(
+        ["sqlite3", ":memory:", ".mode quote", sql],
+        capture_output=True, encoding="utf-8", errors="replace",
+    )
     if p.returncode != 0 or "error" in p.stderr.lower():
         return "ERROR"
     return " | ".join(line for line in p.stdout.splitlines())
