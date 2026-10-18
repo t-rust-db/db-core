@@ -40120,29 +40120,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_batch_apply_map_op_74c90c3b",
+    "id": "vm_batch_apply_map_op_1bfb3631",
     "file": "src/vm/batch.rs",
     "line": 5438,
-    "decision": "match op {\n        MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {\n            return arithmetic(op, a, b).ok_or_else(|| {\n                if matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. }) {\n                    VmError::DecimalOverflow { opcode: \"Map\" }\n                } else {\n                    VmError::IntegerOverflow { opcode: \"Map\" }\n                }\n            });\n        }\n        MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),\n        MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),\n        MapOp::Lt => comparison(a, b, |o| o == Some(Less)),\n        MapOp::Le => comparison(a, b, |o| matches!(o, Some(Less | Equal))),\n        MapOp::Gt => comparison(a, b, |o| o == Some(Greater)),\n        MapOp::Ge => comparison(a, b, |o| matches!(o, Some(Greater | Equal))),\n        MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),\n        MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),\n        MapOp::Not => Value::Bool(!as_bool(a)),\n        MapOp::Concat => Value::Str(Cow::Owned(format!(\"{a}{b}\"))),\n        MapOp::Neg => match a {\n            // `-i64::MIN` has no integer representation: an error, as in\n            // DuckDB (#635), not SQLite's promotion to REAL.\n            Value::Int(v) => {\n                return v\n                    .checked_neg()\n                    .map(Value::Int)\n                    .ok_or(VmError::IntegerOverflow { opcode: \"Map\" });\n            }\n            Value::Float(v) => Value::Float(-v),\n            // In range by construction: |unscaled| < 10^38 both ways.\n            Value::Decimal { unscaled, scale } => Value::Decimal {\n                unscaled: unscaled.saturating_neg(),\n                scale: *scale,\n            },\n            _ => Value::Null,\n        },\n        // Already answered by the early returns above (they must see\n        // `Null`); the same semantics here keep this match total without\n        // an `unreachable!` the qualified subset forbids.\n        MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),\n        MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),\n        MapOp::MaskIf => {\n            // MaskIf keeps `a` wherever the predicate register is true.\n            if matches!(b, Value::Bool(true)) {\n                a.clone()\n            } else {\n                Value::Null\n            }\n        }\n        MapOp::Like { negated } => {\n            let matched = crate::functions::like_match(&a.to_string(), &b.to_string(), None);\n            Value::Bool(matched != negated)\n        }\n        MapOp::Glob { negated } => {\n            let matched = crate::functions::glob_match(&a.to_string(), &b.to_string());\n            Value::Bool(matched != negated)\n        }\n    }",
+    "decision": "match op {\n        MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {\n            let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });\n            return arithmetic(op, a, b).ok_or(if decimal {\n                VmError::DecimalOverflow { opcode: \"Map\" }\n            } else {\n                VmError::IntegerOverflow { opcode: \"Map\" }\n            });\n        }\n        MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),\n        MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),\n        MapOp::Lt => comparison(a, b, |o| o == Some(Less)),\n        MapOp::Le => comparison(a, b, |o| matches!(o, Some(Less | Equal))),\n        MapOp::Gt => comparison(a, b, |o| o == Some(Greater)),\n        MapOp::Ge => comparison(a, b, |o| matches!(o, Some(Greater | Equal))),\n        MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),\n        MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),\n        MapOp::Not => Value::Bool(!as_bool(a)),\n        MapOp::Concat => Value::Str(Cow::Owned(format!(\"{a}{b}\"))),\n        MapOp::Neg => match a {\n            // `-i64::MIN` has no integer representation: an error, as in\n            // DuckDB (#635), not SQLite's promotion to REAL.\n            Value::Int(v) => {\n                return v\n                    .checked_neg()\n                    .map(Value::Int)\n                    .ok_or(VmError::IntegerOverflow { opcode: \"Map\" });\n            }\n            Value::Float(v) => Value::Float(-v),\n            // In range by construction: |unscaled| < 10^38 both ways.\n            Value::Decimal { unscaled, scale } => Value::Decimal {\n                unscaled: unscaled.saturating_neg(),\n                scale: *scale,\n            },\n            _ => Value::Null,\n        },\n        // Already answered by the early returns above (they must see\n        // `Null`); the same semantics here keep this match total without\n        // an `unreachable!` the qualified subset forbids.\n        MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),\n        MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),\n        MapOp::MaskIf => {\n            // MaskIf keeps `a` wherever the predicate register is true.\n            if matches!(b, Value::Bool(true)) {\n                a.clone()\n            } else {\n                Value::Null\n            }\n        }\n        MapOp::Like { negated } => {\n            let matched = crate::functions::like_match(&a.to_string(), &b.to_string(), None);\n            Value::Bool(matched != negated)\n        }\n        MapOp::Glob { negated } => {\n            let matched = crate::functions::glob_match(&a.to_string(), &b.to_string());\n            Value::Bool(matched != negated)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "vm_batch_apply_map_op_a678366a",
+    "id": "vm_batch_apply_map_op_09567692",
     "file": "src/vm/batch.rs",
     "line": 5441,
-    "decision": "matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. })",
-    "conditions": 2,
-    "vectors_required": 3,
+    "decision": "decimal",
+    "conditions": 1,
+    "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "vm_batch_apply_map_op_ce99a4d1",
     "file": "src/vm/batch.rs",
-    "line": 5458,
+    "line": 5457,
     "decision": "match a {\n            // `-i64::MIN` has no integer representation: an error, as in\n            // DuckDB (#635), not SQLite's promotion to REAL.\n            Value::Int(v) => {\n                return v\n                    .checked_neg()\n                    .map(Value::Int)\n                    .ok_or(VmError::IntegerOverflow { opcode: \"Map\" });\n            }\n            Value::Float(v) => Value::Float(-v),\n            // In range by construction: |unscaled| < 10^38 both ways.\n            Value::Decimal { unscaled, scale } => Value::Decimal {\n                unscaled: unscaled.saturating_neg(),\n                scale: *scale,\n            },\n            _ => Value::Null,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40152,7 +40152,7 @@
   {
     "id": "vm_batch_apply_map_op_2ce6a5d0",
     "file": "src/vm/batch.rs",
-    "line": 5482,
+    "line": 5481,
     "decision": "matches!(b, Value::Bool(true))",
     "conditions": 1,
     "vectors_required": 2,
@@ -40162,7 +40162,7 @@
   {
     "id": "vm_batch_arithmetic_495bc58f",
     "file": "src/vm/batch.rs",
-    "line": 5510,
+    "line": 5509,
     "decision": "op == MapOp::Div",
     "conditions": 1,
     "vectors_required": 2,
@@ -40172,7 +40172,7 @@
   {
     "id": "vm_batch_arithmetic_5f45d1c0",
     "file": "src/vm/batch.rs",
-    "line": 5513,
+    "line": 5512,
     "decision": "let (Value::Int(x), Value::Int(y)) = (a, b)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40182,7 +40182,7 @@
   {
     "id": "vm_batch_arithmetic_62c86514",
     "file": "src/vm/batch.rs",
-    "line": 5516,
+    "line": 5515,
     "decision": "match (decimal_parts(a), decimal_parts(b)) {\n        (Some(l), Some(r)) => decimal_arith_op(op, l, r),\n        _ => Some(Value::Float(arith_op(op, x, y))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40192,7 +40192,7 @@
   {
     "id": "vm_batch_decimal_parts_84d63730",
     "file": "src/vm/batch.rs",
-    "line": 5525,
+    "line": 5524,
     "decision": "match v {\n        Value::Int(i) => Some((i128::from(*i), 0)),\n        Value::Decimal { unscaled, scale } => Some((*unscaled, *scale)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40202,7 +40202,7 @@
   {
     "id": "vm_batch_int_arith_op_e293d9db",
     "file": "src/vm/batch.rs",
-    "line": 5535,
+    "line": 5534,
     "decision": "match op {\n        MapOp::Add => x.checked_add(y),\n        MapOp::Sub => x.checked_sub(y),\n        MapOp::Mul => x.checked_mul(y),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40212,7 +40212,7 @@
   {
     "id": "vm_batch_decimal_arith_op_a5e0764f",
     "file": "src/vm/batch.rs",
-    "line": 5546,
+    "line": 5545,
     "decision": "match op {\n        MapOp::Mul => (u1.checked_mul(u2)?, s1.checked_add(s2)?),\n        MapOp::Add | MapOp::Sub => {\n            let scale = s1.max(s2);\n            let l = u1.checked_mul(pow10(u32::from(scale.saturating_sub(s1)))?)?;\n            let r = u2.checked_mul(pow10(u32::from(scale.saturating_sub(s2)))?)?;\n            let sum = if op == MapOp::Add {\n                l.checked_add(r)?\n            } else {\n                l.checked_sub(r)?\n            };\n            (sum, scale)\n        }\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40222,7 +40222,7 @@
   {
     "id": "vm_batch_decimal_arith_op_4de310f3",
     "file": "src/vm/batch.rs",
-    "line": 5552,
+    "line": 5551,
     "decision": "op == MapOp::Add",
     "conditions": 1,
     "vectors_required": 2,
@@ -40232,7 +40232,7 @@
   {
     "id": "vm_batch_column_num_at_62923587",
     "file": "src/vm/batch.rs",
-    "line": 5579,
+    "line": 5578,
     "decision": "match column {\n        Column::Int { data, valid } => {\n            if !valid.get(i) {\n                return None;\n            }\n            #[allow(\n                clippy::cast_precision_loss,\n                reason = \"matches Value::as_f64's existing `*v as f64` widening for Int\"\n            )]\n            data.get(i).map(|&x| (x as f64, true))\n        }\n        Column::Float { data, valid } => {\n            if !valid.get(i) {\n                return None;\n            }\n            data.get(i).map(|&x| (x, false))\n        }\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40242,7 +40242,7 @@
   {
     "id": "vm_batch_column_num_at_fa2abd69",
     "file": "src/vm/batch.rs",
-    "line": 5581,
+    "line": 5580,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40252,7 +40252,7 @@
   {
     "id": "vm_batch_column_num_at_fa2abd69_2",
     "file": "src/vm/batch.rs",
-    "line": 5591,
+    "line": 5590,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40262,7 +40262,7 @@
   {
     "id": "vm_batch_arith_op_a3fb3dfe",
     "file": "src/vm/batch.rs",
-    "line": 5606,
+    "line": 5605,
     "decision": "match op {\n        MapOp::Add => x + y,\n        MapOp::Sub => x - y,\n        MapOp::Mul => x * y,\n        MapOp::Div => x / y,\n        _ => 0.0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40272,7 +40272,7 @@
   {
     "id": "vm_batch_compare_values_51eeaee7",
     "file": "src/vm/batch.rs",
-    "line": 5632,
+    "line": 5631,
     "decision": "match (a, b) {\n        (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),\n        (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),\n        // A decimal compares exactly (#632).\n        (Value::Decimal { .. }, _) | (_, Value::Decimal { .. }) => numeric_cmp(a, b),\n        _ => a.as_f64()?.partial_cmp(&b.as_f64()?),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40282,7 +40282,7 @@
   {
     "id": "vm_batch_name_to_reg_bc77aadd",
     "file": "src/vm/batch.rs",
-    "line": 7980,
+    "line": 7979,
     "decision": "match name {\n            \"part\" => 0,\n            \"ord\" => 1,\n            \"val\" => 2,\n            other => panic!(\"unexpected test column: {other}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40292,7 +40292,7 @@
   {
     "id": "vm_batch_run_parallel_scans_all_segments_in_order_1887f16c",
     "file": "src/vm/batch.rs",
-    "line": 8462,
+    "line": 8461,
     "decision": "match &r[0] {\n                Value::Int(v) => *v,\n                other => panic!(\"expected Value::Int, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40302,7 +40302,7 @@
   {
     "id": "vm_batch_load_d1418253",
     "file": "src/vm/batch.rs",
-    "line": 8518,
+    "line": 8517,
     "decision": "!self.delay.is_zero()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40312,7 +40312,7 @@
   {
     "id": "vm_batch_subset_0c27f214",
     "file": "src/vm/batch.rs",
-    "line": 8590,
+    "line": 8589,
     "decision": "match positions {\n                    Some(p) => p\n                        .iter()\n                        .map(|&i| batch_cell(&self.batch, name, i as usize))\n                        .collect(),\n                    None => (0..n).map(|i| batch_cell(&self.batch, name, i)).collect(),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40322,7 +40322,7 @@
   {
     "id": "vm_batch_load_columns_6d7ce722",
     "file": "src/vm/batch.rs",
-    "line": 8610,
+    "line": 8609,
     "decision": "!self.subset_loads",
     "conditions": 1,
     "vectors_required": 2,
@@ -40332,7 +40332,7 @@
   {
     "id": "vm_batch_gather_at_7b5f6f17",
     "file": "src/vm/batch.rs",
-    "line": 8618,
+    "line": 8617,
     "decision": "!self.can_gather",
     "conditions": 1,
     "vectors_required": 2,
@@ -40342,7 +40342,7 @@
   {
     "id": "vm_batch_late_fixture_7ba6769d",
     "file": "src/vm/batch.rs",
-    "line": 8635,
+    "line": 8634,
     "decision": "i % 7 == 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -40352,7 +40352,7 @@
   {
     "id": "vm_batch_late_fixture_98a22069",
     "file": "src/vm/batch.rs",
-    "line": 8637,
+    "line": 8636,
     "decision": "i % 11 == 5",
     "conditions": 1,
     "vectors_required": 2,
@@ -40362,7 +40362,7 @@
   {
     "id": "vm_batch_late_fixture_ccd4547d",
     "file": "src/vm/batch.rs",
-    "line": 8646,
+    "line": 8645,
     "decision": "match k {\n                Value::Int(v) => Value::Int(v * 10),\n                _ => Value::Str(\"null-key\".into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40372,7 +40372,7 @@
   {
     "id": "vm_batch_late_program_f8be12f4",
     "file": "src/vm/batch.rs",
-    "line": 8664,
+    "line": 8663,
     "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -40382,7 +40382,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_7ccb2b33",
     "file": "src/vm/batch.rs",
-    "line": 9678,
+    "line": 9677,
     "decision": "num_threads < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -40392,7 +40392,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_acb70138",
     "file": "src/vm/batch.rs",
-    "line": 9692,
+    "line": 9691,
     "decision": "i == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40402,7 +40402,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_4b7f034b",
     "file": "src/vm/batch.rs",
-    "line": 9693,
+    "line": 9692,
     "decision": "done.load(Ordering::SeqCst) < others",
     "conditions": 1,
     "vectors_required": 2,
@@ -40412,7 +40412,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_2eba4a46",
     "file": "src/vm/batch.rs",
-    "line": 9694,
+    "line": 9693,
     "decision": "Instant::now() >= deadline",
     "conditions": 1,
     "vectors_required": 2,
@@ -40422,7 +40422,7 @@
   {
     "id": "vm_batch_group_reduce_typed_int_key_matches_the_value_key_path_5216460c",
     "file": "src/vm/batch.rs",
-    "line": 9906,
+    "line": 9905,
     "decision": "match i % 7 {\n                0 => None,\n                1 => Some(-(i % 13)),\n                2 => Some((i % 11) << 40),\n                _ => Some(i % 17),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40432,7 +40432,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_98a22246",
     "file": "src/vm/batch.rs",
-    "line": 10068,
+    "line": 10067,
     "decision": "i % 11 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40442,7 +40442,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_35425997",
     "file": "src/vm/batch.rs",
-    "line": 10076,
+    "line": 10075,
     "decision": "match i % 5 {\n                0 => Value::Null,\n                r => Value::Str(format!(\"s{r}\").into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40452,7 +40452,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_a209a191",
     "file": "src/vm/batch.rs",
-    "line": 10083,
+    "line": 10082,
     "decision": "i % 13 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40462,7 +40462,7 @@
   {
     "id": "vm_batch_group_reduce_dict_plus_int_composite_key_matches_the_value_key_path_bde636e8",
     "file": "src/vm/batch.rs",
-    "line": 10168,
+    "line": 10167,
     "decision": "ok",
     "conditions": 1,
     "vectors_required": 2,

@@ -5437,12 +5437,11 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     use std::cmp::Ordering::{Equal, Greater, Less};
     Ok(match op {
         MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {
-            return arithmetic(op, a, b).ok_or_else(|| {
-                if matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. }) {
-                    VmError::DecimalOverflow { opcode: "Map" }
-                } else {
-                    VmError::IntegerOverflow { opcode: "Map" }
-                }
+            let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });
+            return arithmetic(op, a, b).ok_or(if decimal {
+                VmError::DecimalOverflow { opcode: "Map" }
+            } else {
+                VmError::IntegerOverflow { opcode: "Map" }
             });
         }
         MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),
