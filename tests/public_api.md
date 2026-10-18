@@ -2663,6 +2663,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::Co
 pub enum db_core::storage::column::parquet::footer::FooterError
 pub db_core::storage::column::parquet::footer::FooterError::BadMagic
 pub db_core::storage::column::parquet::footer::FooterError::FileTooShort
+pub db_core::storage::column::parquet::footer::FooterError::InvalidSchema(&'static str)
 pub db_core::storage::column::parquet::footer::FooterError::Thrift(db_core::storage::parquet::thrift::ThriftError)
 impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
@@ -2775,6 +2776,8 @@ impl core::clone::Clone for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::parquet::footer::SchemaElement
+pub fn db_core::storage::parquet::footer::SchemaElement::default() -> Self
 impl core::fmt::Debug for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::SchemaElement
@@ -3167,10 +3170,13 @@ impl core::clone::Clone for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const db_core::storage::column::parquet::schema_tree::MAX_SCHEMA_DEPTH: usize
 pub fn db_core::storage::column::parquet::schema_tree::build_schema_tree(&[db_core::storage::parquet::footer::SchemaElement]) -> db_core::storage::parquet::schema_tree::SchemaNode
+pub fn db_core::storage::column::parquet::schema_tree::check_schema(&[db_core::storage::parquet::footer::SchemaElement]) -> core::result::Result<(), db_core::storage::parquet::footer::FooterError>
 pub fn db_core::storage::column::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> alloc::vec::Vec<alloc::string::String>
 pub mod db_core::storage::column::parquet::thrift
 pub enum db_core::storage::column::parquet::thrift::ThriftError
+pub db_core::storage::column::parquet::thrift::ThriftError::DepthExceeded
 pub db_core::storage::column::parquet::thrift::ThriftError::InvalidLength(u64)
 pub db_core::storage::column::parquet::thrift::ThriftError::InvalidVarint
 pub db_core::storage::column::parquet::thrift::ThriftError::UnexpectedEof
@@ -3215,6 +3221,7 @@ impl<'a> db_core::storage::parquet::thrift::Decoder<'a>
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::new(&'a [u8]) -> Self
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::position(&self) -> usize
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::read_struct(&mut self) -> db_core::storage::parquet::thrift::Result<alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>>
+pub const db_core::storage::column::parquet::thrift::MAX_DEPTH: usize
 pub fn db_core::storage::column::parquet::thrift::decode_struct(&[u8]) -> db_core::storage::parquet::thrift::Result<(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>, usize)>
 pub type db_core::storage::column::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::parquet::thrift::ThriftError>
 pub mod db_core::storage::column::parquet::writer
@@ -4552,6 +4559,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::Co
 pub enum db_core::storage::parquet::footer::FooterError
 pub db_core::storage::parquet::footer::FooterError::BadMagic
 pub db_core::storage::parquet::footer::FooterError::FileTooShort
+pub db_core::storage::parquet::footer::FooterError::InvalidSchema(&'static str)
 pub db_core::storage::parquet::footer::FooterError::Thrift(db_core::storage::parquet::thrift::ThriftError)
 impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
@@ -4664,6 +4672,8 @@ impl core::clone::Clone for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::parquet::footer::SchemaElement
+pub fn db_core::storage::parquet::footer::SchemaElement::default() -> Self
 impl core::fmt::Debug for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::SchemaElement
@@ -5056,10 +5066,13 @@ impl core::clone::Clone for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const db_core::storage::parquet::schema_tree::MAX_SCHEMA_DEPTH: usize
 pub fn db_core::storage::parquet::schema_tree::build_schema_tree(&[db_core::storage::parquet::footer::SchemaElement]) -> db_core::storage::parquet::schema_tree::SchemaNode
+pub fn db_core::storage::parquet::schema_tree::check_schema(&[db_core::storage::parquet::footer::SchemaElement]) -> core::result::Result<(), db_core::storage::parquet::footer::FooterError>
 pub fn db_core::storage::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> alloc::vec::Vec<alloc::string::String>
 pub mod db_core::storage::parquet::thrift
 pub enum db_core::storage::parquet::thrift::ThriftError
+pub db_core::storage::parquet::thrift::ThriftError::DepthExceeded
 pub db_core::storage::parquet::thrift::ThriftError::InvalidLength(u64)
 pub db_core::storage::parquet::thrift::ThriftError::InvalidVarint
 pub db_core::storage::parquet::thrift::ThriftError::UnexpectedEof
@@ -5104,6 +5117,7 @@ impl<'a> db_core::storage::parquet::thrift::Decoder<'a>
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::new(&'a [u8]) -> Self
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::position(&self) -> usize
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::read_struct(&mut self) -> db_core::storage::parquet::thrift::Result<alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>>
+pub const db_core::storage::parquet::thrift::MAX_DEPTH: usize
 pub fn db_core::storage::parquet::thrift::decode_struct(&[u8]) -> db_core::storage::parquet::thrift::Result<(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>, usize)>
 pub type db_core::storage::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::parquet::thrift::ThriftError>
 pub mod db_core::storage::parquet::writer
