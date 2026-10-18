@@ -1223,6 +1223,7 @@ pub fn db_core::json_path::JsonValue<'a>::eq(&self, &Self) -> bool
 impl<'a> core::fmt::Debug for db_core::json_path::JsonValue<'a>
 pub fn db_core::json_path::JsonValue<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::StructuralPartialEq for db_core::json_path::JsonValue<'a>
+pub const db_core::json_path::MAX_DEPTH: usize
 pub fn db_core::json_path::lookup<'a>(&db_core::json_path::JsonValue<'a>, &str) -> core::option::Option<db_core::json_path::JsonValue<'a>>
 pub fn db_core::json_path::parse_object(&str) -> core::option::Option<(db_core::json_path::JsonValue<'_>, &str)>
 pub fn db_core::json_path::parse_value(&str) -> core::option::Option<(db_core::json_path::JsonValue<'_>, &str)>

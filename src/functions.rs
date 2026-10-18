@@ -1529,6 +1529,20 @@ mod tests {
         );
     }
 
+    /// #656: `json_extract` over JSON nested past the parser's depth cap
+    /// is NULL (malformed), not a stack overflow.
+    #[test]
+    fn json_extract_over_too_deep_nesting_is_null() {
+        let deep = format!("{}1{}", "{\"a\":".repeat(100_000), "}".repeat(100_000));
+        assert_eq!(
+            v(
+                "json_extract",
+                &[Value::Text(deep.into()), Value::Text("$.a".into())]
+            ),
+            Value::Null
+        );
+    }
+
     #[test]
     fn length_counts_chars_for_text_bytes_for_blob() {
         assert_eq!(

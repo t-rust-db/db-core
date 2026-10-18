@@ -312,6 +312,19 @@ mod tests {
         batch
     }
 
+    /// #656: a line nested past `json_path::MAX_DEPTH` is not parsed as
+    /// an object -- it is kept whole as the message, as any malformed line
+    /// is -- instead of overflowing the writer's stack.
+    #[test]
+    fn a_too_deeply_nested_line_is_kept_as_its_message() {
+        let deep = format!("{}1{}", "{\"a\":".repeat(100_000), "}".repeat(100_000));
+        // `parse_one` takes a `'static` line; a test may leak one.
+        let line: &'static str = Box::leak(format!("{deep}\n").into_boxed_str());
+        let batch = parse_one(line);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch.message[0], Some(deep.as_str()));
+    }
+
     #[test]
     fn pino_shaped_line_promotes_ts_level_msg() {
         let batch = parse_one(

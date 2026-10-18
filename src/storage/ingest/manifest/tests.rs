@@ -285,3 +285,13 @@ fn retention_drops_leading_files_and_records_where_it_stopped() {
         assert!(err.to_string().contains(message), "{err}");
     }
 }
+
+/// #656 review: objects inside arrays inside objects, nested deep, make a
+/// manifest malformed -- not a stack overflow (the parser scans each
+/// array flat and parses its objects afresh).
+#[test]
+fn deeply_nested_arrays_are_malformed_not_a_stack_overflow() {
+    let n = 50_000;
+    let deep = format!("{}{}", "{\"a\":[".repeat(n), "]}".repeat(n));
+    assert!(Manifest::parse(&deep).is_err());
+}
