@@ -17330,19 +17330,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "json_path_parse_value_1aab4166",
+    "id": "json_path_parse_value_at_5e90bf25",
     "file": "src/json_path.rs",
-    "line": 36,
-    "decision": "match s.as_bytes().first()? {\n        b'{' => parse_object(s),\n        b'[' => parse_array(s),\n        b'\"' => parse_string(s).map(|(v, r)| (JsonValue::Str(v), r)),\n        b't' if s.starts_with(\"true\") => Some((JsonValue::Bool(true), s.get(4..)?)),\n        b'f' if s.starts_with(\"false\") => Some((JsonValue::Bool(false), s.get(5..)?)),\n        b'n' if s.starts_with(\"null\") => Some((JsonValue::Null, s.get(4..)?)),\n        b'-' | b'0'..=b'9' => parse_number(s),\n        _ => None,\n    }",
+    "line": 49,
+    "decision": "match s.as_bytes().first()? {\n        b'{' => parse_object_at(s, depth),\n        b'[' => parse_array(s),\n        b'\"' => parse_string(s).map(|(v, r)| (JsonValue::Str(v), r)),\n        b't' if s.starts_with(\"true\") => Some((JsonValue::Bool(true), s.get(4..)?)),\n        b'f' if s.starts_with(\"false\") => Some((JsonValue::Bool(false), s.get(5..)?)),\n        b'n' if s.starts_with(\"null\") => Some((JsonValue::Null, s.get(4..)?)),\n        b'-' | b'0'..=b'9' => parse_number(s),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "json_path_parse_value_24f0db3a",
+    "id": "json_path_parse_value_at_24f0db3a",
     "file": "src/json_path.rs",
-    "line": 40,
+    "line": 53,
     "decision": "s.starts_with(\"true\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -17350,9 +17350,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "json_path_parse_value_8e073fca",
+    "id": "json_path_parse_value_at_8e073fca",
     "file": "src/json_path.rs",
-    "line": 41,
+    "line": 54,
     "decision": "s.starts_with(\"false\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -17360,9 +17360,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "json_path_parse_value_d79019c5",
+    "id": "json_path_parse_value_at_d79019c5",
     "file": "src/json_path.rs",
-    "line": 42,
+    "line": 55,
     "decision": "s.starts_with(\"null\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -17370,9 +17370,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "json_path_parse_object_a317d6e5",
+    "id": "json_path_parse_object_at_a317d6e5",
     "file": "src/json_path.rs",
-    "line": 57,
+    "line": 77,
     "decision": "let Some(after) = rest.strip_prefix('}')",
     "conditions": 1,
     "vectors_required": 2,
@@ -17380,9 +17380,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "json_path_parse_object_eb1535d4",
+    "id": "json_path_parse_object_at_eb1535d4",
     "file": "src/json_path.rs",
-    "line": 68,
+    "line": 88,
     "decision": "let Some(after) = after_value.strip_prefix(',')",
     "conditions": 1,
     "vectors_required": 2,
@@ -17392,7 +17392,7 @@
   {
     "id": "json_path_parse_array_195d0ad2",
     "file": "src/json_path.rs",
-    "line": 85,
+    "line": 105,
     "decision": "in_string",
     "conditions": 1,
     "vectors_required": 2,
@@ -17402,7 +17402,7 @@
   {
     "id": "json_path_parse_array_5dd4da66",
     "file": "src/json_path.rs",
-    "line": 86,
+    "line": 106,
     "decision": "escaped",
     "conditions": 1,
     "vectors_required": 2,
@@ -17412,7 +17412,7 @@
   {
     "id": "json_path_parse_array_e1f54dec",
     "file": "src/json_path.rs",
-    "line": 88,
+    "line": 108,
     "decision": "b == b'\\\\'",
     "conditions": 1,
     "vectors_required": 2,
@@ -17422,7 +17422,7 @@
   {
     "id": "json_path_parse_array_b3e1fbc8",
     "file": "src/json_path.rs",
-    "line": 90,
+    "line": 110,
     "decision": "b == b'\"'",
     "conditions": 1,
     "vectors_required": 2,
@@ -17432,7 +17432,7 @@
   {
     "id": "json_path_parse_array_01cae98b",
     "file": "src/json_path.rs",
-    "line": 95,
+    "line": 115,
     "decision": "match b {\n            b'\"' => in_string = true,\n            b'[' => depth = depth.saturating_add(1),\n            b']' => {\n                depth = depth.saturating_sub(1);\n                if depth == 0 {\n                    let end = i.checked_add(1)?;\n                    return Some((JsonValue::Array(s.get(0..end)?), s.get(end..)?));\n                }\n            }\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17442,7 +17442,7 @@
   {
     "id": "json_path_parse_array_42bcd25d",
     "file": "src/json_path.rs",
-    "line": 100,
+    "line": 120,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -17452,7 +17452,7 @@
   {
     "id": "json_path_parse_string_5dd4da66",
     "file": "src/json_path.rs",
-    "line": 118,
+    "line": 138,
     "decision": "escaped",
     "conditions": 1,
     "vectors_required": 2,
@@ -17462,7 +17462,7 @@
   {
     "id": "json_path_parse_string_e1f54dec",
     "file": "src/json_path.rs",
-    "line": 120,
+    "line": 140,
     "decision": "b == b'\\\\'",
     "conditions": 1,
     "vectors_required": 2,
@@ -17472,7 +17472,7 @@
   {
     "id": "json_path_parse_string_b3e1fbc8",
     "file": "src/json_path.rs",
-    "line": 122,
+    "line": 142,
     "decision": "b == b'\"'",
     "conditions": 1,
     "vectors_required": 2,
@@ -17482,7 +17482,7 @@
   {
     "id": "json_path_unescape_427a91e8",
     "file": "src/json_path.rs",
-    "line": 137,
+    "line": 157,
     "decision": "!s.contains('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -17492,7 +17492,7 @@
   {
     "id": "json_path_unescape_b7f9c1cf",
     "file": "src/json_path.rs",
-    "line": 142,
+    "line": 162,
     "decision": "let Some(at) = rest.find('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -17502,7 +17502,7 @@
   {
     "id": "json_path_decode_escape_fc5b3d71",
     "file": "src/json_path.rs",
-    "line": 157,
+    "line": 177,
     "decision": "match tail.as_bytes().get(1)? {\n        b'\"' => '\"',\n        b'\\\\' => '\\\\',\n        b'/' => '/',\n        b'b' => '\\u{8}',\n        b'f' => '\\u{c}',\n        b'n' => '\\n',\n        b'r' => '\\r',\n        b't' => '\\t',\n        b'u' => return decode_unicode_escape(tail),\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17512,7 +17512,7 @@
   {
     "id": "json_path_decode_unicode_escape_f6fac079",
     "file": "src/json_path.rs",
-    "line": 175,
+    "line": 195,
     "decision": "!(0xD800..=0xDFFF).contains(&unit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17522,7 +17522,7 @@
   {
     "id": "json_path_decode_unicode_escape_362ded33",
     "file": "src/json_path.rs",
-    "line": 183,
+    "line": 203,
     "decision": "match low {\n        Some(low) if unit < 0xDC00 => {\n            let high = unit.checked_sub(0xD800)?;\n            let low = low.checked_sub(0xDC00)?;\n            let code = 0x10000u32.checked_add(high.checked_mul(0x400)?.checked_add(low)?)?;\n            char::from_u32(code).map(|c| (c, 12))\n        }\n        _ => Some((char::REPLACEMENT_CHARACTER, 6)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17532,7 +17532,7 @@
   {
     "id": "json_path_decode_unicode_escape_b50e816c",
     "file": "src/json_path.rs",
-    "line": 184,
+    "line": 204,
     "decision": "unit < 0xDC00",
     "conditions": 1,
     "vectors_required": 2,
@@ -17542,7 +17542,7 @@
   {
     "id": "json_path_hex4_b1420117",
     "file": "src/json_path.rs",
-    "line": 197,
+    "line": 217,
     "decision": "!digits.bytes().all(|b| b.is_ascii_hexdigit())",
     "conditions": 1,
     "vectors_required": 2,
@@ -17552,7 +17552,7 @@
   {
     "id": "json_path_parse_number_f4a2e4b7",
     "file": "src/json_path.rs",
-    "line": 207,
+    "line": 227,
     "decision": "bytes.first() == Some(&b'-')",
     "conditions": 1,
     "vectors_required": 2,
@@ -17562,7 +17562,7 @@
   {
     "id": "json_path_parse_number_75ec1a7a",
     "file": "src/json_path.rs",
-    "line": 211,
+    "line": 231,
     "decision": "bytes.get(i).is_some_and(u8::is_ascii_digit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17572,7 +17572,7 @@
   {
     "id": "json_path_parse_number_a218b299",
     "file": "src/json_path.rs",
-    "line": 214,
+    "line": 234,
     "decision": "i == start_digits",
     "conditions": 1,
     "vectors_required": 2,
@@ -17582,7 +17582,7 @@
   {
     "id": "json_path_parse_number_bb0be0d3",
     "file": "src/json_path.rs",
-    "line": 218,
+    "line": 238,
     "decision": "bytes.get(i) == Some(&b'.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -17592,7 +17592,7 @@
   {
     "id": "json_path_parse_number_75ec1a7a_2",
     "file": "src/json_path.rs",
-    "line": 221,
+    "line": 241,
     "decision": "bytes.get(i).is_some_and(u8::is_ascii_digit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17602,7 +17602,7 @@
   {
     "id": "json_path_parse_number_fdc2d075",
     "file": "src/json_path.rs",
-    "line": 225,
+    "line": 245,
     "decision": "matches!(bytes.get(i), Some(b'e' | b'E'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -17612,7 +17612,7 @@
   {
     "id": "json_path_parse_number_7490d896",
     "file": "src/json_path.rs",
-    "line": 228,
+    "line": 248,
     "decision": "matches!(bytes.get(i), Some(b'+' | b'-'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -17622,7 +17622,7 @@
   {
     "id": "json_path_parse_number_75ec1a7a_3",
     "file": "src/json_path.rs",
-    "line": 231,
+    "line": 251,
     "decision": "bytes.get(i).is_some_and(u8::is_ascii_digit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17632,7 +17632,7 @@
   {
     "id": "json_path_parse_number_87048e4f",
     "file": "src/json_path.rs",
-    "line": 237,
+    "line": 257,
     "decision": "is_float",
     "conditions": 1,
     "vectors_required": 2,
@@ -17642,7 +17642,7 @@
   {
     "id": "json_path_parse_number_0e9d6c64",
     "file": "src/json_path.rs",
-    "line": 242,
+    "line": 262,
     "decision": "match text.parse::<i64>() {\n            Ok(v) => Some((JsonValue::Int(v), rest)),\n            Err(_) => text\n                .parse::<f64>()\n                .ok()\n                .map(|v| (JsonValue::Float(v), rest)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36602,7 +36602,7 @@
   {
     "id": "storage_stream_jsonl_pino_shaped_line_promotes_ts_level_msg_9172bdea",
     "file": "src/storage/stream/jsonl.rs",
-    "line": 325,
+    "line": 338,
     "decision": "match batch.fields.get(\"req.method\").expect(\"flattened field\") {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict[indices[0].expect(\"value\") as usize], \"GET\");\n            }\n            other => panic!(\"expected dict-encoded str, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36612,7 +36612,7 @@
   {
     "id": "storage_stream_jsonl_nested_array_kept_as_raw_string_679695a0",
     "file": "src/storage/stream/jsonl.rs",
-    "line": 346,
+    "line": 359,
     "decision": "match batch.fields.get(\"tags\").expect(\"tags field\") {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict[indices[0].expect(\"value\") as usize], \"[1,2,3]\");\n            }\n            other => panic!(\"expected dict-encoded str, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

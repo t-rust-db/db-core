@@ -28,13 +28,26 @@ pub enum JsonValue<'a> {
     Array(&'a str),
 }
 
+/// Deepest object nesting [`parse_value`]/[`parse_object`] accept,
+/// sqlite3's JSON limit (`JSON_MAX_DEPTH`) (#656). Objects recurse once
+/// per level; past this a document is malformed rather than a stack
+/// overflow -- `json_extract` gets NULL, and an ingested JSON line is
+/// kept as its message.
+pub const MAX_DEPTH: usize = 1000;
+
 /// Parse one JSON value starting at `s`. Returns `(value, rest)` where
-/// `rest` is the unparsed remainder, or `None` on malformed input.
+/// `rest` is the unparsed remainder, or `None` on malformed input
+/// (including objects nested deeper than [`MAX_DEPTH`]).
 #[must_use]
 pub fn parse_value(s: &str) -> Option<(JsonValue<'_>, &str)> {
+    parse_value_at(s, 0)
+}
+
+/// [`parse_value`] `depth` objects deep.
+fn parse_value_at(s: &str, depth: usize) -> Option<(JsonValue<'_>, &str)> {
     let s = s.trim_start();
     match s.as_bytes().first()? {
-        b'{' => parse_object(s),
+        b'{' => parse_object_at(s, depth),
         b'[' => parse_array(s),
         b'"' => parse_string(s).map(|(v, r)| (JsonValue::Str(v), r)),
         b't' if s.starts_with("true") => Some((JsonValue::Bool(true), s.get(4..)?)),
@@ -46,9 +59,16 @@ pub fn parse_value(s: &str) -> Option<(JsonValue<'_>, &str)> {
 }
 
 /// Parse a top-level JSON object. Returns `None` if `s` doesn't start an
-/// object or is malformed.
+/// object or is malformed (including nesting deeper than [`MAX_DEPTH`]).
 #[must_use]
 pub fn parse_object(s: &str) -> Option<(JsonValue<'_>, &str)> {
+    parse_object_at(s, 0)
+}
+
+/// [`parse_object`] `depth` objects deep: this object is level
+/// `depth + 1`.
+fn parse_object_at(s: &str, depth: usize) -> Option<(JsonValue<'_>, &str)> {
+    let depth = depth.checked_add(1).filter(|d| *d <= MAX_DEPTH)?;
     let s = s.trim_start();
     let mut rest = s.strip_prefix('{')?;
     rest = rest.trim_start();
@@ -62,7 +82,7 @@ pub fn parse_object(s: &str) -> Option<(JsonValue<'_>, &str)> {
         let (key, after_key) = parse_string(rest)?;
         let after_key = after_key.trim_start();
         let after_colon = after_key.strip_prefix(':')?.trim_start();
-        let (value, after_value) = parse_value(after_colon)?;
+        let (value, after_value) = parse_value_at(after_colon, depth)?;
         fields.push((key, value));
         let after_value = after_value.trim_start();
         if let Some(after) = after_value.strip_prefix(',') {
@@ -272,6 +292,22 @@ pub fn lookup<'a>(root: &JsonValue<'a>, path: &str) -> Option<JsonValue<'a>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #656: objects nested to `MAX_DEPTH` parse; deeper ones, up to a
+    /// million levels, are malformed -- not a stack overflow.
+    #[test]
+    fn nesting_is_capped_at_max_depth_without_overflowing() {
+        let nested = |n: usize| format!("{}1{}", "{\"a\":".repeat(n), "}".repeat(n));
+        let at = nested(MAX_DEPTH);
+        let (v, rest) = parse_value(&at).expect("at the limit");
+        assert_eq!(rest, "");
+        let path = format!("${}", ".a".repeat(MAX_DEPTH));
+        assert_eq!(lookup(&v, &path), Some(JsonValue::Int(1)));
+        for n in [MAX_DEPTH + 1, 50_000, 1_000_000] {
+            assert!(parse_value(&nested(n)).is_none(), "{n} levels");
+            assert!(parse_object(&nested(n)).is_none(), "{n} levels");
+        }
+    }
 
     #[test]
     fn parses_flat_object() {

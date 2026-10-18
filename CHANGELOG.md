@@ -4,6 +4,15 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.143.0] - 2026-10-18
+
+### Fixed
+
+- **Deeply nested JSON no longer crashes the process** (#656, security). The JSON parser (`json_path`, used by `json_extract` and by JSON Lines ingest) recursed once per object level with no cap, so a document nested about 50,000 levels deep overflowed the stack. That included one hostile log line at ingest.
+  - Nesting is now capped at sqlite3's `JSON_MAX_DEPTH` of 1000 (`json_path::MAX_DEPTH`).
+  - A deeper document is malformed: `json_extract` returns NULL, and an ingested line is kept whole as its message, as any malformed line is.
+  - Documents a million levels deep are refused cleanly.
+
 ## [0.142.0] - 2026-10-18
 
 ### Fixed
