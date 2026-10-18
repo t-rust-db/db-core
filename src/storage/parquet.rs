@@ -17,12 +17,6 @@
     reason = "reader lint burn-down, see storage::parquet"
 )]
 pub mod compression;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod decimal;
 #[allow(
     clippy::arithmetic_side_effects,
@@ -31,12 +25,6 @@ pub mod decimal;
     reason = "reader lint burn-down, see storage::parquet"
 )]
 pub mod encoding;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod footer;
 #[allow(
     clippy::arithmetic_side_effects,
@@ -67,19 +55,7 @@ pub mod parquet_file;
 )]
 pub mod reader;
 pub mod schema;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod schema_tree;
-#[allow(
-    clippy::arithmetic_side_effects,
-    clippy::indexing_slicing,
-    missing_docs,
-    reason = "reader lint burn-down, see storage::parquet"
-)]
 pub mod thrift;
 #[cfg(feature = "storage-column-write")]
 pub mod writer;

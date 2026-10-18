@@ -19,13 +19,24 @@ const CTYPE_SET: u8 = 0x0a;
 const CTYPE_MAP: u8 = 0x0b;
 const CTYPE_STRUCT: u8 = 0x0c;
 
+/// Deepest nesting of structs, lists and maps the decoder follows. Parquet's
+/// own metadata nests about six levels; anything far deeper is hostile
+/// input that would otherwise recurse until the stack overflows (#657).
+pub const MAX_DEPTH: usize = 64;
+
+/// Why a Thrift Compact Protocol buffer could not be decoded.
 #[derive(Debug)]
 pub enum ThriftError {
+    /// The input ended in the middle of a value.
     UnexpectedEof,
+    /// A varint ran past the 10 bytes a `u64` can need.
     InvalidVarint,
     /// A length, size or narrow-integer varint does not fit its type.
     InvalidLength(u64),
+    /// A type nibble that is not a compact-protocol type id.
     UnknownType(u8),
+    /// Structs, lists or maps nested deeper than [`MAX_DEPTH`].
+    DepthExceeded,
 }
 
 impl fmt::Display for ThriftError {
@@ -35,12 +46,16 @@ impl fmt::Display for ThriftError {
             ThriftError::InvalidVarint => write!(f, "varint too long"),
             ThriftError::InvalidLength(n) => write!(f, "length or size out of range: {n}"),
             ThriftError::UnknownType(t) => write!(f, "unknown thrift compact type: 0x{t:02x}"),
+            ThriftError::DepthExceeded => {
+                write!(f, "thrift values nested deeper than {MAX_DEPTH} levels")
+            }
         }
     }
 }
 
 impl std::error::Error for ThriftError {}
 
+/// Result of a Thrift decode.
 pub type Result<T> = std::result::Result<T, ThriftError>;
 
 /// An `i16` field (field ids, I16 values) read as zigzag i32: out of range is
@@ -53,20 +68,30 @@ fn narrow_i16(v: i32) -> Result<i16> {
 /// decoded into this shape and then interpreted field-by-field.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// A `bool`.
     Bool(bool),
+    /// An `i8` (Thrift `byte`).
     Byte(i8),
+    /// An `i16`.
     I16(i16),
+    /// An `i32`.
     I32(i32),
+    /// An `i64`.
     I64(i64),
+    /// A `double`.
     Double(f64),
+    /// A `binary` or `string`, as raw bytes.
     Binary(Vec<u8>),
+    /// A `list` or `set`, in wire order.
     List(Vec<Value>),
+    /// A `map`, as key/value pairs in wire order.
     Map(Vec<(Value, Value)>),
     /// Fields keyed by their Thrift field id.
     Struct(Vec<(i16, Value)>),
 }
 
 impl Value {
+    /// Any integer value that fits an `i32`.
     pub fn as_i32(&self) -> Option<i32> {
         match self {
             Value::I16(v) => Some(*v as i32),
@@ -77,6 +102,7 @@ impl Value {
         }
     }
 
+    /// Any integer value, widened to `i64`.
     pub fn as_i64(&self) -> Option<i64> {
         match self {
             Value::I16(v) => Some(*v as i64),
@@ -87,6 +113,7 @@ impl Value {
         }
     }
 
+    /// A binary value that is valid UTF-8.
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Binary(b) => std::str::from_utf8(b).ok(),
@@ -94,6 +121,7 @@ impl Value {
         }
     }
 
+    /// A binary value's bytes.
     pub fn as_binary(&self) -> Option<&[u8]> {
         match self {
             Value::Binary(b) => Some(b),
@@ -101,6 +129,7 @@ impl Value {
         }
     }
 
+    /// A list (or set) value's elements.
     pub fn as_list(&self) -> Option<&[Value]> {
         match self {
             Value::List(l) => Some(l),
@@ -108,6 +137,7 @@ impl Value {
         }
     }
 
+    /// A struct value's `(field id, value)` pairs.
     pub fn as_struct(&self) -> Option<&[(i16, Value)]> {
         match self {
             Value::Struct(fields) => Some(fields),
@@ -124,24 +154,65 @@ impl Value {
     }
 }
 
+/// A cursor over a Thrift Compact Protocol buffer.
 pub struct Decoder<'a> {
     buf: &'a [u8],
     pos: usize,
+    /// Structs, lists and maps currently open, capped at [`MAX_DEPTH`].
+    depth: usize,
 }
 
 impl<'a> Decoder<'a> {
+    /// A decoder positioned at the start of `buf`.
     pub fn new(buf: &'a [u8]) -> Self {
-        Decoder { buf, pos: 0 }
+        Decoder {
+            buf,
+            pos: 0,
+            depth: 0,
+        }
     }
 
+    /// Bytes consumed so far.
     pub fn position(&self) -> usize {
         self.pos
     }
 
+    /// Bytes not yet consumed.
+    fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.pos)
+    }
+
     fn read_byte(&mut self) -> Result<u8> {
         let b = *self.buf.get(self.pos).ok_or(ThriftError::UnexpectedEof)?;
-        self.pos += 1;
+        self.pos = self.pos.checked_add(1).ok_or(ThriftError::UnexpectedEof)?;
         Ok(b)
+    }
+
+    /// Run `f` one nesting level (struct, list or map) deeper, or fail
+    /// past [`MAX_DEPTH`].
+    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        if self.depth >= MAX_DEPTH {
+            return Err(ThriftError::DepthExceeded);
+        }
+        self.depth = self
+            .depth
+            .checked_add(1)
+            .ok_or(ThriftError::DepthExceeded)?;
+        let out = f(self);
+        self.depth = self.depth.saturating_sub(1);
+        out
+    }
+
+    /// A collection size read from the input, checked against the bytes
+    /// left: every element takes at least `min_elem_bytes`, so a larger
+    /// size is corrupt and is rejected before anything is allocated.
+    fn checked_size(&self, size: u64, min_elem_bytes: usize) -> Result<usize> {
+        let n = usize::try_from(size).map_err(|_| ThriftError::InvalidLength(size))?;
+        let max = self.remaining().checked_div(min_elem_bytes).unwrap_or(0);
+        if n > max {
+            return Err(ThriftError::InvalidLength(size));
+        }
+        Ok(n)
     }
 
     fn read_bytes(&mut self, n: usize) -> Result<&'a [u8]> {
@@ -154,22 +225,17 @@ impl<'a> Decoder<'a> {
         Ok(slice)
     }
 
-    /// Unsigned LEB128 varint.
+    /// Unsigned LEB128 varint, at most 10 bytes; bits past 64 are dropped.
     fn read_varint(&mut self) -> Result<u64> {
         let mut result: u64 = 0;
-        let mut shift = 0u32;
-        loop {
-            if shift >= 70 {
-                return Err(ThriftError::InvalidVarint);
-            }
+        for shift in (0..64u32).step_by(7) {
             let b = self.read_byte()?;
-            result |= ((b & 0x7f) as u64) << shift;
+            result |= u64::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
-                break;
+                return Ok(result);
             }
-            shift += 7;
         }
-        Ok(result)
+        Err(ThriftError::InvalidVarint)
     }
 
     fn read_zigzag_i32(&mut self) -> Result<i32> {
@@ -177,13 +243,13 @@ impl<'a> Decoder<'a> {
         let v = u32::try_from(raw).map_err(|_| ThriftError::InvalidLength(raw))?;
         // Zigzag: the magnitude half always fits; the sign is -1 or 0.
         let half = i32::try_from(v >> 1).unwrap_or(i32::MAX);
-        Ok(half ^ -i32::from(v & 1 == 1))
+        Ok(if v & 1 == 1 { !half } else { half })
     }
 
     fn read_zigzag_i64(&mut self) -> Result<i64> {
         let v = self.read_varint()?;
         let half = i64::try_from(v >> 1).unwrap_or(i64::MAX);
-        Ok(half ^ -i64::from(v & 1 == 1))
+        Ok(if v & 1 == 1 { !half } else { half })
     }
 
     fn read_double(&mut self) -> Result<f64> {
@@ -217,8 +283,8 @@ impl<'a> Decoder<'a> {
             CTYPE_I64 => Ok(Value::I64(self.read_zigzag_i64()?)),
             CTYPE_DOUBLE => Ok(Value::Double(self.read_double()?)),
             CTYPE_BINARY => Ok(Value::Binary(self.read_binary()?)),
-            CTYPE_LIST | CTYPE_SET => self.read_list(),
-            CTYPE_MAP => self.read_map(),
+            CTYPE_LIST | CTYPE_SET => self.nested(Self::read_list),
+            CTYPE_MAP => self.nested(Self::read_map),
             CTYPE_STRUCT => self.read_struct().map(Value::Struct),
             other => Err(ThriftError::UnknownType(other)),
         }
@@ -226,12 +292,14 @@ impl<'a> Decoder<'a> {
 
     fn read_list(&mut self) -> Result<Value> {
         let header = self.read_byte()?;
-        let mut size = (header >> 4) as u64;
+        let mut size = u64::from(header >> 4);
         let elem_type = decode_element_type(header & 0x0f)?;
         if size == 15 {
             size = self.read_varint()?;
         }
-        let mut items = Vec::with_capacity(usize::try_from(size).map_or(0, |n| n.min(1 << 16)));
+        // Every element takes at least one byte on the wire.
+        let size = self.checked_size(size, 1)?;
+        let mut items = Vec::with_capacity(size);
         for _ in 0..size {
             items.push(self.read_value(elem_type, None)?);
         }
@@ -246,7 +314,9 @@ impl<'a> Decoder<'a> {
         let types = self.read_byte()?;
         let key_type = decode_element_type(types >> 4)?;
         let val_type = decode_element_type(types & 0x0f)?;
-        let mut items = Vec::with_capacity(usize::try_from(size).map_or(0, |n| n.min(1 << 16)));
+        // Every entry takes at least one byte for its key and one for its value.
+        let size = self.checked_size(size, 2)?;
+        let mut items = Vec::with_capacity(size);
         for _ in 0..size {
             let k = self.read_value(key_type, None)?;
             let v = self.read_value(val_type, None)?;
@@ -256,7 +326,13 @@ impl<'a> Decoder<'a> {
     }
 
     /// Read a struct: a sequence of field headers/values terminated by STOP.
+    /// Fails with [`ThriftError::DepthExceeded`] past [`MAX_DEPTH`] levels.
     pub fn read_struct(&mut self) -> Result<Vec<(i16, Value)>> {
+        self.nested(Self::read_struct_fields)
+    }
+
+    /// [`Self::read_struct`]'s body, run one nesting level deeper.
+    fn read_struct_fields(&mut self) -> Result<Vec<(i16, Value)>> {
         let mut fields = Vec::new();
         let mut last_field_id: i16 = 0;
         loop {
@@ -269,7 +345,9 @@ impl<'a> Decoder<'a> {
             let field_id = if delta == 0 {
                 narrow_i16(self.read_zigzag_i32()?)?
             } else {
-                last_field_id + delta as i16
+                last_field_id
+                    .checked_add(i16::from(delta))
+                    .ok_or(ThriftError::InvalidLength(u64::from(delta)))?
             };
             last_field_id = field_id;
 
@@ -525,5 +603,161 @@ mod tests_289 {
             }
             out.push(byte | 0x80);
         }
+    }
+}
+
+/// #657: hostile lengths, sizes and nesting fail fast, without a panic,
+/// stack overflow or an allocation sized by the claimed length.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
+mod tests_657 {
+    use super::*;
+
+    fn varint(out: &mut Vec<u8>, mut v: u64) {
+        loop {
+            let b = u8::try_from(v & 0x7f).unwrap();
+            v >>= 7;
+            if v == 0 {
+                out.push(b);
+                return;
+            }
+            out.push(b | 0x80);
+        }
+    }
+
+    #[test]
+    fn absurd_binary_length_is_an_error() {
+        for len in [10, 1 << 31, 1 << 62, u64::MAX] {
+            let mut buf = vec![0x18]; // field 1: binary
+            varint(&mut buf, len);
+            buf.extend_from_slice(b"abc");
+            assert!(decode_struct(&buf).is_err(), "length {len}");
+        }
+    }
+
+    #[test]
+    fn absurd_list_size_is_rejected_before_allocating() {
+        for size in [5, 1 << 20, u64::from(u32::MAX), u64::MAX] {
+            let mut buf = vec![0x19, 0xf5]; // field 1: list<i32>, escaped size
+            varint(&mut buf, size);
+            buf.extend_from_slice(&[0x02, 0x04, 0x00]);
+            assert!(
+                matches!(decode_struct(&buf), Err(ThriftError::InvalidLength(n)) if n == size),
+                "size {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_size_matching_the_remaining_bytes_still_decodes() {
+        // Three one-byte elements and the closing STOP.
+        let buf = [0x19, 0x35, 0x02, 0x04, 0x06, 0x00];
+        let (fields, _) = decode_struct(&buf).unwrap();
+        assert_eq!(
+            fields,
+            vec![(
+                1,
+                Value::List(vec![Value::I32(1), Value::I32(2), Value::I32(3)])
+            )]
+        );
+    }
+
+    #[test]
+    fn absurd_map_size_is_rejected_before_allocating() {
+        for size in [3, 1 << 40, u64::MAX] {
+            let mut buf = vec![0x1b]; // field 1: map
+            varint(&mut buf, size);
+            buf.extend_from_slice(&[0x55, 0x02, 0x04, 0x00]); // map<i32, i32>
+            assert!(
+                matches!(decode_struct(&buf), Err(ThriftError::InvalidLength(n)) if n == size),
+                "size {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn field_id_delta_overflow_is_an_error() {
+        // Field id 32767 (long form), then a delta that would pass i16::MAX.
+        let mut buf = vec![0x05];
+        varint(&mut buf, 65534); // zigzag(32767)
+        buf.push(0x02);
+        buf.extend_from_slice(&[0x15, 0x02, 0x00]);
+        assert!(matches!(
+            decode_struct(&buf),
+            Err(ThriftError::InvalidLength(1))
+        ));
+    }
+
+    #[test]
+    fn overlong_varint_is_an_error() {
+        let mut buf = vec![0x16]; // field 1: i64
+        buf.extend_from_slice(&[0xff; 10]);
+        buf.push(0x01);
+        assert!(matches!(
+            decode_struct(&buf),
+            Err(ThriftError::InvalidVarint)
+        ));
+        // Ten bytes is the most a u64 can need, and still decodes.
+        let mut buf = vec![0x16];
+        buf.extend_from_slice(&[0xff; 9]);
+        buf.extend_from_slice(&[0x01, 0x00]);
+        let (fields, _) = decode_struct(&buf).unwrap();
+        assert_eq!(fields, vec![(1, Value::I64(i64::MIN))]);
+    }
+
+    /// `depth` structs, each the first field of its parent.
+    fn nested_structs(depth: usize) -> Vec<u8> {
+        let mut buf = vec![0x1c; depth - 1];
+        buf.extend(vec![0x00; depth]);
+        buf
+    }
+
+    #[test]
+    fn struct_nesting_is_capped() {
+        assert!(decode_struct(&nested_structs(MAX_DEPTH)).is_ok());
+        assert!(matches!(
+            decode_struct(&nested_structs(MAX_DEPTH + 1)),
+            Err(ThriftError::DepthExceeded)
+        ));
+        assert!(matches!(
+            decode_struct(&nested_structs(1_000_000)),
+            Err(ThriftError::DepthExceeded)
+        ));
+    }
+
+    #[test]
+    fn list_nesting_is_capped() {
+        // field 1: list<list>, then list<list> of size 1 again and again.
+        let mut buf = vec![0x19];
+        buf.extend(vec![0x19; 1_000_000]);
+        assert!(matches!(
+            decode_struct(&buf),
+            Err(ThriftError::DepthExceeded)
+        ));
+    }
+
+    #[test]
+    fn map_nesting_is_capped() {
+        // field 1: map, then map<map, i32> of size 1 again and again.
+        let mut buf = vec![0x1b];
+        for _ in 0..1_000_000 {
+            buf.extend_from_slice(&[0x01, 0xb5]);
+        }
+        assert!(matches!(
+            decode_struct(&buf),
+            Err(ThriftError::DepthExceeded)
+        ));
+    }
+
+    #[test]
+    fn depth_resets_between_sibling_structs() {
+        // Two siblings, each nested to the cap, both decode.
+        let inner = nested_structs(MAX_DEPTH - 1);
+        let mut buf = vec![0x1c];
+        buf.extend_from_slice(&inner);
+        buf.push(0x1c);
+        buf.extend_from_slice(&inner);
+        buf.push(0x00);
+        assert!(decode_struct(&buf).is_ok());
     }
 }

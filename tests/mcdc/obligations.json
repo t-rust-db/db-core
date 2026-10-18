@@ -27132,7 +27132,7 @@
   {
     "id": "storage_parquet_decimal_fmt_8c5eefaf",
     "file": "src/storage/parquet/decimal.rs",
-    "line": 23,
+    "line": 32,
     "decision": "self.scale <= 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27140,9 +27140,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_decimal_fmt_e223671e",
+    "file": "src/storage/parquet/decimal.rs",
+    "line": 36,
+    "decision": "match scaled {\n                Some(v) => write!(f, \"{v}\"),\n                None => write!(f, \"{}e{scale}\", self.unscaled),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_decimal_fmt_681dad1b",
     "file": "src/storage/parquet/decimal.rs",
-    "line": 32,
+    "line": 41,
     "decision": "self.unscaled < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27150,9 +27160,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_decimal_fmt_7b75c49b",
+    "file": "src/storage/parquet/decimal.rs",
+    "line": 43,
+    "decision": "match pow10.and_then(|d| Some((magnitude.checked_div(d)?, magnitude.checked_rem(d)?))) {\n            Some((whole, frac)) => {\n                write!(f, \"{sign}{whole}.{frac:0width$}\", width = scale as usize)\n            }\n            None => write!(f, \"{sign}{magnitude}e-{scale}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_decimal_from_be_bytes_9eb817f7",
     "file": "src/storage/parquet/decimal.rs",
-    "line": 45,
+    "line": 56,
     "decision": "negative",
     "conditions": 1,
     "vectors_required": 2,
@@ -27320,10 +27340,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_footer_fmt_513a060f",
+    "id": "storage_parquet_footer_fmt_f11fca54",
     "file": "src/storage/parquet/footer.rs",
-    "line": 21,
-    "decision": "match self {\n            FooterError::FileTooShort => write!(f, \"file too short to contain a Parquet footer\"),\n            FooterError::BadMagic => write!(f, \"missing PAR1 magic bytes\"),\n            FooterError::Thrift(e) => write!(f, \"failed to decode footer metadata: {e}\"),\n        }",
+    "line": 29,
+    "decision": "match self {\n            FooterError::FileTooShort => write!(f, \"file too short to contain a Parquet footer\"),\n            FooterError::BadMagic => write!(f, \"missing PAR1 magic bytes\"),\n            FooterError::Thrift(e) => write!(f, \"failed to decode footer metadata: {e}\"),\n            FooterError::InvalidSchema(why) => write!(f, \"invalid footer schema: {why}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -27332,7 +27352,7 @@
   {
     "id": "storage_parquet_footer_from_11b50630",
     "file": "src/storage/parquet/footer.rs",
-    "line": 55,
+    "line": 74,
     "decision": "match v {\n            0 => PhysicalType::Boolean,\n            1 => PhysicalType::Int32,\n            2 => PhysicalType::Int64,\n            3 => PhysicalType::Int96,\n            4 => PhysicalType::Float,\n            5 => PhysicalType::Double,\n            6 => PhysicalType::ByteArray,\n            7 => PhysicalType::FixedLenByteArray,\n            other => PhysicalType::Unknown(other),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27342,7 +27362,7 @@
   {
     "id": "storage_parquet_footer_from_0f6e6401",
     "file": "src/storage/parquet/footer.rs",
-    "line": 80,
+    "line": 103,
     "decision": "match v {\n            0 => Repetition::Required,\n            1 => Repetition::Optional,\n            2 => Repetition::Repeated,\n            other => Repetition::Unknown(other),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27352,7 +27372,7 @@
   {
     "id": "storage_parquet_footer_from_7b323bfe",
     "file": "src/storage/parquet/footer.rs",
-    "line": 127,
+    "line": 160,
     "decision": "match v {\n            5 => ConvertedType::Decimal,\n            9 => ConvertedType::TimestampMillis,\n            10 => ConvertedType::TimestampMicros,\n            11 => ConvertedType::Uint8,\n            12 => ConvertedType::Uint16,\n            13 => ConvertedType::Uint32,\n            14 => ConvertedType::Uint64,\n            other => ConvertedType::Other(other),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27362,7 +27382,7 @@
   {
     "id": "storage_parquet_footer_from_f3594b0a",
     "file": "src/storage/parquet/footer.rs",
-    "line": 151,
+    "line": 188,
     "decision": "match v {\n            0 => Codec::Uncompressed,\n            1 => Codec::Snappy,\n            6 => Codec::Zstd,\n            other => Codec::Other(other),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27370,20 +27390,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_footer_parse_footer_215f5b14",
+    "id": "storage_parquet_footer_parse_footer_21b9b4fc",
     "file": "src/storage/parquet/footer.rs",
-    "line": 223,
-    "decision": "file.len() < FOOTER_LEN",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_parquet_footer_parse_footer_3253825a",
-    "file": "src/storage/parquet/footer.rs",
-    "line": 227,
-    "decision": "&tail[4..8] != MAGIC",
+    "line": 296,
+    "decision": "magic != *MAGIC",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -27392,7 +27402,7 @@
   {
     "id": "storage_parquet_footer_write_varint_2427714d",
     "file": "src/storage/parquet/footer.rs",
-    "line": 417,
+    "line": 490,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27402,7 +27412,7 @@
   {
     "id": "storage_parquet_footer_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/footer.rs",
-    "line": 421,
+    "line": 494,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27412,7 +27422,7 @@
   {
     "id": "storage_parquet_footer_list_of_structs_field_b09c4ad2",
     "file": "src/storage/parquet/footer.rs",
-    "line": 471,
+    "line": 544,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -27422,7 +27432,7 @@
   {
     "id": "storage_parquet_footer_build_statistics_6e0c02b7",
     "file": "src/storage/parquet/footer.rs",
-    "line": 522,
+    "line": 595,
     "decision": "let Some(nc) = null_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -27432,7 +27442,7 @@
   {
     "id": "storage_parquet_footer_build_statistics_c902b83d",
     "file": "src/storage/parquet/footer.rs",
-    "line": 525,
+    "line": 598,
     "decision": "let Some(dc) = distinct_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -27442,7 +27452,7 @@
   {
     "id": "storage_parquet_footer_build_statistics_deb319cf",
     "file": "src/storage/parquet/footer.rs",
-    "line": 528,
+    "line": 601,
     "decision": "let Some(max) = max_value",
     "conditions": 1,
     "vectors_required": 2,
@@ -27452,8 +27462,48 @@
   {
     "id": "storage_parquet_footer_build_statistics_0edd8feb",
     "file": "src/storage/parquet/footer.rs",
-    "line": 531,
+    "line": 604,
     "decision": "let Some(min) = min_value",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_footer_exercise_94fba42a",
+    "file": "src/storage/parquet/footer.rs",
+    "line": 861,
+    "decision": "match parse_footer(file) {\n            Ok(meta) => {\n                let tree = build_schema_tree(&meta.schema);\n                assert!(tree.leaves().len() <= meta.schema.len());\n                if let Ok(f) = ParquetFile::open(file) {\n                    assert!(f.fields().len() <= meta.schema.len());\n                }\n                true\n            }\n            Err(e) => {\n                assert!(!e.to_string().is_empty());\n                false\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_footer_exercise_080f25df",
+    "file": "src/storage/parquet/footer.rs",
+    "line": 865,
+    "decision": "let Ok(f) = ParquetFile::open(file)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_footer_every_declared_metadata_length_is_handled_00b75ab0",
+    "file": "src/storage/parquet/footer.rs",
+    "line": 931,
+    "decision": "len as usize > tail",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_footer_varint_a5b1bbc4",
+    "file": "src/storage/parquet/footer.rs",
+    "line": 973,
+    "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -28642,7 +28692,7 @@
   {
     "id": "storage_parquet_schema_tree_collect_leaves_fcd16de5",
     "file": "src/storage/parquet/schema_tree.rs",
-    "line": 30,
+    "line": 44,
     "decision": "self.is_leaf()",
     "conditions": 1,
     "vectors_required": 2,
@@ -28652,7 +28702,7 @@
   {
     "id": "storage_parquet_schema_tree_collect_paths_12c7f8f3",
     "file": "src/storage/parquet/schema_tree.rs",
-    "line": 52,
+    "line": 66,
     "decision": "node.is_leaf()",
     "conditions": 1,
     "vectors_required": 2,
@@ -28660,20 +28710,70 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_schema_tree_build_node_477e92ab",
+    "id": "storage_parquet_schema_tree_check_schema_e1b75317",
     "file": "src/storage/parquet/schema_tree.rs",
-    "line": 78,
-    "decision": "is_root",
+    "line": 93,
+    "decision": "let Some(left) = open.last_mut()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_thrift_fmt_88e675d3",
+    "id": "storage_parquet_schema_tree_check_schema_0254b575",
+    "file": "src/storage/parquet/schema_tree.rs",
+    "line": 103,
+    "decision": "children > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_schema_tree_check_schema_07dd7fc1",
+    "file": "src/storage/parquet/schema_tree.rs",
+    "line": 104,
+    "decision": "open.len() >= MAX_SCHEMA_DEPTH",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_schema_tree_build_node_42bcd25d",
+    "file": "src/storage/parquet/schema_tree.rs",
+    "line": 143,
+    "decision": "depth == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_schema_tree_build_node_8edb3480",
+    "file": "src/storage/parquet/schema_tree.rs",
+    "line": 154,
+    "decision": "depth < MAX_SCHEMA_DEPTH",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_schema_tree_build_node_f19da1f5",
+    "file": "src/storage/parquet/schema_tree.rs",
+    "line": 161,
+    "decision": "match build_node(schema, idx, def_level, rep_level, child_depth) {\n                Some(child) => children.push(child),\n                None => break,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_thrift_fmt_4e393515",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 33,
-    "decision": "match self {\n            ThriftError::UnexpectedEof => write!(f, \"unexpected end of input\"),\n            ThriftError::InvalidVarint => write!(f, \"varint too long\"),\n            ThriftError::InvalidLength(n) => write!(f, \"length or size out of range: {n}\"),\n            ThriftError::UnknownType(t) => write!(f, \"unknown thrift compact type: 0x{t:02x}\"),\n        }",
+    "line": 44,
+    "decision": "match self {\n            ThriftError::UnexpectedEof => write!(f, \"unexpected end of input\"),\n            ThriftError::InvalidVarint => write!(f, \"varint too long\"),\n            ThriftError::InvalidLength(n) => write!(f, \"length or size out of range: {n}\"),\n            ThriftError::UnknownType(t) => write!(f, \"unknown thrift compact type: 0x{t:02x}\"),\n            ThriftError::DepthExceeded => {\n                write!(f, \"thrift values nested deeper than {MAX_DEPTH} levels\")\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -28682,7 +28782,7 @@
   {
     "id": "storage_parquet_thrift_as_i32_da05c1d6",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 71,
+    "line": 96,
     "decision": "match self {\n            Value::I16(v) => Some(*v as i32),\n            Value::I32(v) => Some(*v),\n            Value::I64(v) => i32::try_from(*v).ok(),\n            Value::Byte(v) => Some(*v as i32),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28692,7 +28792,7 @@
   {
     "id": "storage_parquet_thrift_as_i64_8417d1a9",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 81,
+    "line": 107,
     "decision": "match self {\n            Value::I16(v) => Some(*v as i64),\n            Value::I32(v) => Some(*v as i64),\n            Value::I64(v) => Some(*v),\n            Value::Byte(v) => Some(*v as i64),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28702,7 +28802,7 @@
   {
     "id": "storage_parquet_thrift_as_str_ffaacf14",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 91,
+    "line": 118,
     "decision": "match self {\n            Value::Binary(b) => std::str::from_utf8(b).ok(),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28712,7 +28812,7 @@
   {
     "id": "storage_parquet_thrift_as_binary_674ac020",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 98,
+    "line": 126,
     "decision": "match self {\n            Value::Binary(b) => Some(b),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28722,7 +28822,7 @@
   {
     "id": "storage_parquet_thrift_as_list_f7a9038f",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 105,
+    "line": 134,
     "decision": "match self {\n            Value::List(l) => Some(l),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28732,7 +28832,7 @@
   {
     "id": "storage_parquet_thrift_as_struct_cfa0c4f4",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 112,
+    "line": 142,
     "decision": "match self {\n            Value::Struct(fields) => Some(fields),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28740,10 +28840,20 @@
     "wildcard_risk": true
   },
   {
-    "id": "storage_parquet_thrift_read_varint_a627ad9d",
+    "id": "storage_parquet_thrift_nested_636fd620",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 162,
-    "decision": "shift >= 70",
+    "line": 194,
+    "decision": "self.depth >= MAX_DEPTH",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_thrift_checked_size_e6820295",
+    "file": "src/storage/parquet/thrift.rs",
+    "line": 212,
+    "decision": "n > max",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -28752,7 +28862,7 @@
   {
     "id": "storage_parquet_thrift_read_varint_4f87fce9",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 167,
+    "line": 234,
     "decision": "b & 0x80 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28760,10 +28870,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_thrift_read_value_4a3e4236",
+    "id": "storage_parquet_thrift_read_zigzag_i32_44269d00",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 208,
-    "decision": "match ctype {\n            CTYPE_BOOLEAN_TRUE => match bool_value {\n                Some(v) => Ok(Value::Bool(v)),\n                None => Ok(Value::Bool(self.read_byte()? == CTYPE_BOOLEAN_TRUE)),\n            },\n            CTYPE_BOOLEAN_FALSE => Ok(Value::Bool(bool_value.unwrap_or(false))),\n            CTYPE_BYTE => Ok(Value::Byte(i8::from_be_bytes([self.read_byte()?]))),\n            CTYPE_I16 => Ok(Value::I16(narrow_i16(self.read_zigzag_i32()?)?)),\n            CTYPE_I32 => Ok(Value::I32(self.read_zigzag_i32()?)),\n            CTYPE_I64 => Ok(Value::I64(self.read_zigzag_i64()?)),\n            CTYPE_DOUBLE => Ok(Value::Double(self.read_double()?)),\n            CTYPE_BINARY => Ok(Value::Binary(self.read_binary()?)),\n            CTYPE_LIST | CTYPE_SET => self.read_list(),\n            CTYPE_MAP => self.read_map(),\n            CTYPE_STRUCT => self.read_struct().map(Value::Struct),\n            other => Err(ThriftError::UnknownType(other)),\n        }",
+    "line": 246,
+    "decision": "v & 1 == 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_thrift_read_zigzag_i64_44269d00",
+    "file": "src/storage/parquet/thrift.rs",
+    "line": 252,
+    "decision": "v & 1 == 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_thrift_read_value_40420dde",
+    "file": "src/storage/parquet/thrift.rs",
+    "line": 274,
+    "decision": "match ctype {\n            CTYPE_BOOLEAN_TRUE => match bool_value {\n                Some(v) => Ok(Value::Bool(v)),\n                None => Ok(Value::Bool(self.read_byte()? == CTYPE_BOOLEAN_TRUE)),\n            },\n            CTYPE_BOOLEAN_FALSE => Ok(Value::Bool(bool_value.unwrap_or(false))),\n            CTYPE_BYTE => Ok(Value::Byte(i8::from_be_bytes([self.read_byte()?]))),\n            CTYPE_I16 => Ok(Value::I16(narrow_i16(self.read_zigzag_i32()?)?)),\n            CTYPE_I32 => Ok(Value::I32(self.read_zigzag_i32()?)),\n            CTYPE_I64 => Ok(Value::I64(self.read_zigzag_i64()?)),\n            CTYPE_DOUBLE => Ok(Value::Double(self.read_double()?)),\n            CTYPE_BINARY => Ok(Value::Binary(self.read_binary()?)),\n            CTYPE_LIST | CTYPE_SET => self.nested(Self::read_list),\n            CTYPE_MAP => self.nested(Self::read_map),\n            CTYPE_STRUCT => self.read_struct().map(Value::Struct),\n            other => Err(ThriftError::UnknownType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -28772,7 +28902,7 @@
   {
     "id": "storage_parquet_thrift_read_value_ed8ceffb",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 209,
+    "line": 275,
     "decision": "match bool_value {\n                Some(v) => Ok(Value::Bool(v)),\n                None => Ok(Value::Bool(self.read_byte()? == CTYPE_BOOLEAN_TRUE)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28782,7 +28912,7 @@
   {
     "id": "storage_parquet_thrift_read_list_1c1fd052",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 231,
+    "line": 297,
     "decision": "size == 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -28792,7 +28922,7 @@
   {
     "id": "storage_parquet_thrift_read_map_35d003ad",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 243,
+    "line": 311,
     "decision": "size == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28800,9 +28930,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_thrift_read_struct_1fa2b47d",
+    "id": "storage_parquet_thrift_read_struct_fields_1fa2b47d",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 264,
+    "line": 340,
     "decision": "header == CTYPE_STOP",
     "conditions": 1,
     "vectors_required": 2,
@@ -28810,9 +28940,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_thrift_read_struct_967aaa8c",
+    "id": "storage_parquet_thrift_read_struct_fields_967aaa8c",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 269,
+    "line": 345,
     "decision": "delta == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28820,9 +28950,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_thrift_read_struct_74c3b927",
+    "id": "storage_parquet_thrift_read_struct_fields_74c3b927",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 276,
+    "line": 354,
     "decision": "match ctype {\n                CTYPE_BOOLEAN_TRUE => Some(true),\n                CTYPE_BOOLEAN_FALSE => Some(false),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28832,7 +28962,7 @@
   {
     "id": "storage_parquet_thrift_decode_element_type_f2cc7b7c",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 292,
+    "line": 370,
     "decision": "match nibble {\n        0x01 => Ok(CTYPE_BOOLEAN_TRUE), // bool element; value bit follows as a real byte via read_bool path\n        CTYPE_BYTE | CTYPE_I16 | CTYPE_I32 | CTYPE_I64 | CTYPE_DOUBLE | CTYPE_BINARY\n        | CTYPE_LIST | CTYPE_SET | CTYPE_MAP | CTYPE_STRUCT => Ok(nibble),\n        other => Err(ThriftError::UnknownType(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28842,7 +28972,7 @@
   {
     "id": "storage_parquet_thrift_write_varint_2427714d",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 327,
+    "line": 405,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28852,7 +28982,7 @@
   {
     "id": "storage_parquet_thrift_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 331,
+    "line": 409,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28862,7 +28992,7 @@
   {
     "id": "storage_parquet_thrift_decodes_nested_struct_0e893d60",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 372,
+    "line": 450,
     "decision": "match &fields[0].1 {\n            Value::Struct(inner_fields) => {\n                assert_eq!(inner_fields, &vec![(1, Value::Bool(true))]);\n            }\n            other => panic!(\"expected nested struct, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28872,7 +29002,7 @@
   {
     "id": "storage_parquet_thrift_decodes_map_caa53fb3",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 439,
+    "line": 517,
     "decision": "match &fields[0].1 {\n            Value::Map(entries) => {\n                assert_eq!(entries.len(), 1);\n                assert_eq!(entries[0].0.as_str(), Some(\"a\"));\n                assert_eq!(entries[0].1, Value::I32(1));\n            }\n            other => panic!(\"expected map, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28882,7 +29012,17 @@
   {
     "id": "storage_parquet_thrift_encode_varint_test_a5b1bbc4",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 522,
+    "line": 600,
+    "decision": "v == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_thrift_varint_a5b1bbc4",
+    "file": "src/storage/parquet/thrift.rs",
+    "line": 620,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
