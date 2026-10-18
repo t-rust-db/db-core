@@ -215,14 +215,8 @@ fn check_constraint(create: &CreateTable, expr: &Expr) -> Result<(), CodegenErro
         };
         problem = if is_aggregate_call(name, args) {
             Some(format!("misuse of aggregate function {name}()"))
-        } else if crate::functions::exists(name, arity) {
-            None
-        } else if crate::functions::SCALAR_FUNCTION_NAMES
-            .contains(&name.to_ascii_lowercase().as_str())
-        {
-            Some(format!("wrong number of arguments to function {name}()"))
         } else {
-            Some(format!("no such function: {name}"))
+            crate::functions::prepare_error(name, arity)
         };
         problem.is_some()
     });

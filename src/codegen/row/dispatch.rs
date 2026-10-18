@@ -259,8 +259,13 @@ fn dispatch_create_index(
 ) -> Result<Program, DispatchError> {
     match parse_create_index(sql) {
         ParseOutcome::Accepted(ci) => {
+            let schema = schemas
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(&ci.table))
+                .ok_or_else(|| DispatchError::NoSuchTable(ci.table.clone()))?;
             // A table or view of that name is a clash across kinds: an
-            // error even with `IF NOT EXISTS` (#562).
+            // error even with `IF NOT EXISTS` (#562). Checked after the
+            // target table, as sqlite3 does.
             if schemas
                 .iter()
                 .any(|s| s.name.eq_ignore_ascii_case(&ci.name))
@@ -271,10 +276,6 @@ fn dispatch_create_index(
                     index: false,
                 });
             }
-            let schema = schemas
-                .iter()
-                .find(|s| s.name.eq_ignore_ascii_case(&ci.table))
-                .ok_or_else(|| DispatchError::NoSuchTable(ci.table.clone()))?;
             let exists = schemas
                 .iter()
                 .flat_map(|s| &s.indexes)
@@ -328,11 +329,11 @@ fn dispatch_drop_view(
 ) -> Result<Program, DispatchError> {
     match parse_drop_view(sql) {
         ParseOutcome::Accepted(drop) => {
-            if views
+            if let Some(view) = views
                 .iter()
-                .any(|v| v.name.eq_ignore_ascii_case(&drop.name))
+                .find(|v| v.name.eq_ignore_ascii_case(&drop.name))
             {
-                return Ok(compile_drop_view(&drop)?);
+                return Ok(compile_drop_view(&view.name)?);
             }
             // As sqlite3: the kind is checked before `IF EXISTS`.
             if schemas
@@ -912,10 +913,14 @@ mod already_exists_tests {
     /// EXISTS.
     #[test]
     fn drop_view_resolves_by_kind() {
-        let program = compile_statement("DROP VIEW v", &schemas(), &views()).unwrap();
+        // Any case finds the view; the row is deleted by its stored name.
+        let program = compile_statement("DROP VIEW V", &schemas(), &views()).unwrap();
         assert_eq!(
             opcodes(&program),
             vec![Opcode::Init, Opcode::DropView, Opcode::Halt]
+        );
+        assert!(
+            matches!(&program.instructions[1].p4, crate::vm::row::P4::DropView { name } if name == "v")
         );
         for sql in ["DROP VIEW t", "DROP VIEW IF EXISTS t"] {
             let err = compile_statement(sql, &schemas(), &views()).unwrap_err();
@@ -978,6 +983,7 @@ mod already_exists_tests {
     fn unknown_functions_are_refused_at_compile_time() {
         for (sql, message) in [
             ("UPDATE t SET a = b()", "no such function: b"),
+            ("CREATE INDEX t ON missing(a)", "no such table: missing"),
             ("DELETE FROM t WHERE i()", "no such function: i"),
             (
                 "INSERT INTO t VALUES (nosuch(1))",
@@ -992,6 +998,8 @@ mod already_exists_tests {
             assert_eq!(err.to_string(), message, "{sql}");
         }
         assert!(compile_statement("SELECT upper(a) FROM t", &schemas(), &views()).is_ok());
+        // An sqlite3 built-in not implemented yet is left to run time.
+        assert!(compile_statement("SELECT random() FROM t WHERE 0", &schemas(), &views()).is_ok());
     }
 
     /// #562: the CREATE TABLE definitions sqlite3 refuses, with its
@@ -1021,6 +1029,8 @@ mod already_exists_tests {
                 "no such function: nosuch",
             ),
             ("CREATE TABLE x(a, CHECK (r > 0))", "no such column: r"),
+            // sqlite3 3.53 refuses a double-quoted string here as well.
+            ("CREATE TABLE x(a CHECK (a <> \"x\"))", "no such column: x"),
             ("CREATE TABLE x(b, B)", "duplicate column name: B"),
             (
                 "CREATE TABLE x(a, b, PRIMARY KEY(a), PRIMARY KEY(b))",

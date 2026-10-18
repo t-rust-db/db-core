@@ -214,7 +214,7 @@ pub fn db_core::codegen::row::ddl::compile_create_table(&db_core::parser::ast::C
 pub fn db_core::codegen::row::ddl::compile_create_view(&db_core::parser::ast::CreateView, &str) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::ddl::compile_drop_index(&db_core::parser::ast::DropIndex, u32) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::ddl::compile_drop_table(&db_core::parser::ast::DropTable, &db_core::schema::TableSchema) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
-pub fn db_core::codegen::row::ddl::compile_drop_view(&db_core::parser::ast::DropView) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
+pub fn db_core::codegen::row::ddl::compile_drop_view(&str) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub mod db_core::codegen::row::delete
 pub fn db_core::codegen::row::delete::compile_delete(&db_core::parser::ast::Delete, &db_core::schema::TableSchema) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::delete::compile_delete_with_catalog(&db_core::parser::ast::Delete, &db_core::schema::TableSchema, &[db_core::schema::TableSchema]) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
@@ -541,7 +541,7 @@ pub fn db_core::codegen::row::compile_delete(&db_core::parser::ast::Delete, &db_
 pub fn db_core::codegen::row::compile_delete_with_catalog(&db_core::parser::ast::Delete, &db_core::schema::TableSchema, &[db_core::schema::TableSchema]) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_drop_index(&db_core::parser::ast::DropIndex, u32) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_drop_table(&db_core::parser::ast::DropTable, &db_core::schema::TableSchema) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
-pub fn db_core::codegen::row::compile_drop_view(&db_core::parser::ast::DropView) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
+pub fn db_core::codegen::row::compile_drop_view(&str) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_insert(&db_core::parser::ast::Insert, &db_core::schema::TableSchema, core::option::Option<&[db_core::schema::TableSchema]>) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_pragma(&db_core::parser::ast::Pragma) -> db_core::vm::row::program::Program
 pub fn db_core::codegen::row::compile_rollback(&db_core::parser::ast::Rollback) -> db_core::vm::row::program::Program
@@ -1204,6 +1204,7 @@ pub fn db_core::functions::call(&str, &[db_core::value::Value]) -> core::result:
 pub fn db_core::functions::exists(&str, usize) -> bool
 pub fn db_core::functions::glob_match(&str, &str) -> bool
 pub fn db_core::functions::like_match(&str, &str, core::option::Option<char>) -> bool
+pub fn db_core::functions::prepare_error(&str, usize) -> core::option::Option<alloc::string::String>
 pub fn db_core::functions::trigram_key([u8; 3]) -> i64
 pub fn db_core::functions::trigrams(&str) -> impl core::iter::traits::iterator::Iterator<Item = [u8; 3]> + '_
 pub mod db_core::json_path

@@ -1964,18 +1964,18 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             // The attached pager (via the transaction hook) switches its
             // on-disk journal mode; with no hook this is the no-op
             // sqlite-rs itself falls back to for a read-only connection.
+            // sqlite3 answers the assignment with the resulting mode, one
+            // TEXT row (#561) -- only when a pager applied it.
             if let Some(hook) = vm.transaction_hook.as_mut() {
                 hook.set_journal_mode(instr.p1)
                     .map_err(ExecError::TransactionFailed)?;
+                let mode = if instr.p1 == JOURNAL_MODE_WAL {
+                    "wal"
+                } else {
+                    "delete"
+                };
+                vm.emit_row(vec![Value::Text(mode.into())]);
             }
-            // sqlite3 answers the assignment with the resulting mode, one
-            // TEXT row (#561).
-            let mode = if instr.p1 == JOURNAL_MODE_WAL {
-                "wal"
-            } else {
-                "delete"
-            };
-            vm.emit_row(vec![Value::Text(mode.into())]);
             Ok(Step::Next)
         }
         Opcode::Synchronous => {
@@ -4532,10 +4532,12 @@ mod tests {
         assert_eq!(step(&mut vm, 0, &query).unwrap(), Step::Next);
     }
 
-    /// #561: `journal_mode = DELETE` answers `delete`, with or without a
-    /// pager attached.
+    /// #561: with no pager nothing is applied, so nothing is answered;
+    /// the pager case is covered by
+    /// `journal_mode_synchronous_and_integrity_check_reach_the_hook` and
+    /// the engine's `sqlite_parity` test.
     #[test]
-    fn set_journal_mode_delete_answers_its_mode() {
+    fn set_journal_mode_answers_nothing_without_a_pager() {
         let mut vm = Vm::new();
         let program = Program::new(vec![
             Instruction::new(
@@ -4546,10 +4548,7 @@ mod tests {
             ),
             Instruction::new(Opcode::Halt, 0, 0, 0),
         ]);
-        assert_eq!(
-            execute(&mut vm, &program).unwrap(),
-            vec![vec![Value::Text("delete".into())]]
-        );
+        assert!(execute(&mut vm, &program).unwrap().is_empty());
     }
 
     #[test]

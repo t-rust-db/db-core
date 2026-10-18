@@ -10,13 +10,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 Row engine parity with sqlite3 3.53.4. On `make fuzz-diff TARGET=row N=2000 SEED=1`, wrong answers go from 18 to 0 and over-permissive findings from 54 to 6.
 
-- **`DROP VIEW`** (#552). It was parsed but refused as "unsupported or unrecognized statement". It now removes the view's `sqlite_master` row (new `Opcode::DropView`, `P4::DropView`, `compile_drop_view`). On a table it says `use DROP TABLE to delete table t`, even with `IF EXISTS`. An unknown name is `no such view: x` unless `IF EXISTS`.
-- **`PRAGMA journal_mode = WAL|DELETE` answers with the mode it set** as one TEXT row (`wal`, `delete`), as sqlite3 does (#561).
+- **`DROP VIEW`** (#552). It was parsed but refused as "unsupported or unrecognized statement". It now removes the view's `sqlite_master` row, found by its stored name in any case (new `Opcode::DropView`, `P4::DropView`, `compile_drop_view`). On a table it says `use DROP TABLE to delete table t`, even with `IF EXISTS`. An unknown name is `no such view: x` unless `IF EXISTS`.
+- **`PRAGMA journal_mode = WAL|DELETE` answers with the mode it set** as one TEXT row (`wal`, `delete`), as sqlite3 does, when a pager applied it (#561).
 - **`PRAGMA synchronous = N` inside a transaction is an error**: `Safety level may not be changed inside a transaction` (new `ExecError::SynchronousChangeDuringTransaction`, #563). Changing the level anyway was also why a later `PRAGMA synchronous` disagreed with sqlite3 (#561).
 - **`INSERT INTO t (cols) DEFAULT VALUES` is refused**: it supplies 0 values for those columns (#563).
 - **Rules sqlite3 checks when it prepares a statement** (#562), with its messages, through the new `CodegenError::Rejected`:
   - **name clashes across kinds:** tables, views and indexes share one namespace, so `there is already a table named t` and `there is already an index named i` are errors even with `IF NOT EXISTS`;
-  - **unknown functions:** `no such function: f` or `wrong number of arguments to function f()` at compile time, also where no row would evaluate the call (new `functions::exists`);
+  - **unknown functions:** `no such function: f` or `wrong number of arguments to function f()` at compile time, also where no row would evaluate the call (new `functions::exists`, `functions::prepare_error`). An sqlite3 built-in that db-core doesn't implement yet (`random`, `printf`, `date`, ...) is not refused at compile time; it still fails only when a row reaches it;
   - **`CREATE TABLE` definitions:**
     - duplicate column names;
     - expressions, subqueries or unknown columns in `PRIMARY KEY`/`UNIQUE`;
