@@ -1354,8 +1354,24 @@ pub const SCALAR_FUNCTION_NAMES: &[&str] = &[
 /// Dispatches `name(args)` by name and arity into this module's
 /// registry, per `Opcode::Function`.
 pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {
-    let arity = args.len();
-    let f: Option<ScalarFn> = match (name.to_ascii_lowercase().as_str(), arity) {
+    match lookup(name, args.len()) {
+        Some(f) => f(args),
+        None => Err(FunctionError::Unknown {
+            name: name.to_string(),
+            arity: args.len(),
+        }),
+    }
+}
+
+/// Whether [`call`] knows `name` at `arity`: codegen refuses an unknown
+/// call up front, as sqlite3 does when it prepares the statement (#562).
+pub fn exists(name: &str, arity: usize) -> bool {
+    lookup(name, arity).is_some()
+}
+
+/// The registry entry for `name` (any case) at `arity`.
+fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
+    match (name.to_ascii_lowercase().as_str(), arity) {
         ("length", 1) => Some(length),
         ("upper", 1) => Some(upper),
         ("lower", 1) => Some(lower),
@@ -1386,13 +1402,6 @@ pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {
         ("logfmt_extract", 2) => Some(logfmt_extract),
         ("regexp_extract", 3) => Some(regexp_extract),
         _ => None,
-    };
-    match f {
-        Some(f) => f(args),
-        None => Err(FunctionError::Unknown {
-            name: name.to_string(),
-            arity,
-        }),
     }
 }
 
@@ -1402,6 +1411,14 @@ mod tests {
 
     fn v(name: &str, args: &[Value]) -> Value {
         call(name, args).unwrap()
+    }
+
+    #[test]
+    fn exists_matches_call_by_name_and_arity() {
+        assert!(exists("UPPER", 1));
+        assert!(!exists("upper", 2));
+        assert!(!exists("nosuch", 0));
+        assert!(exists("coalesce", 5));
     }
 
     #[test]

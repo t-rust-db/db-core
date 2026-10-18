@@ -1158,3 +1158,43 @@ fn group_by_positions_and_aliases_match_sqlite3() {
         assert!(err.contains(error), "{sql}: {err}");
     }
 }
+
+/// #552, #561, #563: statements the fuzz oracle found answered or refused
+/// differently from sqlite3 3.53, run end to end through the engine.
+#[test]
+fn drop_view_journal_mode_and_transaction_rules_match_sqlite3() {
+    let db = TempDb::new("drop-view");
+    let mut e = engine(&db);
+    // DROP VIEW removes the catalog row; the name is free again.
+    e.run_query("DROP VIEW vv").expect("drop view");
+    let err = e.run_query("SELECT * FROM vv").unwrap_err().to_string();
+    assert!(err.contains("no such table: vv"), "{err}");
+    e.run_query("CREATE VIEW vv AS SELECT 1")
+        .expect("recreate view");
+    let err = e.run_query("DROP VIEW t").unwrap_err().to_string();
+    assert!(err.contains("use DROP TABLE to delete table t"), "{err}");
+    // journal_mode answers with the mode it set.
+    for (sql, mode) in [
+        ("PRAGMA journal_mode = WAL", "wal"),
+        ("PRAGMA journal_mode = DELETE", "delete"),
+    ] {
+        let rows = e.run_query(sql).expect(sql).rows;
+        assert_eq!(rows, vec![vec![Cell::Text(mode.into())]], "{sql}");
+    }
+    // A safety level may not change inside a transaction.
+    e.run_query("BEGIN").unwrap();
+    let err = e
+        .run_query("PRAGMA synchronous = 1")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("Safety level may not be changed inside a transaction"),
+        "{err}"
+    );
+    e.run_query("ROLLBACK").unwrap();
+    let err = e
+        .run_query("INSERT INTO u(k) DEFAULT VALUES")
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("0 values were supplied"), "{err}");
+}

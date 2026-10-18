@@ -302,6 +302,8 @@ pub enum Opcode {
     DropIndex,
     /// `CREATE VIEW`, per `p4`.
     CreateView,
+    /// `DROP VIEW`, per `p4` (#552).
+    DropView,
     /// `ANALYZE`, per `p4`.
     Analyze,
     // compare (fused jump)
@@ -488,6 +490,12 @@ pub enum P4 {
         name: String,
         /// The verbatim `sqlite_master.sql` text.
         sql: String,
+    },
+    /// `DropView` (#552): the view's name. A view has no b-tree, so
+    /// there are no pages to free.
+    DropView {
+        /// The view's name.
+        name: String,
     },
     /// `DropTable` (db-core#97): the target table's name/root page,
     /// plus every index on it (`(name, root_page)`) to cascade-drop.
@@ -818,6 +826,7 @@ impl Opcode {
             | Opcode::CreateIndex
             | Opcode::DropIndex
             | Opcode::CreateView
+            | Opcode::DropView
             | Opcode::Analyze => NONE,
             Opcode::OpenPseudo
             | Opcode::Rowid

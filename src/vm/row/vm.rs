@@ -37,7 +37,9 @@ use super::compare::compare;
 use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, PseudoCursor, SorterCursor};
 use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
-use super::program::{Instruction, Opcode, Program, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY};
+use super::program::{
+    Instruction, Opcode, Program, JOURNAL_MODE_WAL, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY,
+};
 use super::record::{decode_column_with, decode_record, encode_record, parse_header};
 use super::schema_storage::{SchemaStorage, SchemaStorageError};
 use super::transaction::Transaction;
@@ -135,6 +137,10 @@ pub enum ExecError {
     /// (`!Vm::autocommit`) -- stock SQLite refuses to change journal
     /// mode mid-transaction.
     JournalModeChangeDuringTransaction,
+    /// `Synchronous` set a level while a transaction was open -- stock
+    /// SQLite refuses with "Safety level may not be changed inside a
+    /// transaction" (#563).
+    SynchronousChangeDuringTransaction,
     /// `Transaction` while one is already open (sqlite-rs, #134).
     TransactionAlreadyActive,
     /// `AutoCommit` commit with no open transaction (#134).
@@ -215,6 +221,9 @@ impl std::fmt::Display for ExecError {
                 f,
                 "SetJournalMode: cannot change journal mode within a transaction"
             ),
+            ExecError::SynchronousChangeDuringTransaction => {
+                write!(f, "Safety level may not be changed inside a transaction")
+            }
             ExecError::TransactionAlreadyActive => {
                 write!(f, "cannot start a transaction within a transaction")
             }
@@ -1959,6 +1968,14 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 hook.set_journal_mode(instr.p1)
                     .map_err(ExecError::TransactionFailed)?;
             }
+            // sqlite3 answers the assignment with the resulting mode, one
+            // TEXT row (#561).
+            let mode = if instr.p1 == JOURNAL_MODE_WAL {
+                "wal"
+            } else {
+                "delete"
+            };
+            vm.emit_row(vec![Value::Text(mode.into())]);
             Ok(Step::Next)
         }
         Opcode::Synchronous => {
@@ -1972,6 +1989,9 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                     .unwrap_or(SYNCHRONOUS_FULL);
                 vm.emit_row(vec![Value::Integer(i64::from(level))]);
                 return Ok(Step::Next);
+            }
+            if !vm.autocommit {
+                return Err(ExecError::SynchronousChangeDuringTransaction);
             }
             if let Some(hook) = vm.transaction_hook.as_mut() {
                 hook.set_synchronous(instr.p1)
@@ -2107,6 +2127,25 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let storage = vm.schema_storage("CreateView")?;
             storage
                 .insert_master_row("view", &name, &name, 0, &sql)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::DropView => {
+            // A view has no b-tree: its sqlite_master row, then the
+            // cookie bump (#552).
+            let P4::DropView { name } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "DropView",
+                    reason: format!("expected a DropView P4, got {:?}", instr.p4),
+                });
+            };
+            let name = name.clone();
+            let storage = vm.schema_storage("DropView")?;
+            storage
+                .delete_master_row(&name)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
@@ -4463,12 +4502,53 @@ mod tests {
             Instruction::new(Opcode::Halt, 0, 0, 0),
         ]);
         let rows = execute(&mut vm, &program).unwrap();
+        // #561: the journal_mode assignment answers with the new mode.
         assert_eq!(
             rows,
             vec![
+                vec![Value::Text("wal".into())],
                 vec![Value::Integer(i64::from(SYNCHRONOUS_OFF))],
                 vec![Value::Text("ok quick=true".into())],
             ]
+        );
+    }
+
+    /// #563: a safety level may not change inside a transaction (sqlite3);
+    /// the query form still answers.
+    #[test]
+    fn synchronous_assignment_errors_when_a_transaction_is_open() {
+        let mut vm = Vm::new();
+        vm.autocommit = false;
+        let set = Instruction::new(Opcode::Synchronous, SYNCHRONOUS_FULL, 0, 0);
+        assert!(matches!(
+            step(&mut vm, 0, &set),
+            Err(ExecError::SynchronousChangeDuringTransaction)
+        ));
+        assert_eq!(
+            ExecError::SynchronousChangeDuringTransaction.to_string(),
+            "Safety level may not be changed inside a transaction"
+        );
+        let query = Instruction::new(Opcode::Synchronous, SYNCHRONOUS_QUERY, 0, 0);
+        assert_eq!(step(&mut vm, 0, &query).unwrap(), Step::Next);
+    }
+
+    /// #561: `journal_mode = DELETE` answers `delete`, with or without a
+    /// pager attached.
+    #[test]
+    fn set_journal_mode_delete_answers_its_mode() {
+        let mut vm = Vm::new();
+        let program = Program::new(vec![
+            Instruction::new(
+                Opcode::SetJournalMode,
+                super::super::program::JOURNAL_MODE_DELETE,
+                0,
+                0,
+            ),
+            Instruction::new(Opcode::Halt, 0, 0, 0),
+        ]);
+        assert_eq!(
+            execute(&mut vm, &program).unwrap(),
+            vec![vec![Value::Text("delete".into())]]
         );
     }
 

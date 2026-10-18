@@ -315,6 +315,18 @@ pub(crate) fn compile_value(
                 crate::parser::ast::FunctionArgs::Star => &[][..],
                 crate::parser::ast::FunctionArgs::List(list) => list.as_slice(),
             };
+            // sqlite3 refuses an unknown function when it prepares the
+            // statement, not when a row reaches it (#562).
+            if !crate::functions::exists(name, arg_exprs.len()) {
+                let lower = name.to_ascii_lowercase();
+                return Err(CodegenError::Rejected(
+                    if crate::functions::SCALAR_FUNCTION_NAMES.contains(&lower.as_str()) {
+                        format!("wrong number of arguments to function {name}()")
+                    } else {
+                        format!("no such function: {name}")
+                    },
+                ));
+            }
             // `Function` reads its arguments from a contiguous register
             // window starting at P2, so the args must land next to each
             // other. Reserving the window up front and *then* compiling

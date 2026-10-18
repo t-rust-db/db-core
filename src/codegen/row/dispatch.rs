@@ -14,15 +14,15 @@ use crate::parser::ast::{InsertSource, Select, TableRef, TableRefKind};
 use crate::parser::row::error::ParseOutcome;
 use crate::parser::row::error::{
     parse_analyze, parse_begin, parse_commit, parse_create_index, parse_create_table,
-    parse_create_view, parse_delete, parse_drop_index, parse_drop_table, parse_explain,
-    parse_insert, parse_pragma, parse_rollback, parse_select, parse_update,
+    parse_create_view, parse_delete, parse_drop_index, parse_drop_table, parse_drop_view,
+    parse_explain, parse_insert, parse_pragma, parse_rollback, parse_select, parse_update,
 };
 use crate::vm::row::{Instruction, Opcode, Program, P4};
 
 use super::{
     compile_analyze, compile_begin, compile_commit, compile_create_index, compile_create_table,
     compile_create_view, compile_delete_with_catalog, compile_drop_index, compile_drop_table,
-    compile_insert, compile_pragma, compile_rollback, compile_select_compound,
+    compile_drop_view, compile_insert, compile_pragma, compile_rollback, compile_select_compound,
     compile_select_joined, compile_select_with_catalog, compile_select_with_catalog_and_stats,
     compile_update_with_catalog, expand_with_clause, explain_query_plan, flatten_from_subqueries,
     push_down_where_predicates, resolve_from_table_schema, resolve_views, CodegenError, EqpRow,
@@ -60,6 +60,26 @@ pub enum DispatchError {
     /// root page and the view's catalog row from being confused).
     UseDropView(String),
 
+    /// `DROP VIEW` named a table. sqlite3: `use DROP TABLE to delete table
+    /// x`, checked before `IF EXISTS` as for [`Self::UseDropView`] (#552).
+    UseDropTable(String),
+
+    /// `DROP VIEW` named no view or table (and no `IF EXISTS`) (#552).
+    NoSuchView(String),
+
+    /// `CREATE INDEX` named a table or view, or `CREATE TABLE`/`CREATE
+    /// VIEW` named an index: tables, views and indexes share one
+    /// namespace, and a clash across kinds is an error even with `IF NOT
+    /// EXISTS` (#562). Carries the name and whether the existing object
+    /// is an index, for sqlite3's `there is already a table/an index
+    /// named x`.
+    NameTakenByOtherKind {
+        /// The clashing name.
+        name: String,
+        /// Whether the existing object is an index (else a table or view).
+        index: bool,
+    },
+
     /// The leading keyword(s) didn't match any statement kind this
     /// dispatcher knows how to parse/compile.
     Unrecognized(String),
@@ -84,6 +104,16 @@ impl std::fmt::Display for DispatchError {
             DispatchError::ViewAlreadyExists(name) => write!(f, "view {name} already exists"),
             DispatchError::UseDropView(name) => {
                 write!(f, "use DROP VIEW to delete view {name}")
+            }
+            DispatchError::UseDropTable(name) => {
+                write!(f, "use DROP TABLE to delete table {name}")
+            }
+            DispatchError::NoSuchView(name) => write!(f, "no such view: {name}"),
+            DispatchError::NameTakenByOtherKind { name, index: true } => {
+                write!(f, "there is already an index named {name}")
+            }
+            DispatchError::NameTakenByOtherKind { name, index: false } => {
+                write!(f, "there is already a table named {name}")
             }
             DispatchError::Unrecognized(kw) => {
                 write!(f, "unsupported or unrecognized statement: {kw:?} ...")
@@ -161,6 +191,16 @@ fn parse_error<T: std::fmt::Debug>(other: ParseOutcome<T>) -> DispatchError {
 /// object that exists (sqlite3's `%s %T already exists`), `None` when it
 /// is free (db-core#551).
 fn name_taken(name: &str, schemas: &[TableSchema], views: &[ViewSchema]) -> Option<DispatchError> {
+    if schemas
+        .iter()
+        .flat_map(|s| &s.indexes)
+        .any(|idx| idx.name.eq_ignore_ascii_case(name))
+    {
+        return Some(DispatchError::NameTakenByOtherKind {
+            name: name.to_string(),
+            index: true,
+        });
+    }
     if schemas.iter().any(|s| s.name.eq_ignore_ascii_case(name)) {
         return Some(DispatchError::TableAlreadyExists(name.to_string()));
     }
@@ -178,7 +218,9 @@ fn dispatch_create_table(
     match parse_create_table(sql) {
         ParseOutcome::Accepted(create) => {
             if let Some(err) = name_taken(&create.name, schemas, views) {
-                if create.if_not_exists {
+                if create.if_not_exists
+                    && !matches!(err, DispatchError::NameTakenByOtherKind { .. })
+                {
                     return Ok(no_op_program());
                 }
                 return Err(err);
@@ -197,7 +239,9 @@ fn dispatch_create_view(
     match parse_create_view(sql) {
         ParseOutcome::Accepted(create) => {
             if let Some(err) = name_taken(&create.name, schemas, views) {
-                if create.if_not_exists {
+                if create.if_not_exists
+                    && !matches!(err, DispatchError::NameTakenByOtherKind { .. })
+                {
                     return Ok(no_op_program());
                 }
                 return Err(err);
@@ -208,20 +252,33 @@ fn dispatch_create_view(
     }
 }
 
-fn dispatch_create_index(sql: &str, schemas: &[TableSchema]) -> Result<Program, DispatchError> {
+fn dispatch_create_index(
+    sql: &str,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
     match parse_create_index(sql) {
         ParseOutcome::Accepted(ci) => {
+            // A table or view of that name is a clash across kinds: an
+            // error even with `IF NOT EXISTS` (#562).
+            if schemas
+                .iter()
+                .any(|s| s.name.eq_ignore_ascii_case(&ci.name))
+                || views.iter().any(|v| v.name.eq_ignore_ascii_case(&ci.name))
+            {
+                return Err(DispatchError::NameTakenByOtherKind {
+                    name: ci.name,
+                    index: false,
+                });
+            }
             let schema = schemas
                 .iter()
                 .find(|s| s.name.eq_ignore_ascii_case(&ci.table))
                 .ok_or_else(|| DispatchError::NoSuchTable(ci.table.clone()))?;
             let exists = schemas
                 .iter()
-                .any(|s| s.name.eq_ignore_ascii_case(&ci.name))
-                || schemas
-                    .iter()
-                    .flat_map(|s| &s.indexes)
-                    .any(|idx| idx.name.eq_ignore_ascii_case(&ci.name));
+                .flat_map(|s| &s.indexes)
+                .any(|idx| idx.name.eq_ignore_ascii_case(&ci.name));
             if exists {
                 if ci.if_not_exists {
                     return Ok(no_op_program());
@@ -259,6 +316,35 @@ fn dispatch_drop_table(
                 return Ok(no_op_program());
             }
             Err(DispatchError::NoSuchTable(drop.name))
+        }
+        other => Err(parse_error(other)),
+    }
+}
+
+fn dispatch_drop_view(
+    sql: &str,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
+    match parse_drop_view(sql) {
+        ParseOutcome::Accepted(drop) => {
+            if views
+                .iter()
+                .any(|v| v.name.eq_ignore_ascii_case(&drop.name))
+            {
+                return Ok(compile_drop_view(&drop)?);
+            }
+            // As sqlite3: the kind is checked before `IF EXISTS`.
+            if schemas
+                .iter()
+                .any(|s| s.name.eq_ignore_ascii_case(&drop.name))
+            {
+                return Err(DispatchError::UseDropTable(drop.name));
+            }
+            if drop.if_exists {
+                return Ok(no_op_program());
+            }
+            Err(DispatchError::NoSuchView(drop.name))
         }
         other => Err(parse_error(other)),
     }
@@ -487,9 +573,10 @@ pub fn compile_statement(
         },
         "CREATE" if second == "TABLE" => dispatch_create_table(sql, schemas, views),
         "CREATE" if second == "VIEW" => dispatch_create_view(sql, schemas, views),
-        "CREATE" if is_create_index => dispatch_create_index(sql, schemas),
+        "CREATE" if is_create_index => dispatch_create_index(sql, schemas, views),
         "DROP" if second == "TABLE" => dispatch_drop_table(sql, schemas, views),
         "DROP" if second == "INDEX" => dispatch_drop_index(sql, schemas),
+        "DROP" if second == "VIEW" => dispatch_drop_view(sql, schemas, views),
         // Reports the statement's actual leading word (uppercased, as
         // before), not `canonical`'s `""` sentinel — this is a cold
         // path, so the one allocation is free.
@@ -818,6 +905,157 @@ mod already_exists_tests {
         assert_eq!(opcodes(&program), vec![Opcode::Init, Opcode::Halt]);
         let err = compile_statement("DROP INDEX nope", &schemas(), &views()).unwrap_err();
         assert_eq!(err.to_string(), "no such index: nope");
+    }
+
+    /// #552: DROP VIEW removes a view; on a table it says use DROP TABLE
+    /// (even with IF EXISTS); an unknown name is `no such view` unless IF
+    /// EXISTS.
+    #[test]
+    fn drop_view_resolves_by_kind() {
+        let program = compile_statement("DROP VIEW v", &schemas(), &views()).unwrap();
+        assert_eq!(
+            opcodes(&program),
+            vec![Opcode::Init, Opcode::DropView, Opcode::Halt]
+        );
+        for sql in ["DROP VIEW t", "DROP VIEW IF EXISTS t"] {
+            let err = compile_statement(sql, &schemas(), &views()).unwrap_err();
+            assert_eq!(err.to_string(), "use DROP TABLE to delete table t");
+        }
+        let err = compile_statement("DROP VIEW nope", &schemas(), &views()).unwrap_err();
+        assert_eq!(err.to_string(), "no such view: nope");
+        let program = compile_statement("DROP VIEW IF EXISTS nope", &schemas(), &views()).unwrap();
+        assert_eq!(opcodes(&program), vec![Opcode::Init, Opcode::Halt]);
+    }
+
+    /// #562: tables, views and indexes share one namespace; a clash across
+    /// kinds is an error even with IF NOT EXISTS, a clash with the same
+    /// kind is a no-op under IF NOT EXISTS.
+    #[test]
+    fn a_name_clash_across_kinds_is_an_error_even_with_if_not_exists() {
+        for (sql, message) in [
+            (
+                "CREATE INDEX IF NOT EXISTS t ON t(a)",
+                "there is already a table named t",
+            ),
+            ("CREATE INDEX v ON t(a)", "there is already a table named v"),
+            (
+                "CREATE TABLE IF NOT EXISTS idx_t_a(b)",
+                "there is already an index named idx_t_a",
+            ),
+            (
+                "CREATE VIEW idx_t_a AS SELECT 1",
+                "there is already an index named idx_t_a",
+            ),
+        ] {
+            let err = compile_statement(sql, &schemas(), &views()).unwrap_err();
+            assert_eq!(err.to_string(), message, "{sql}");
+        }
+        let program = compile_statement(
+            "CREATE INDEX IF NOT EXISTS idx_t_a ON t(a)",
+            &schemas(),
+            &views(),
+        )
+        .unwrap();
+        assert_eq!(opcodes(&program), vec![Opcode::Init, Opcode::Halt]);
+    }
+
+    /// #563: a column list with DEFAULT VALUES supplies 0 values.
+    #[test]
+    fn insert_column_list_with_default_values_is_refused() {
+        let err =
+            compile_statement("INSERT INTO t(a) DEFAULT VALUES", &schemas(), &views()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "t has 1 columns but 0 values were supplied"
+        );
+        assert!(compile_statement("INSERT INTO t DEFAULT VALUES", &schemas(), &views()).is_ok());
+    }
+
+    /// #562: an unknown function, or a known one with the wrong number of
+    /// arguments, is refused when the statement compiles -- even where no
+    /// row would ever evaluate it.
+    #[test]
+    fn unknown_functions_are_refused_at_compile_time() {
+        for (sql, message) in [
+            ("UPDATE t SET a = b()", "no such function: b"),
+            ("DELETE FROM t WHERE i()", "no such function: i"),
+            (
+                "INSERT INTO t VALUES (nosuch(1))",
+                "no such function: nosuch",
+            ),
+            (
+                "SELECT upper(a, a) FROM t",
+                "wrong number of arguments to function upper()",
+            ),
+        ] {
+            let err = compile_statement(sql, &schemas(), &views()).unwrap_err();
+            assert_eq!(err.to_string(), message, "{sql}");
+        }
+        assert!(compile_statement("SELECT upper(a) FROM t", &schemas(), &views()).is_ok());
+    }
+
+    /// #562: the CREATE TABLE definitions sqlite3 refuses, with its
+    /// messages.
+    #[test]
+    fn create_table_rejects_what_sqlite3_rejects() {
+        for (sql, message) in [
+            (
+                "CREATE TABLE x(a, PRIMARY KEY(a+1))",
+                "expressions prohibited in PRIMARY KEY and UNIQUE constraints",
+            ),
+            (
+                "CREATE TABLE x(a, UNIQUE((SELECT 1)))",
+                "subqueries prohibited in index expressions",
+            ),
+            ("CREATE TABLE x(a, UNIQUE(b))", "no such column: b"),
+            (
+                "CREATE TABLE x(a CHECK (a IN (SELECT 1)))",
+                "subqueries prohibited in CHECK constraints",
+            ),
+            (
+                "CREATE TABLE x(a CHECK (count(*) > 0))",
+                "misuse of aggregate function count()",
+            ),
+            (
+                "CREATE TABLE x(a CHECK (nosuch(a)))",
+                "no such function: nosuch",
+            ),
+            ("CREATE TABLE x(a, CHECK (r > 0))", "no such column: r"),
+            ("CREATE TABLE x(b, B)", "duplicate column name: B"),
+            (
+                "CREATE TABLE x(a, b, PRIMARY KEY(a), PRIMARY KEY(b))",
+                "table \"x\" has more than one primary key",
+            ),
+            (
+                "CREATE TABLE x(a) WITHOUT ROWID",
+                "PRIMARY KEY missing on table x",
+            ),
+            (
+                "CREATE TABLE x(a INT PRIMARY KEY AUTOINCREMENT)",
+                "AUTOINCREMENT is only allowed on an INTEGER PRIMARY KEY",
+            ),
+            (
+                "CREATE TABLE x(a INTEGER PRIMARY KEY AUTOINCREMENT) WITHOUT ROWID",
+                "AUTOINCREMENT not allowed on WITHOUT ROWID tables",
+            ),
+            ("CREATE TABLE x(a) STRICT", "missing datatype for x.a"),
+            (
+                "CREATE TABLE x(a VARCHAR(20)) STRICT",
+                "unknown datatype for x.a: \"VARCHAR(20)\"",
+            ),
+        ] {
+            let err = compile_statement(sql, &schemas(), &views()).unwrap_err();
+            assert_eq!(err.to_string(), message, "{sql}");
+        }
+        for sql in [
+            "CREATE TABLE x(a, PRIMARY KEY((a) COLLATE nocase DESC))",
+            "CREATE TABLE x(a INTEGER PRIMARY KEY AUTOINCREMENT, b TEXT, UNIQUE(b), CHECK (length(b) > 0))",
+            "CREATE TABLE x(a, CHECK (rowid > 0))",
+            "CREATE TABLE x(a int, b ANY) STRICT",
+            "CREATE TABLE x(a PRIMARY KEY) WITHOUT ROWID",
+        ] {
+            assert!(compile_statement(sql, &schemas(), &views()).is_ok(), "{sql}");
+        }
     }
 
     #[test]

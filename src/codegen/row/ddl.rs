@@ -11,9 +11,11 @@ mod create_table;
 mod create_view;
 mod drop_index;
 mod drop_table;
+mod drop_view;
 
 pub use create_index::compile_create_index;
 pub use create_table::compile_create_table;
 pub use create_view::compile_create_view;
 pub use drop_index::compile_drop_index;
 pub use drop_table::compile_drop_table;
+pub use drop_view::compile_drop_view;
