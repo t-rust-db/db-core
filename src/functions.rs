@@ -41,6 +41,32 @@ use std::cmp::Ordering;
 use crate::compare::compare;
 use crate::value::{len_to_i64, Collation, Value};
 
+thread_local! {
+    /// The time `'now'` means while a statement runs (#651).
+    static STATEMENT_NOW_NS: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` with `'now'` fixed to the current time, as sqlite3 fixes it
+/// for the whole of one statement; a nested call keeps the outer
+/// statement's time.
+pub fn with_statement_time<R>(f: impl FnOnce() -> R) -> R {
+    use crate::clock::{Clock, SystemClock};
+    let outer = STATEMENT_NOW_NS.get();
+    STATEMENT_NOW_NS.set(Some(outer.unwrap_or_else(|| SystemClock.now_ns())));
+    let result = f();
+    STATEMENT_NOW_NS.set(outer);
+    result
+}
+
+/// What `'now'` means: the running statement's time (see
+/// [`with_statement_time`]), or the clock outside one.
+pub(crate) fn statement_now_ns() -> i64 {
+    use crate::clock::{Clock, SystemClock};
+    STATEMENT_NOW_NS
+        .get()
+        .unwrap_or_else(|| SystemClock.now_ns())
+}
+
 // sqlite3 built-ins by family (#651); each adds its own names to
 // [`lookup`] through its own `lookup`.
 mod datetime;
@@ -1525,6 +1551,19 @@ mod tests {
 
     fn v(name: &str, args: &[Value]) -> Value {
         call(name, args).unwrap()
+    }
+
+    /// #651: `'now'` is one instant per statement; a nested statement
+    /// keeps the outer one's.
+    #[test]
+    fn statement_time_is_fixed_and_nests() {
+        with_statement_time(|| {
+            let t = statement_now_ns();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            assert_eq!(statement_now_ns(), t);
+            with_statement_time(|| assert_eq!(statement_now_ns(), t));
+            assert_eq!(statement_now_ns(), t);
+        });
     }
 
     #[test]

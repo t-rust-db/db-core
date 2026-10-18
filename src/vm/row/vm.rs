@@ -2507,6 +2507,11 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
 /// Runs `program` to completion (or the first error/step-limit),
 /// returning the rows [`Opcode::ResultRow`] emitted.
 pub fn execute(vm: &mut Vm, program: &Program) -> Result<Vec<Vec<Value>>, ExecError> {
+    // `'now'` is one instant for the whole statement, as in sqlite3 (#651).
+    crate::functions::with_statement_time(|| execute_program(vm, program))
+}
+
+fn execute_program(vm: &mut Vm, program: &Program) -> Result<Vec<Vec<Value>>, ExecError> {
     // Sizing the register file to the highest register the program
     // names is a cheap linear pass that keeps `set_register` from
     // resizing inside the loop (#254). Only register operands count:

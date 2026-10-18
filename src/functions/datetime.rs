@@ -8,10 +8,10 @@
 //! `compute_jd`/`compute_ymd`/`compute_hms` exactly as sqlite3
 //! does. Any parse error or out-of-range value yields NULL.
 //!
-//! Two deliberate approximations: `localtime` and `utc` treat the local
-//! zone as UTC (sqlite3 run under `TZ=UTC` behaves identically), and
-//! `'now'` reads the clock on every call rather than once per statement
-//! (a scalar function has no statement context to cache it in).
+//! One deliberate approximation: `localtime` and `utc` treat the local
+//! zone as UTC (sqlite3 run under `TZ=UTC` behaves identically). `'now'`
+//! is one instant per statement: the row VM fixes it
+//! ([`super::with_statement_time`]).
 //!
 //! Integer arithmetic on calendar fields uses `std::num::Wrapping`: every field
 //! is bounded (years -4713..=9999 before any formula runs, julian days
@@ -22,7 +22,6 @@ use std::num::Wrapping as W;
 use std::rc::Rc;
 
 use super::{FunctionError, ScalarFn};
-use crate::clock::{Clock, SystemClock};
 use crate::value::Value;
 
 /// Milliseconds in one day.
@@ -465,7 +464,7 @@ fn parse_yyyymmdd(z: &[u8], p: &mut DateTime) -> bool {
 
 /// The current time as a julian day in ms (`sqlite3StmtCurrentTime`).
 fn now_jd_ms() -> i64 {
-    (SystemClock.now_ns() / 1_000_000).saturating_add(UNIX_EPOCH_JD_MS)
+    (super::statement_now_ns() / 1_000_000).saturating_add(UNIX_EPOCH_JD_MS)
 }
 
 /// Set `p` to the current time (`setDateTimeToCurrent`).

@@ -188,3 +188,4 @@ SELECT date('-2299-11-30'), date('-2299-11-30', '-16 months'), date('-2299-11-30
 SELECT date('8014-04-28'), date('8014-04-28', '+11 months'), date('8014-04-28', '+11 months', 'floor'), date('8014-04-28', '+11 years', 'floor'), date('8014-04-28', 'weekday 2')
 SELECT date('3579-06-30'), date('3579-06-30', '+17 months'), date('3579-06-30', '+17 months', 'floor'), date('3579-06-30', '+17 years', 'floor'), date('3579-06-30', 'weekday 6')
 SELECT date('1582-06-30'), date('1582-06-30', '+12 months'), date('1582-06-30', '+12 months', 'floor'), date('1582-06-30', '+12 years', 'floor'), date('1582-06-30', 'weekday 2')
+SELECT julianday('now') = julianday('now'), datetime('now', 'subsec') = datetime('now', 'subsec')
