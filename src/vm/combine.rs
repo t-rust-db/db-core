@@ -1249,7 +1249,7 @@ mod tests {
         assert_eq!(merged.into_rows(), expected, "first-seen order is kept");
         let mut all = rows_of(&[a, b]);
         all.rotate_left(1);
-        let reference = finalize(&parts, 2, false, Some((0, false)), None, all).unwrap();
+        let reference = finalize(&parts, 2, false, &[(0, false)], None, all).unwrap();
         assert_eq!(reference.into_rows(), expected);
     }
 
@@ -1277,7 +1277,7 @@ mod tests {
                 Value::Float(1.0)
             ]]
         );
-        let reference = finalize(&parts, 1, false, None, None, Vec::new()).unwrap();
+        let reference = finalize(&parts, 1, false, &[], None, Vec::new()).unwrap();
         assert_eq!(reference.num_rows(), 1);
         let grouped = [AggPart::GroupKey, AggPart::DistinctKey];
         assert!(combine_chunks(&grouped, 2, &[]).unwrap().is_empty());
@@ -1370,7 +1370,7 @@ mod tests {
                 vec![Value::Int(100)],
             ]),
         ];
-        let expected = finalize(&parts, 2, false, None, None, rows_of(&chunks)).unwrap();
+        let expected = finalize(&parts, 2, false, &[], None, rows_of(&chunks)).unwrap();
         let got = combine_chunks(&parts, 2, &chunks).unwrap();
         assert_eq!(got, expected);
         // Sanity on the content itself: 5 groups, first-seen order.
@@ -1567,7 +1567,7 @@ mod tests {
             chunks.push(int_chunk(&keys, &vals));
         }
         let got = combine_chunks(&parts, 1, &chunks).unwrap();
-        let reference = finalize(&parts, 1, false, None, None, rows_of(&chunks)).unwrap();
+        let reference = finalize(&parts, 1, false, &[], None, rows_of(&chunks)).unwrap();
         assert_eq!(got, reference);
         // 4 first-chunk groups + 3 x 5000 distinct, minus the one later key
         // that recurs: `(2756 - 2500) << 32 | 0 == 1 << 40`.
@@ -1600,7 +1600,7 @@ mod tests {
         let out = combiner.finish().unwrap();
         assert_eq!(
             out,
-            finalize(&parts, 1, false, None, None, rows_of(&chunks)).unwrap()
+            finalize(&parts, 1, false, &[], None, rows_of(&chunks)).unwrap()
         );
         assert_eq!(
             out.into_rows(),
@@ -1641,7 +1641,7 @@ mod tests {
             })
             .collect();
         let direct = combine_chunks(&parts, 1, &chunks).unwrap();
-        let reference = finalize(&parts, 1, false, None, None, rows_of(&chunks)).unwrap();
+        let reference = finalize(&parts, 1, false, &[], None, rows_of(&chunks)).unwrap();
         assert_eq!(direct, reference);
 
         // Worker A got segments 5, 2, 0 (in that order); worker B got 4, 1;

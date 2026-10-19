@@ -16,8 +16,8 @@
 //! [`crate::codegen::row`] already does. [`validate_select`] is where
 //! "column's grammar becomes an enforced subset" (ADR 0002's second
 //! amendment) actually happens: a `Select` outside this subset (a real
-//! JOIN condition shape, `WITH`, `UNION`, non-integer `LIMIT`, a
-//! second `ORDER BY` term, ...) is rejected here with
+//! JOIN condition shape, `WITH`, `UNION`, non-integer `LIMIT`, ...) is
+//! rejected here with
 //! [`ParseError::Unexpected`], not silently miscompiled -- and, as a side
 //! effect, table aliases (`FROM orders o`) are resolved in place, rewriting
 //! every alias-qualified column reference to the real table name, so
@@ -907,10 +907,9 @@ fn validate_select(select: &mut Select) -> Result<()> {
         column_name(e)?;
     }
 
-    if select.order_by.len() > 1 {
-        return Err(unsupported(select.span, "multiple ORDER BY terms".into()));
-    }
-    if let Some(term) = select.order_by.first() {
+    // Each term (#645: any number, most significant first) is a column
+    // or an aggregate.
+    for term in &select.order_by {
         if term.nulls_last.is_some() {
             return Err(unsupported(select.span, "NULLS FIRST/LAST".into()));
         }

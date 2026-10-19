@@ -21,10 +21,10 @@
 //! it isn't. And [`semi_filter`].
 
 use super::batch::{
-    chunk_len, compare_for_order, execute_in_slices, hash_group_key, run_morsels, run_morsels_fold,
-    run_parallel, run_parallel_streaming, run_parallel_top_n, sliceable, AggPart, Batch, Chunk,
-    GroupKey, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource, Segment, TopN, Value,
-    Vm, VmError, SLICE_ROWS,
+    chunk_len, compare_rows_for_order, execute_in_slices, hash_group_key, run_morsels,
+    run_morsels_fold, run_parallel, run_parallel_streaming, run_parallel_top_n, sliceable, AggPart,
+    Batch, Chunk, GroupKey, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource, Segment,
+    TopN, Value, Vm, VmError, SLICE_ROWS,
 };
 use super::combine::{
     combine_chunks, combine_partials, eval_agg_expr, finish_avg, merge_slot, order_key, slot_ops,
@@ -123,9 +123,9 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
     else {
         return run_parallel(segments, &body);
     };
-    let order_by = match sort {
-        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),
-        _ => None,
+    let (order_by, hidden): (&[(usize, bool)], usize) = match sort {
+        Some(Opcode::Sort { keys, hidden }) => (keys, *hidden),
+        _ => (&[], 0),
     };
     let limit = match limit_op {
         Some(Opcode::Limit { n }) => Some(*n),
@@ -140,14 +140,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
     // Return the chunked output as-is rather than transposing every
     // surviving row into a `Vec` and back (which is what the reverted
     // first attempt did on exactly this path, the one the issue is about).
-    if is_identity_finalize(
-        agg_parts,
-        *distinct,
-        output_order,
-        project,
-        &order_by,
-        limit,
-    ) {
+    if is_identity_finalize(agg_parts, *distinct, output_order, project, order_by, limit) {
         return run_parallel(segments, &body);
     }
     // #478/#488: aggregates never go through `run_parallel` + a row
@@ -180,13 +173,15 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
             combine_chunks(agg_parts, *num_group_keys, output.chunks())?
         };
         let combined = apply_projection(combined.project(output_order)?, project)?;
-        if !*distinct && order_by.is_none() && limit.is_none() {
+        if !*distinct && order_by.is_empty() && limit.is_none() {
             return Ok(combined);
         }
         return finalize(&[], 0, *distinct, order_by, limit, combined.into_rows());
     }
+    // The parallel top-N keeps one key per row; several keys sort the
+    // whole result in `finalize` (#645).
     let output = match (agg_parts.is_empty() && !distinct, order_by, limit) {
-        (true, Some((col, descending)), Some(limit)) => run_parallel_top_n(
+        (true, &[(col, descending)], Some(limit)) => run_parallel_top_n(
             segments,
             &body,
             &TopN {
@@ -199,14 +194,20 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
     }
     .project(output_order)?;
     let output = apply_projection(output, project)?;
-    finalize(
+    let output = finalize(
         agg_parts,
         *num_group_keys,
         *distinct,
         order_by,
         limit,
         output.into_rows(),
-    )
+    )?;
+    // The columns `ORDER BY` needed beyond the select list (#645).
+    let keep: Vec<usize> = (0..output.num_columns().saturating_sub(hidden)).collect();
+    if hidden == 0 || keep.is_empty() {
+        return Ok(output);
+    }
+    output.project(&keep)
 }
 
 /// Segments per worker below which `run()` merges the per-segment chunks
@@ -309,14 +310,14 @@ fn is_identity_finalize(
     distinct: bool,
     output_order: &[usize],
     project: &[Opcode],
-    order_by: &Option<(usize, bool)>,
+    order_by: &[(usize, bool)],
     limit: Option<usize>,
 ) -> bool {
     agg_parts.is_empty()
         && !distinct
         && output_order.is_empty()
         && project.is_empty()
-        && order_by.is_none()
+        && order_by.is_empty()
         && limit.is_none()
 }
 
@@ -361,22 +362,15 @@ pub fn is_streamable(program: &Program) -> bool {
     else {
         return true;
     };
-    let order_by = match sort {
-        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),
-        _ => None,
+    let order_by: &[(usize, bool)] = match sort {
+        Some(Opcode::Sort { keys, .. }) => keys,
+        _ => &[],
     };
     let limit = match limit_op {
         Some(Opcode::Limit { n }) => Some(*n),
         _ => None,
     };
-    is_identity_finalize(
-        agg_parts,
-        *distinct,
-        output_order,
-        project,
-        &order_by,
-        limit,
-    )
+    is_identity_finalize(agg_parts, *distinct, output_order, project, order_by, limit)
 }
 
 /// Streaming counterpart to [`run`] (#456): hands each segment's chunks to
@@ -409,36 +403,29 @@ pub fn run_streaming<S: Segment>(
     else {
         return run_parallel_streaming(segments, &body, sink);
     };
-    let order_by = match sort {
-        Some(Opcode::Sort { col, descending }) => Some((*col, *descending)),
-        _ => None,
+    let order_by: &[(usize, bool)] = match sort {
+        Some(Opcode::Sort { keys, .. }) => keys,
+        _ => &[],
     };
     let limit = match limit_op {
         Some(Opcode::Limit { n }) => Some(*n),
         _ => None,
     };
-    if !is_identity_finalize(
-        agg_parts,
-        *distinct,
-        output_order,
-        project,
-        &order_by,
-        limit,
-    ) {
+    if !is_identity_finalize(agg_parts, *distinct, output_order, project, order_by, limit) {
         let reason = if !agg_parts.is_empty() {
             "query has aggregates".to_string()
         } else if *distinct {
             "query is DISTINCT".to_string()
         } else {
-            match (order_by, limit) {
-                (Some(_), Some(_)) => "query has ORDER BY ... LIMIT".to_string(),
-                (Some(_), None) => "query has ORDER BY".to_string(),
-                (None, Some(_)) => "query has LIMIT".to_string(),
+            match (!order_by.is_empty(), limit) {
+                (true, Some(_)) => "query has ORDER BY ... LIMIT".to_string(),
+                (true, None) => "query has ORDER BY".to_string(),
+                (false, Some(_)) => "query has LIMIT".to_string(),
                 // Only a non-empty `output_order` or `project` is left
                 // (#585, #623); codegen sets one only alongside
                 // aggregates, but a hand-built program can carry one on
                 // its own.
-                (None, None) => "query reorders or projects its output columns".to_string(),
+                (false, None) => "query reorders or projects its output columns".to_string(),
             }
         };
         return Err(VmError::NotStreamable { reason });
@@ -512,7 +499,7 @@ pub fn finalize(
     agg_parts: &[AggPart],
     num_group_keys: usize,
     distinct: bool,
-    order_by: Option<(usize, bool)>,
+    order_by: &[(usize, bool)],
     limit: Option<usize>,
     rows: Vec<Vec<Value>>,
 ) -> Result<QueryOutput> {
@@ -581,8 +568,8 @@ pub fn finalize(
         result_rows.retain(|row| seen.insert(GroupKey(row.clone())));
     }
 
-    if let Some((pos, descending)) = order_by {
-        result_rows.sort_by(|a, b| compare_for_order(&a[pos], &b[pos], descending));
+    if !order_by.is_empty() {
+        result_rows.sort_by(|a, b| compare_rows_for_order(a, b, order_by));
     }
 
     if let Some(limit) = limit {
@@ -1099,8 +1086,8 @@ mod tests {
                 project: Vec::new().into(),
             },
             Opcode::Sort {
-                col: 0,
-                descending: false,
+                keys: vec![(0, false)].into(),
+                hidden: 0,
             },
         ]);
         let rows = run(&segments, &program).unwrap();
@@ -1318,8 +1305,8 @@ mod tests {
                 project: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
-                col: 0,
-                descending: false,
+                keys: vec![(0, false)].into(),
+                hidden: 0,
             }),
         ]);
         let rows = run(&segments, &program).unwrap();
@@ -1355,8 +1342,8 @@ mod tests {
                 project: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
-                col: 0,
-                descending: false,
+                keys: vec![(0, false)].into(),
+                hidden: 0,
             }),
             Instruction::new(Opcode::Limit { n: 2 }),
         ]);
@@ -1380,8 +1367,8 @@ mod tests {
                 project: Vec::new().into(),
             },
             Opcode::Sort {
-                col: 0,
-                descending: false,
+                keys: vec![(0, false)].into(),
+                hidden: 0,
             },
         ]);
         let rows = run(&segments, &program).unwrap();
@@ -1413,8 +1400,8 @@ mod tests {
                 project: Vec::new().into(),
             }),
             Instruction::new(Opcode::Sort {
-                col: 0,
-                descending: true,
+                keys: vec![(0, true)].into(),
+                hidden: 0,
             }),
             Instruction::new(Opcode::Limit { n: 2 }),
         ]);
@@ -1432,7 +1419,7 @@ mod tests {
             &[AggPart::GroupKey, AggPart::Avg(1, 2)],
             1,
             false,
-            None,
+            &[],
             None,
             rows,
         )
@@ -1483,8 +1470,8 @@ mod tests {
                     project: Vec::new().into(),
                 },
                 Opcode::Sort {
-                    col: 0,
-                    descending: false,
+                    keys: vec![(0, false)].into(),
+                    hidden: 0,
                 },
                 Opcode::Limit { n: 0 },
             ],
@@ -1518,11 +1505,11 @@ mod tests {
         }
     }
 
-    // vm_engine_run_930fb66a (`run`, aggregate branch):
-    // `!*distinct && order_by.is_none() && limit.is_none()`
+    // vm_engine_run_90c1a10a (`run`, aggregate branch):
+    // `!*distinct && order_by.is_empty() && limit.is_none()`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_930fb66a__v1_plain_aggregate_returns_the_merge_directly() {
+    fn mcdc__vm_engine_run_90c1a10a__v1_plain_aggregate_returns_the_merge_directly() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(&segments, &group_sum_program(vec![combine(false)])).unwrap();
         assert_eq!(
@@ -1536,7 +1523,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_930fb66a__v2_distinct_goes_through_finalize() {
+    fn mcdc__vm_engine_run_90c1a10a__v2_distinct_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(&segments, &group_sum_program(vec![combine(true)])).unwrap();
         assert_eq!(rows.len(), 2);
@@ -1544,15 +1531,15 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_930fb66a__v3_order_by_goes_through_finalize() {
+    fn mcdc__vm_engine_run_90c1a10a__v3_order_by_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(
             &segments,
             &group_sum_program(vec![
                 combine(false),
                 Opcode::Sort {
-                    col: 0,
-                    descending: true,
+                    keys: vec![(0, true)].into(),
+                    hidden: 0,
                 },
             ]),
         )
@@ -1568,7 +1555,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_930fb66a__v4_limit_goes_through_finalize() {
+    fn mcdc__vm_engine_run_90c1a10a__v4_limit_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(
             &segments,

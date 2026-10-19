@@ -4,6 +4,30 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.150.0] - 2026-10-19
+
+### Added
+
+- **`ORDER BY` with several terms in the column and stream engines and in emitted programs** (#645). `ORDER BY a, b DESC` sorts by each term in turn. NULLs come last for every term in either direction, as in DuckDB.
+- **A query that neither groups nor aggregates may sort on a column it does not select.** The column is emitted after the select list and dropped after the sort and `LIMIT`.
+- `make check-column-oracle` has four multi-term cases against DuckDB. `make bench-events` replays sessions with `ORDER BY session_id, request_id`.
+
+### Changed
+
+- **`Opcode::Sort` is `{ keys, hidden }`** instead of `{ col, descending }`.
+  - `keys` lists `(output column, descending)` pairs, most significant first.
+  - `hidden` counts the trailing sort-only columns.
+  - `vm::engine::finalize` takes the keys as `&[(usize, bool)]`, and the new `vm::batch::compare_rows_for_order` compares two rows by them.
+  - Code that builds or matches `Opcode::Sort`, or calls `finalize`, needs updating.
+- **`ORDER BY ... LIMIT` with several terms sorts the whole result before limiting it.** The parallel top-N path still takes a single key.
+
+### Fixed
+
+- **An `ORDER BY` term the planner could not place no longer drops the sort silently.** Such terms were a column outside the select list, and a `COUNT(DISTINCT x)` key whose label differed from its select item. Unsorted rows came back with no error.
+  - A non-selected column now sorts as a hidden key.
+  - An aggregate key is matched to its select item structurally.
+  - What remains unsupported is refused: in a grouped or aggregate query, a key that is not in the select list; with `SELECT DISTINCT`, a key outside the list.
+
 ## [0.149.0] - 2026-10-19
 
 ### Added

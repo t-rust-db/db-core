@@ -962,8 +962,12 @@ fn render_opcode(op: &Opcode) -> String {
                 project.join(", "),
             )
         }
-        Opcode::Sort { col, descending } => {
-            format!("Opcode::Sort {{ col: {col}, descending: {descending} }}")
+        Opcode::Sort { keys, hidden } => {
+            let keys: Vec<String> = keys.iter().map(|(c, d)| format!("({c}, {d})")).collect();
+            format!(
+                "Opcode::Sort {{ keys: std::borrow::Cow::Borrowed(&[{}]), hidden: {hidden} }}",
+                keys.join(", ")
+            )
         }
         Opcode::Limit { n } => format!("Opcode::Limit {{ n: {n} }}"),
         // No caller-side planner emits these three yet -- the join/semi-
@@ -1152,8 +1156,8 @@ mod tests {
             ),
             Instruction::with_comment(
                 Opcode::Sort {
-                    col: 0,
-                    descending: true,
+                    keys: vec![(0, true)].into(),
+                    hidden: 0,
                 },
                 "ORDER BY region DESC",
             ),
@@ -1171,7 +1175,7 @@ mod tests {
             "{src}"
         );
         assert!(
-            src.contains("Opcode::Sort { col: 0, descending: true }, // ORDER BY region DESC"),
+            src.contains("Opcode::Sort { keys: std::borrow::Cow::Borrowed(&[(0, true)]), hidden: 0 }, // ORDER BY region DESC"),
             "{src}"
         );
         assert!(
@@ -1295,7 +1299,9 @@ mod tests {
     fn generates_const_program_for_order_by_and_limit() {
         let src = generate("column_rs", "SELECT id FROM t ORDER BY id DESC LIMIT 10").unwrap();
         assert!(
-            src.contains("Opcode::Sort { col: 0, descending: true }"),
+            src.contains(
+                "Opcode::Sort { keys: std::borrow::Cow::Borrowed(&[(0, true)]), hidden: 0 }"
+            ),
             "{src}"
         );
         assert!(src.contains("Opcode::Limit { n: 10 }"), "{src}");
@@ -1403,8 +1409,8 @@ mod tests {
                 project: Vec::new().into(),
             },
             Opcode::Sort {
-                col: 0,
-                descending: false,
+                keys: vec![(0, false)].into(),
+                hidden: 0,
             },
             Opcode::Limit { n: 10 },
         ] {

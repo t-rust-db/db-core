@@ -28,6 +28,12 @@ FIXTURES=(
 
 # db_core_sql|duckdb_sql, "__TABLE__" substituted per fixture below.
 QUERIES=(
+  # #645: ORDER BY with several terms, mixed directions, a key the
+  # SELECT list does not show, an aggregate key, and LIMIT after them.
+  "SELECT region, id FROM __TABLE__ WHERE id > 4980 ORDER BY region DESC, id|SELECT region, id FROM __TABLE__ WHERE id > 4980 ORDER BY region DESC, id"
+  "SELECT id FROM __TABLE__ WHERE id < 30 ORDER BY region, id DESC|SELECT id FROM __TABLE__ WHERE id < 30 ORDER BY region, id DESC"
+  "SELECT id, amount FROM __TABLE__ ORDER BY region, amount DESC LIMIT 7|SELECT id, amount::DECIMAL(18,2) FROM __TABLE__ ORDER BY region, amount DESC LIMIT 7"
+  "SELECT region, count(*), min(amount) FROM __TABLE__ GROUP BY region ORDER BY count(*) DESC, min(amount) DESC|SELECT region, count(*), min(amount)::DECIMAL(18,2) FROM __TABLE__ GROUP BY region ORDER BY count(*) DESC, min(amount) DESC"
   # #644: HAVING over select-list aggregates, HAVING-only aggregates,
   # aliases, keys, COUNT(DISTINCT), no GROUP BY, with WHERE/ORDER/LIMIT.
   "SELECT region, sum(amount) FROM __TABLE__ GROUP BY region HAVING sum(amount) > 7812000 ORDER BY region|SELECT region, sum(amount)::DECIMAL(18,2) FROM __TABLE__ GROUP BY region HAVING sum(amount) > 7812000 ORDER BY region"
