@@ -561,7 +561,7 @@ where
         let synthetic = joined_record_schema(full_scope, &synthetic_names);
         let flush_scope = record_scope(&synthetic, flush_cursor, full_scope);
         let rewritten = to_record_expr(
-            &substitute_aggregates(having, agg_slots, &synthetic_names),
+            &substitute_aggregates(having, agg_slots, &synthetic_names)?,
             full_scope,
         )?;
         compile_cond(
@@ -814,7 +814,7 @@ fn project_grouped_result_columns(
                     reg,
                     &flush_scope,
                     &to_record_expr(
-                        &substitute_aggregates(expr, agg_slots, &synthetic_names),
+                        &substitute_aggregates(expr, agg_slots, &synthetic_names)?,
                         full_scope,
                     )?,
                 )?);

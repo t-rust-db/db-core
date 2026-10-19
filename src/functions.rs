@@ -698,10 +698,12 @@ fn iif(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(pairs.remainder().first().cloned().unwrap_or(Value::Null))
 }
 
-/// Whether `v` is true as a condition: non-zero once read as a number.
+/// Whether `v` is true as a condition: non-zero once read as a number,
+/// a blob as the text of its bytes.
 fn is_true(v: &Value) -> bool {
     match v {
-        Value::Null | Value::Blob(_) => false,
+        Value::Null => false,
+        Value::Blob(b) => is_true(&Value::Text(String::from_utf8_lossy(b).as_ref().into())),
         Value::Integer(i) => *i != 0,
         Value::Real(r) => *r != 0.0,
         Value::Text(s) => match crate::coerce::coerce_text_to_numeric(s) {

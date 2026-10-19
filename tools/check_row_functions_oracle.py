@@ -85,7 +85,7 @@ def main():
         expected.append(("ERROR" if got == "ERROR" else "OK") if nondet else got)
     print(f"check-row-functions-oracle: {len(lines) - bad}/{len(lines)} agree with sqlite3 {EXPECTED}")
     if not bad:
-        with open(CASES.removesuffix(".sql") + ".expected", "w") as f:
+        with open(CASES.removesuffix(".sql") + ".expected", "w", encoding="utf-8", newline="\n") as f:
             f.write("".join(line + "\n" for line in expected))
     sys.exit(1 if bad else 0)
 

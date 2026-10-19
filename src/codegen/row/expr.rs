@@ -31,6 +31,7 @@ mod json_subtype;
 mod value;
 
 pub(crate) use cond::{column_index, compile_cond, ensure_label, has_rowid, virtual_rowid_index};
+pub(crate) use json_subtype::{carries_json_subtype, mark as json_subtype_marks};
 pub(crate) use value::{
     collation_of, compile_value, emit_column_read, expr_affinity, expr_collation,
     is_aggregate_call, is_rowid_field,

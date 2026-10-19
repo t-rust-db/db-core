@@ -280,6 +280,9 @@ fn printf(args: &[Value]) -> Result<Value, FunctionError> {
             return Err(FunctionError::TooBig);
         }
         let arg = if spec.takes_arg() { rest.next() } else { None };
+        if out.len().saturating_add(spec.size_bound(arg)) > MAX_LENGTH {
+            return Err(FunctionError::TooBig);
+        }
         let Some(piece) = spec.convert(arg) else {
             return Ok(finish(out, false));
         };
@@ -430,6 +433,37 @@ impl Spec {
         );
         self.width > MAX_LENGTH
             || (precision_pads && self.precision.is_some_and(|p| p > MAX_LENGTH))
+    }
+
+    /// At least as many bytes as the conversion of `arg` can produce,
+    /// for the conversions whose output can far outgrow the width and
+    /// precision [`Self::too_big`] checks -- `%c` of a multibyte
+    /// character, `%q` doubling quotes, `%,d` adding commas -- so that
+    /// their output is refused before it is built; 0 for the others.
+    fn size_bound(&self, arg: Option<&Value>) -> usize {
+        let body = match self.conversion {
+            'c' => {
+                let width = arg
+                    .and_then(|v| as_text(v).chars().next())
+                    .map_or(1, char::len_utf8);
+                self.precision.unwrap_or(1).max(1).saturating_mul(width)
+            }
+            'q' | 'Q' | 'w' => {
+                let text = arg.map(as_text).unwrap_or_default();
+                let quote = if self.conversion == 'w' { '"' } else { '\'' };
+                let kept = self
+                    .precision
+                    .map_or(text.len(), |p| p.saturating_mul(4).min(text.len()));
+                let quotes = text.matches(quote).count();
+                kept.saturating_add(quotes).saturating_add(2)
+            }
+            'd' | 'i' | 'r' | 'u' | 'o' | 'x' | 'X' | 'p' if self.comma => {
+                let digits = self.precision.unwrap_or(0).max(64);
+                digits.saturating_add(digits / 3).saturating_add(4)
+            }
+            _ => return 0,
+        };
+        body.max(self.width)
     }
 
     /// Whether the conversion consumes an argument.
@@ -896,6 +930,19 @@ mod tests {
         assert_eq!(
             call("randomblob", &[i(1_000_000_001)]),
             Err(FunctionError::TooBig)
+        );
+        // Refused before building: multibyte `%c`, `%,d` grouping.
+        assert_eq!(
+            call("printf", &[t("%.600000000c"), t("é")]),
+            Err(FunctionError::TooBig)
+        );
+        assert_eq!(
+            call("printf", &[t("%,.900000000d"), i(1)]),
+            Err(FunctionError::TooBig)
+        );
+        assert_eq!(
+            p(&[t("%,d|%Q|%.3c|"), i(1234567), t("it's"), t("é")]),
+            t("1,234,567|'it''s'|ééé|")
         );
         assert_eq!(p(&[t("%4294967298d|"), i(1)]), t(" 1|"));
         assert_eq!(p(&[t("%.5000000000s|"), t("abc")]), t("abc|"));

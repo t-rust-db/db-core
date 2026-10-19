@@ -692,14 +692,6 @@ fn compile_negate_value(em: &mut Emitter, reg: &mut RegAlloc, src: i32) -> i32 {
     out
 }
 
-/// CASE's branch results (each computed into its own register) must
-/// land in one shared destination. `Literal` and `Column` branches are
-/// re-emitted directly into `dest`; any other branch expression is
-/// compiled via `compile_value` into its own register and `Copy`'d
-/// into `dest` (#141) — evaluating straight into `dest` and leaving it
-/// untouched on a re-entrant compile would otherwise risk a stale
-/// register from a prior branch or a prior loop iteration leaking out
-/// as this branch's result.
 /// `iif(B1, V1, ..., [E])` (or `if`) at `call`'s span as the `CASE WHEN
 /// B1 THEN V1 ... [ELSE E] END` it means.
 pub(super) fn iif_as_case(call: &Expr, args: &[Expr]) -> Expr {
@@ -742,6 +734,14 @@ fn compile_coalesce(
     Ok(dest)
 }
 
+/// CASE's branch results (each computed into its own register) must
+/// land in one shared destination. `Literal` and `Column` branches are
+/// re-emitted directly into `dest`; any other branch expression is
+/// compiled via `compile_value` into its own register and `Copy`'d
+/// into `dest` (#141) — evaluating straight into `dest` and leaving it
+/// untouched on a re-entrant compile would otherwise risk a stale
+/// register from a prior branch or a prior loop iteration leaking out
+/// as this branch's result.
 fn emit_branch_into(
     em: &mut Emitter,
     reg: &mut RegAlloc,

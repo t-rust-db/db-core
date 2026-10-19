@@ -299,7 +299,9 @@ pub(crate) fn is_falsy(v: &Value) -> bool {
             Value::Real(r) => r == 0.0,
             _ => true,
         },
-        Value::Blob(_) => true,
+        // A blob reads as the text of its bytes, as in sqlite3
+        // (`sqlite3VdbeBooleanValue`): `x'31'` is true (#651).
+        Value::Blob(b) => is_falsy(&Value::Text(String::from_utf8_lossy(b).as_ref().into())),
     }
 }
 
@@ -1426,9 +1428,9 @@ fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
                 Some(positions) => {
                     let positions = positions
                         .split(',')
-                        .map(str::parse)
-                        .collect::<Result<Vec<usize>, _>>()
-                        .map_err(|_| ExecError::MalformedInstruction {
+                        .map(|p| p.parse::<usize>().ok().filter(|&p| p < arity))
+                        .collect::<Option<Vec<usize>>>()
+                        .ok_or_else(|| ExecError::MalformedInstruction {
                             opcode: "Function",
                             reason: format!("malformed JSON argument positions {positions:?}"),
                         })?;
@@ -2939,6 +2941,38 @@ mod tests {
             Instruction::new(Opcode::Halt, 0, 0, 0),
         ]);
         assert_eq!(rows, vec![vec![Value::Integer(42)]]);
+    }
+
+    /// #651: `;json=` names the arguments carrying the JSON subtype; a
+    /// position that is not an argument is a malformed instruction.
+    #[test]
+    fn function_json_marks_nest_and_out_of_range_marks_are_malformed() {
+        let program = |descriptor: &str| {
+            Program::new(vec![
+                Instruction::with_p4(Opcode::String8, 0, 0, 0, P4::Str("[1]".to_string())),
+                Instruction::with_p4(Opcode::Function, 0, 0, 1, P4::Str(descriptor.to_string())),
+                Instruction::new(Opcode::ResultRow, 1, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ])
+        };
+        let rows = execute(&mut Vm::new(), &program("json_array(1);json=0")).unwrap();
+        assert_eq!(rows, vec![vec![Value::Text("[[1]]".into())]]);
+        for bad in [
+            "json_array(1);json=1",
+            "json_array(1);json=",
+            "json_array(1);json=x",
+        ] {
+            assert!(
+                matches!(
+                    execute(&mut Vm::new(), &program(bad)),
+                    Err(ExecError::MalformedInstruction {
+                        opcode: "Function",
+                        ..
+                    })
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

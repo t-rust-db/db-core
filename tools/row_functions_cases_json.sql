@@ -334,3 +334,13 @@ SELECT json_object(json('"k"'), json('[1]'))
 SELECT json_array(json_extract('{"a":1.50}', '$.a'), json_extract('{"a":0x10}', '$.a'), json_extract('{"a":"A"}', '$.a'))
 SELECT json_array(json_extract('{"a":[5]}', '$.a', '$.a')), json_array(json_extract('{"a":[5]}', '$.a'))
 SELECT json_array(x) FROM (SELECT json('[1]') AS x)
+-- json_extract edge cases (#651 review)
+SELECT json_extract('{}')
+SELECT json_extract('[0x10,-0x1,1e2,.5,+5,123456789012345678901]','$[0]','$[1]','$[2]','$[3]','$[4]','$[5]')
+SELECT json_extract('[-0x1]','$[0]'), json_extract('[+5]','$[0]'), json_extract('[.5]','$[0]'), json_extract('[123456789012345678901]','$[0]'), json_extract('[-9223372036854775808]','$[0]'), json_extract('[0x8000000000000000]','$[0]')
+SELECT json_extract('{"a":1}','$.a',NULL), json_extract('{"a":1}',NULL,'$.a')
+-- min/max keep the JSON subtype through aggregation
+SELECT json_array(max(json(x))) FROM (SELECT '[1]' AS x UNION ALL SELECT '[2]')
+SELECT json_array(min(json(x)), max(x), count(*)) FROM (SELECT '[1]' AS x UNION ALL SELECT '[2]')
+SELECT max(json(x)), json_array(max(x)) FROM (SELECT '[ 1 ]' AS x UNION ALL SELECT '[2]')
+SELECT json_object('k', max(json(x))) FROM (SELECT '{"a":1}' AS x) GROUP BY x HAVING max(json(x)) IS NOT NULL

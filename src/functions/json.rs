@@ -22,9 +22,13 @@
 //!   `json_array('[1]')` quotes `["[1]"]`. db-core's [`Value`] carries no
 //!   subtype, so the row codegen decides it from the expression instead
 //!   (`codegen::row::expr::json_subtype`) and passes the positions of the
-//!   arguments that carry it ([`call_marked`]). An expression whose
-//!   subtype depends on the row -- `coalesce` over JSON and plain values
-//!   -- is refused rather than guessed.
+//!   arguments that carry it ([`call_marked`]). Where the subtype
+//!   depends on the row the codegen rewrites the argument
+//!   ([`extract_subtyped`], [`quote_nullable`]), or refuses it where the
+//!   value is also compared (`nullif(json_extract(..), '')`). A JSON
+//!   string holding a lone surrogate escape (`"\ud800"`) reads back as
+//!   U+FFFD: sqlite3 returns the invalid UTF-8 bytes, which a `Value`
+//!   cannot hold.
 //! * **JSONB.** A BLOB argument that passes sqlite3's `jsonArgIsJsonb`
 //!   check is decoded as JSONB, as sqlite3 does (`json_valid` flags 4/8
 //!   and `json_error_position` run the ported `jsonbValidityCheck`). Any
@@ -49,7 +53,7 @@ pub(super) fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
         ("json_array", _) => Some(|args| json_array(args, &[])),
         ("json_array_length", 1 | 2) => Some(json_array_length),
         ("json_error_position", 1) => Some(json_error_position),
-        ("json_extract", n) if n >= 2 => Some(json_extract),
+        ("json_extract", n) if n >= 1 => Some(json_extract),
         ("json_insert", _) => Some(|args| json_insert(args, &[])),
         ("json_object", _) => Some(|args| json_object(args, &[])),
         ("json_patch", 2) => Some(json_patch),
@@ -97,15 +101,20 @@ fn quote_nullable(args: &[Value]) -> Result<Value, FunctionError> {
 /// returns the JSON text the receiving function embeds -- the container
 /// as is, any other value quoted -- and NULL as NULL (#651).
 pub(super) fn extract_subtyped(args: &[Value]) -> Result<Value, FunctionError> {
-    let value = json_extract(args)?;
-    if value == Value::Null {
+    let [doc, path] = args else {
         return Ok(Value::Null);
+    };
+    let Some(mut root) = parse_arg(doc)? else {
+        return Ok(Value::Null);
+    };
+    let Some(path) = value_text(path) else {
+        return Ok(Value::Null);
+    };
+    match extract_at(&mut root, &path)? {
+        None | Some(Node::Null) => Ok(Value::Null),
+        Some(node @ (Node::Array(_) | Node::Object(_))) => node_result(&node),
+        Some(node) => json_quote(&[sql_value(&node)?], &[]),
     }
-    let container = matches!(
-        json_type(args)?,
-        Value::Text(t) if matches!(&*t, "object" | "array")
-    );
-    json_quote(&[value], if container { &[0] } else { &[] })
 }
 
 // ---------------------------------------------------------------------------
@@ -2370,6 +2379,16 @@ fn format_real17(r: f64, zeropad: bool) -> Vec<u8> {
 // SQL value plumbing
 // ---------------------------------------------------------------------------
 
+/// `string or blob too big` once `out` is past [`super::MAX_LENGTH`], as
+/// sqlite3's `jsonAppend*` checks: a JSON result built from many
+/// arguments or paths can outgrow any one of them (#651).
+fn check_length(out: &[u8]) -> Result<(), FunctionError> {
+    if out.len() > super::MAX_LENGTH {
+        return Err(FunctionError::TooBig);
+    }
+    Ok(())
+}
+
 /// A JSON function's text result.
 fn json_result(bytes: Vec<u8>) -> Value {
     let text = String::from_utf8(bytes)
@@ -2534,10 +2553,11 @@ fn path_error(path: &[u8], lk: Lk) -> FunctionError {
 }
 
 /// Render `node` as a JSON result.
-fn node_result(node: &Node) -> Value {
+fn node_result(node: &Node) -> Result<Value, FunctionError> {
     let mut out = Vec::new();
     render(&mut out, node);
-    json_result(out)
+    check_length(&out)?;
+    Ok(json_result(out))
 }
 
 /// Look `path` (the text after `$`) up in `root` without editing it.
@@ -2563,10 +2583,22 @@ fn extract_path(root: &mut Node, path: &[u8]) -> Result<Node, Lk> {
     walk.extracted.take().ok_or(Lk::NotFound)
 }
 
+/// The element `path` (with its `$`) names in `root`, `None` if missing.
+fn extract_at(root: &mut Node, path: &[u8]) -> Result<Option<Node>, FunctionError> {
+    if at(path, 0) != b'$' {
+        return Err(path_error(path, Lk::PathError));
+    }
+    match extract_path(root, path.get(1..).unwrap_or(&[])) {
+        Ok(node) => Ok(Some(node)),
+        Err(Lk::NotFound) => Ok(None),
+        Err(lk) => Err(path_error(path, lk)),
+    }
+}
+
 /// `jsonReturnFromBlob`: an object or array as its JSON text, anything
 /// else as its SQL value.
-fn sql_value(node: &Node) -> Value {
-    match node {
+fn sql_value(node: &Node) -> Result<Value, FunctionError> {
+    Ok(match node {
         Node::Null => Value::Null,
         Node::True => Value::Integer(1),
         Node::False => Value::Integer(0),
@@ -2585,8 +2617,8 @@ fn sql_value(node: &Node) -> Value {
             J_TEXTJ | J_TEXT5 => Value::Text(Rc::from(unescape(&s.raw))),
             _ => Value::Text(Rc::from(String::from_utf8_lossy(&s.raw).as_ref())),
         },
-        Node::Array(_) | Node::Object(_) => node_result(node),
-    }
+        Node::Array(_) | Node::Object(_) => return node_result(node),
+    })
 }
 
 /// A JSON string's payload with its escapes decoded.
@@ -2617,6 +2649,9 @@ pub(super) fn json_extract(args: &[Value]) -> Result<Value, FunctionError> {
     let Some((first, paths)) = args.split_first() else {
         return Ok(Value::Null);
     };
+    if paths.is_empty() {
+        return Ok(Value::Null);
+    }
     let Some(mut root) = parse_arg(first)? else {
         return Ok(Value::Null);
     };
@@ -2625,16 +2660,9 @@ pub(super) fn json_extract(args: &[Value]) -> Result<Value, FunctionError> {
         let Some(path) = value_text(p) else {
             return Ok(Value::Null);
         };
-        if at(&path, 0) != b'$' {
-            return Err(path_error(&path, Lk::PathError));
-        }
-        let found = match extract_path(&mut root, path.get(1..).unwrap_or(&[])) {
-            Ok(node) => Some(node),
-            Err(Lk::NotFound) => None,
-            Err(lk) => return Err(path_error(&path, lk)),
-        };
+        let found = extract_at(&mut root, &path)?;
         if paths.len() == 1 {
-            return Ok(found.as_ref().map_or(Value::Null, sql_value));
+            return found.as_ref().map_or(Ok(Value::Null), sql_value);
         }
         if k > 0 {
             out.push(b',');
@@ -2643,6 +2671,7 @@ pub(super) fn json_extract(args: &[Value]) -> Result<Value, FunctionError> {
             Some(node) => render(&mut out, &node),
             None => out.extend_from_slice(b"null"),
         }
+        check_length(&out)?;
     }
     out.push(b']');
     Ok(json_result(out))
@@ -2662,6 +2691,7 @@ fn json_array(args: &[Value], json: &[usize]) -> Result<Value, FunctionError> {
             out.push(b',');
         }
         push_sql_value(&mut out, v, json.contains(&k))?;
+        check_length(&out)?;
     }
     out.push(b']');
     Ok(json_result(out))
@@ -2695,6 +2725,7 @@ fn json_object(args: &[Value], json: &[usize]) -> Result<Value, FunctionError> {
         if let Err(e) = push_sql_value(&mut out, value, marked) {
             pending.get_or_insert(e);
         }
+        check_length(&out)?;
     }
     if let Some(e) = pending {
         return Err(e);
@@ -2832,7 +2863,7 @@ fn edit_fn(args: &[Value], json: &[usize], edit: Edit, name: &str) -> Result<Val
             Err(lk) => return Err(path_error(&path, lk)),
         }
     }
-    Ok(node_result(&root))
+    node_result(&root)
 }
 
 /// `json_remove(X, P...)`: X without the elements at each P.
@@ -2864,7 +2895,7 @@ fn json_remove(args: &[Value]) -> Result<Value, FunctionError> {
             Err(lk) => return Err(path_error(&path, lk)),
         }
     }
-    Ok(node_result(&root))
+    node_result(&root)
 }
 
 /// `json_patch(T, P)`: RFC 7396 merge patch of P into T.
@@ -2877,7 +2908,7 @@ fn json_patch(args: &[Value]) -> Result<Value, FunctionError> {
     };
     merge_patch(&mut target, &patch, 0)
         .map_err(|()| FunctionError::Sql("JSON nested too deep".to_string()))?;
-    Ok(node_result(&target))
+    node_result(&target)
 }
 
 /// The `json_type` name of a JSONB type (`jsonbType[]`).

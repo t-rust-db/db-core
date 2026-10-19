@@ -94,6 +94,12 @@ pub(crate) fn mark(
     Ok((json, rewritten))
 }
 
+/// Whether `expr` always carries the JSON subtype, needing no rewrite:
+/// an aggregate's argument, whose result keeps it through `min`/`max`.
+pub(crate) fn carries_json_subtype(expr: &Expr) -> bool {
+    matches!(classify(expr, false), Ok(Arg::Json(_)))
+}
+
 /// `expr` as a JSON function's argument, rewritten if `rewrite` allows.
 fn classify(expr: &Expr, rewrite: bool) -> Result<Arg, CodegenError> {
     match &expr.kind {
