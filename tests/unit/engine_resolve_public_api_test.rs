@@ -186,6 +186,48 @@ fn cross_mode_engine_routes_run_query_and_explain_opcodes() {
     assert_eq!(body.lane, "batch");
 }
 
+/// #644: `HAVING` over a join filters the merged groups -- on a joined
+/// key and on an aggregate the select list does not show -- exactly as
+/// filtering the unfiltered result does.
+#[test]
+fn cross_mode_having_filters_the_joined_groups() {
+    let db = HostsDb::new("having");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+    let join = "FROM log JOIN hosts ON log.hostname = hosts.name";
+    let all = run_query(
+        &driving,
+        &lookup,
+        &format!(
+            "SELECT hosts.region, COUNT(*) {join} GROUP BY hosts.region ORDER BY hosts.region"
+        ),
+    )
+    .expect("grouped join");
+    assert!(all.rows.len() >= 2, "{:?}", all.rows);
+    let first = all.rows[0][0].clone();
+    let having_key = run_query(
+        &driving,
+        &lookup,
+        &format!(
+            "SELECT hosts.region, COUNT(*) {join} GROUP BY hosts.region \
+             HAVING hosts.region <> '{first}' ORDER BY hosts.region"
+        ),
+    )
+    .expect("HAVING on a joined key");
+    assert_eq!(having_key.rows, all.rows[1..].to_vec());
+    let having_agg = run_query(
+        &driving,
+        &lookup,
+        &format!(
+            "SELECT hosts.region {join} GROUP BY hosts.region \
+             HAVING COUNT(*) > 0 AND MIN(log.hostname) IS NOT NULL ORDER BY hosts.region"
+        ),
+    )
+    .expect("HAVING on aggregates the select list does not show");
+    let regions: Vec<_> = all.rows.iter().map(|r| vec![r[0].clone()]).collect();
+    assert_eq!(having_agg.rows, regions);
+}
+
 /// #623 review: a join resolves `GROUP BY` names against the joined
 /// tables' columns, like a single-table query: an alias that is no column
 /// groups by its expression, and a name that is a real column (`region`

@@ -359,6 +359,166 @@ fn agg_expr_calls(expr: &AstExpr) -> Vec<&AstExpr> {
     }
 }
 
+/// The source register of one aggregate call nested in an expression
+/// (#496) or in `HAVING` (#644), resolved before `WHERE`'s `Filter` like
+/// every other aggregate source, `FILTER (WHERE ...)` folded in.
+fn agg_call_source(call: &AstExpr, ctx: &mut Ctx) -> Result<Option<usize>> {
+    let ExprKind::FunctionCall {
+        name,
+        distinct,
+        args,
+        tail,
+    } = &call.kind
+    else {
+        return Err(PlanError::UnsupportedSelectItem(
+            "internal: agg_expr_calls returned a non-FunctionCall node".into(),
+        ));
+    };
+    if *distinct {
+        return Err(PlanError::UnsupportedSelectItem(format!(
+            "{name}(DISTINCT ...) inside an expression"
+        )));
+    }
+    let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
+    let base = agg_arg(call, func, args)?.map(|a| match a {
+        AggArg::Column(name) => ctx.load_column(&name),
+        AggArg::Expr(e) => compile_expr(&e, ctx),
+    });
+    let filter = tail.as_deref().and_then(|t| t.filter.as_ref());
+    Ok(mask_filtered_source(ctx, base, filter))
+}
+
+/// `HAVING` (#644) with each bare column that is not a `GROUP BY` key but
+/// names a select-list alias replaced by that item's expression, as
+/// sqlite3 and DuckDB resolve `HAVING n > 1` for `count(*) AS n`.
+fn having_with_aliases(having: &AstExpr, select: &Select) -> AstExpr {
+    let mut out = having.clone();
+    substitute_aliases(&mut out, select);
+    out
+}
+
+fn substitute_aliases(expr: &mut AstExpr, select: &Select) {
+    if let ExprKind::Column {
+        table: None, name, ..
+    } = &expr.kind
+    {
+        let is_key = select
+            .group_by
+            .iter()
+            .any(|t| expr_column_name(t).as_deref() == Some(name.as_str()));
+        let aliased = select.columns.iter().find_map(|col| match col {
+            ResultColumn::Expr {
+                expr,
+                alias: Some(alias),
+            } if alias == name => Some(expr),
+            _ => None,
+        });
+        if let (false, Some(aliased)) = (is_key, aliased) {
+            *expr = aliased.clone();
+        }
+        return;
+    }
+    match &mut expr.kind {
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Is { lhs, rhs, .. }
+        | ExprKind::Like {
+            expr: lhs,
+            pattern: rhs,
+            ..
+        } => {
+            substitute_aliases(lhs, select);
+            substitute_aliases(rhs, select);
+        }
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Paren(inner) => substitute_aliases(inner, select),
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        } => list.iter_mut().for_each(|a| substitute_aliases(a, select)),
+        _ => {}
+    }
+}
+
+/// Whether two aggregate calls are the same aggregate: the same function
+/// (any case), `DISTINCT` or not, and the same arguments as SQL text.
+fn same_aggregate(a: &AstExpr, b: &AstExpr) -> bool {
+    match (&a.kind, &b.kind) {
+        (
+            ExprKind::FunctionCall {
+                name: na,
+                distinct: da,
+                args: aa,
+                ..
+            },
+            ExprKind::FunctionCall {
+                name: nb,
+                distinct: db,
+                args: ab,
+                ..
+            },
+        ) => {
+            na.eq_ignore_ascii_case(nb)
+                && da == db
+                && match (aa, ab) {
+                    (FunctionArgs::Star, FunctionArgs::Star) => true,
+                    (FunctionArgs::List(la), FunctionArgs::List(lb)) => {
+                        la.len() == lb.len()
+                            && la
+                                .iter()
+                                .zip(lb)
+                                .all(|(x, y)| x.to_string() == y.to_string())
+                    }
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
+}
+
+/// Where each `HAVING` aggregate call (#644) finds its value: the select
+/// list's own merged column for the same aggregate ([`same_aggregate`])
+/// -- item `i`'s `k`th call -- or `None`, a column of its own.
+/// `COUNT(DISTINCT x)` must be the select list's: a query has one
+/// distinct key.
+fn having_reuse(
+    calls: &[&AstExpr],
+    select: &Select,
+    items: &[Item],
+) -> Result<Vec<Option<(usize, usize)>>> {
+    calls
+        .iter()
+        .map(|call| {
+            let found =
+                select
+                    .columns
+                    .iter()
+                    .zip(items)
+                    .enumerate()
+                    .find_map(|(i, (col, item))| {
+                        let ResultColumn::Expr { expr, .. } = col else {
+                            return None;
+                        };
+                        match item {
+                            Item::Agg(..) => same_aggregate(expr, call).then_some((i, 0)),
+                            Item::AggExpr(_) => agg_expr_calls(expr)
+                                .iter()
+                                .position(|c| same_aggregate(c, call))
+                                .map(|k| (i, k)),
+                            _ => None,
+                        }
+                    });
+            let distinct = matches!(&call.kind, ExprKind::FunctionCall { distinct: true, .. });
+            if distinct && found.is_none() {
+                return Err(PlanError::UnsupportedSelectItem(
+                    "COUNT(DISTINCT ...) in HAVING must also be in the SELECT list".into(),
+                ));
+            }
+            Ok(found)
+        })
+        .collect()
+}
+
 /// Adds one aggregate over `src` to `compile`'s accumulators as a merged
 /// output column and returns that column's position: `AVG` is two
 /// partials (sum, count) that merge into one column, every other
@@ -454,17 +614,26 @@ fn needs_projection(select: &Select, items: &[Item]) -> bool {
 /// Builds `Combine`'s projection (#623): each select item rewritten onto
 /// the merged columns (`#i` is merged column `i`: the keys first, then
 /// the aggregates at the positions `item_slots` recorded) and compiled
-/// like any other expression, then one `Emit` in select order.
+/// like any other expression, then one `Emit` in select order. A
+/// `HAVING` (#644) is a `Filter` over the merged columns before them.
 fn build_projection(
     select: &Select,
     items: &[Item],
     item_slots: &[Vec<usize>],
+    having: Option<(&AstExpr, &[&AstExpr], &[usize])>,
 ) -> Result<Vec<Opcode>> {
     let mut ctx = Ctx {
         next_reg: 0,
         column_regs: HashMap::new(),
         program: Vec::new(),
     };
+    // #644: `HAVING` filters the merged rows first; its aggregate calls
+    // are merged columns like the select list's.
+    if let Some((expr, calls, slots)) = having {
+        let rewritten = onto_merged(expr, &select.group_by, calls, slots)?;
+        let predicate = compile_expr(&rewritten, &mut ctx);
+        ctx.push(Opcode::Filter { predicate });
+    }
     let mut registers = Vec::with_capacity(items.len());
     for ((col, item), slots) in select.columns.iter().zip(items).zip(item_slots) {
         let ResultColumn::Expr { expr, .. } = col else {
@@ -1345,7 +1514,15 @@ pub fn compile(select: &Select) -> Result<Program> {
     // expressions, already resolved by [`expand_star`] (#623): a real
     // column by name, a `SELECT`-list alias (#307) as its expression.
     let group_by: Vec<String> = select.group_by.iter().map(group_term_label).collect();
-    let projection = needs_projection(select, &items);
+    // #644: `HAVING` is a filter in `Combine`'s projection, over the
+    // merged keys and aggregates.
+    let having = select
+        .having
+        .as_ref()
+        .map(|h| having_with_aliases(h, select));
+    let having_calls: Vec<&AstExpr> = having.as_ref().map(agg_expr_calls).unwrap_or_default();
+    let having_reused = having_reuse(&having_calls, select, &items)?;
+    let projection = having.is_some() || needs_projection(select, &items);
 
     // Load every column the group-by keys and select-list aggregates need
     // *before* compiling WHERE/Filter: Filter only shrinks registers that
@@ -1411,31 +1588,7 @@ pub fn compile(select: &Select) -> Result<Program> {
             Item::AggExpr(expr) => {
                 let srcs = agg_expr_calls(expr)
                     .into_iter()
-                    .map(|call| {
-                        let ExprKind::FunctionCall {
-                            name,
-                            distinct,
-                            args,
-                            tail,
-                        } = &call.kind
-                        else {
-                            return Err(PlanError::UnsupportedSelectItem(
-                                "internal: agg_expr_calls returned a non-FunctionCall node".into(),
-                            ));
-                        };
-                        if *distinct {
-                            return Err(PlanError::UnsupportedSelectItem(format!(
-                                "{name}(DISTINCT ...) inside an expression"
-                            )));
-                        }
-                        let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
-                        let base = agg_arg(call, func, args)?.map(|a| match a {
-                            AggArg::Column(name) => ctx.load_column(&name),
-                            AggArg::Expr(e) => compile_expr(&e, &mut ctx),
-                        });
-                        let filter = tail.as_deref().and_then(|t| t.filter.as_ref());
-                        Ok(mask_filtered_source(&mut ctx, base, filter))
-                    })
+                    .map(|call| agg_call_source(call, &mut ctx))
                     .collect::<Result<Vec<_>>>()?;
                 agg_srcs.push(srcs);
             }
@@ -1470,6 +1623,17 @@ pub fn compile(select: &Select) -> Result<Program> {
             _ => agg_srcs.push(Vec::new()),
         }
     }
+
+    // The sources of the aggregates only `HAVING` reads, loaded with the
+    // select list's, before `WHERE`'s `Filter`.
+    let having_srcs = having_calls
+        .iter()
+        .zip(&having_reused)
+        .map(|(call, reused)| match reused {
+            Some(_) => Ok(None),
+            None => agg_call_source(call, &mut ctx),
+        })
+        .collect::<Result<Vec<_>>>()?;
 
     if let Some(where_clause) = &select.where_clause {
         let predicate = compile_expr(where_clause, &mut ctx);
@@ -1574,6 +1738,34 @@ pub fn compile(select: &Select) -> Result<Program> {
         }
         item_slots.push(slots);
     }
+    // Each `HAVING` aggregate's merged column: the select list's, or one
+    // added here that the projection reads but never emits.
+    let mut having_slots = Vec::with_capacity(having_calls.len());
+    for ((call, reused), src) in having_calls.iter().zip(&having_reused).zip(&having_srcs) {
+        let slot = match reused {
+            Some((i, k)) => item_slots.get(*i).and_then(|slots| slots.get(*k)).copied(),
+            None => {
+                let ExprKind::FunctionCall { name, .. } = &call.kind else {
+                    return Err(PlanError::Internal(
+                        "agg_expr_calls returned a non-FunctionCall node".into(),
+                    ));
+                };
+                let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
+                Some(push_aggregate(
+                    func,
+                    *src,
+                    &mut aggs,
+                    &mut agg_dst,
+                    &mut agg_parts,
+                    &mut emit_regs,
+                    &mut ctx,
+                ))
+            }
+        };
+        having_slots.push(slot.ok_or_else(|| {
+            PlanError::Internal("a HAVING aggregate without a merged column".into())
+        })?);
+    }
 
     if group_by_regs.is_empty() {
         // #452: an aggregate with no GROUP BY is a global reduction, one
@@ -1650,7 +1842,10 @@ pub fn compile(select: &Select) -> Result<Program> {
             }
             .into(),
             project: if projection {
-                build_projection(select, &items, &item_slots)?
+                let having = having
+                    .as_ref()
+                    .map(|h| (h, &having_calls[..], &having_slots[..]));
+                build_projection(select, &items, &item_slots, having)?
             } else {
                 Vec::new()
             }
@@ -4205,6 +4400,96 @@ mod tests {
             .map(|_| InMemorySegment(amount_batch()))
             .collect();
         run(&segments, &program).unwrap().into_rows()
+    }
+
+    /// #644: `HAVING` filters the merged groups -- over keys, select-list
+    /// aggregates, aggregates only it reads (alongside select-list ones,
+    /// which must not be confused with them), aliases, `AVG` and
+    /// `COUNT(DISTINCT)`; without `GROUP BY` over the one group, which it
+    /// may filter out. Applied before `ORDER BY`/`LIMIT`. Over 1 segment and
+    /// 256 the answers agree.
+    #[test]
+    fn having_filters_the_merged_groups() {
+        let s = |v: &str| Value::Str(v.to_string().into());
+        for segments in [1, 256] {
+            let n = i64::try_from(segments).unwrap();
+            let run = |q: &str| run_grouped(q, segments);
+            // a: amounts 5, 20 (avg 12.5); b: 3, 30 (avg 16.5), per segment.
+            assert_eq!(
+                run("SELECT region, COUNT(*) FROM t GROUP BY region \
+                     HAVING SUM(amount) / COUNT(*) > 13"),
+                vec![vec![s("b"), Value::Int(2 * n)]],
+            );
+            assert_eq!(
+                run("SELECT region, COUNT(*) FROM t GROUP BY region HAVING SUM(amount) > 30 * 256"),
+                if segments == 256 {
+                    vec![vec![s("b"), Value::Int(2 * n)]]
+                } else {
+                    vec![]
+                },
+            );
+            assert_eq!(
+                run("SELECT region, MAX(amount) AS m FROM t GROUP BY region HAVING m > 25"),
+                vec![vec![s("b"), Value::Int(30)]],
+            );
+            assert_eq!(
+                run("SELECT region FROM t GROUP BY region HAVING region = 'a'"),
+                vec![vec![s("a")]],
+            );
+            assert_eq!(
+                run("SELECT region FROM t GROUP BY region HAVING AVG(amount) < 15"),
+                vec![vec![s("a")]],
+            );
+            assert_eq!(
+                run(
+                    "SELECT region, COUNT(DISTINCT amount) FROM t GROUP BY region \
+                     HAVING COUNT(DISTINCT amount) = 2 AND MIN(amount) > 4"
+                ),
+                vec![vec![s("a"), Value::Int(2)]],
+            );
+            assert_eq!(
+                run("SELECT COUNT(*) FROM t HAVING COUNT(*) > 100000"),
+                Vec::<Vec<Value>>::new()
+            );
+            assert_eq!(
+                run("SELECT SUM(amount) FROM t HAVING MIN(amount) = 3"),
+                vec![vec![Value::Int(58 * n)]],
+            );
+            assert_eq!(
+                run(
+                    "SELECT region, SUM(amount) FROM t GROUP BY region HAVING COUNT(*) > 0 \
+                     ORDER BY region DESC LIMIT 1"
+                ),
+                vec![vec![s("b"), Value::Int(33 * n)]],
+            );
+        }
+    }
+
+    /// #644: what `HAVING` refuses, in the select list's words.
+    #[test]
+    fn having_refusals() {
+        let parse_err = |q: &str| sql::parse(q).unwrap_err().to_string();
+        assert!(
+            parse_err("SELECT region FROM t GROUP BY region HAVING amount > 1")
+                .contains("column `amount` must be a GROUP BY key or inside an aggregate")
+        );
+        assert!(parse_err("SELECT region FROM t HAVING region = 'a'")
+            .contains("HAVING requires GROUP BY or an aggregate"));
+        assert!(
+            parse_err("SELECT region FROM t GROUP BY region HAVING SUM(DISTINCT amount) > 1")
+                .contains("only COUNT(DISTINCT x) is supported")
+        );
+        let schema = ["region".to_string(), "amount".to_string()];
+        let select = expand_star(
+            &sql::parse("SELECT region FROM t GROUP BY region HAVING COUNT(DISTINCT amount) > 1")
+                .unwrap(),
+            &schema,
+        )
+        .unwrap();
+        assert!(matches!(
+            compile(&select),
+            Err(PlanError::UnsupportedSelectItem(m)) if m.contains("must also be in the SELECT list")
+        ));
     }
 
     fn sorted(mut rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {

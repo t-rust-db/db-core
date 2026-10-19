@@ -83,10 +83,9 @@ SQL
 timed ingest_sqlite sqlite3 "$SQLITE_DB" ".read $OUT/sqlite_load.sql"
 rm -f "$CSV"
 
-# The queries. db-core's subset has one ORDER BY term and no HAVING, so
-# replay orders by session alone and the A-and-B query keeps n = 2 after
-# the fact; the row store and DuckDB run the same SQL so the answers
-# compare, and every result is compared as sorted rows.
+# The queries. db-core's subset has one ORDER BY term, so replay orders
+# by session alone; the row store and DuckDB run the same SQL so the
+# answers compare, and every result is compared as sorted rows.
 S=$((EVENTS / 40))
 N=1000
 LABELS=(stats replay session cross)
@@ -96,7 +95,7 @@ sql_for() {
     stats) echo "SELECT day, name, count(*), sum(amount) FROM events GROUP BY day, name" ;;
     replay) echo "SELECT session_id, request_id, name FROM events WHERE session_id >= $S AND session_id < $((S + N)) ORDER BY session_id" ;;
     session) echo "SELECT request_id, name, amount FROM events WHERE session_id = $S" ;;
-    cross) echo "SELECT session_id, count(DISTINCT name) FROM events WHERE name = 'search' OR name = 'checkout' GROUP BY session_id" ;;
+    cross) echo "SELECT session_id, count(DISTINCT name) FROM events WHERE name = 'search' OR name = 'checkout' GROUP BY session_id HAVING count(DISTINCT name) = 2" ;;
   esac
 }
 
@@ -111,7 +110,6 @@ for q in "${LABELS[@]}"; do
     f="$OUT/q_${q}_${engine}.out"
     # sqlite3 3.53's -csv ends lines with CRLF (RFC 4180); the others LF.
     tr -d '\r' <"$f" >"$f.tmp" && mv "$f.tmp" "$f"
-    if [[ "$q" == cross ]]; then awk -F, '$2 == 2' "$f" >"$f.tmp" && mv "$f.tmp" "$f"; fi
     LC_ALL=C sort "$f" -o "$f"
   done
   for engine in dbcore sqlite; do
