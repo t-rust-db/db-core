@@ -300,6 +300,34 @@ pub struct Batch {
 }
 
 impl Batch {
+    /// Rows `start..start + len` of every column (clamped to the batch),
+    /// as a batch of their own (#643).
+    pub(crate) fn slice(&self, start: usize, len: usize) -> Batch {
+        let end = start.saturating_add(len).min(self.num_rows);
+        let start = start.min(end);
+        Batch {
+            columns: self
+                .columns
+                .iter()
+                .map(|(k, v)| {
+                    let rows = v.get(start..end).unwrap_or_default().to_vec();
+                    (k.clone(), Arc::new(rows))
+                })
+                .collect(),
+            typed_columns: self
+                .typed_columns
+                .iter()
+                .map(|(k, c)| {
+                    (
+                        k.clone(),
+                        Arc::new(c.slice(start, end.saturating_sub(start))),
+                    )
+                })
+                .collect(),
+            num_rows: end.saturating_sub(start),
+        }
+    }
+
     /// An empty batch of `num_rows` rows with no columns yet.
     pub fn new(num_rows: usize) -> Self {
         Batch {
@@ -1396,7 +1424,7 @@ pub trait Segment: Send + Sync {
 /// sitting on a statically pre-assigned share -- the morsel-driven property
 /// `run_parallel`/`run_parallel_top_n`'s doc comments require, without a
 /// work-stealing dependency.
-fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -1610,6 +1638,73 @@ fn run_morsels_ordered<I: Sync, T: Send>(
     outcome
 }
 
+/// Rows a segment's body runs over at a time (#643). The VM materializes
+/// registers row by row (a `Value` is 32 bytes), so a worker's memory is
+/// this many rows times the program's live registers -- not a whole row
+/// group's (up to `row_group_max_rows`, 1M by default) -- and the pool's
+/// is that times its threads.
+pub(crate) const SLICE_ROWS: usize = 16_384;
+
+/// Whether running `program` over a segment slice by slice gives the
+/// same rows as over the whole segment, and is worth it: row-wise
+/// opcodes and partial aggregates only (`Reduce`/`GroupReduce`, whose
+/// per-slice partials `Combine` merges as it merges per-segment ones --
+/// every aggregate body codegen emits ends in such a `Combine`), and at
+/// least one opcode that materializes registers. A pure projection
+/// (`LoadColumn ... Emit`) hands out the batch's own columns, so slicing
+/// it would only copy them. Joins, windows and sources see the segment
+/// whole.
+pub(crate) fn sliceable(program: &[Opcode]) -> bool {
+    let materializes = program.iter().any(|op| {
+        matches!(
+            op,
+            Opcode::Map { .. }
+                | Opcode::Call { .. }
+                | Opcode::Filter { .. }
+                | Opcode::Reduce { .. }
+                | Opcode::GroupReduce { .. }
+        )
+    });
+    materializes
+        && program.iter().all(|op| {
+            matches!(
+                op,
+                Opcode::LoadColumn { .. }
+                    | Opcode::LoadConst { .. }
+                    | Opcode::Map { .. }
+                    | Opcode::Call { .. }
+                    | Opcode::Filter { .. }
+                    | Opcode::Reduce { .. }
+                    | Opcode::GroupReduce { .. }
+                    | Opcode::Emit { .. }
+            )
+        })
+}
+
+/// Runs `program` over `batch`, in [`SLICE_ROWS`]-row slices when
+/// [`sliceable`], handing each slice's output and first row to `sink`
+/// in row order.
+pub(crate) fn execute_in_slices(
+    batch: &Batch,
+    program: &[Opcode],
+    mut sink: impl FnMut(usize, QueryOutput) -> Result<()>,
+) -> Result<()> {
+    if batch.num_rows <= SLICE_ROWS || !sliceable(program) {
+        let mut vm = Vm::new();
+        vm.execute(batch, program)?;
+        return sink(0, vm.take_output());
+    }
+    let mut start = 0;
+    while start < batch.num_rows {
+        let slice = batch.slice(start, SLICE_ROWS);
+        let mut vm = Vm::new();
+        vm.execute(&slice, program)?;
+        sink(start, vm.take_output())?;
+        start = start.saturating_add(SLICE_ROWS);
+    }
+    Ok(())
+}
+
 /// Run `program` (a flat, non-looping instruction list ending in
 /// [`Opcode::Emit`]) against every segment in parallel (morsel-driven: a
 /// fixed thread pool dynamically pulls one segment per task off a shared
@@ -1621,9 +1716,12 @@ fn run_morsels_ordered<I: Sync, T: Send>(
 pub fn run_parallel<S: Segment>(segments: &[S], program: &[Opcode]) -> Result<QueryOutput> {
     let per_segment: Vec<Result<QueryOutput>> = run_morsels(segments, |segment| {
         let batch = segment.load()?;
-        let mut vm = Vm::new();
-        vm.execute(&batch, program)?;
-        Ok(std::mem::take(&mut vm.output))
+        let mut output = QueryOutput::default();
+        execute_in_slices(&batch, program, |_, part| {
+            output.extend(part);
+            Ok(())
+        })?;
+        Ok(output)
     });
 
     // #436: column-wise `Vec::extend` per segment, not a per-row rebuild.
@@ -1656,9 +1754,12 @@ pub fn run_parallel_streaming<S: Segment>(
         segments,
         |segment| -> Result<QueryOutput> {
             let batch = segment.load()?;
-            let mut vm = Vm::new();
-            vm.execute(&batch, program)?;
-            Ok(std::mem::take(&mut vm.output))
+            let mut output = QueryOutput::default();
+            execute_in_slices(&batch, program, |_, part| {
+                output.extend(part);
+                Ok(())
+            })?;
+            Ok(output)
         },
         |output| {
             for chunk in output?.into_chunks() {
@@ -2304,11 +2405,16 @@ pub enum VmError {
         /// Which finalize step needs the whole result.
         reason: String,
     },
-    /// An integer `SUM` does not fit in 64 bits (#631), or integer or
-    /// decimal arithmetic leaves its type's range (#635: `BIGINT` past 64
-    /// bits, `DECIMAL` past 38 digits): an error, as in SQLite and DuckDB,
-    /// rather than a rounded or wrapped result.
+    /// An integer `SUM` does not fit in 64 bits (#631), or integer
+    /// arithmetic leaves `BIGINT` (#635): an error, as in SQLite and
+    /// DuckDB, rather than a rounded or wrapped result.
     IntegerOverflow {
+        /// Name of the [`Opcode`] variant (or engine phase) that failed.
+        opcode: &'static str,
+    },
+    /// A decimal `SUM` or decimal arithmetic leaves `DECIMAL(38)` -- more
+    /// than 38 digits, or a scale above 38 (#632, #635, #660).
+    DecimalOverflow {
         /// Name of the [`Opcode`] variant (or engine phase) that failed.
         opcode: &'static str,
     },
@@ -2344,6 +2450,9 @@ impl fmt::Display for VmError {
             VmError::SegmentLoad { reason } => write!(f, "segment load failed: {reason}"),
             VmError::NotStreamable { reason } => write!(f, "cannot stream this program: {reason}"),
             VmError::IntegerOverflow { opcode } => write!(f, "{opcode}: integer overflow"),
+            VmError::DecimalOverflow { opcode } => {
+                write!(f, "{opcode}: decimal overflow (past DECIMAL(38))")
+            }
         }
     }
 }
@@ -3241,7 +3350,7 @@ impl RunningAgg {
             // largest scale seen, an error past DECIMAL(38) (#632).
             AggFunc::Sum if self.dec_scale.is_some() => {
                 let scale = self.dec_scale.unwrap_or(0);
-                let overflow = || VmError::IntegerOverflow { opcode };
+                let overflow = || VmError::DecimalOverflow { opcode };
                 if self.dec_overflow {
                     return Err(overflow());
                 }
@@ -4108,556 +4217,24 @@ impl Vm {
                 };
                 self.registers.insert(*dst, Arc::new(result));
             }
-            Opcode::Filter { predicate } => {
-                // #265: produces a selection vector (surviving row
-                // indices) instead of eagerly compacting every live
-                // register -- registers stay exactly as they are;
-                // whichever opcode later actually needs dense rows
-                // resolves this (see `Selection`).
-                let mask: Vec<bool> = match self.typed_registers.get(predicate) {
-                    // #429: a typed Bool predicate register (e.g. loaded
-                    // straight from a sealed segment's Bool column) reads
-                    // its bitmap-backed buffer directly, skipping the
-                    // `Value::Bool(true)` match entirely.
-                    Some(column) => match column.as_ref() {
-                        Column::Bool { data, valid } => (0..data.len())
-                            .map(|i| valid.get(i) && data.get(i).copied().unwrap_or(false))
-                            .collect(),
-                        other => (0..other.len())
-                            .map(|i| matches!(other.get(i), Value::Bool(true)))
-                            .collect(),
-                    },
-                    None => {
-                        self.ensure_materialized(*predicate);
-                        self.reg(*predicate, opcode)?
-                            .iter()
-                            .map(|v| matches!(v, Value::Bool(true)))
-                            .collect()
-                    }
-                };
-                let base_len = mask.len();
-                for values in self.registers.values() {
-                    if values.len() != base_len {
-                        return Err(VmError::RegisterLengthMismatch { opcode });
-                    }
-                }
-                let source_indices: Vec<u32> = match self.selection.take() {
-                    Some(existing) => {
-                        if existing.base_len != base_len {
-                            return Err(VmError::RegisterLengthMismatch { opcode });
-                        }
-                        existing.indices
-                    }
-                    // #110: size the surviving-index buffer to the actual
-                    // survivor count up front (not the pre-filter length)
-                    // -- at 50% selectivity on a 10M-row scan, over-
-                    // allocating by 2x is real peak-RSS waste for no
-                    // benefit (the excess capacity is never used).
-                    None => (0..u32::try_from(base_len).unwrap_or(u32::MAX)).collect(),
-                };
-                let kept_len = mask.iter().filter(|&&keep| keep).count();
-                let mut indices = Vec::with_capacity(kept_len);
-                for idx in source_indices {
-                    if mask.get(idx as usize).copied().unwrap_or(false) {
-                        indices.push(idx);
-                    }
-                }
-                self.selection = Some(Selection { base_len, indices });
-            }
-            Opcode::Reduce { func, src, dst } => {
-                let result = match src {
-                    Some(reg) => {
-                        // #265: see the comment on `Map`'s same call. Also
-                        // clears `typed_registers` when it actually
-                        // resolves a selection, so the typed fast path
-                        // below only ever fires over an unfiltered (or
-                        // already-compacted) typed column -- never a
-                        // stale, wrong-length shadow.
-                        self.resolve_selection(opcode)?;
-                        let typed = self
-                            .typed_registers
-                            .get(reg)
-                            .and_then(|column| typed_reduce_values(*func, column));
-                        match typed {
-                            Some(result) => result?,
-                            None => {
-                                self.ensure_materialized(*reg);
-                                reduce_values(*func, self.reg(*reg, opcode)?)?
-                            }
-                        }
-                    }
-                    // #452/#474: bare `COUNT(*)` never reads register
-                    // contents, only the survivor count -- so unlike
-                    // every other `src`, it must NOT force
-                    // `resolve_selection`'s per-register compaction
-                    // (O(live registers x survivors), the dominant cost
-                    // at high selectivity per #474). Peek (don't take)
-                    // the pending selection's index count: another
-                    // `Reduce`/`Map` in the same SELECT list (e.g.
-                    // `count(*), sum(amt)`) still needs the selection
-                    // itself to compact its own source register.
-                    None => {
-                        let count = match &self.selection {
-                            Some(selection) => selection.indices.len(),
-                            None => self.selected_rows.unwrap_or(batch.num_rows),
-                        };
-                        reduce_count_star(*func, count)
-                    }
-                };
-                self.registers.insert(*dst, Arc::new(vec![result]));
-                self.typed_registers.remove(dst);
-                self.scalar_registers.insert(*dst);
-            }
+            Opcode::Filter { predicate } => self.filter(opcode, predicate)?,
+            Opcode::Reduce { func, src, dst } => self.reduce(batch, opcode, func, src, dst)?,
             Opcode::GroupReduce {
                 group_by,
                 aggs,
                 agg_dst,
-            } => {
-                // #265: lazily resolves any pending selection -- only the
-                // group-key and per-aggregate source registers this
-                // opcode actually reads are indexed through it, instead
-                // of every live register being eagerly compacted back in
-                // `Filter`. Taken up front so the borrows below are of
-                // `self.registers` alone, not all of `self`.
-                let selection = self.selection.take();
-                // #457: a single dict-encoded group-by column groups by its
-                // integer code instead of decoding every row to a `String`
-                // first -- for a low-cardinality dictionary the group table
-                // degenerates to a `dict.len()`-sized array, skipping the
-                // per-row hash entirely. Only fires for exactly one group-by
-                // column (matching a `GROUP BY <dict col>` with no other
-                // key); a composite key falls back to the general path.
-                let dict_group_by = match &group_by[..] {
-                    [reg] => match self.typed_registers.get(reg).map(Arc::as_ref) {
-                        Some(Column::Dict {
-                            dict,
-                            indices,
-                            valid,
-                        }) => Some((dict.clone(), indices.clone(), valid.clone())),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                // #482: materialize every register this opcode might read
-                // as `Vec<Value>` up front, before `key_columns` below
-                // starts borrowing `self.registers` -- the `aggs` fallback
-                // a few lines down only fires when `group_by` is empty
-                // (so `key_columns` is empty too), but it still needs its
-                // agg-source registers materialized, and by then
-                // `key_columns`'s live borrow would make a mutating
-                // `ensure_materialized` call a borrow-checker conflict.
-                // #479: a single typed `Int` key -- the `GROUP BY
-                // customer_id` shape -- groups through `IntKeyTable` on the
-                // packed `i64`s below: the key register is never
-                // materialized to `Vec<Value>` (which would hand back, for
-                // exactly this column, the copy #482 stopped `LoadColumn`
-                // from making), no SipHash per cell, `i64 == i64` on a
-                // probe. `Dict` keeps #457's own path; composite, `Str` and
-                // `Float` keys keep the generic hash-then-verify below.
-                let int_group_by: Option<Arc<Column>> = match &group_by[..] {
-                    [reg] if dict_group_by.is_none() => self
-                        .typed_registers
-                        .get(reg)
-                        .filter(|column| matches!(column.as_ref(), Column::Int { .. }))
-                        .map(Arc::clone),
-                    _ => None,
-                };
-                for (_, src) in aggs.iter() {
-                    if let Some(reg) = src {
-                        self.ensure_materialized(*reg);
-                    }
-                }
-                // #479: the generic path reads each key register through a
-                // `KeyView` -- the typed column when there is one, the
-                // `Vec<Value>` otherwise -- so a typed key is hashed and
-                // compared in place and never materialized to `Vec<Value>`
-                // (which would hand back, for the key column, the copy #482
-                // stopped `LoadColumn` from making).
-                let key_views: Vec<KeyView> = if int_group_by.is_some() || dict_group_by.is_some() {
-                    Vec::new()
-                } else {
-                    group_by
-                        .iter()
-                        .map(|reg| self.key_view(*reg, opcode))
-                        .collect::<Result<_>>()?
-                };
-                let base_len = match &selection {
-                    Some(sel) => sel.base_len,
-                    None => match key_views
-                        .first()
-                        .map(KeyView::len)
-                        .or(int_group_by.as_ref().map(|c| c.len()))
-                        .or(dict_group_by.as_ref().map(|(_, _, valid)| valid.len()))
-                    {
-                        Some(len) => len,
-                        None => match aggs.iter().find_map(|(_, src)| {
-                            src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len))
-                        }) {
-                            Some(len) => len?,
-                            // `COUNT(*)` alone: no key or source column
-                            // carries the row count, but every live
-                            // register has the post-`Filter` length
-                            // (RegisterLengthMismatch guards that), so any
-                            // one of them is it; with no register at all
-                            // nothing was filtered and the batch's own row
-                            // count is exact.
-                            None => self
-                                .registers
-                                .values()
-                                .next()
-                                .map_or(batch.num_rows, |v| v.len()),
-                        },
-                    },
-                };
-                for view in &key_views {
-                    if view.len() != base_len {
-                        return Err(VmError::RegisterLengthMismatch { opcode });
-                    }
-                }
-                if int_group_by.as_ref().is_some_and(|c| c.len() != base_len) {
-                    return Err(VmError::RegisterLengthMismatch { opcode });
-                }
-                let int_key: Option<(&[i64], &Bitmap)> = match int_group_by.as_deref() {
-                    Some(Column::Int { data, valid }) => Some((data.as_slice(), valid)),
-                    _ => None,
-                };
-                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
-                let physical = |row: usize| {
-                    selection
-                        .as_ref()
-                        .map_or(row, |sel| sel.indices[row] as usize)
-                };
-
-                let (row_group, group_keys): (Vec<usize>, Vec<Vec<Value>>) = match dict_group_by {
-                    Some((dict, indices, valid)) => {
-                        dict_group_by_single_column(&dict, &indices, &valid, num_rows, physical)
-                    }
-                    // #439/#440: hash column-wise (`hash_columns_by_row`, no
-                    // per-row key materialized), then probe by hash first on
-                    // a borrowed row view, only clone+allocate a
-                    // `Vec<Value>` key on a genuine new group -- the old
-                    // code built and cloned that `Vec` (plus its `String`s)
-                    // for every input row, even though nearly every row
-                    // lands in a group that already exists. `group_index`
-                    // buckets group ids by hash (collisions possible, so
-                    // each bucket is checked for an exact match) rather
-                    // than owning a `GroupKey` per entry.
-                    None => match int_key {
-                        Some((data, valid)) => {
-                            int_group_by_single_column(data, valid, num_rows, physical)?
-                        }
-                        None => group_by_key_views(&key_views, num_rows, physical)?,
-                    },
-                };
-                let num_groups = group_keys.len();
-
-                for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
-                    // #477: one `RunningAgg` per group instead of
-                    // `per_group: Vec<Vec<Value>>` + a final
-                    // `reduce_values` pass -- O(1) memory per row instead
-                    // of O(matched rows), same accumulator
-                    // `Opcode::HashProbeGroupReduce` (#441) already uses.
-                    let mut accs: Vec<RunningAgg> = vec![RunningAgg::default(); num_groups];
-                    match src {
-                        Some(reg) => match self.typed_registers.get(reg).map(Arc::clone) {
-                            // #477: read straight from the typed column's
-                            // packed `data`/`valid` for `Int`/`Float` --
-                            // no `Value` allocated per row at all, unlike
-                            // `Column::get`'s scalar-at-a-time path used
-                            // for every other variant below.
-                            Some(column) if column.len() == base_len => match column.as_ref() {
-                                Column::Float { data, valid } => {
-                                    for (row, group) in row_group.iter().enumerate() {
-                                        let p = physical(row);
-                                        if valid.get(p) {
-                                            accs[*group].push_f64(data[p]);
-                                        } else {
-                                            accs[*group].push_null();
-                                        }
-                                    }
-                                }
-                                Column::Int { data, valid } => {
-                                    for (row, group) in row_group.iter().enumerate() {
-                                        let p = physical(row);
-                                        if valid.get(p) {
-                                            accs[*group].push_i64(data[p]);
-                                        } else {
-                                            accs[*group].push_null();
-                                        }
-                                    }
-                                }
-                                other => {
-                                    for (row, group) in row_group.iter().enumerate() {
-                                        let value = other.get(physical(row));
-                                        accs[*group].push(Some(&value));
-                                    }
-                                }
-                            },
-                            _ => {
-                                // #110: borrow instead of `.to_vec()` --
-                                // same redundant-clone pattern as the old
-                                // `Emit`. #482: already materialized above.
-                                let values = self.reg(*reg, opcode)?;
-                                if values.len() != base_len {
-                                    return Err(VmError::RegisterLengthMismatch { opcode });
-                                }
-                                for (row, group) in row_group.iter().enumerate() {
-                                    accs[*group].push(Some(&values[physical(row)]));
-                                }
-                            }
-                        },
-                        None => {
-                            for group in &row_group {
-                                accs[*group].push_null();
-                            }
-                        }
-                    }
-                    let is_count_star = src.is_none();
-                    let result: Vec<Value> = accs
-                        .iter()
-                        .map(|acc| acc.finalize(*func, is_count_star, opcode))
-                        .collect::<Result<_>>()?;
-                    self.registers.insert(*dst, Arc::new(result));
-                }
-
-                // After the aggregates, which may read a key register as
-                // their source (`MIN(k) ... GROUP BY k`): overwriting it
-                // first left them the per-group keys, not the rows.
-                for (i, reg) in group_by.iter().enumerate() {
-                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
-                    self.registers.insert(*reg, Arc::new(column));
-                }
-            }
+            } => self.group_reduce(batch, opcode, group_by, aggs, agg_dst)?,
             Opcode::HashBuild {
                 key_cols,
                 payload_cols,
                 table,
-            } => {
-                // #265: lazily resolves any pending selection -- only the
-                // key/payload registers this opcode actually reads are
-                // indexed through it, rather than every live register
-                // being eagerly compacted back in `Filter`. Taken up
-                // front so the borrows below are of `self.registers`
-                // alone, not all of `self`.
-                let selection = self.selection.take();
-                for r in key_cols.iter() {
-                    self.ensure_materialized(*r);
-                }
-                let key_columns: Vec<&[Value]> = key_cols
-                    .iter()
-                    .map(|r| self.reg(*r, opcode))
-                    .collect::<Result<_>>()?;
-                let base_len = key_columns.first().map(|c| c.len()).ok_or_else(|| {
-                    VmError::MalformedProgram {
-                        opcode,
-                        reason: "hash build has no key columns".to_string(),
-                    }
-                })?;
-                for c in &key_columns {
-                    if c.len() != base_len {
-                        return Err(VmError::RegisterLengthMismatch { opcode });
-                    }
-                }
-                if let Some(sel) = &selection {
-                    if sel.base_len != base_len {
-                        return Err(VmError::RegisterLengthMismatch { opcode });
-                    }
-                }
-                let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
-                let physical = |row: usize| {
-                    selection
-                        .as_ref()
-                        .map_or(row, |sel| sel.indices[row] as usize)
-                };
-
-                // #440: hash the key columns column-wise (no per-row
-                // `Vec<Value>` key), then store key/payload data
-                // column-major too -- one allocation per key/payload
-                // column (reserved up front), not one per row. `index`
-                // maps each row's hash to its own row number; a later
-                // probe still has to verify a candidate row's actual
-                // values (`join_keys_match`), since two different keys
-                // can share a hash.
-                let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
-                let mut keys: Vec<Vec<Value>> = key_columns
-                    .iter()
-                    .map(|_| Vec::with_capacity(num_rows))
-                    .collect();
-                let mut index: JoinHashTable<u64, usize, SlotState> =
-                    JoinHashTable::with_capacity_and_hasher(num_rows, SlotState);
-                // #514: `int_keys` used to be a second pass over the
-                // freshly cloned `keys` column, re-walking and re-copying
-                // values this loop already touched. Fold it into the same
-                // pass instead: for a single-column key, track the `i64`s
-                // as we go and drop the accumulator the moment a
-                // non-`Int` value shows up.
-                let mut int_keys: Option<Vec<i64>> =
-                    (key_columns.len() == 1).then(|| Vec::with_capacity(num_rows));
-                for row in 0..num_rows {
-                    let p = physical(row);
-                    for (i, c) in key_columns.iter().enumerate() {
-                        let value = &c[p];
-                        if i == 0 {
-                            match (value, int_keys.as_mut()) {
-                                (Value::Int(v), Some(ik)) => ik.push(*v),
-                                (_, Some(_)) => int_keys = None,
-                                (_, None) => {}
-                            }
-                        }
-                        keys[i].push(value.clone());
-                    }
-                    index.insert(hashes[row], row);
-                }
-                // #514: built after `keys`, once `key_columns` (and any
-                // borrow of `self.typed_registers` it needed) is done --
-                // a payload register still shaped as `Column::Dict` stays
-                // dict-coded instead of decoding every build row into an
-                // owned `Value::Str` just to throw most of that away in
-                // `payload_groups`'s classification.
-                let payload: Vec<PayloadColumn> = payload_cols
-                    .iter()
-                    .map(|r| {
-                        self.hash_build_payload_column(*r, opcode, base_len, num_rows, &physical)
-                    })
-                    .collect::<Result<_>>()?;
-                self.join_tables.0.insert(
-                    *table,
-                    Arc::new(BuildTable {
-                        index,
-                        keys,
-                        payload,
-                        int_keys,
-                        payload_groups: std::sync::OnceLock::new(),
-                    }),
-                );
-            }
+            } => self.hash_build(opcode, key_cols, payload_cols, table)?,
             Opcode::HashProbe {
                 key_cols,
                 table,
                 payload_dst,
                 kind,
-            } => {
-                // #265: HashProbe already reshapes every live register
-                // itself (below) based on its own match/fan-out indices,
-                // a different and richer concept than a plain `Filter`
-                // selection vector -- resolve any pending selection first
-                // so the rest of this arm is unchanged from before #265.
-                self.resolve_selection(opcode)?;
-                for r in key_cols.iter() {
-                    self.ensure_materialized(*r);
-                }
-                let key_columns: Vec<&[Value]> = key_cols
-                    .iter()
-                    .map(|r| self.reg(*r, opcode))
-                    .collect::<Result<_>>()?;
-                let num_rows = key_columns.first().map(|c| c.len()).ok_or_else(|| {
-                    VmError::MalformedProgram {
-                        opcode,
-                        reason: "hash probe has no key columns".to_string(),
-                    }
-                })?;
-                // An `Arc` bump, so `bt` is a local the payload columns
-                // below can read from after the reshape has mutably
-                // borrowed `self.registers` (#272: no payload clone per
-                // matched row -- `emitted` records the build row, and
-                // each payload cell is cloned once, straight into its
-                // destination column).
-                let bt = Arc::clone(self.join_tables.0.get(table).ok_or(
-                    VmError::UnknownJoinTable {
-                        opcode,
-                        table: *table,
-                    },
-                )?);
-
-                // #440: hash the probe rows column-wise (no per-row
-                // `Vec<Value>` key, not even a reused buffer) and probe
-                // `bt.index` by hash; `join_keys_match` resolves both
-                // genuine hash collisions and NULL-never-matches against
-                // `bt.keys` before a candidate counts as a real match.
-                let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);
-                let mut emitted: Vec<(usize, Option<usize>)> = Vec::with_capacity(num_rows);
-                for row in 0..num_rows {
-                    let mut matched = false;
-                    let emit_payload =
-                        !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
-                    bt.index.for_each_match_slot(&hashes[row], |slot| {
-                        let Some(&build_row) = bt.index.value_at(slot) else {
-                            return;
-                        };
-                        if !bt.keys_match(&key_columns, row, build_row) {
-                            return;
-                        }
-                        matched = true;
-                        if emit_payload {
-                            emitted.push((row, Some(build_row)));
-                        }
-                    });
-                    if !matched {
-                        if should_emit(*kind, false, false) {
-                            emitted.push((row, None));
-                        }
-                    } else if matches!(kind, JoinKind::Semi) {
-                        // At most one row per probe-side match, regardless
-                        // of build-side fanout; no payload (see doc comment
-                        // on `Opcode::HashProbe`).
-                        emitted.push((row, None));
-                    }
-                }
-
-                // #482: every live register gets reshaped below by row
-                // position -- a typed-only register (never read as
-                // `Vec<Value>` yet) would otherwise be silently skipped
-                // here, then left both stale (still describing pre-probe
-                // rows) and undetected once `typed_registers` is cleared
-                // below.
-                let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
-                for r in typed_only {
-                    self.ensure_materialized(r);
-                }
-                for values in self.registers.values_mut() {
-                    if values.len() != num_rows {
-                        return Err(VmError::RegisterLengthMismatch { opcode });
-                    }
-                    let reshaped: Vec<Value> = emitted
-                        .iter()
-                        .map(|(row, _)| values[*row].clone())
-                        .collect();
-                    *values = Arc::new(reshaped);
-                }
-                // #482: every register above was just reshaped to the
-                // post-probe row order/count, so any `typed_registers`
-                // shadow of one is now stale -- clear them (mirrors
-                // `resolve_selection`'s same discipline) rather than let a
-                // later opcode's typed fast path read pre-probe data.
-                self.typed_registers.clear();
-
-                for (i, dst) in payload_dst.iter().enumerate() {
-                    let col: Vec<Value> = emitted
-                        .iter()
-                        .map(|(_, build_row)| match build_row {
-                            // `None` is an unmatched LEFT JOIN probe row: NULL
-                            // by definition. A payload narrower than its
-                            // destinations is a planner bug, not NULL data;
-                            // `build_row` always indexes a real row of
-                            // `bt.payload` (it came from `bt.index` itself),
-                            // so only the column count can be wrong.
-                            Some(build_row) => bt
-                                .payload
-                                .get(i)
-                                .and_then(|column| column.get(*build_row))
-                                .ok_or_else(|| VmError::MalformedProgram {
-                                    opcode,
-                                    reason: format!(
-                                        "join payload has {} columns but destination {i} was requested",
-                                        bt.payload.len()
-                                    ),
-                                }),
-                            None => Ok(Value::Null),
-                        })
-                        .collect::<Result<_>>()?;
-                    self.registers.insert(*dst, Arc::new(col));
-                }
-            }
+            } => self.hash_probe(opcode, key_cols, table, payload_dst, kind)?,
             Opcode::HashProbeGroupReduce {
                 key_cols,
                 table,
@@ -4665,233 +4242,8 @@ impl Vm {
                 group_by,
                 aggs,
                 agg_dst,
-            } => {
-                // #441: same probe-resolution rule as `Opcode::HashProbe`
-                // above -- this opcode reshapes nothing (there is no
-                // per-row output to reshape), but still reads live
-                // registers by row index below, so any pending selection
-                // must be resolved first.
-                self.resolve_selection(opcode)?;
-                // Every distinct probe-side register `key_cols` or a
-                // `group_by`/`aggs` source reads -- materialized (#482)
-                // and resolved once up front, before `key_columns` below
-                // starts holding `&[Value]` borrows across this whole
-                // arm; a later `ensure_materialized` call (mutable)
-                // couldn't run alongside a borrow still live in
-                // `key_columns`/`probe_columns` from an earlier step.
-                let probe_regs: Vec<usize> = group_by
-                    .iter()
-                    .filter_map(|(src, _)| match src {
-                        ValueSource::Probe(reg) => Some(*reg),
-                        ValueSource::Payload(_) => None,
-                    })
-                    .chain(aggs.iter().filter_map(|(_, src)| match src {
-                        Some(ValueSource::Probe(reg)) => Some(*reg),
-                        _ => None,
-                    }))
-                    .collect();
-                for r in key_cols.iter() {
-                    self.ensure_materialized(*r);
-                }
-                for &reg in &probe_regs {
-                    self.ensure_materialized(reg);
-                }
-                let key_columns: Vec<&[Value]> = key_cols
-                    .iter()
-                    .map(|r| self.reg(*r, opcode))
-                    .collect::<Result<_>>()?;
-                let num_rows = key_columns.first().map(|c| c.len()).ok_or_else(|| {
-                    VmError::MalformedProgram {
-                        opcode,
-                        reason: "hash probe has no key columns".to_string(),
-                    }
-                })?;
-                let bt = Arc::clone(self.join_tables.0.get(table).ok_or(
-                    VmError::UnknownJoinTable {
-                        opcode,
-                        table: *table,
-                    },
-                )?);
-
-                let mut probe_columns: Vec<(usize, &[Value])> = Vec::new();
-                for reg in probe_regs {
-                    if !probe_columns.iter().any(|(r, _)| *r == reg) {
-                        probe_columns.push((reg, self.reg(reg, opcode)?));
-                    }
-                }
-
-                // #440-style hash-then-verify probe, but folding each real
-                // match straight into a group's `RunningAgg`s instead of
-                // recording `(row, build_row)` pairs to reshape later
-                // (#439's `HashProbe`) or materializing a joined row at
-                // all (this is the whole point of #441): a join feeding
-                // only an aggregate never allocates one register set per
-                // matched row, only one `RunningAgg` per *group*.
-                let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);
-                let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
-                let mut group_keys: Vec<Vec<Value>> = Vec::new();
-                let mut accumulators: Vec<Vec<RunningAgg>> = vec![Vec::new(); aggs.len()];
-
-                // #514: an inner join grouped only by build-side payload
-                // columns knows each matched row's group from the build
-                // row it matched -- classified once per table -- so the
-                // per-row fold is an array read and the aggregate pushes,
-                // with no hashing or comparing of the payload values.
-                let payload_group_cols: Option<Vec<usize>> = group_by
-                    .iter()
-                    .map(|(src, _)| match src {
-                        ValueSource::Payload(i) => Some(*i),
-                        ValueSource::Probe(_) => None,
-                    })
-                    .collect();
-                let fast = match (kind, payload_group_cols) {
-                    (JoinKind::Inner, Some(cols)) if !cols.is_empty() => bt.payload_groups(&cols),
-                    _ => None,
-                };
-                if let Some(groups) = fast {
-                    let agg_sources: Vec<Option<AggSource>> = aggs
-                        .iter()
-                        .map(|(_, src)| match src {
-                            None => None,
-                            Some(ValueSource::Payload(i)) => Some(AggSource::Payload(*i)),
-                            Some(ValueSource::Probe(reg)) => Some(AggSource::Probe(
-                                probe_columns
-                                    .iter()
-                                    .position(|(r, _)| r == reg)
-                                    .unwrap_or(usize::MAX),
-                            )),
-                        })
-                        .collect();
-                    // Output groups in first-seen probe order, exactly as
-                    // the general fold numbers them.
-                    let mut seen: Vec<u32> = vec![u32::MAX; groups.keys.len()];
-                    for row in 0..num_rows {
-                        bt.index.for_each_match_slot(&hashes[row], |slot| {
-                            let Some(&build_row) = bt.index.value_at(slot) else {
-                                return;
-                            };
-                            if !bt.keys_match(&key_columns, row, build_row) {
-                                return;
-                            }
-                            let Some(&bg) = groups.group_of.get(build_row) else {
-                                return;
-                            };
-                            let Some(slot_seen) =
-                                seen.get_mut(usize::try_from(bg).unwrap_or(usize::MAX))
-                            else {
-                                return;
-                            };
-                            if *slot_seen == u32::MAX {
-                                *slot_seen = u32::try_from(group_keys.len()).unwrap_or(u32::MAX);
-                                group_keys.push(
-                                    groups
-                                        .keys
-                                        .get(usize::try_from(bg).unwrap_or(usize::MAX))
-                                        .cloned()
-                                        .unwrap_or_default(),
-                                );
-                                for accs in accumulators.iter_mut() {
-                                    accs.push(RunningAgg::default());
-                                }
-                            }
-                            let g = usize::try_from(*slot_seen).unwrap_or(usize::MAX);
-                            for (i, src) in agg_sources.iter().enumerate() {
-                                let Some(acc) = accumulators.get_mut(i).and_then(|a| a.get_mut(g))
-                                else {
-                                    continue;
-                                };
-                                match src {
-                                    None => acc.push(None),
-                                    Some(AggSource::Probe(c)) => acc.push(Some(
-                                        probe_columns
-                                            .get(*c)
-                                            .and_then(|(_, col)| col.get(row))
-                                            .unwrap_or(&Value::Null),
-                                    )),
-                                    Some(AggSource::Payload(i)) => acc.push(Some(
-                                        &bt.payload
-                                            .get(*i)
-                                            .and_then(|c| c.get(build_row))
-                                            .unwrap_or(Value::Null),
-                                    )),
-                                }
-                            }
-                        });
-                    }
-                } else {
-                    for row in 0..num_rows {
-                        let mut matched = false;
-                        let emit_payload =
-                            !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
-                        bt.index.for_each_match_slot(&hashes[row], |slot| {
-                            let Some(&build_row) = bt.index.value_at(slot) else {
-                                return;
-                            };
-                            if !bt.keys_match(&key_columns, row, build_row) {
-                                return;
-                            }
-                            matched = true;
-                            if emit_payload {
-                                fold_group_row(
-                                    group_by,
-                                    aggs,
-                                    &probe_columns,
-                                    &bt,
-                                    row,
-                                    Some(build_row),
-                                    &mut group_index,
-                                    &mut group_keys,
-                                    &mut accumulators,
-                                );
-                            }
-                        });
-                        if !matched {
-                            if should_emit(*kind, false, false) {
-                                fold_group_row(
-                                    group_by,
-                                    aggs,
-                                    &probe_columns,
-                                    &bt,
-                                    row,
-                                    None,
-                                    &mut group_index,
-                                    &mut group_keys,
-                                    &mut accumulators,
-                                );
-                            }
-                        } else if matches!(kind, JoinKind::Semi) {
-                            // Mirrors `Opcode::HashProbe`'s own `Semi` handling:
-                            // at most one contribution per probe row, with every
-                            // `Payload` source NULL (semi-joins never surface
-                            // the build side's columns).
-                            fold_group_row(
-                                group_by,
-                                aggs,
-                                &probe_columns,
-                                &bt,
-                                row,
-                                None,
-                                &mut group_index,
-                                &mut group_keys,
-                                &mut accumulators,
-                            );
-                        }
-                    }
-                }
-
-                for (i, (_src, dst)) in group_by.iter().enumerate() {
-                    let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
-                    self.registers.insert(*dst, Arc::new(column));
-                }
-                for (i, (func, src)) in aggs.iter().enumerate() {
-                    let is_count_star = src.is_none();
-                    let result: Vec<Value> = accumulators[i]
-                        .iter()
-                        .map(|acc| acc.finalize(*func, is_count_star, opcode))
-                        .collect::<Result<_>>()?;
-                    self.registers.insert(agg_dst[i], Arc::new(result));
-                }
-            }
+            } => self
+                .hash_probe_group_reduce(opcode, key_cols, table, kind, group_by, aggs, agg_dst)?,
             Opcode::Window {
                 func,
                 arg,
@@ -4899,136 +4251,17 @@ impl Vm {
                 partition_by,
                 order_by,
                 dst,
-            } => {
-                // #265: see the comment on `Map`'s same call.
-                self.resolve_selection(opcode)?;
-                for r in partition_by.iter() {
-                    self.ensure_materialized(*r);
-                }
-                for (r, _) in order_by.iter() {
-                    self.ensure_materialized(*r);
-                }
-                if let Some(r) = arg {
-                    self.ensure_materialized(*r);
-                }
-                let partition_cols: Vec<&[Value]> = partition_by
-                    .iter()
-                    .map(|r| self.reg(*r, opcode))
-                    .collect::<Result<_>>()?;
-                let order_cols: Vec<(&[Value], bool)> = order_by
-                    .iter()
-                    .map(|(r, desc)| self.reg(*r, opcode).map(|c| (c, *desc)))
-                    .collect::<Result<_>>()?;
-                let arg_col: Option<&[Value]> = match arg {
-                    Some(r) => Some(self.reg(*r, opcode)?),
-                    None => None,
-                };
-
-                let num_rows = partition_cols.first().map_or_else(
-                    || {
-                        order_cols.first().map_or_else(
-                            || arg_col.map_or(batch.num_rows, <[Value]>::len),
-                            |(c, _)| c.len(),
-                        )
-                    },
-                    |c| c.len(),
-                );
-
-                let result = compute_window(
-                    *func,
-                    *offset,
-                    &partition_cols,
-                    &order_cols,
-                    arg_col,
-                    num_rows,
-                )?;
-                self.registers.insert(*dst, Arc::new(result));
-            }
-            Opcode::Emit { registers } => {
-                // #262: Emit is terminal for these registers, so remove
-                // each column from `self.registers` instead of borrowing
-                // and cloning every cell into the output rows. A register
-                // listed more than once in `registers` (e.g. `SELECT a,
-                // a`) is removed on its first occurrence and `Arc::clone`d
-                // (a refcount bump, not a cell copy) for the repeats.
-                // #474: every emitted register already scalar (a bare
-                // `Reduce`'s single-value `dst`) means this is a bare
-                // aggregate SELECT list -- any selection still pending
-                // (peeked but never resolved by a `COUNT(*)`-only run of
-                // `Reduce`s) is stale, not something to index these
-                // columns by. See the comment below where it's used.
-                let all_scalar = registers.iter().all(|r| self.scalar_registers.contains(r));
-                let mut cols: Vec<Arc<Vec<Value>>> = Vec::with_capacity(registers.len());
-                for r in registers.iter() {
-                    self.ensure_materialized(*r);
-                    let owned = if let Some(existing) = self.registers.remove(r) {
-                        existing
-                    } else {
-                        cols.iter()
-                            .zip(registers.iter())
-                            .find(|(_, seen_r)| *seen_r == r)
-                            .map(|(col, _)| Arc::clone(col))
-                            .ok_or(VmError::UnknownRegister {
-                                opcode,
-                                register: *r,
-                            })?
-                    };
-                    cols.push(owned);
-                }
-                let base_len =
-                    cols.first()
-                        .map(|c| c.len())
-                        .ok_or_else(|| VmError::MalformedProgram {
-                            opcode,
-                            reason: "emit has no registers".to_string(),
-                        })?;
-                for c in &cols {
-                    if c.len() != base_len {
-                        return Err(VmError::RegisterLengthMismatch { opcode });
-                    }
-                }
-                // #265: lazily resolves any pending selection, indexing
-                // straight into the (still uncompacted) emitted columns
-                // instead of `Filter` having eagerly compacted every live
-                // register up front.
-                // #474: a pending selection is stale, not malformed, once
-                // every emitted column is already scalar -- nothing here
-                // ever needed the row-level data it pointed to. Drop it
-                // instead of indexing into already-scalar columns (or
-                // erroring on their length).
-                let selection = if all_scalar {
-                    self.selection.take();
-                    None
-                } else {
-                    self.selection.take()
-                };
-                if let Some(sel) = &selection {
-                    if sel.base_len != base_len {
-                        return Err(VmError::RegisterLengthMismatch { opcode });
-                    }
-                }
-                // #436: one chunk per `Emit` -- no per-row `Vec`, no
-                // row-major transpose, and no copy at all when there is
-                // no selection: the emitted `Arc` *is* the register's
-                // column (a bare `LoadColumn`'s is the batch's own, shared
-                // by refcount; a `Map`/`Reduce` result is moved as-is).
-                // Only a selected subset has to be materialized, since
-                // the unselected cells can't be left behind in a shared
-                // `Arc`.
-                let chunk: Chunk = cols
-                    .into_iter()
-                    .map(|col| match &selection {
-                        Some(sel) => Arc::new(
-                            sel.indices
-                                .iter()
-                                .map(|&idx| col[idx as usize].clone())
-                                .collect(),
-                        ),
-                        None => col,
-                    })
-                    .collect();
-                self.output.push_chunk(chunk);
-            }
+            } => self.window(
+                batch,
+                opcode,
+                func,
+                arg,
+                offset,
+                partition_by,
+                order_by,
+                dst,
+            )?,
+            Opcode::Emit { registers } => self.emit(opcode, registers)?,
             // Meaningful only as loop markers interpreted by `run` --
             // and `Combine`/`Sort`/`Limit` are the cross-segment
             // sequential phase applied once by `crate::vm::engine::run`,
@@ -5045,6 +4278,1032 @@ impl Vm {
             | Opcode::Limit { .. }
             | Opcode::ScanSource { .. } => {}
         }
+        Ok(())
+    }
+
+    /// [`Opcode::Filter`].
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
+    )]
+    fn filter(&mut self, opcode: &'static str, predicate: &usize) -> Result<()> {
+        // #265: produces a selection vector (surviving row
+        // indices) instead of eagerly compacting every live
+        // register -- registers stay exactly as they are;
+        // whichever opcode later actually needs dense rows
+        // resolves this (see `Selection`).
+        let mask: Vec<bool> = match self.typed_registers.get(predicate) {
+            // #429: a typed Bool predicate register (e.g. loaded
+            // straight from a sealed segment's Bool column) reads
+            // its bitmap-backed buffer directly, skipping the
+            // `Value::Bool(true)` match entirely.
+            Some(column) => match column.as_ref() {
+                Column::Bool { data, valid } => (0..data.len())
+                    .map(|i| valid.get(i) && data.get(i).copied().unwrap_or(false))
+                    .collect(),
+                other => (0..other.len())
+                    .map(|i| matches!(other.get(i), Value::Bool(true)))
+                    .collect(),
+            },
+            None => {
+                self.ensure_materialized(*predicate);
+                self.reg(*predicate, opcode)?
+                    .iter()
+                    .map(|v| matches!(v, Value::Bool(true)))
+                    .collect()
+            }
+        };
+        let base_len = mask.len();
+        for values in self.registers.values() {
+            if values.len() != base_len {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+        }
+        let source_indices: Vec<u32> = match self.selection.take() {
+            Some(existing) => {
+                if existing.base_len != base_len {
+                    return Err(VmError::RegisterLengthMismatch { opcode });
+                }
+                existing.indices
+            }
+            // #110: size the surviving-index buffer to the actual
+            // survivor count up front (not the pre-filter length)
+            // -- at 50% selectivity on a 10M-row scan, over-
+            // allocating by 2x is real peak-RSS waste for no
+            // benefit (the excess capacity is never used).
+            None => (0..u32::try_from(base_len).unwrap_or(u32::MAX)).collect(),
+        };
+        let kept_len = mask.iter().filter(|&&keep| keep).count();
+        let mut indices = Vec::with_capacity(kept_len);
+        for idx in source_indices {
+            if mask.get(idx as usize).copied().unwrap_or(false) {
+                indices.push(idx);
+            }
+        }
+        self.selection = Some(Selection { base_len, indices });
+        Ok(())
+    }
+
+    /// [`Opcode::Reduce`].
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
+    )]
+    fn reduce(
+        &mut self,
+        batch: &Batch,
+        opcode: &'static str,
+        func: &AggFunc,
+        src: &Option<usize>,
+        dst: &usize,
+    ) -> Result<()> {
+        let result = match src {
+            Some(reg) => {
+                // #265: see the comment on `Map`'s same call. Also
+                // clears `typed_registers` when it actually
+                // resolves a selection, so the typed fast path
+                // below only ever fires over an unfiltered (or
+                // already-compacted) typed column -- never a
+                // stale, wrong-length shadow.
+                self.resolve_selection(opcode)?;
+                let typed = self
+                    .typed_registers
+                    .get(reg)
+                    .and_then(|column| typed_reduce_values(*func, column));
+                match typed {
+                    Some(result) => result?,
+                    None => {
+                        self.ensure_materialized(*reg);
+                        reduce_values(*func, self.reg(*reg, opcode)?)?
+                    }
+                }
+            }
+            // #452/#474: bare `COUNT(*)` never reads register
+            // contents, only the survivor count -- so unlike
+            // every other `src`, it must NOT force
+            // `resolve_selection`'s per-register compaction
+            // (O(live registers x survivors), the dominant cost
+            // at high selectivity per #474). Peek (don't take)
+            // the pending selection's index count: another
+            // `Reduce`/`Map` in the same SELECT list (e.g.
+            // `count(*), sum(amt)`) still needs the selection
+            // itself to compact its own source register.
+            None => {
+                let count = match &self.selection {
+                    Some(selection) => selection.indices.len(),
+                    None => self.selected_rows.unwrap_or(batch.num_rows),
+                };
+                reduce_count_star(*func, count)
+            }
+        };
+        self.registers.insert(*dst, Arc::new(vec![result]));
+        self.typed_registers.remove(dst);
+        self.scalar_registers.insert(*dst);
+        Ok(())
+    }
+
+    /// [`Opcode::GroupReduce`].
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
+    )]
+    fn group_reduce(
+        &mut self,
+        batch: &Batch,
+        opcode: &'static str,
+        group_by: &[usize],
+        aggs: &[(AggFunc, Option<usize>)],
+        agg_dst: &[usize],
+    ) -> Result<()> {
+        // #265: lazily resolves any pending selection -- only the
+        // group-key and per-aggregate source registers this
+        // opcode actually reads are indexed through it, instead
+        // of every live register being eagerly compacted back in
+        // `Filter`. Taken up front so the borrows below are of
+        // `self.registers` alone, not all of `self`.
+        let selection = self.selection.take();
+        // #457: a single dict-encoded group-by column groups by its
+        // integer code instead of decoding every row to a `String`
+        // first -- for a low-cardinality dictionary the group table
+        // degenerates to a `dict.len()`-sized array, skipping the
+        // per-row hash entirely. Only fires for exactly one group-by
+        // column (matching a `GROUP BY <dict col>` with no other
+        // key); a composite key falls back to the general path.
+        let dict_group_by = match group_by {
+            [reg] => match self.typed_registers.get(reg).map(Arc::as_ref) {
+                Some(Column::Dict {
+                    dict,
+                    indices,
+                    valid,
+                }) => Some((dict.clone(), indices.clone(), valid.clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+        // #482: materialize every register this opcode might read
+        // as `Vec<Value>` up front, before `key_columns` below
+        // starts borrowing `self.registers` -- the `aggs` fallback
+        // a few lines down only fires when `group_by` is empty
+        // (so `key_columns` is empty too), but it still needs its
+        // agg-source registers materialized, and by then
+        // `key_columns`'s live borrow would make a mutating
+        // `ensure_materialized` call a borrow-checker conflict.
+        // #479: a single typed `Int` key -- the `GROUP BY
+        // customer_id` shape -- groups through `IntKeyTable` on the
+        // packed `i64`s below: the key register is never
+        // materialized to `Vec<Value>` (which would hand back, for
+        // exactly this column, the copy #482 stopped `LoadColumn`
+        // from making), no SipHash per cell, `i64 == i64` on a
+        // probe. `Dict` keeps #457's own path; composite, `Str` and
+        // `Float` keys keep the generic hash-then-verify below.
+        let int_group_by: Option<Arc<Column>> = match group_by {
+            [reg] if dict_group_by.is_none() => self
+                .typed_registers
+                .get(reg)
+                .filter(|column| matches!(column.as_ref(), Column::Int { .. }))
+                .map(Arc::clone),
+            _ => None,
+        };
+        for (_, src) in aggs.iter() {
+            if let Some(reg) = src {
+                self.ensure_materialized(*reg);
+            }
+        }
+        // #479: the generic path reads each key register through a
+        // `KeyView` -- the typed column when there is one, the
+        // `Vec<Value>` otherwise -- so a typed key is hashed and
+        // compared in place and never materialized to `Vec<Value>`
+        // (which would hand back, for the key column, the copy #482
+        // stopped `LoadColumn` from making).
+        let key_views: Vec<KeyView> = if int_group_by.is_some() || dict_group_by.is_some() {
+            Vec::new()
+        } else {
+            group_by
+                .iter()
+                .map(|reg| self.key_view(*reg, opcode))
+                .collect::<Result<_>>()?
+        };
+        let base_len = match &selection {
+            Some(sel) => sel.base_len,
+            None => match key_views
+                .first()
+                .map(KeyView::len)
+                .or(int_group_by.as_ref().map(|c| c.len()))
+                .or(dict_group_by.as_ref().map(|(_, _, valid)| valid.len()))
+            {
+                Some(len) => len,
+                None => match aggs
+                    .iter()
+                    .find_map(|(_, src)| src.map(|reg| self.reg(reg, opcode).map(<[Value]>::len)))
+                {
+                    Some(len) => len?,
+                    // `COUNT(*)` alone: no key or source column
+                    // carries the row count, but every live
+                    // register has the post-`Filter` length
+                    // (RegisterLengthMismatch guards that), so any
+                    // one of them is it; with no register at all
+                    // nothing was filtered and the batch's own row
+                    // count is exact.
+                    None => self
+                        .registers
+                        .values()
+                        .next()
+                        .map_or(batch.num_rows, |v| v.len()),
+                },
+            },
+        };
+        for view in &key_views {
+            if view.len() != base_len {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+        }
+        if int_group_by.as_ref().is_some_and(|c| c.len() != base_len) {
+            return Err(VmError::RegisterLengthMismatch { opcode });
+        }
+        let int_key: Option<(&[i64], &Bitmap)> = match int_group_by.as_deref() {
+            Some(Column::Int { data, valid }) => Some((data.as_slice(), valid)),
+            _ => None,
+        };
+        let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
+        let physical = |row: usize| {
+            selection
+                .as_ref()
+                .map_or(row, |sel| sel.indices[row] as usize)
+        };
+
+        let (row_group, group_keys): (Vec<usize>, Vec<Vec<Value>>) = match dict_group_by {
+            Some((dict, indices, valid)) => {
+                dict_group_by_single_column(&dict, &indices, &valid, num_rows, physical)
+            }
+            // #439/#440: hash column-wise (`hash_columns_by_row`, no
+            // per-row key materialized), then probe by hash first on
+            // a borrowed row view, only clone+allocate a
+            // `Vec<Value>` key on a genuine new group -- the old
+            // code built and cloned that `Vec` (plus its `String`s)
+            // for every input row, even though nearly every row
+            // lands in a group that already exists. `group_index`
+            // buckets group ids by hash (collisions possible, so
+            // each bucket is checked for an exact match) rather
+            // than owning a `GroupKey` per entry.
+            None => match int_key {
+                Some((data, valid)) => int_group_by_single_column(data, valid, num_rows, physical)?,
+                None => group_by_key_views(&key_views, num_rows, physical)?,
+            },
+        };
+        let num_groups = group_keys.len();
+
+        for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
+            // #477: one `RunningAgg` per group instead of
+            // `per_group: Vec<Vec<Value>>` + a final
+            // `reduce_values` pass -- O(1) memory per row instead
+            // of O(matched rows), same accumulator
+            // `Opcode::HashProbeGroupReduce` (#441) already uses.
+            let mut accs: Vec<RunningAgg> = vec![RunningAgg::default(); num_groups];
+            match src {
+                Some(reg) => match self.typed_registers.get(reg).map(Arc::clone) {
+                    // #477: read straight from the typed column's
+                    // packed `data`/`valid` for `Int`/`Float` --
+                    // no `Value` allocated per row at all, unlike
+                    // `Column::get`'s scalar-at-a-time path used
+                    // for every other variant below.
+                    Some(column) if column.len() == base_len => match column.as_ref() {
+                        Column::Float { data, valid } => {
+                            for (row, group) in row_group.iter().enumerate() {
+                                let p = physical(row);
+                                if valid.get(p) {
+                                    accs[*group].push_f64(data[p]);
+                                } else {
+                                    accs[*group].push_null();
+                                }
+                            }
+                        }
+                        Column::Int { data, valid } => {
+                            for (row, group) in row_group.iter().enumerate() {
+                                let p = physical(row);
+                                if valid.get(p) {
+                                    accs[*group].push_i64(data[p]);
+                                } else {
+                                    accs[*group].push_null();
+                                }
+                            }
+                        }
+                        other => {
+                            for (row, group) in row_group.iter().enumerate() {
+                                let value = other.get(physical(row));
+                                accs[*group].push(Some(&value));
+                            }
+                        }
+                    },
+                    _ => {
+                        // #110: borrow instead of `.to_vec()` --
+                        // same redundant-clone pattern as the old
+                        // `Emit`. #482: already materialized above.
+                        let values = self.reg(*reg, opcode)?;
+                        if values.len() != base_len {
+                            return Err(VmError::RegisterLengthMismatch { opcode });
+                        }
+                        for (row, group) in row_group.iter().enumerate() {
+                            accs[*group].push(Some(&values[physical(row)]));
+                        }
+                    }
+                },
+                None => {
+                    for group in &row_group {
+                        accs[*group].push_null();
+                    }
+                }
+            }
+            let is_count_star = src.is_none();
+            let result: Vec<Value> = accs
+                .iter()
+                .map(|acc| acc.finalize(*func, is_count_star, opcode))
+                .collect::<Result<_>>()?;
+            self.registers.insert(*dst, Arc::new(result));
+        }
+
+        // After the aggregates, which may read a key register as
+        // their source (`MIN(k) ... GROUP BY k`): overwriting it
+        // first left them the per-group keys, not the rows.
+        for (i, reg) in group_by.iter().enumerate() {
+            let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
+            self.registers.insert(*reg, Arc::new(column));
+        }
+        Ok(())
+    }
+
+    /// [`Opcode::HashBuild`].
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
+    )]
+    fn hash_build(
+        &mut self,
+        opcode: &'static str,
+        key_cols: &[usize],
+        payload_cols: &[usize],
+        table: &usize,
+    ) -> Result<()> {
+        // #265: lazily resolves any pending selection -- only the
+        // key/payload registers this opcode actually reads are
+        // indexed through it, rather than every live register
+        // being eagerly compacted back in `Filter`. Taken up
+        // front so the borrows below are of `self.registers`
+        // alone, not all of `self`.
+        let selection = self.selection.take();
+        for r in key_cols.iter() {
+            self.ensure_materialized(*r);
+        }
+        let key_columns: Vec<&[Value]> = key_cols
+            .iter()
+            .map(|r| self.reg(*r, opcode))
+            .collect::<Result<_>>()?;
+        let base_len =
+            key_columns
+                .first()
+                .map(|c| c.len())
+                .ok_or_else(|| VmError::MalformedProgram {
+                    opcode,
+                    reason: "hash build has no key columns".to_string(),
+                })?;
+        for c in &key_columns {
+            if c.len() != base_len {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+        }
+        if let Some(sel) = &selection {
+            if sel.base_len != base_len {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+        }
+        let num_rows = selection.as_ref().map_or(base_len, |sel| sel.indices.len());
+        let physical = |row: usize| {
+            selection
+                .as_ref()
+                .map_or(row, |sel| sel.indices[row] as usize)
+        };
+
+        // #440: hash the key columns column-wise (no per-row
+        // `Vec<Value>` key), then store key/payload data
+        // column-major too -- one allocation per key/payload
+        // column (reserved up front), not one per row. `index`
+        // maps each row's hash to its own row number; a later
+        // probe still has to verify a candidate row's actual
+        // values (`join_keys_match`), since two different keys
+        // can share a hash.
+        let hashes = hash_columns_by_row(&key_columns, num_rows, physical);
+        let mut keys: Vec<Vec<Value>> = key_columns
+            .iter()
+            .map(|_| Vec::with_capacity(num_rows))
+            .collect();
+        let mut index: JoinHashTable<u64, usize, SlotState> =
+            JoinHashTable::with_capacity_and_hasher(num_rows, SlotState);
+        // #514: `int_keys` used to be a second pass over the
+        // freshly cloned `keys` column, re-walking and re-copying
+        // values this loop already touched. Fold it into the same
+        // pass instead: for a single-column key, track the `i64`s
+        // as we go and drop the accumulator the moment a
+        // non-`Int` value shows up.
+        let mut int_keys: Option<Vec<i64>> =
+            (key_columns.len() == 1).then(|| Vec::with_capacity(num_rows));
+        for row in 0..num_rows {
+            let p = physical(row);
+            for (i, c) in key_columns.iter().enumerate() {
+                let value = &c[p];
+                if i == 0 {
+                    match (value, int_keys.as_mut()) {
+                        (Value::Int(v), Some(ik)) => ik.push(*v),
+                        (_, Some(_)) => int_keys = None,
+                        (_, None) => {}
+                    }
+                }
+                keys[i].push(value.clone());
+            }
+            index.insert(hashes[row], row);
+        }
+        // #514: built after `keys`, once `key_columns` (and any
+        // borrow of `self.typed_registers` it needed) is done --
+        // a payload register still shaped as `Column::Dict` stays
+        // dict-coded instead of decoding every build row into an
+        // owned `Value::Str` just to throw most of that away in
+        // `payload_groups`'s classification.
+        let payload: Vec<PayloadColumn> = payload_cols
+            .iter()
+            .map(|r| self.hash_build_payload_column(*r, opcode, base_len, num_rows, &physical))
+            .collect::<Result<_>>()?;
+        self.join_tables.0.insert(
+            *table,
+            Arc::new(BuildTable {
+                index,
+                keys,
+                payload,
+                int_keys,
+                payload_groups: std::sync::OnceLock::new(),
+            }),
+        );
+        Ok(())
+    }
+
+    /// [`Opcode::HashProbe`].
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
+    )]
+    fn hash_probe(
+        &mut self,
+        opcode: &'static str,
+        key_cols: &[usize],
+        table: &usize,
+        payload_dst: &[usize],
+        kind: &JoinKind,
+    ) -> Result<()> {
+        // #265: HashProbe already reshapes every live register
+        // itself (below) based on its own match/fan-out indices,
+        // a different and richer concept than a plain `Filter`
+        // selection vector -- resolve any pending selection first
+        // so the rest of this arm is unchanged from before #265.
+        self.resolve_selection(opcode)?;
+        for r in key_cols.iter() {
+            self.ensure_materialized(*r);
+        }
+        let key_columns: Vec<&[Value]> = key_cols
+            .iter()
+            .map(|r| self.reg(*r, opcode))
+            .collect::<Result<_>>()?;
+        let num_rows =
+            key_columns
+                .first()
+                .map(|c| c.len())
+                .ok_or_else(|| VmError::MalformedProgram {
+                    opcode,
+                    reason: "hash probe has no key columns".to_string(),
+                })?;
+        // An `Arc` bump, so `bt` is a local the payload columns
+        // below can read from after the reshape has mutably
+        // borrowed `self.registers` (#272: no payload clone per
+        // matched row -- `emitted` records the build row, and
+        // each payload cell is cloned once, straight into its
+        // destination column).
+        let bt = Arc::clone(
+            self.join_tables
+                .0
+                .get(table)
+                .ok_or(VmError::UnknownJoinTable {
+                    opcode,
+                    table: *table,
+                })?,
+        );
+
+        // #440: hash the probe rows column-wise (no per-row
+        // `Vec<Value>` key, not even a reused buffer) and probe
+        // `bt.index` by hash; `join_keys_match` resolves both
+        // genuine hash collisions and NULL-never-matches against
+        // `bt.keys` before a candidate counts as a real match.
+        let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);
+        let mut emitted: Vec<(usize, Option<usize>)> = Vec::with_capacity(num_rows);
+        for row in 0..num_rows {
+            let mut matched = false;
+            let emit_payload = !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
+            bt.index.for_each_match_slot(&hashes[row], |slot| {
+                let Some(&build_row) = bt.index.value_at(slot) else {
+                    return;
+                };
+                if !bt.keys_match(&key_columns, row, build_row) {
+                    return;
+                }
+                matched = true;
+                if emit_payload {
+                    emitted.push((row, Some(build_row)));
+                }
+            });
+            if !matched {
+                if should_emit(*kind, false, false) {
+                    emitted.push((row, None));
+                }
+            } else if matches!(kind, JoinKind::Semi) {
+                // At most one row per probe-side match, regardless
+                // of build-side fanout; no payload (see doc comment
+                // on `Opcode::HashProbe`).
+                emitted.push((row, None));
+            }
+        }
+
+        // #482: every live register gets reshaped below by row
+        // position -- a typed-only register (never read as
+        // `Vec<Value>` yet) would otherwise be silently skipped
+        // here, then left both stale (still describing pre-probe
+        // rows) and undetected once `typed_registers` is cleared
+        // below.
+        let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
+        for r in typed_only {
+            self.ensure_materialized(r);
+        }
+        for values in self.registers.values_mut() {
+            if values.len() != num_rows {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+            let reshaped: Vec<Value> = emitted
+                .iter()
+                .map(|(row, _)| values[*row].clone())
+                .collect();
+            *values = Arc::new(reshaped);
+        }
+        // #482: every register above was just reshaped to the
+        // post-probe row order/count, so any `typed_registers`
+        // shadow of one is now stale -- clear them (mirrors
+        // `resolve_selection`'s same discipline) rather than let a
+        // later opcode's typed fast path read pre-probe data.
+        self.typed_registers.clear();
+
+        for (i, dst) in payload_dst.iter().enumerate() {
+            let col: Vec<Value> = emitted
+                .iter()
+                .map(|(_, build_row)| match build_row {
+                    // `None` is an unmatched LEFT JOIN probe row: NULL
+                    // by definition. A payload narrower than its
+                    // destinations is a planner bug, not NULL data;
+                    // `build_row` always indexes a real row of
+                    // `bt.payload` (it came from `bt.index` itself),
+                    // so only the column count can be wrong.
+                    Some(build_row) => bt
+                        .payload
+                        .get(i)
+                        .and_then(|column| column.get(*build_row))
+                        .ok_or_else(|| VmError::MalformedProgram {
+                            opcode,
+                            reason: format!(
+                                "join payload has {} columns but destination {i} was requested",
+                                bt.payload.len()
+                            ),
+                        }),
+                    None => Ok(Value::Null),
+                })
+                .collect::<Result<_>>()?;
+            self.registers.insert(*dst, Arc::new(col));
+        }
+        Ok(())
+    }
+
+    /// [`Opcode::HashProbeGroupReduce`].
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
+    )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the opcode's own fields, passed through from `step`'s dispatch"
+    )]
+    fn hash_probe_group_reduce(
+        &mut self,
+        opcode: &'static str,
+        key_cols: &[usize],
+        table: &usize,
+        kind: &JoinKind,
+        group_by: &[(ValueSource, usize)],
+        aggs: &[(AggFunc, Option<ValueSource>)],
+        agg_dst: &[usize],
+    ) -> Result<()> {
+        // #441: same probe-resolution rule as `Opcode::HashProbe`
+        // above -- this opcode reshapes nothing (there is no
+        // per-row output to reshape), but still reads live
+        // registers by row index below, so any pending selection
+        // must be resolved first.
+        self.resolve_selection(opcode)?;
+        // Every distinct probe-side register `key_cols` or a
+        // `group_by`/`aggs` source reads -- materialized (#482)
+        // and resolved once up front, before `key_columns` below
+        // starts holding `&[Value]` borrows across this whole
+        // arm; a later `ensure_materialized` call (mutable)
+        // couldn't run alongside a borrow still live in
+        // `key_columns`/`probe_columns` from an earlier step.
+        let probe_regs: Vec<usize> = group_by
+            .iter()
+            .filter_map(|(src, _)| match src {
+                ValueSource::Probe(reg) => Some(*reg),
+                ValueSource::Payload(_) => None,
+            })
+            .chain(aggs.iter().filter_map(|(_, src)| match src {
+                Some(ValueSource::Probe(reg)) => Some(*reg),
+                _ => None,
+            }))
+            .collect();
+        for r in key_cols.iter() {
+            self.ensure_materialized(*r);
+        }
+        for &reg in &probe_regs {
+            self.ensure_materialized(reg);
+        }
+        let key_columns: Vec<&[Value]> = key_cols
+            .iter()
+            .map(|r| self.reg(*r, opcode))
+            .collect::<Result<_>>()?;
+        let num_rows =
+            key_columns
+                .first()
+                .map(|c| c.len())
+                .ok_or_else(|| VmError::MalformedProgram {
+                    opcode,
+                    reason: "hash probe has no key columns".to_string(),
+                })?;
+        let bt = Arc::clone(
+            self.join_tables
+                .0
+                .get(table)
+                .ok_or(VmError::UnknownJoinTable {
+                    opcode,
+                    table: *table,
+                })?,
+        );
+
+        let mut probe_columns: Vec<(usize, &[Value])> = Vec::new();
+        for reg in probe_regs {
+            if !probe_columns.iter().any(|(r, _)| *r == reg) {
+                probe_columns.push((reg, self.reg(reg, opcode)?));
+            }
+        }
+
+        // #440-style hash-then-verify probe, but folding each real
+        // match straight into a group's `RunningAgg`s instead of
+        // recording `(row, build_row)` pairs to reshape later
+        // (#439's `HashProbe`) or materializing a joined row at
+        // all (this is the whole point of #441): a join feeding
+        // only an aggregate never allocates one register set per
+        // matched row, only one `RunningAgg` per *group*.
+        let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);
+        let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut group_keys: Vec<Vec<Value>> = Vec::new();
+        let mut accumulators: Vec<Vec<RunningAgg>> = vec![Vec::new(); aggs.len()];
+
+        // #514: an inner join grouped only by build-side payload
+        // columns knows each matched row's group from the build
+        // row it matched -- classified once per table -- so the
+        // per-row fold is an array read and the aggregate pushes,
+        // with no hashing or comparing of the payload values.
+        let payload_group_cols: Option<Vec<usize>> = group_by
+            .iter()
+            .map(|(src, _)| match src {
+                ValueSource::Payload(i) => Some(*i),
+                ValueSource::Probe(_) => None,
+            })
+            .collect();
+        let fast = match (kind, payload_group_cols) {
+            (JoinKind::Inner, Some(cols)) if !cols.is_empty() => bt.payload_groups(&cols),
+            _ => None,
+        };
+        if let Some(groups) = fast {
+            let agg_sources: Vec<Option<AggSource>> = aggs
+                .iter()
+                .map(|(_, src)| match src {
+                    None => None,
+                    Some(ValueSource::Payload(i)) => Some(AggSource::Payload(*i)),
+                    Some(ValueSource::Probe(reg)) => Some(AggSource::Probe(
+                        probe_columns
+                            .iter()
+                            .position(|(r, _)| r == reg)
+                            .unwrap_or(usize::MAX),
+                    )),
+                })
+                .collect();
+            // Output groups in first-seen probe order, exactly as
+            // the general fold numbers them.
+            let mut seen: Vec<u32> = vec![u32::MAX; groups.keys.len()];
+            for row in 0..num_rows {
+                bt.index.for_each_match_slot(&hashes[row], |slot| {
+                    let Some(&build_row) = bt.index.value_at(slot) else {
+                        return;
+                    };
+                    if !bt.keys_match(&key_columns, row, build_row) {
+                        return;
+                    }
+                    let Some(&bg) = groups.group_of.get(build_row) else {
+                        return;
+                    };
+                    let Some(slot_seen) = seen.get_mut(usize::try_from(bg).unwrap_or(usize::MAX))
+                    else {
+                        return;
+                    };
+                    if *slot_seen == u32::MAX {
+                        *slot_seen = u32::try_from(group_keys.len()).unwrap_or(u32::MAX);
+                        group_keys.push(
+                            groups
+                                .keys
+                                .get(usize::try_from(bg).unwrap_or(usize::MAX))
+                                .cloned()
+                                .unwrap_or_default(),
+                        );
+                        for accs in accumulators.iter_mut() {
+                            accs.push(RunningAgg::default());
+                        }
+                    }
+                    let g = usize::try_from(*slot_seen).unwrap_or(usize::MAX);
+                    for (i, src) in agg_sources.iter().enumerate() {
+                        let Some(acc) = accumulators.get_mut(i).and_then(|a| a.get_mut(g)) else {
+                            continue;
+                        };
+                        match src {
+                            None => acc.push(None),
+                            Some(AggSource::Probe(c)) => acc.push(Some(
+                                probe_columns
+                                    .get(*c)
+                                    .and_then(|(_, col)| col.get(row))
+                                    .unwrap_or(&Value::Null),
+                            )),
+                            Some(AggSource::Payload(i)) => acc.push(Some(
+                                &bt.payload
+                                    .get(*i)
+                                    .and_then(|c| c.get(build_row))
+                                    .unwrap_or(Value::Null),
+                            )),
+                        }
+                    }
+                });
+            }
+        } else {
+            for row in 0..num_rows {
+                let mut matched = false;
+                let emit_payload =
+                    !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
+                bt.index.for_each_match_slot(&hashes[row], |slot| {
+                    let Some(&build_row) = bt.index.value_at(slot) else {
+                        return;
+                    };
+                    if !bt.keys_match(&key_columns, row, build_row) {
+                        return;
+                    }
+                    matched = true;
+                    if emit_payload {
+                        fold_group_row(
+                            group_by,
+                            aggs,
+                            &probe_columns,
+                            &bt,
+                            row,
+                            Some(build_row),
+                            &mut group_index,
+                            &mut group_keys,
+                            &mut accumulators,
+                        );
+                    }
+                });
+                if !matched {
+                    if should_emit(*kind, false, false) {
+                        fold_group_row(
+                            group_by,
+                            aggs,
+                            &probe_columns,
+                            &bt,
+                            row,
+                            None,
+                            &mut group_index,
+                            &mut group_keys,
+                            &mut accumulators,
+                        );
+                    }
+                } else if matches!(kind, JoinKind::Semi) {
+                    // Mirrors `Opcode::HashProbe`'s own `Semi` handling:
+                    // at most one contribution per probe row, with every
+                    // `Payload` source NULL (semi-joins never surface
+                    // the build side's columns).
+                    fold_group_row(
+                        group_by,
+                        aggs,
+                        &probe_columns,
+                        &bt,
+                        row,
+                        None,
+                        &mut group_index,
+                        &mut group_keys,
+                        &mut accumulators,
+                    );
+                }
+            }
+        }
+
+        for (i, (_src, dst)) in group_by.iter().enumerate() {
+            let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
+            self.registers.insert(*dst, Arc::new(column));
+        }
+        for (i, (func, src)) in aggs.iter().enumerate() {
+            let is_count_star = src.is_none();
+            let result: Vec<Value> = accumulators[i]
+                .iter()
+                .map(|acc| acc.finalize(*func, is_count_star, opcode))
+                .collect::<Result<_>>()?;
+            self.registers.insert(agg_dst[i], Arc::new(result));
+        }
+        Ok(())
+    }
+
+    /// [`Opcode::Window`].
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
+    )]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the opcode's own fields, passed through from `step`'s dispatch"
+    )]
+    fn window(
+        &mut self,
+        batch: &Batch,
+        opcode: &'static str,
+        func: &WindowFunc,
+        arg: &Option<usize>,
+        offset: &Option<i64>,
+        partition_by: &[usize],
+        order_by: &[(usize, bool)],
+        dst: &usize,
+    ) -> Result<()> {
+        // #265: see the comment on `Map`'s same call.
+        self.resolve_selection(opcode)?;
+        for r in partition_by.iter() {
+            self.ensure_materialized(*r);
+        }
+        for (r, _) in order_by.iter() {
+            self.ensure_materialized(*r);
+        }
+        if let Some(r) = arg {
+            self.ensure_materialized(*r);
+        }
+        let partition_cols: Vec<&[Value]> = partition_by
+            .iter()
+            .map(|r| self.reg(*r, opcode))
+            .collect::<Result<_>>()?;
+        let order_cols: Vec<(&[Value], bool)> = order_by
+            .iter()
+            .map(|(r, desc)| self.reg(*r, opcode).map(|c| (c, *desc)))
+            .collect::<Result<_>>()?;
+        let arg_col: Option<&[Value]> = match arg {
+            Some(r) => Some(self.reg(*r, opcode)?),
+            None => None,
+        };
+
+        let num_rows = partition_cols.first().map_or_else(
+            || {
+                order_cols.first().map_or_else(
+                    || arg_col.map_or(batch.num_rows, <[Value]>::len),
+                    |(c, _)| c.len(),
+                )
+            },
+            |c| c.len(),
+        );
+
+        let result = compute_window(
+            *func,
+            *offset,
+            &partition_cols,
+            &order_cols,
+            arg_col,
+            num_rows,
+        )?;
+        self.registers.insert(*dst, Arc::new(result));
+        Ok(())
+    }
+
+    /// [`Opcode::Emit`].
+    #[allow(
+        clippy::indexing_slicing,
+        clippy::arithmetic_side_effects,
+        clippy::needless_range_loop,
+        reason = "every register and batch column holds exactly `num_rows` values (checked via `RegisterLengthMismatch` where two are combined), so `row`/`group` drawn from `0..num_rows` and group ids from `group_keys` are in range; the `len() - 1` follows a push. `0..num_rows` loops that index a same-length `hashes: Vec<u64>` (#439/#440) also call `physical(row)` or otherwise use `row` beyond that one index, so `enumerate()` would not simplify them"
+    )]
+    fn emit(&mut self, opcode: &'static str, registers: &[usize]) -> Result<()> {
+        // #262: Emit is terminal for these registers, so remove
+        // each column from `self.registers` instead of borrowing
+        // and cloning every cell into the output rows. A register
+        // listed more than once in `registers` (e.g. `SELECT a,
+        // a`) is removed on its first occurrence and `Arc::clone`d
+        // (a refcount bump, not a cell copy) for the repeats.
+        // #474: every emitted register already scalar (a bare
+        // `Reduce`'s single-value `dst`) means this is a bare
+        // aggregate SELECT list -- any selection still pending
+        // (peeked but never resolved by a `COUNT(*)`-only run of
+        // `Reduce`s) is stale, not something to index these
+        // columns by. See the comment below where it's used.
+        let all_scalar = registers.iter().all(|r| self.scalar_registers.contains(r));
+        let mut cols: Vec<Arc<Vec<Value>>> = Vec::with_capacity(registers.len());
+        for r in registers.iter() {
+            self.ensure_materialized(*r);
+            let owned = if let Some(existing) = self.registers.remove(r) {
+                existing
+            } else {
+                cols.iter()
+                    .zip(registers.iter())
+                    .find(|(_, seen_r)| *seen_r == r)
+                    .map(|(col, _)| Arc::clone(col))
+                    .ok_or(VmError::UnknownRegister {
+                        opcode,
+                        register: *r,
+                    })?
+            };
+            cols.push(owned);
+        }
+        let base_len = cols
+            .first()
+            .map(|c| c.len())
+            .ok_or_else(|| VmError::MalformedProgram {
+                opcode,
+                reason: "emit has no registers".to_string(),
+            })?;
+        for c in &cols {
+            if c.len() != base_len {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+        }
+        // #265: lazily resolves any pending selection, indexing
+        // straight into the (still uncompacted) emitted columns
+        // instead of `Filter` having eagerly compacted every live
+        // register up front.
+        // #474: a pending selection is stale, not malformed, once
+        // every emitted column is already scalar -- nothing here
+        // ever needed the row-level data it pointed to. Drop it
+        // instead of indexing into already-scalar columns (or
+        // erroring on their length).
+        let selection = if all_scalar {
+            self.selection.take();
+            None
+        } else {
+            self.selection.take()
+        };
+        if let Some(sel) = &selection {
+            if sel.base_len != base_len {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+        }
+        // #436: one chunk per `Emit` -- no per-row `Vec`, no
+        // row-major transpose, and no copy at all when there is
+        // no selection: the emitted `Arc` *is* the register's
+        // column (a bare `LoadColumn`'s is the batch's own, shared
+        // by refcount; a `Map`/`Reduce` result is moved as-is).
+        // Only a selected subset has to be materialized, since
+        // the unselected cells can't be left behind in a shared
+        // `Arc`.
+        let chunk: Chunk = cols
+            .into_iter()
+            .map(|col| match &selection {
+                Some(sel) => Arc::new(
+                    sel.indices
+                        .iter()
+                        .map(|&idx| col[idx as usize].clone())
+                        .collect(),
+                ),
+                None => col,
+            })
+            .collect();
+        self.output.push_chunk(chunk);
         Ok(())
     }
 }
@@ -5328,7 +5587,12 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     use std::cmp::Ordering::{Equal, Greater, Less};
     Ok(match op {
         MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {
-            return arithmetic(op, a, b).ok_or(VmError::IntegerOverflow { opcode: "Map" });
+            let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });
+            return arithmetic(op, a, b).ok_or(if decimal {
+                VmError::DecimalOverflow { opcode: "Map" }
+            } else {
+                VmError::IntegerOverflow { opcode: "Map" }
+            });
         }
         MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),
         MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),
@@ -6151,7 +6415,7 @@ mod tests {
         let max = 10_i128.pow(38) - 1;
         assert!(matches!(
             apply_map_op(MapOp::Add, &dec(max, 0), &Value::Int(1)),
-            Err(VmError::IntegerOverflow { .. })
+            Err(VmError::DecimalOverflow { .. })
         ));
         assert!(matches!(
             apply_map_op(
@@ -6159,7 +6423,7 @@ mod tests {
                 &dec(10_i128.pow(20), 0),
                 &dec(10_i128.pow(20), 0)
             ),
-            Err(VmError::IntegerOverflow { .. })
+            Err(VmError::DecimalOverflow { .. })
         ));
     }
 
@@ -10273,7 +10537,7 @@ mod tests {
         big.push(Some(&dec(1, 0)));
         assert!(matches!(
             big.finalize(AggFunc::Sum, false, "Test"),
-            Err(VmError::IntegerOverflow { opcode: "Test" })
+            Err(VmError::DecimalOverflow { opcode: "Test" })
         ));
 
         let mut wrapped = RunningAgg::default();
@@ -10354,11 +10618,11 @@ mod tests {
         )
     }
 
-    // vm_batch_step_e967929c (`GroupReduce`): `int_group_by.is_some() || dict_group_by.is_some()`
+    // vm_batch_group_reduce_e967929c (`GroupReduce`): `int_group_by.is_some() || dict_group_by.is_some()`
     // -- a typed key skips the generic `KeyView` path (#479/#457).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_step_e967929c__v1_a_typed_int_key_groups_through_the_int_key_table() {
+    fn mcdc__vm_batch_group_reduce_e967929c__v1_a_typed_int_key_groups_through_the_int_key_table() {
         let key = Column::Int {
             data: vec![7, 3, 7, 3, 7],
             valid: Bitmap::from_bools([true, true, true, true, true].into_iter()),
@@ -10381,7 +10645,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_step_e967929c__v2_a_dict_key_groups_by_code() {
+    fn mcdc__vm_batch_group_reduce_e967929c__v2_a_dict_key_groups_by_code() {
         let dict: Vec<std::sync::Arc<str>> = vec!["east".into(), "west".into()];
         let key = Column::Dict {
             dict,
@@ -10402,7 +10666,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_step_e967929c__v3_a_plain_str_key_takes_the_generic_hash_path() {
+    fn mcdc__vm_batch_group_reduce_e967929c__v3_a_plain_str_key_takes_the_generic_hash_path() {
         let batch = Batch::new(3)
             .with_column(
                 "region",

@@ -141,6 +141,10 @@ pub enum ExecError {
     /// SQLite refuses with "Safety level may not be changed inside a
     /// transaction" (#563).
     SynchronousChangeDuringTransaction,
+    /// A function would build a string or blob past
+    /// [`crate::functions::MAX_LENGTH`]; sqlite3's "string or blob too
+    /// big" (#659).
+    TooBig,
     /// `Transaction` while one is already open (sqlite-rs, #134).
     TransactionAlreadyActive,
     /// `AutoCommit` commit with no open transaction (#134).
@@ -221,6 +225,7 @@ impl std::fmt::Display for ExecError {
                 f,
                 "SetJournalMode: cannot change journal mode within a transaction"
             ),
+            ExecError::TooBig => write!(f, "string or blob too big"),
             ExecError::SynchronousChangeDuringTransaction => {
                 write!(f, "Safety level may not be changed inside a transaction")
             }
@@ -1090,8 +1095,125 @@ fn parse_function_descriptor(descriptor: &str) -> Option<(&str, usize)> {
 /// Executes one instruction against `vm`, returning where control flow
 /// goes next. `pc` is this instruction's own address (needed by
 /// `Once`'s per-address guard).
-#[allow(clippy::too_many_lines)]
 fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
+        Opcode::Init
+        | Opcode::Goto
+        | Opcode::Once
+        | Opcode::BeginSubrtn
+        | Opcode::Gosub
+        | Opcode::Return
+        | Opcode::Halt
+        | Opcode::IsNull
+        | Opcode::NotNull
+        | Opcode::IfNot
+        | Opcode::MustBeInt
+        | Opcode::OffsetLimit
+        | Opcode::IfPos
+        | Opcode::IfNotZero
+        | Opcode::DecrJumpZero => step_control(vm, pc, instr),
+        Opcode::Eq
+        | Opcode::Ge
+        | Opcode::Gt
+        | Opcode::Le
+        | Opcode::Lt
+        | Opcode::RealAffinity
+        | Opcode::Cast
+        | Opcode::Add
+        | Opcode::Subtract
+        | Opcode::Multiply
+        | Opcode::Divide
+        | Opcode::Remainder
+        | Opcode::Not
+        | Opcode::BitAnd
+        | Opcode::BitOr
+        | Opcode::ShiftLeft
+        | Opcode::ShiftRight
+        | Opcode::BitNot
+        | Opcode::Concat
+        | Opcode::Function => step_expr(vm, instr),
+        Opcode::Integer
+        | Opcode::Int64
+        | Opcode::Real
+        | Opcode::Blob
+        | Opcode::Null
+        | Opcode::String8
+        | Opcode::Variable
+        | Opcode::Copy
+        | Opcode::MakeRecord
+        | Opcode::ResultRow => step_value(vm, instr),
+        Opcode::Next => step_next(vm, instr),
+        Opcode::Column => step_column(vm, instr),
+        Opcode::Rewind
+        | Opcode::Last
+        | Opcode::Rowid
+        | Opcode::SeekRowid
+        | Opcode::NullRow
+        | Opcode::Sequence
+        | Opcode::Count
+        | Opcode::AutoIndexInsert
+        | Opcode::AutoIndexSeek
+        | Opcode::AutoIndexRowid
+        | Opcode::AutoIndexNext
+        | Opcode::OpenRead
+        | Opcode::OpenWrite
+        | Opcode::OpenDup
+        | Opcode::OpenPseudo
+        | Opcode::OpenEphemeral
+        | Opcode::IdxRewind
+        | Opcode::IdxLast
+        | Opcode::IdxNext
+        | Opcode::IdxPrev
+        | Opcode::IdxRowid
+        | Opcode::SeekIndexEq
+        | Opcode::SeekIndexGE
+        | Opcode::IdxCompareGT
+        | Opcode::IdxCompareGE
+        | Opcode::IdxLE
+        | Opcode::Found
+        | Opcode::Filter
+        | Opcode::FilterAdd
+        | Opcode::NoConflict => step_cursor_ops(vm, instr),
+        Opcode::SorterOpen
+        | Opcode::SorterInsert
+        | Opcode::SorterSort
+        | Opcode::Sort
+        | Opcode::HashAggRewind
+        | Opcode::SorterNext
+        | Opcode::HashAggNext
+        | Opcode::SorterData
+        | Opcode::HashAggOpen
+        | Opcode::HashAggFind
+        | Opcode::HashAggStep
+        | Opcode::HashAggData
+        | Opcode::AggStep
+        | Opcode::AggFinal
+        | Opcode::AggReset => step_sort_agg(vm, instr),
+        Opcode::Insert
+        | Opcode::Update
+        | Opcode::Delete
+        | Opcode::NewRowid
+        | Opcode::IdxInsert
+        | Opcode::IdxDelete => step_write(vm, instr),
+        Opcode::Transaction
+        | Opcode::AutoCommit
+        | Opcode::SetJournalMode
+        | Opcode::Synchronous
+        | Opcode::IntegrityCheck
+        | Opcode::CreateTable
+        | Opcode::CreateView
+        | Opcode::DropView
+        | Opcode::CreateIndex
+        | Opcode::DropTable
+        | Opcode::DropIndex
+        | Opcode::Analyze => step_schema(vm, instr),
+    }
+}
+
+/// [`step`] for one family: jumps, branches and subroutines. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_control(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> {
     match instr.opcode {
         Opcode::Init => Ok(if instr.p2 == 0 {
             Step::Next
@@ -1221,6 +1343,18 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
 
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_control"),
+        }),
+    }
+}
+
+/// [`step`] for one family: comparisons, arithmetic, casts and scalar functions. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::Eq => compare_jump(vm, instr, |o| o == Ordering::Equal),
         Opcode::Ge => compare_jump(vm, instr, |o| o != Ordering::Less),
         Opcode::Gt => compare_jump(vm, instr, |o| o == Ordering::Greater),
@@ -1242,6 +1376,70 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         Opcode::BitNot => bit_not(vm, instr),
         Opcode::Concat => binary_op_reversed(vm, instr, coerce::concat),
 
+        Opcode::Function => {
+            let descriptor = match &instr.p4 {
+                P4::Str(s) => s.as_str(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "Function",
+                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
+                    })
+                }
+            };
+            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
+                ExecError::MalformedInstruction {
+                    opcode: "Function",
+                    reason: format!("malformed function descriptor {descriptor:?}"),
+                }
+            })?;
+            // The connection's counters live in the VM, not the pure
+            // function registry (#651). `total_changes` includes this
+            // statement's writes so far, as in sqlite3.
+            let connection = match (name.to_ascii_lowercase().as_str(), arity) {
+                ("changes", 0) => Some(vm.connection.changes),
+                ("total_changes", 0) => Some(vm.connection_state(false).total_changes),
+                ("last_insert_rowid", 0) => Some(vm.connection.last_insert_rowid),
+                _ => None,
+            };
+            if let Some(n) = connection {
+                vm.set_register(instr.p3, Value::Integer(n))?;
+                return Ok(Step::Next);
+            }
+            let mut args = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let reg = instr
+                    .p2
+                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "Function",
+                        index: instr.p2,
+                    })?;
+                args.push(vm.register(reg)?.clone());
+            }
+            let result = functions::call_at(name, &args, vm.statement_now_ns).map_err(|e| match e {
+                // A limit sqlite3 reports in its own words (#659).
+                functions::FunctionError::TooBig => ExecError::TooBig,
+                e => ExecError::MalformedInstruction {
+                    opcode: "Function",
+                    reason: e.to_string(),
+                },
+            })?;
+            vm.set_register(instr.p3, result)?;
+            Ok(Step::Next)
+        }
+
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_expr"),
+        }),
+    }
+}
+
+/// [`step`] for one family: constants, register copies, records and result rows. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_value(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::Integer => {
             vm.set_register(instr.p2, Value::Integer(i64::from(instr.p1)))?;
             Ok(Step::Next)
@@ -1377,6 +1575,18 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_value"),
+        }),
+    }
+}
+
+/// [`step`] for one family: opening, moving and reading table and index cursors. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::Rewind => {
             vm.clear_null_row(instr.p1)?;
             let has_row = vm.cursor_mut(instr.p1)?.rewind();
@@ -1384,15 +1594,6 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Next
             } else {
                 Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::Next => {
-            vm.clear_null_row(instr.p1)?;
-            let has_row = vm.cursor_mut(instr.p1)?.next();
-            Ok(if has_row {
-                Step::Jump(to_pc(instr.p2))
-            } else {
-                Step::Next
             })
         }
         Opcode::Last => {
@@ -1403,28 +1604,6 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             } else {
                 Step::Jump(to_pc(instr.p2))
             })
-        }
-        Opcode::Column => {
-            // A negative column index used to read as NULL through the
-            // `as usize` wrap; it is a malformed program (#260).
-            let col = usize::try_from(instr.p2).map_err(|_| ExecError::MalformedInstruction {
-                opcode: "Column",
-                reason: format!("column index {} is negative", instr.p2),
-            })?;
-            let value = if vm.is_null_row(instr.p1)? {
-                Value::Null
-            } else if let Some(reg) = vm.pseudo_reg(instr.p1) {
-                vm.pseudo_column(instr.p1, reg, col, "Column")?
-            } else {
-                vm.cursor(instr.p1)?
-                    .column(col)
-                    .ok_or(ExecError::NoCurrentRow {
-                        opcode: "Column",
-                        slot: instr.p1,
-                    })?
-            };
-            vm.set_register(instr.p3, value)?;
-            Ok(Step::Next)
         }
         Opcode::Rowid => {
             // sqlite-rs: a NullRow'd cursor reads NULL for its rowid too.
@@ -1594,751 +1773,6 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.open_cursor(instr.p1, cursor)?;
             Ok(Step::Next)
         }
-        Opcode::SorterOpen => {
-            let keys = match &instr.p4 {
-                P4::SortKey(keys) => keys.clone(),
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "SorterOpen",
-                        reason: format!("expected a SortKey P4, got {other:?}"),
-                    })
-                }
-            };
-            let bound = if instr.p5 == 0 {
-                None
-            } else {
-                // `LIMIT -1` (any negative) means "no limit" in SQLite, and a
-                // non-integer limit register is unbounded too.
-                match vm.register(instr.p2)? {
-                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
-                    _ => None,
-                }
-            };
-            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(keys, bound)))?;
-            Ok(Step::Next)
-        }
-        Opcode::SorterInsert => {
-            let blob = match vm.register(instr.p2)? {
-                Value::Blob(bytes) => bytes.clone(),
-                other => {
-                    return Err(ExecError::TypeMismatch {
-                        opcode: "SorterInsert",
-                        found: value_kind(other),
-                    })
-                }
-            };
-            let inserted = vm.cursor_mut(instr.p1)?.sorter_insert(blob);
-            if !inserted {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "SorterInsert",
-                    reason: "cursor slot is not a sorter, or the record blob does not decode"
-                        .to_string(),
-                });
-            }
-            Ok(Step::Next)
-        }
-        Opcode::SorterSort | Opcode::Sort | Opcode::HashAggRewind => {
-            let has_row = vm.cursor_mut(instr.p1)?.rewind();
-            Ok(if has_row {
-                Step::Next
-            } else {
-                Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::SorterNext | Opcode::HashAggNext => {
-            let has_row = vm.cursor_mut(instr.p1)?.next();
-            Ok(if has_row {
-                Step::Jump(to_pc(instr.p2))
-            } else {
-                Step::Next
-            })
-        }
-        Opcode::SorterData => {
-            let blob =
-                vm.cursor(instr.p1)?
-                    .current_blob()
-                    .ok_or(ExecError::MalformedInstruction {
-                        opcode: "SorterData",
-                        reason: "sorter has not been sorted yet, or has no current row".to_string(),
-                    })?;
-            vm.set_register(instr.p2, blob)?;
-            Ok(Step::Next)
-        }
-        Opcode::HashAggOpen => {
-            let keys = match &instr.p4 {
-                P4::GroupKey(keys) => keys.clone(),
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "HashAggOpen",
-                        reason: format!("expected a GroupKey P4, got {other:?}"),
-                    })
-                }
-            };
-            vm.open_cursor(instr.p1, Box::new(HashAggCursor::new(keys)))?;
-            Ok(Step::Next)
-        }
-        Opcode::HashAggFind => {
-            let blob = match vm.register(instr.p2)? {
-                Value::Blob(bytes) => bytes.clone(),
-                other => {
-                    return Err(ExecError::TypeMismatch {
-                        opcode: "HashAggFind",
-                        found: value_kind(other),
-                    })
-                }
-            };
-            let found = vm.cursor_mut(instr.p1)?.hash_agg_find(blob);
-            if !found {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "HashAggFind",
-                    reason:
-                        "cursor slot is not a hash-aggregation cursor, or the record blob does not decode"
-                            .to_string(),
-                });
-            }
-            Ok(Step::Next)
-        }
-        Opcode::HashAggStep => {
-            let (name, arity, collation) = match &instr.p4 {
-                P4::AggFunc {
-                    name,
-                    arity,
-                    collation,
-                } => (name.as_str(), *arity, *collation),
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "HashAggStep",
-                        reason: format!("expected an AggFunc P4, got {other:?}"),
-                    })
-                }
-            };
-            let start = Vm::index("HashAggStep", instr.p2)?;
-            let end = start
-                .checked_add(arity)
-                .filter(|&end| end <= MAX_REGISTERS)
-                .ok_or(ExecError::RegisterOutOfRange {
-                    opcode: "HashAggStep",
-                    index: instr.p2,
-                })?;
-            if vm.registers.len() < end {
-                vm.registers.resize(end, Value::Null);
-            }
-            #[allow(clippy::cast_sign_loss)]
-            let slot = instr.p1.max(0) as usize;
-            // Borrow the argument registers in place (no per-row `Vec` +
-            // `Value` clones, #486): `registers` and `cursors` are
-            // disjoint fields, so both borrows coexist.
-            let cursor_idx = Vm::index("cursor slot write", instr.p3)?;
-            let cursor = vm
-                .cursors
-                .get_mut(cursor_idx)
-                .and_then(Option::as_mut)
-                .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;
-            let args = vm.registers.get(start..end).unwrap_or(&[]);
-            let handled = cursor
-                .hash_agg_step(slot, name, args, collation)
-                .map_err(|e| ExecError::MalformedInstruction {
-                    opcode: "HashAggStep",
-                    reason: e.to_string(),
-                })?;
-            if !handled {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "HashAggStep",
-                    reason: "cursor slot has no current group".to_string(),
-                });
-            }
-            Ok(Step::Next)
-        }
-        Opcode::HashAggData => {
-            let blob =
-                vm.cursor(instr.p1)?
-                    .current_blob()
-                    .ok_or(ExecError::MalformedInstruction {
-                    opcode: "HashAggData",
-                    reason:
-                        "hash-aggregation cursor has not been rewound yet, or has no current group"
-                            .to_string(),
-                })?;
-            let accumulators: Vec<Option<AggState>> = vm
-                .cursor(instr.p1)?
-                .hash_agg_group_accumulators()
-                .map(<[_]>::to_vec)
-                .ok_or_else(|| ExecError::MalformedInstruction {
-                    opcode: "HashAggData",
-                    reason: "cursor slot is not a hash-aggregation cursor".to_string(),
-                })?;
-            for (slot, state) in accumulators.into_iter().enumerate() {
-                // Saturation is unreachable (slots are bounded by
-                // MAX_REGISTERS) and would be caught by set_agg_context's
-                // own range check anyway.
-                let slot = i32::try_from(slot).unwrap_or(i32::MAX);
-                match state {
-                    Some(state) => vm.set_agg_context(slot, state)?,
-                    None => vm.clear_agg_context(slot)?,
-                }
-            }
-            vm.set_register(instr.p2, blob)?;
-            Ok(Step::Next)
-        }
-        Opcode::Insert => {
-            let rowid = match vm.register(instr.p2)? {
-                Value::Integer(i) => *i,
-                other => {
-                    return Err(ExecError::TypeMismatch {
-                        opcode: "Insert",
-                        found: value_kind(other),
-                    })
-                }
-            };
-            let payload = match vm.register(instr.p3)? {
-                Value::Blob(bytes) => bytes.clone(),
-                other => {
-                    return Err(ExecError::TypeMismatch {
-                        opcode: "Insert",
-                        found: value_kind(other),
-                    })
-                }
-            };
-            let encoding = vm.text_encoding;
-            let cursor = vm.cursor_mut(instr.p1)?;
-            // A storage-backed cursor takes the record bytes as they are
-            // (byte-exact with MakeRecord); in-memory ones decode them.
-            let inserted = match cursor.insert_payload(rowid, &payload) {
-                Some(ok) => ok,
-                None => {
-                    let values = decode_record(&payload, encoding).map_err(|e| {
-                        ExecError::MalformedInstruction {
-                            opcode: "Insert",
-                            reason: e.to_string(),
-                        }
-                    })?;
-                    cursor.insert(rowid, values)
-                }
-            };
-            if !inserted {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "Insert",
-                    reason: "cursor slot does not support insertion".to_string(),
-                });
-            }
-            vm.count_change(instr.p5);
-            if instr.p5 & super::program::OPFLAG_LASTROWID != 0 {
-                vm.connection.last_insert_rowid = rowid;
-            }
-            Ok(Step::Next)
-        }
-
-        Opcode::Update => {
-            let rowid = match vm.register(instr.p2)? {
-                Value::Integer(i) => *i,
-                other => {
-                    return Err(ExecError::TypeMismatch {
-                        opcode: "Update",
-                        found: value_kind(other),
-                    })
-                }
-            };
-            let payload = match vm.register(instr.p3)? {
-                Value::Blob(bytes) => bytes.clone(),
-                other => {
-                    return Err(ExecError::TypeMismatch {
-                        opcode: "Update",
-                        found: value_kind(other),
-                    })
-                }
-            };
-            let encoding = vm.text_encoding;
-            let cursor = vm.cursor_mut(instr.p1)?;
-            let updated = match cursor.update_payload(rowid, &payload) {
-                Some(ok) => ok,
-                None => {
-                    // Cursor kinds without a combined rewrite (in-memory
-                    // fixtures, ephemeral tables) fall back to the
-                    // Delete+Insert pair a storage-backed cursor avoids.
-                    if !cursor.delete() {
-                        return Err(ExecError::MalformedInstruction {
-                            opcode: "Update",
-                            reason: "cursor slot does not support deletion".to_string(),
-                        });
-                    }
-                    match cursor.insert_payload(rowid, &payload) {
-                        Some(ok) => ok,
-                        None => {
-                            let values = decode_record(&payload, encoding).map_err(|e| {
-                                ExecError::MalformedInstruction {
-                                    opcode: "Update",
-                                    reason: e.to_string(),
-                                }
-                            })?;
-                            cursor.insert(rowid, values)
-                        }
-                    }
-                }
-            };
-            if !updated {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "Update",
-                    reason: "cursor slot does not support update".to_string(),
-                });
-            }
-            vm.count_change(instr.p5);
-            Ok(Step::Next)
-        }
-
-        Opcode::Function => {
-            let descriptor = match &instr.p4 {
-                P4::Str(s) => s.as_str(),
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "Function",
-                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
-                    })
-                }
-            };
-            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
-                ExecError::MalformedInstruction {
-                    opcode: "Function",
-                    reason: format!("malformed function descriptor {descriptor:?}"),
-                }
-            })?;
-            // The connection's counters live in the VM, not the pure
-            // function registry (#651). `total_changes` includes this
-            // statement's writes so far, as in sqlite3.
-            let connection = match (name.to_ascii_lowercase().as_str(), arity) {
-                ("changes", 0) => Some(vm.connection.changes),
-                ("total_changes", 0) => Some(vm.connection_state(false).total_changes),
-                ("last_insert_rowid", 0) => Some(vm.connection.last_insert_rowid),
-                _ => None,
-            };
-            if let Some(n) = connection {
-                vm.set_register(instr.p3, Value::Integer(n))?;
-                return Ok(Step::Next);
-            }
-            let mut args = Vec::with_capacity(arity);
-            for i in 0..arity {
-                let reg = instr
-                    .p2
-                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-                    .ok_or(ExecError::RegisterOutOfRange {
-                        opcode: "Function",
-                        index: instr.p2,
-                    })?;
-                args.push(vm.register(reg)?.clone());
-            }
-            let result = functions::call_at(name, &args, vm.statement_now_ns).map_err(|e| {
-                ExecError::MalformedInstruction {
-                    opcode: "Function",
-                    reason: e.to_string(),
-                }
-            })?;
-            vm.set_register(instr.p3, result)?;
-            Ok(Step::Next)
-        }
-
-        Opcode::AggStep => {
-            let (name, arity, collation) = match &instr.p4 {
-                P4::AggFunc {
-                    name,
-                    arity,
-                    collation,
-                } => (name.as_str(), *arity, *collation),
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "AggStep",
-                        reason: format!("expected an AggFunc P4, got {other:?}"),
-                    })
-                }
-            };
-            let mut args = Vec::with_capacity(arity);
-            for i in 0..arity {
-                let reg = instr
-                    .p2
-                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-                    .ok_or(ExecError::RegisterOutOfRange {
-                        opcode: "AggStep",
-                        index: instr.p2,
-                    })?;
-                args.push(vm.register(reg)?.clone());
-            }
-            let current = if instr.p5 == 0 {
-                vm.take_agg_context(instr.p1)?
-            } else {
-                None
-            };
-            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {
-                ExecError::MalformedInstruction {
-                    opcode: "AggStep",
-                    reason: e.to_string(),
-                }
-            })?;
-            vm.set_agg_context(instr.p1, updated)?;
-            Ok(Step::Next)
-        }
-        Opcode::AggFinal => {
-            let descriptor = match &instr.p4 {
-                P4::Str(s) => s.as_str(),
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "AggFinal",
-                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
-                    })
-                }
-            };
-            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
-                ExecError::MalformedInstruction {
-                    opcode: "AggFinal",
-                    reason: format!("malformed aggregate descriptor {descriptor:?}"),
-                }
-            })?;
-            let state = vm.agg_context(instr.p1)?;
-            let result =
-                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {
-                    opcode: "AggFinal",
-                    reason: e.to_string(),
-                })?;
-            vm.set_register(instr.p3, result)?;
-            vm.clear_agg_context(instr.p1)?;
-            Ok(Step::Next)
-        }
-        Opcode::AggReset => {
-            vm.clear_agg_context(instr.p1)?;
-            Ok(Step::Next)
-        }
-
-        Opcode::Transaction => {
-            if !vm.autocommit {
-                return Err(ExecError::TransactionAlreadyActive);
-            }
-            if let Some(hook) = vm.transaction_hook.as_mut() {
-                hook.begin(instr.p1).map_err(ExecError::TransactionFailed)?;
-            }
-            vm.autocommit = false;
-            Ok(Step::Next)
-        }
-        Opcode::AutoCommit => {
-            if vm.autocommit {
-                return Err(if instr.p2 == 0 {
-                    ExecError::NoActiveTransactionToRollback
-                } else {
-                    ExecError::NoActiveTransactionToCommit
-                });
-            }
-            if let Some(hook) = vm.transaction_hook.as_mut() {
-                if instr.p2 == 0 {
-                    hook.rollback().map_err(ExecError::TransactionFailed)?;
-                } else {
-                    hook.commit().map_err(ExecError::TransactionFailed)?;
-                }
-            }
-            vm.autocommit = true;
-            Ok(Step::Next)
-        }
-        Opcode::SetJournalMode => {
-            if !vm.autocommit {
-                return Err(ExecError::JournalModeChangeDuringTransaction);
-            }
-            // The attached pager (via the transaction hook) switches its
-            // on-disk journal mode; with no hook this is the no-op
-            // sqlite-rs itself falls back to for a read-only connection.
-            // sqlite3 answers the assignment with the resulting mode, one
-            // TEXT row (#561) -- only when a pager applied it.
-            if let Some(hook) = vm.transaction_hook.as_mut() {
-                hook.set_journal_mode(instr.p1)
-                    .map_err(ExecError::TransactionFailed)?;
-                let mode = if instr.p1 == JOURNAL_MODE_WAL {
-                    "wal"
-                } else {
-                    "delete"
-                };
-                vm.emit_row(vec![Value::Text(mode.into())]);
-            }
-            Ok(Step::Next)
-        }
-        Opcode::Synchronous => {
-            // Query form reports the pager's level (FULL with no pager,
-            // sqlite-rs's no-writer fallback); otherwise sets it.
-            if instr.p1 == SYNCHRONOUS_QUERY {
-                let level = vm
-                    .transaction_hook
-                    .as_deref()
-                    .and_then(|h| h.synchronous())
-                    .unwrap_or(SYNCHRONOUS_FULL);
-                vm.emit_row(vec![Value::Integer(i64::from(level))]);
-                return Ok(Step::Next);
-            }
-            if !vm.autocommit {
-                return Err(ExecError::SynchronousChangeDuringTransaction);
-            }
-            if let Some(hook) = vm.transaction_hook.as_mut() {
-                hook.set_synchronous(instr.p1)
-                    .map_err(ExecError::TransactionFailed)?;
-            }
-            Ok(Step::Next)
-        }
-        Opcode::IntegrityCheck => {
-            // `p1 != 0` is quick_check. One TEXT row per problem line
-            // (sqlite-rs `pragma::integrity_check`); without a hook that
-            // can read the file this stays Unimplemented.
-            let quick = instr.p1 != 0;
-            let Some(result) = vm
-                .transaction_hook
-                .as_mut()
-                .and_then(|h| h.integrity_check(quick))
-            else {
-                return Err(ExecError::Unimplemented {
-                    opcode: Opcode::IntegrityCheck,
-                });
-            };
-            for line in result.map_err(ExecError::TransactionFailed)? {
-                vm.emit_row(vec![Value::Text(line.into())]);
-            }
-            Ok(Step::Next)
-        }
-
-        Opcode::Delete => {
-            let deleted = vm.cursor_mut(instr.p1)?.delete();
-            if !deleted {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "Delete",
-                    reason: "cursor slot does not support deletion".to_string(),
-                });
-            }
-            vm.count_change(instr.p5);
-            Ok(Step::Next)
-        }
-        Opcode::NewRowid => {
-            let next = vm.cursor(instr.p1)?.next_rowid();
-            // sqlite-rs: p5 != 0 with P4::Str(table) is AUTOINCREMENT —
-            // the schema hook consults/updates sqlite_sequence so a rowid
-            // is never reused after a delete.
-            let rowid = if instr.p5 != 0 {
-                let table = match &instr.p4 {
-                    P4::Str(name) => name.clone(),
-                    other => {
-                        return Err(ExecError::MalformedInstruction {
-                            opcode: "NewRowid",
-                            reason: format!(
-                                "AUTOINCREMENT requested (P5 nonzero) but P4 is not a table-name string, got {other:?}"
-                            ),
-                        })
-                    }
-                };
-                let max_from_table = next.saturating_sub(1);
-                vm.schema_storage
-                    .as_deref_mut()
-                    .ok_or(ExecError::SchemaStorageMissing { opcode: "NewRowid" })?
-                    .autoincrement_rowid(&table, max_from_table)
-                    .map_err(ExecError::SchemaStorageFailed)?
-            } else {
-                next
-            };
-            vm.set_register(instr.p2, Value::Integer(rowid))?;
-            Ok(Step::Next)
-        }
-        Opcode::IdxInsert | Opcode::IdxDelete => {
-            let opcode = if instr.opcode == Opcode::IdxInsert {
-                "IdxInsert"
-            } else {
-                "IdxDelete"
-            };
-            let (key, collations) = key_from_registers(vm, opcode, instr.p2, &instr.p4)?;
-            let ok = if instr.opcode == Opcode::IdxInsert {
-                // sqlite-rs: on an ephemeral index the stored row is the key
-                // columns plus `p5` trailing payload columns.
-                let total = key.len().checked_add(usize::from(instr.p5)).ok_or(
-                    ExecError::RegisterRangeTooLarge {
-                        opcode,
-                        count: i32::from(instr.p5),
-                    },
-                )?;
-                let stored = register_range(vm, opcode, instr.p2, total)?;
-                let cursor = vm.cursor_mut(instr.p1)?;
-                match cursor.ephemeral_idx_insert(&key, &collations, stored) {
-                    Some(ok) => ok,
-                    None => cursor.idx_insert(key),
-                }
-            } else {
-                vm.cursor_mut(instr.p1)?.idx_delete(&key)
-            };
-            if !ok {
-                return Err(ExecError::MalformedInstruction {
-                    opcode,
-                    reason:
-                        "cursor slot does not support this index operation, or no matching entry"
-                            .to_string(),
-                });
-            }
-            Ok(Step::Next)
-        }
-
-        Opcode::CreateTable => {
-            let P4::CreateTable { name, sql } = &instr.p4 else {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "CreateTable",
-                    reason: format!("expected a CreateTable P4, got {:?}", instr.p4),
-                });
-            };
-            let (name, sql) = (name.clone(), sql.clone());
-            let storage = vm.schema_storage("CreateTable")?;
-            let root = storage
-                .create_table_root()
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .insert_master_row("table", &name, &name, root, &sql)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .bump_schema_cookie()
-                .map_err(ExecError::SchemaStorageFailed)?;
-            Ok(Step::Next)
-        }
-        Opcode::CreateView => {
-            // sqlite-rs `cursor::create_view`: a view has no b-tree — one
-            // sqlite_master row with rootpage 0, then the cookie bump.
-            let P4::CreateView { name, sql } = &instr.p4 else {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "CreateView",
-                    reason: format!("expected a CreateView P4, got {:?}", instr.p4),
-                });
-            };
-            let (name, sql) = (name.clone(), sql.clone());
-            let storage = vm.schema_storage("CreateView")?;
-            storage
-                .insert_master_row("view", &name, &name, 0, &sql)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .bump_schema_cookie()
-                .map_err(ExecError::SchemaStorageFailed)?;
-            Ok(Step::Next)
-        }
-        Opcode::DropView => {
-            // A view has no b-tree: its sqlite_master row, then the
-            // cookie bump (#552).
-            let P4::DropView { name } = &instr.p4 else {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "DropView",
-                    reason: format!("expected a DropView P4, got {:?}", instr.p4),
-                });
-            };
-            let name = name.clone();
-            let storage = vm.schema_storage("DropView")?;
-            storage
-                .delete_master_row(&name)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .bump_schema_cookie()
-                .map_err(ExecError::SchemaStorageFailed)?;
-            Ok(Step::Next)
-        }
-        Opcode::CreateIndex => {
-            let P4::CreateIndex {
-                name,
-                table_name,
-                table_root_page,
-                sql,
-                column_indices,
-                ..
-            } = &instr.p4
-            else {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "CreateIndex",
-                    reason: format!("expected a CreateIndex P4, got {:?}", instr.p4),
-                });
-            };
-            let (name, table_name, table_root_page, sql, column_indices) = (
-                name.clone(),
-                table_name.clone(),
-                *table_root_page,
-                sql.clone(),
-                column_indices.clone(),
-            );
-            let storage = vm.schema_storage("CreateIndex")?;
-            let root = storage
-                .create_index_root()
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .populate_index(root, table_root_page, &column_indices)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .insert_master_row("index", &name, &table_name, root, &sql)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .bump_schema_cookie()
-                .map_err(ExecError::SchemaStorageFailed)?;
-            Ok(Step::Next)
-        }
-        Opcode::DropTable => {
-            let P4::DropTable {
-                name,
-                root_page,
-                indexes,
-            } = &instr.p4
-            else {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "DropTable",
-                    reason: format!("expected a DropTable P4, got {:?}", instr.p4),
-                });
-            };
-            let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());
-            let storage = vm.schema_storage("DropTable")?;
-            // sqlite-rs order (page-image parity with the oracle): each
-            // index's pages then its row, then the table's pages, then
-            // its row.
-            for (index_name, index_root) in &indexes {
-                storage
-                    .free_root(*index_root)
-                    .map_err(ExecError::SchemaStorageFailed)?;
-                storage
-                    .delete_master_row(index_name)
-                    .map_err(ExecError::SchemaStorageFailed)?;
-            }
-            storage
-                .free_root(root_page)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .delete_master_row(&name)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .bump_schema_cookie()
-                .map_err(ExecError::SchemaStorageFailed)?;
-            Ok(Step::Next)
-        }
-        Opcode::DropIndex => {
-            let P4::DropIndex { name, root_page } = &instr.p4 else {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "DropIndex",
-                    reason: format!("expected a DropIndex P4, got {:?}", instr.p4),
-                });
-            };
-            let (name, root_page) = (name.clone(), *root_page);
-            let storage = vm.schema_storage("DropIndex")?;
-            storage
-                .free_root(root_page)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .delete_master_row(&name)
-                .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .bump_schema_cookie()
-                .map_err(ExecError::SchemaStorageFailed)?;
-            Ok(Step::Next)
-        }
-        Opcode::Analyze => {
-            let P4::Analyze { targets } = &instr.p4 else {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "Analyze",
-                    reason: format!("expected an Analyze P4, got {:?}", instr.p4),
-                });
-            };
-            let targets = targets.clone();
-            let storage = vm.schema_storage("Analyze")?;
-            for target in &targets {
-                storage
-                    .write_stat1(target)
-                    .map_err(ExecError::SchemaStorageFailed)?;
-            }
-            Ok(Step::Next)
-        }
-
         Opcode::IdxRewind => {
             let has_row = vm.cursor_mut(instr.p1)?.rewind();
             Ok(if has_row {
@@ -2506,6 +1940,780 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Ok(Step::Jump(to_pc(instr.p2)))
             }
         }
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_cursor_ops"),
+        }),
+    }
+}
+
+/// [`Opcode::Next`]: dispatched by [`step`] directly, not through
+/// this family's `match` -- it runs once per row of every scan.
+#[inline(always)]
+fn step_next(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    vm.clear_null_row(instr.p1)?;
+    let has_row = vm.cursor_mut(instr.p1)?.next();
+    Ok(if has_row {
+        Step::Jump(to_pc(instr.p2))
+    } else {
+        Step::Next
+    })
+}
+
+/// [`Opcode::Column`]: dispatched by [`step`] directly, like
+/// [`step_next`] -- it runs once per column read of every row.
+#[inline(always)]
+fn step_column(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    // A negative column index used to read as NULL through the
+    // `as usize` wrap; it is a malformed program (#260).
+    let col = usize::try_from(instr.p2).map_err(|_| ExecError::MalformedInstruction {
+        opcode: "Column",
+        reason: format!("column index {} is negative", instr.p2),
+    })?;
+    let value = if vm.is_null_row(instr.p1)? {
+        Value::Null
+    } else if let Some(reg) = vm.pseudo_reg(instr.p1) {
+        vm.pseudo_column(instr.p1, reg, col, "Column")?
+    } else {
+        vm.cursor(instr.p1)?
+            .column(col)
+            .ok_or(ExecError::NoCurrentRow {
+                opcode: "Column",
+                slot: instr.p1,
+            })?
+    };
+    vm.set_register(instr.p3, value)?;
+    Ok(Step::Next)
+}
+
+/// [`step`] for one family: sorters, hash aggregation and aggregate accumulators. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
+        Opcode::SorterOpen => {
+            let keys = match &instr.p4 {
+                P4::SortKey(keys) => keys.clone(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "SorterOpen",
+                        reason: format!("expected a SortKey P4, got {other:?}"),
+                    })
+                }
+            };
+            let bound = if instr.p5 == 0 {
+                None
+            } else {
+                // `LIMIT -1` (any negative) means "no limit" in SQLite, and a
+                // non-integer limit register is unbounded too.
+                match vm.register(instr.p2)? {
+                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
+                    _ => None,
+                }
+            };
+            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(keys, bound)))?;
+            Ok(Step::Next)
+        }
+        Opcode::SorterInsert => {
+            let blob = match vm.register(instr.p2)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "SorterInsert",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let inserted = vm.cursor_mut(instr.p1)?.sorter_insert(blob);
+            if !inserted {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "SorterInsert",
+                    reason: "cursor slot is not a sorter, or the record blob does not decode"
+                        .to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::SorterSort | Opcode::Sort | Opcode::HashAggRewind => {
+            let has_row = vm.cursor_mut(instr.p1)?.rewind();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::SorterNext | Opcode::HashAggNext => {
+            let has_row = vm.cursor_mut(instr.p1)?.next();
+            Ok(if has_row {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::SorterData => {
+            let blob =
+                vm.cursor(instr.p1)?
+                    .current_blob()
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "SorterData",
+                        reason: "sorter has not been sorted yet, or has no current row".to_string(),
+                    })?;
+            vm.set_register(instr.p2, blob)?;
+            Ok(Step::Next)
+        }
+        Opcode::HashAggOpen => {
+            let keys = match &instr.p4 {
+                P4::GroupKey(keys) => keys.clone(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "HashAggOpen",
+                        reason: format!("expected a GroupKey P4, got {other:?}"),
+                    })
+                }
+            };
+            vm.open_cursor(instr.p1, Box::new(HashAggCursor::new(keys)))?;
+            Ok(Step::Next)
+        }
+        Opcode::HashAggFind => {
+            let blob = match vm.register(instr.p2)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "HashAggFind",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let found = vm.cursor_mut(instr.p1)?.hash_agg_find(blob);
+            if !found {
+                return Err(ExecError::MalformedInstruction {
+                opcode: "HashAggFind",
+                reason:
+                    "cursor slot is not a hash-aggregation cursor, or the record blob does not decode"
+                        .to_string(),
+            });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::HashAggStep => {
+            let (name, arity, collation) = match &instr.p4 {
+                P4::AggFunc {
+                    name,
+                    arity,
+                    collation,
+                } => (name.as_str(), *arity, *collation),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "HashAggStep",
+                        reason: format!("expected an AggFunc P4, got {other:?}"),
+                    })
+                }
+            };
+            let start = Vm::index("HashAggStep", instr.p2)?;
+            let end = start
+                .checked_add(arity)
+                .filter(|&end| end <= MAX_REGISTERS)
+                .ok_or(ExecError::RegisterOutOfRange {
+                    opcode: "HashAggStep",
+                    index: instr.p2,
+                })?;
+            if vm.registers.len() < end {
+                vm.registers.resize(end, Value::Null);
+            }
+            #[allow(clippy::cast_sign_loss)]
+            let slot = instr.p1.max(0) as usize;
+            // Borrow the argument registers in place (no per-row `Vec` +
+            // `Value` clones, #486): `registers` and `cursors` are
+            // disjoint fields, so both borrows coexist.
+            let cursor_idx = Vm::index("cursor slot write", instr.p3)?;
+            let cursor = vm
+                .cursors
+                .get_mut(cursor_idx)
+                .and_then(Option::as_mut)
+                .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;
+            let args = vm.registers.get(start..end).unwrap_or(&[]);
+            let handled = cursor
+                .hash_agg_step(slot, name, args, collation)
+                .map_err(|e| ExecError::MalformedInstruction {
+                    opcode: "HashAggStep",
+                    reason: e.to_string(),
+                })?;
+            if !handled {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "HashAggStep",
+                    reason: "cursor slot has no current group".to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+        Opcode::HashAggData => {
+            let blob =
+                vm.cursor(instr.p1)?
+                    .current_blob()
+                    .ok_or(ExecError::MalformedInstruction {
+                    opcode: "HashAggData",
+                    reason:
+                        "hash-aggregation cursor has not been rewound yet, or has no current group"
+                            .to_string(),
+                })?;
+            let accumulators: Vec<Option<AggState>> = vm
+                .cursor(instr.p1)?
+                .hash_agg_group_accumulators()
+                .map(<[_]>::to_vec)
+                .ok_or_else(|| ExecError::MalformedInstruction {
+                    opcode: "HashAggData",
+                    reason: "cursor slot is not a hash-aggregation cursor".to_string(),
+                })?;
+            for (slot, state) in accumulators.into_iter().enumerate() {
+                // Saturation is unreachable (slots are bounded by
+                // MAX_REGISTERS) and would be caught by set_agg_context's
+                // own range check anyway.
+                let slot = i32::try_from(slot).unwrap_or(i32::MAX);
+                match state {
+                    Some(state) => vm.set_agg_context(slot, state)?,
+                    None => vm.clear_agg_context(slot)?,
+                }
+            }
+            vm.set_register(instr.p2, blob)?;
+            Ok(Step::Next)
+        }
+        Opcode::AggStep => {
+            let (name, arity, collation) = match &instr.p4 {
+                P4::AggFunc {
+                    name,
+                    arity,
+                    collation,
+                } => (name.as_str(), *arity, *collation),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "AggStep",
+                        reason: format!("expected an AggFunc P4, got {other:?}"),
+                    })
+                }
+            };
+            let mut args = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let reg = instr
+                    .p2
+                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "AggStep",
+                        index: instr.p2,
+                    })?;
+                args.push(vm.register(reg)?.clone());
+            }
+            let current = if instr.p5 == 0 {
+                vm.take_agg_context(instr.p1)?
+            } else {
+                None
+            };
+            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {
+                ExecError::MalformedInstruction {
+                    opcode: "AggStep",
+                    reason: e.to_string(),
+                }
+            })?;
+            vm.set_agg_context(instr.p1, updated)?;
+            Ok(Step::Next)
+        }
+        Opcode::AggFinal => {
+            let descriptor = match &instr.p4 {
+                P4::Str(s) => s.as_str(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "AggFinal",
+                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
+                    })
+                }
+            };
+            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
+                ExecError::MalformedInstruction {
+                    opcode: "AggFinal",
+                    reason: format!("malformed aggregate descriptor {descriptor:?}"),
+                }
+            })?;
+            let state = vm.agg_context(instr.p1)?;
+            let result =
+                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {
+                    opcode: "AggFinal",
+                    reason: e.to_string(),
+                })?;
+            vm.set_register(instr.p3, result)?;
+            vm.clear_agg_context(instr.p1)?;
+            Ok(Step::Next)
+        }
+        Opcode::AggReset => {
+            vm.clear_agg_context(instr.p1)?;
+            Ok(Step::Next)
+        }
+
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_sort_agg"),
+        }),
+    }
+}
+
+/// [`step`] for one family: row and index writes. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
+        Opcode::Insert => {
+            let rowid = match vm.register(instr.p2)? {
+                Value::Integer(i) => *i,
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "Insert",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let payload = match vm.register(instr.p3)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "Insert",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let encoding = vm.text_encoding;
+            let cursor = vm.cursor_mut(instr.p1)?;
+            // A storage-backed cursor takes the record bytes as they are
+            // (byte-exact with MakeRecord); in-memory ones decode them.
+            let inserted = match cursor.insert_payload(rowid, &payload) {
+                Some(ok) => ok,
+                None => {
+                    let values = decode_record(&payload, encoding).map_err(|e| {
+                        ExecError::MalformedInstruction {
+                            opcode: "Insert",
+                            reason: e.to_string(),
+                        }
+                    })?;
+                    cursor.insert(rowid, values)
+                }
+            };
+            if !inserted {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Insert",
+                    reason: "cursor slot does not support insertion".to_string(),
+                });
+            }
+            vm.count_change(instr.p5);
+            if instr.p5 & super::program::OPFLAG_LASTROWID != 0 {
+                vm.connection.last_insert_rowid = rowid;
+            }
+            Ok(Step::Next)
+        }
+
+        Opcode::Update => {
+            let rowid = match vm.register(instr.p2)? {
+                Value::Integer(i) => *i,
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "Update",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let payload = match vm.register(instr.p3)? {
+                Value::Blob(bytes) => bytes.clone(),
+                other => {
+                    return Err(ExecError::TypeMismatch {
+                        opcode: "Update",
+                        found: value_kind(other),
+                    })
+                }
+            };
+            let encoding = vm.text_encoding;
+            let cursor = vm.cursor_mut(instr.p1)?;
+            let updated = match cursor.update_payload(rowid, &payload) {
+                Some(ok) => ok,
+                None => {
+                    // Cursor kinds without a combined rewrite (in-memory
+                    // fixtures, ephemeral tables) fall back to the
+                    // Delete+Insert pair a storage-backed cursor avoids.
+                    if !cursor.delete() {
+                        return Err(ExecError::MalformedInstruction {
+                            opcode: "Update",
+                            reason: "cursor slot does not support deletion".to_string(),
+                        });
+                    }
+                    match cursor.insert_payload(rowid, &payload) {
+                        Some(ok) => ok,
+                        None => {
+                            let values = decode_record(&payload, encoding).map_err(|e| {
+                                ExecError::MalformedInstruction {
+                                    opcode: "Update",
+                                    reason: e.to_string(),
+                                }
+                            })?;
+                            cursor.insert(rowid, values)
+                        }
+                    }
+                }
+            };
+            if !updated {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Update",
+                    reason: "cursor slot does not support update".to_string(),
+                });
+            }
+            vm.count_change(instr.p5);
+            Ok(Step::Next)
+        }
+
+        Opcode::Delete => {
+            let deleted = vm.cursor_mut(instr.p1)?.delete();
+            if !deleted {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Delete",
+                    reason: "cursor slot does not support deletion".to_string(),
+                });
+            }
+            vm.count_change(instr.p5);
+            Ok(Step::Next)
+        }
+        Opcode::NewRowid => {
+            let next = vm.cursor(instr.p1)?.next_rowid();
+            // sqlite-rs: p5 != 0 with P4::Str(table) is AUTOINCREMENT —
+            // the schema hook consults/updates sqlite_sequence so a rowid
+            // is never reused after a delete.
+            let rowid = if instr.p5 != 0 {
+                let table = match &instr.p4 {
+                P4::Str(name) => name.clone(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "NewRowid",
+                        reason: format!(
+                            "AUTOINCREMENT requested (P5 nonzero) but P4 is not a table-name string, got {other:?}"
+                        ),
+                    })
+                }
+            };
+                let max_from_table = next.saturating_sub(1);
+                vm.schema_storage
+                    .as_deref_mut()
+                    .ok_or(ExecError::SchemaStorageMissing { opcode: "NewRowid" })?
+                    .autoincrement_rowid(&table, max_from_table)
+                    .map_err(ExecError::SchemaStorageFailed)?
+            } else {
+                next
+            };
+            vm.set_register(instr.p2, Value::Integer(rowid))?;
+            Ok(Step::Next)
+        }
+        Opcode::IdxInsert | Opcode::IdxDelete => {
+            let opcode = if instr.opcode == Opcode::IdxInsert {
+                "IdxInsert"
+            } else {
+                "IdxDelete"
+            };
+            let (key, collations) = key_from_registers(vm, opcode, instr.p2, &instr.p4)?;
+            let ok = if instr.opcode == Opcode::IdxInsert {
+                // sqlite-rs: on an ephemeral index the stored row is the key
+                // columns plus `p5` trailing payload columns.
+                let total = key.len().checked_add(usize::from(instr.p5)).ok_or(
+                    ExecError::RegisterRangeTooLarge {
+                        opcode,
+                        count: i32::from(instr.p5),
+                    },
+                )?;
+                let stored = register_range(vm, opcode, instr.p2, total)?;
+                let cursor = vm.cursor_mut(instr.p1)?;
+                match cursor.ephemeral_idx_insert(&key, &collations, stored) {
+                    Some(ok) => ok,
+                    None => cursor.idx_insert(key),
+                }
+            } else {
+                vm.cursor_mut(instr.p1)?.idx_delete(&key)
+            };
+            if !ok {
+                return Err(ExecError::MalformedInstruction {
+                    opcode,
+                    reason:
+                        "cursor slot does not support this index operation, or no matching entry"
+                            .to_string(),
+                });
+            }
+            Ok(Step::Next)
+        }
+
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_write"),
+        }),
+    }
+}
+
+/// [`step`] for one family: transactions, pragmas and DDL. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
+        Opcode::Transaction => {
+            if !vm.autocommit {
+                return Err(ExecError::TransactionAlreadyActive);
+            }
+            if let Some(hook) = vm.transaction_hook.as_mut() {
+                hook.begin(instr.p1).map_err(ExecError::TransactionFailed)?;
+            }
+            vm.autocommit = false;
+            Ok(Step::Next)
+        }
+        Opcode::AutoCommit => {
+            if vm.autocommit {
+                return Err(if instr.p2 == 0 {
+                    ExecError::NoActiveTransactionToRollback
+                } else {
+                    ExecError::NoActiveTransactionToCommit
+                });
+            }
+            if let Some(hook) = vm.transaction_hook.as_mut() {
+                if instr.p2 == 0 {
+                    hook.rollback().map_err(ExecError::TransactionFailed)?;
+                } else {
+                    hook.commit().map_err(ExecError::TransactionFailed)?;
+                }
+            }
+            vm.autocommit = true;
+            Ok(Step::Next)
+        }
+        Opcode::SetJournalMode => {
+            if !vm.autocommit {
+                return Err(ExecError::JournalModeChangeDuringTransaction);
+            }
+            // The attached pager (via the transaction hook) switches its
+            // on-disk journal mode; with no hook this is the no-op
+            // sqlite-rs itself falls back to for a read-only connection.
+            // sqlite3 answers the assignment with the resulting mode, one
+            // TEXT row (#561) -- only when a pager applied it.
+            if let Some(hook) = vm.transaction_hook.as_mut() {
+                hook.set_journal_mode(instr.p1)
+                    .map_err(ExecError::TransactionFailed)?;
+                let mode = if instr.p1 == JOURNAL_MODE_WAL {
+                    "wal"
+                } else {
+                    "delete"
+                };
+                vm.emit_row(vec![Value::Text(mode.into())]);
+            }
+            Ok(Step::Next)
+        }
+        Opcode::Synchronous => {
+            // Query form reports the pager's level (FULL with no pager,
+            // sqlite-rs's no-writer fallback); otherwise sets it.
+            if instr.p1 == SYNCHRONOUS_QUERY {
+                let level = vm
+                    .transaction_hook
+                    .as_deref()
+                    .and_then(|h| h.synchronous())
+                    .unwrap_or(SYNCHRONOUS_FULL);
+                vm.emit_row(vec![Value::Integer(i64::from(level))]);
+                return Ok(Step::Next);
+            }
+            if !vm.autocommit {
+                return Err(ExecError::SynchronousChangeDuringTransaction);
+            }
+            if let Some(hook) = vm.transaction_hook.as_mut() {
+                hook.set_synchronous(instr.p1)
+                    .map_err(ExecError::TransactionFailed)?;
+            }
+            Ok(Step::Next)
+        }
+        Opcode::IntegrityCheck => {
+            // `p1 != 0` is quick_check. One TEXT row per problem line
+            // (sqlite-rs `pragma::integrity_check`); without a hook that
+            // can read the file this stays Unimplemented.
+            let quick = instr.p1 != 0;
+            let Some(result) = vm
+                .transaction_hook
+                .as_mut()
+                .and_then(|h| h.integrity_check(quick))
+            else {
+                return Err(ExecError::Unimplemented {
+                    opcode: Opcode::IntegrityCheck,
+                });
+            };
+            for line in result.map_err(ExecError::TransactionFailed)? {
+                vm.emit_row(vec![Value::Text(line.into())]);
+            }
+            Ok(Step::Next)
+        }
+
+        Opcode::CreateTable => {
+            let P4::CreateTable { name, sql } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "CreateTable",
+                    reason: format!("expected a CreateTable P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, sql) = (name.clone(), sql.clone());
+            let storage = vm.schema_storage("CreateTable")?;
+            let root = storage
+                .create_table_root()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .insert_master_row("table", &name, &name, root, &sql)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::CreateView => {
+            // sqlite-rs `cursor::create_view`: a view has no b-tree — one
+            // sqlite_master row with rootpage 0, then the cookie bump.
+            let P4::CreateView { name, sql } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "CreateView",
+                    reason: format!("expected a CreateView P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, sql) = (name.clone(), sql.clone());
+            let storage = vm.schema_storage("CreateView")?;
+            storage
+                .insert_master_row("view", &name, &name, 0, &sql)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::DropView => {
+            // A view has no b-tree: its sqlite_master row, then the
+            // cookie bump (#552).
+            let P4::DropView { name } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "DropView",
+                    reason: format!("expected a DropView P4, got {:?}", instr.p4),
+                });
+            };
+            let name = name.clone();
+            let storage = vm.schema_storage("DropView")?;
+            storage
+                .delete_master_row("view", &name)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::CreateIndex => {
+            let P4::CreateIndex {
+                name,
+                table_name,
+                table_root_page,
+                sql,
+                column_indices,
+                ..
+            } = &instr.p4
+            else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "CreateIndex",
+                    reason: format!("expected a CreateIndex P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, table_name, table_root_page, sql, column_indices) = (
+                name.clone(),
+                table_name.clone(),
+                *table_root_page,
+                sql.clone(),
+                column_indices.clone(),
+            );
+            let storage = vm.schema_storage("CreateIndex")?;
+            let root = storage
+                .create_index_root()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .populate_index(root, table_root_page, &column_indices)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .insert_master_row("index", &name, &table_name, root, &sql)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::DropTable => {
+            let P4::DropTable {
+                name,
+                root_page,
+                indexes,
+            } = &instr.p4
+            else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "DropTable",
+                    reason: format!("expected a DropTable P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());
+            let storage = vm.schema_storage("DropTable")?;
+            // sqlite-rs order (page-image parity with the oracle): each
+            // index's pages then its row, then the table's pages, then
+            // its row.
+            for (index_name, index_root) in &indexes {
+                storage
+                    .free_root(*index_root)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+                storage
+                    .delete_master_row("index", index_name)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
+            storage
+                .free_root(root_page)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .delete_master_row("table", &name)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::DropIndex => {
+            let P4::DropIndex { name, root_page } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "DropIndex",
+                    reason: format!("expected a DropIndex P4, got {:?}", instr.p4),
+                });
+            };
+            let (name, root_page) = (name.clone(), *root_page);
+            let storage = vm.schema_storage("DropIndex")?;
+            storage
+                .free_root(root_page)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .delete_master_row("index", &name)
+                .map_err(ExecError::SchemaStorageFailed)?;
+            storage
+                .bump_schema_cookie()
+                .map_err(ExecError::SchemaStorageFailed)?;
+            Ok(Step::Next)
+        }
+        Opcode::Analyze => {
+            let P4::Analyze { targets } = &instr.p4 else {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Analyze",
+                    reason: format!("expected an Analyze P4, got {:?}", instr.p4),
+                });
+            };
+            let targets = targets.clone();
+            let storage = vm.schema_storage("Analyze")?;
+            for target in &targets {
+                storage
+                    .write_stat1(target)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
+            Ok(Step::Next)
+        }
+
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_schema"),
+        }),
     }
 }
 
@@ -3703,11 +3911,12 @@ mod tests {
 
         fn delete_master_row(
             &mut self,
+            kind: &str,
             name: &str,
         ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
             self.log
                 .borrow_mut()
-                .push(format!("delete_master_row({name})"));
+                .push(format!("delete_master_row({kind} {name})"));
             Ok(())
         }
 
@@ -3871,9 +4080,9 @@ mod tests {
             *log.borrow(),
             vec![
                 "free_root(6)",
-                "delete_master_row(idx)",
+                "delete_master_row(index idx)",
                 "free_root(5)",
-                "delete_master_row(t)",
+                "delete_master_row(table t)",
                 "bump_schema_cookie",
             ]
         );
@@ -3902,7 +4111,7 @@ mod tests {
             *log.borrow(),
             vec![
                 "free_root(6)",
-                "delete_master_row(idx)",
+                "delete_master_row(index idx)",
                 "bump_schema_cookie"
             ]
         );
@@ -4463,6 +4672,7 @@ mod tests {
             }
             fn delete_master_row(
                 &mut self,
+                _: &str,
                 _: &str,
             ) -> Result<(), super::super::schema_storage::SchemaStorageError> {
                 Err(super::super::schema_storage::SchemaStorageError(

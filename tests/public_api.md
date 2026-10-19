@@ -730,7 +730,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::autoincrement_rowid(&m
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -1185,6 +1185,7 @@ pub fn db_core::engine::stream::StreamEngine::tables(&self) -> core::result::Res
 pub mod db_core::functions
 pub enum db_core::functions::FunctionError
 pub db_core::functions::FunctionError::IntegerOverflow
+pub db_core::functions::FunctionError::TooBig
 pub db_core::functions::FunctionError::Unknown
 pub db_core::functions::FunctionError::Unknown::arity: usize
 pub db_core::functions::FunctionError::Unknown::name: alloc::string::String
@@ -1199,6 +1200,7 @@ pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'
 impl core::fmt::Display for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::functions::FunctionError
+pub const db_core::functions::MAX_LENGTH: usize
 pub const db_core::functions::SCALAR_FUNCTION_NAMES: &[&str]
 pub fn db_core::functions::call(&str, &[db_core::value::Value]) -> core::result::Result<db_core::value::Value, db_core::functions::FunctionError>
 pub fn db_core::functions::exists(&str, usize) -> bool
@@ -1223,6 +1225,7 @@ pub fn db_core::json_path::JsonValue<'a>::eq(&self, &Self) -> bool
 impl<'a> core::fmt::Debug for db_core::json_path::JsonValue<'a>
 pub fn db_core::json_path::JsonValue<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl<'a> core::marker::StructuralPartialEq for db_core::json_path::JsonValue<'a>
+pub const db_core::json_path::MAX_DEPTH: usize
 pub fn db_core::json_path::lookup<'a>(&db_core::json_path::JsonValue<'a>, &str) -> core::option::Option<db_core::json_path::JsonValue<'a>>
 pub fn db_core::json_path::parse_object(&str) -> core::option::Option<(db_core::json_path::JsonValue<'_>, &str)>
 pub fn db_core::json_path::parse_value(&str) -> core::option::Option<(db_core::json_path::JsonValue<'_>, &str)>
@@ -2608,6 +2611,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::decimal::D
 pub fn db_core::storage::column::parquet::decimal::from_be_bytes(&[u8]) -> i128
 pub mod db_core::storage::column::parquet::encoding
 pub enum db_core::storage::column::parquet::encoding::EncodingError
+pub db_core::storage::column::parquet::encoding::EncodingError::InvalidBitWidth(u32)
 pub db_core::storage::column::parquet::encoding::EncodingError::InvalidLength(u64)
 pub db_core::storage::column::parquet::encoding::EncodingError::InvalidVarint
 pub db_core::storage::column::parquet::encoding::EncodingError::UnexpectedEof
@@ -2619,7 +2623,7 @@ pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core:
 impl core::fmt::Display for db_core::storage::parquet::encoding::EncodingError
 pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::storage::column::parquet::encoding::bit_width_for_max_level(u32) -> u32
-pub fn db_core::storage::column::parquet::encoding::decode_delta_binary_packed(&[u8]) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
+pub fn db_core::storage::column::parquet::encoding::decode_delta_binary_packed(&[u8], usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
 pub fn db_core::storage::column::parquet::encoding::decode_hybrid_rle_bitpacked(&[u8], u32, usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<u32>>
 pub fn db_core::storage::column::parquet::encoding::null_mask(&[u32], u32) -> alloc::vec::Vec<bool>
 pub type db_core::storage::column::parquet::encoding::Result<T> = core::result::Result<T, db_core::storage::parquet::encoding::EncodingError>
@@ -2663,6 +2667,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::Co
 pub enum db_core::storage::column::parquet::footer::FooterError
 pub db_core::storage::column::parquet::footer::FooterError::BadMagic
 pub db_core::storage::column::parquet::footer::FooterError::FileTooShort
+pub db_core::storage::column::parquet::footer::FooterError::InvalidSchema(&'static str)
 pub db_core::storage::column::parquet::footer::FooterError::Thrift(db_core::storage::parquet::thrift::ThriftError)
 impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
@@ -2775,6 +2780,8 @@ impl core::clone::Clone for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::parquet::footer::SchemaElement
+pub fn db_core::storage::parquet::footer::SchemaElement::default() -> Self
 impl core::fmt::Debug for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::SchemaElement
@@ -2797,6 +2804,7 @@ pub type db_core::storage::column::parquet::footer::Result<T> = core::result::Re
 pub mod db_core::storage::column::parquet::nested
 pub enum db_core::storage::column::parquet::nested::NestedError
 pub db_core::storage::column::parquet::nested::NestedError::MissingLeafData(alloc::string::String)
+pub db_core::storage::column::parquet::nested::NestedError::TruncatedLeafData(alloc::string::String)
 pub db_core::storage::column::parquet::nested::NestedError::UnsupportedListElement(alloc::string::String)
 pub db_core::storage::column::parquet::nested::NestedError::UnsupportedMapShape(alloc::string::String)
 impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
@@ -2926,6 +2934,7 @@ pub db_core::storage::column::parquet::parquet_file::FileError::NotAStringMap(al
 pub db_core::storage::column::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::column::parquet::parquet_file::FileError::TimestampOutOfRange
 pub db_core::storage::column::parquet::parquet_file::FileError::UnexpectedDictionaryPage
 pub db_core::storage::column::parquet::parquet_file::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::parquet::parquet_file::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -3167,10 +3176,14 @@ impl core::clone::Clone for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const db_core::storage::column::parquet::schema_tree::MAX_LEAF_PATH_BYTES: usize
+pub const db_core::storage::column::parquet::schema_tree::MAX_SCHEMA_DEPTH: usize
 pub fn db_core::storage::column::parquet::schema_tree::build_schema_tree(&[db_core::storage::parquet::footer::SchemaElement]) -> db_core::storage::parquet::schema_tree::SchemaNode
-pub fn db_core::storage::column::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> alloc::vec::Vec<alloc::string::String>
+pub fn db_core::storage::column::parquet::schema_tree::check_schema(&[db_core::storage::parquet::footer::SchemaElement]) -> core::result::Result<(), db_core::storage::parquet::footer::FooterError>
+pub fn db_core::storage::column::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub mod db_core::storage::column::parquet::thrift
 pub enum db_core::storage::column::parquet::thrift::ThriftError
+pub db_core::storage::column::parquet::thrift::ThriftError::DepthExceeded
 pub db_core::storage::column::parquet::thrift::ThriftError::InvalidLength(u64)
 pub db_core::storage::column::parquet::thrift::ThriftError::InvalidVarint
 pub db_core::storage::column::parquet::thrift::ThriftError::UnexpectedEof
@@ -3215,6 +3228,7 @@ impl<'a> db_core::storage::parquet::thrift::Decoder<'a>
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::new(&'a [u8]) -> Self
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::position(&self) -> usize
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::read_struct(&mut self) -> db_core::storage::parquet::thrift::Result<alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>>
+pub const db_core::storage::column::parquet::thrift::MAX_DEPTH: usize
 pub fn db_core::storage::column::parquet::thrift::decode_struct(&[u8]) -> db_core::storage::parquet::thrift::Result<(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>, usize)>
 pub type db_core::storage::column::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::parquet::thrift::ThriftError>
 pub mod db_core::storage::column::parquet::writer
@@ -3403,6 +3417,7 @@ pub db_core::storage::column::parquet::FileError::NotAStringMap(alloc::string::S
 pub db_core::storage::column::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::column::parquet::FileError::TimestampOutOfRange
 pub db_core::storage::column::parquet::FileError::UnexpectedDictionaryPage
 pub db_core::storage::column::parquet::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::parquet::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -3554,6 +3569,7 @@ pub db_core::storage::column::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::column::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::column::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::column::FileError::TimestampOutOfRange
 pub db_core::storage::column::FileError::UnexpectedDictionaryPage
 pub db_core::storage::column::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::column::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -4497,6 +4513,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::decimal::D
 pub fn db_core::storage::parquet::decimal::from_be_bytes(&[u8]) -> i128
 pub mod db_core::storage::parquet::encoding
 pub enum db_core::storage::parquet::encoding::EncodingError
+pub db_core::storage::parquet::encoding::EncodingError::InvalidBitWidth(u32)
 pub db_core::storage::parquet::encoding::EncodingError::InvalidLength(u64)
 pub db_core::storage::parquet::encoding::EncodingError::InvalidVarint
 pub db_core::storage::parquet::encoding::EncodingError::UnexpectedEof
@@ -4508,7 +4525,7 @@ pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core:
 impl core::fmt::Display for db_core::storage::parquet::encoding::EncodingError
 pub fn db_core::storage::parquet::encoding::EncodingError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::storage::parquet::encoding::bit_width_for_max_level(u32) -> u32
-pub fn db_core::storage::parquet::encoding::decode_delta_binary_packed(&[u8]) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
+pub fn db_core::storage::parquet::encoding::decode_delta_binary_packed(&[u8], usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<i64>>
 pub fn db_core::storage::parquet::encoding::decode_hybrid_rle_bitpacked(&[u8], u32, usize) -> db_core::storage::parquet::encoding::Result<alloc::vec::Vec<u32>>
 pub fn db_core::storage::parquet::encoding::null_mask(&[u32], u32) -> alloc::vec::Vec<bool>
 pub type db_core::storage::parquet::encoding::Result<T> = core::result::Result<T, db_core::storage::parquet::encoding::EncodingError>
@@ -4552,6 +4569,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::Co
 pub enum db_core::storage::parquet::footer::FooterError
 pub db_core::storage::parquet::footer::FooterError::BadMagic
 pub db_core::storage::parquet::footer::FooterError::FileTooShort
+pub db_core::storage::parquet::footer::FooterError::InvalidSchema(&'static str)
 pub db_core::storage::parquet::footer::FooterError::Thrift(db_core::storage::parquet::thrift::ThriftError)
 impl core::convert::From<db_core::storage::parquet::footer::FooterError> for db_core::storage::parquet::parquet_file::FileError
 pub fn db_core::storage::parquet::parquet_file::FileError::from(db_core::storage::parquet::footer::FooterError) -> Self
@@ -4664,6 +4682,8 @@ impl core::clone::Clone for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::parquet::footer::SchemaElement
+pub fn db_core::storage::parquet::footer::SchemaElement::default() -> Self
 impl core::fmt::Debug for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::SchemaElement
@@ -4686,6 +4706,7 @@ pub type db_core::storage::parquet::footer::Result<T> = core::result::Result<T, 
 pub mod db_core::storage::parquet::nested
 pub enum db_core::storage::parquet::nested::NestedError
 pub db_core::storage::parquet::nested::NestedError::MissingLeafData(alloc::string::String)
+pub db_core::storage::parquet::nested::NestedError::TruncatedLeafData(alloc::string::String)
 pub db_core::storage::parquet::nested::NestedError::UnsupportedListElement(alloc::string::String)
 pub db_core::storage::parquet::nested::NestedError::UnsupportedMapShape(alloc::string::String)
 impl core::convert::From<db_core::storage::parquet::nested::NestedError> for db_core::storage::parquet::parquet_file::FileError
@@ -4815,6 +4836,7 @@ pub db_core::storage::parquet::parquet_file::FileError::NotAStringMap(alloc::str
 pub db_core::storage::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::parquet::parquet_file::FileError::TimestampOutOfRange
 pub db_core::storage::parquet::parquet_file::FileError::UnexpectedDictionaryPage
 pub db_core::storage::parquet::parquet_file::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::parquet::parquet_file::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -5056,10 +5078,14 @@ impl core::clone::Clone for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::parquet::schema_tree::SchemaNode
 pub fn db_core::storage::parquet::schema_tree::SchemaNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub const db_core::storage::parquet::schema_tree::MAX_LEAF_PATH_BYTES: usize
+pub const db_core::storage::parquet::schema_tree::MAX_SCHEMA_DEPTH: usize
 pub fn db_core::storage::parquet::schema_tree::build_schema_tree(&[db_core::storage::parquet::footer::SchemaElement]) -> db_core::storage::parquet::schema_tree::SchemaNode
-pub fn db_core::storage::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> alloc::vec::Vec<alloc::string::String>
+pub fn db_core::storage::parquet::schema_tree::check_schema(&[db_core::storage::parquet::footer::SchemaElement]) -> core::result::Result<(), db_core::storage::parquet::footer::FooterError>
+pub fn db_core::storage::parquet::schema_tree::leaf_paths(&db_core::storage::parquet::schema_tree::SchemaNode) -> core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub mod db_core::storage::parquet::thrift
 pub enum db_core::storage::parquet::thrift::ThriftError
+pub db_core::storage::parquet::thrift::ThriftError::DepthExceeded
 pub db_core::storage::parquet::thrift::ThriftError::InvalidLength(u64)
 pub db_core::storage::parquet::thrift::ThriftError::InvalidVarint
 pub db_core::storage::parquet::thrift::ThriftError::UnexpectedEof
@@ -5104,6 +5130,7 @@ impl<'a> db_core::storage::parquet::thrift::Decoder<'a>
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::new(&'a [u8]) -> Self
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::position(&self) -> usize
 pub fn db_core::storage::parquet::thrift::Decoder<'a>::read_struct(&mut self) -> db_core::storage::parquet::thrift::Result<alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>>
+pub const db_core::storage::parquet::thrift::MAX_DEPTH: usize
 pub fn db_core::storage::parquet::thrift::decode_struct(&[u8]) -> db_core::storage::parquet::thrift::Result<(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>, usize)>
 pub type db_core::storage::parquet::thrift::Result<T> = core::result::Result<T, db_core::storage::parquet::thrift::ThriftError>
 pub mod db_core::storage::parquet::writer
@@ -5292,6 +5319,7 @@ pub db_core::storage::parquet::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::parquet::FileError::TimestampOutOfRange
 pub db_core::storage::parquet::FileError::UnexpectedDictionaryPage
 pub db_core::storage::parquet::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::parquet::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -5387,11 +5415,9 @@ pub db_core::storage::row::btree::BtreeError::InvalidCellVarint::page_num: u32
 pub db_core::storage::row::btree::BtreeError::InvalidCellVarint::source: db_core::storage::row::record::RecordError
 pub db_core::storage::row::btree::BtreeError::InvalidKeyRecord(db_core::storage::row::record::RecordError)
 pub db_core::storage::row::btree::BtreeError::InvalidRootPage
-pub db_core::storage::row::btree::BtreeError::InvalidRootPage::name: &'static str
 pub db_core::storage::row::btree::BtreeError::InvalidRootPage::rootpage: i64
 pub db_core::storage::row::btree::BtreeError::KeyNotFound
 pub db_core::storage::row::btree::BtreeError::MasterEntryNotFound
-pub db_core::storage::row::btree::BtreeError::MasterEntryNotFound::name: &'static str
 pub db_core::storage::row::btree::BtreeError::MissingChildRoute
 pub db_core::storage::row::btree::BtreeError::MissingChildRoute::child: u32
 pub db_core::storage::row::btree::BtreeError::MissingChildRoute::page_num: u32
@@ -5509,7 +5535,7 @@ pub fn db_core::storage::row::btree::count_table_rows<P: db_core::storage::row::
 pub fn db_core::storage::row::btree::create_empty_index_root(&mut db_core::storage::row::pager::Pager) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::create_empty_table_root(&mut db_core::storage::row::pager::Pager) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_entry(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &[db_core::value::Value], db_core::value::TextEncoding) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
-pub fn db_core::storage::row::btree::delete_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::delete_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &str, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, i64) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_stat1_rows_for_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::ensure_sqlite_sequence_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
@@ -7426,6 +7452,7 @@ pub db_core::storage::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::FileError::Page(db_core::storage::parquet::page::PageError)
 pub db_core::storage::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::FileError::RowPositionOutOfRange(u32)
+pub db_core::storage::FileError::TimestampOutOfRange
 pub db_core::storage::FileError::UnexpectedDictionaryPage
 pub db_core::storage::FileError::UnsignedOutOfRange(u64)
 pub db_core::storage::FileError::UnsupportedDecimalPhysicalType(db_core::storage::parquet::footer::PhysicalType)
@@ -8006,6 +8033,8 @@ pub fn db_core::vm::batch::ValueSource::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::marker::Copy for db_core::vm::batch::ValueSource
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ValueSource
 pub enum db_core::vm::batch::VmError
+pub db_core::vm::batch::VmError::DecimalOverflow
+pub db_core::vm::batch::VmError::DecimalOverflow::opcode: &'static str
 pub db_core::vm::batch::VmError::IntegerOverflow
 pub db_core::vm::batch::VmError::IntegerOverflow::opcode: &'static str
 pub db_core::vm::batch::VmError::MalformedProgram
@@ -9224,6 +9253,7 @@ pub fn db_core::vm::row::explain::explain(&db_core::vm::row::program::Program) -
 pub mod db_core::vm::row::functions
 pub enum db_core::vm::row::functions::FunctionError
 pub db_core::vm::row::functions::FunctionError::IntegerOverflow
+pub db_core::vm::row::functions::FunctionError::TooBig
 pub db_core::vm::row::functions::FunctionError::Unknown
 pub db_core::vm::row::functions::FunctionError::Unknown::arity: usize
 pub db_core::vm::row::functions::FunctionError::Unknown::name: alloc::string::String
@@ -9581,7 +9611,7 @@ pub fn db_core::vm::row::schema_storage::SchemaStorage::autoincrement_rowid(&mut
 pub fn db_core::vm::row::schema_storage::SchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::vm::row::schema_storage::SchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::vm::row::schema_storage::SchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -9591,7 +9621,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::autoincrement_rowid(&m
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -9660,6 +9690,7 @@ pub db_core::vm::row::vm::ExecError::SchemaStorageMissing
 pub db_core::vm::row::vm::ExecError::SchemaStorageMissing::opcode: &'static str
 pub db_core::vm::row::vm::ExecError::StepLimitExceeded
 pub db_core::vm::row::vm::ExecError::SynchronousChangeDuringTransaction
+pub db_core::vm::row::vm::ExecError::TooBig
 pub db_core::vm::row::vm::ExecError::TransactionAlreadyActive
 pub db_core::vm::row::vm::ExecError::TransactionFailed(db_core::vm::row::transaction::TransactionError)
 pub db_core::vm::row::vm::ExecError::TypeMismatch
@@ -9795,6 +9826,7 @@ pub db_core::vm::row::ExecError::SchemaStorageMissing
 pub db_core::vm::row::ExecError::SchemaStorageMissing::opcode: &'static str
 pub db_core::vm::row::ExecError::StepLimitExceeded
 pub db_core::vm::row::ExecError::SynchronousChangeDuringTransaction
+pub db_core::vm::row::ExecError::TooBig
 pub db_core::vm::row::ExecError::TransactionAlreadyActive
 pub db_core::vm::row::ExecError::TransactionFailed(db_core::vm::row::transaction::TransactionError)
 pub db_core::vm::row::ExecError::TypeMismatch
@@ -9809,6 +9841,7 @@ impl core::fmt::Display for db_core::vm::row::vm::ExecError
 pub fn db_core::vm::row::vm::ExecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::vm::row::FunctionError
 pub db_core::vm::row::FunctionError::IntegerOverflow
+pub db_core::vm::row::FunctionError::TooBig
 pub db_core::vm::row::FunctionError::Unknown
 pub db_core::vm::row::FunctionError::Unknown::arity: usize
 pub db_core::vm::row::FunctionError::Unknown::name: alloc::string::String
@@ -10914,7 +10947,7 @@ pub fn db_core::vm::row::SchemaStorage::autoincrement_rowid(&mut self, &str, i64
 pub fn db_core::vm::row::SchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::vm::row::SchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::vm::row::SchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -10924,7 +10957,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::autoincrement_rowid(&m
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
-pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>

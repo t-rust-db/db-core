@@ -330,24 +330,35 @@ pub(crate) fn combine_chunks(
 pub(crate) fn combine_partials(
     parts: &[AggPart],
     num_group_keys: usize,
-    partials: &[(Chunk, Vec<u64>)],
+    partials: Vec<(Chunk, Vec<u64>)>,
 ) -> Result<QueryOutput> {
     let mut combiner = Combiner::new(parts, num_group_keys);
+    // Sized once, so the accumulators rarely double-and-copy while the
+    // partials are still live (#643). The groups are at least the largest
+    // partial and at most the sum of them; workers sharing keys make the
+    // sum an overestimate up to `threads` times, and a key table sized
+    // for it is written in full, so take the middle.
+    let sizes = partials.iter().map(|(_, first_seen)| first_seen.len());
+    let largest = sizes.clone().max().unwrap_or(0);
+    let total: usize = sizes.sum();
+    combiner.expect_groups(largest.max(total / 2));
+    // By value: each worker's partial is dropped as soon as it is merged,
+    // not held until the last one is (#643).
     for (chunk, first_seen) in partials {
-        if chunk.is_empty() || chunk_len(chunk) == 0 {
+        if chunk.is_empty() || chunk_len(&chunk) == 0 {
             continue;
         }
-        if first_seen.len() != chunk_len(chunk) {
+        if first_seen.len() != chunk_len(&chunk) {
             return Err(VmError::MalformedProgram {
                 opcode: "Combine",
                 reason: format!(
                     "partial carries {} first-seen keys for {} rows",
                     first_seen.len(),
-                    chunk_len(chunk)
+                    chunk_len(&chunk)
                 ),
             });
         }
-        combiner.push_chunk(chunk, |row| {
+        combiner.push_chunk(&chunk, |row| {
             first_seen.get(row).copied().unwrap_or(u64::MAX)
         })?;
     }
@@ -435,7 +446,45 @@ enum KeyIndex {
     Int(IntKeyTable),
     /// Any key shape: hash-then-verify buckets of group ids, exact
     /// `Value` equality against the key columns of `acc` on a hit (#439).
-    Generic(HashMap<u64, Vec<usize>>),
+    Generic(GenericIndex),
+}
+
+/// Group ids by key hash: the first group with a hash inline, any others
+/// (a collision, rare) in a side table -- one map entry per group instead
+/// of a `Vec` allocated per group (#643).
+#[derive(Default)]
+struct GenericIndex {
+    first: HashMap<u64, usize>,
+    more: HashMap<u64, Vec<usize>>,
+}
+
+impl GenericIndex {
+    fn with_capacity(groups: usize) -> Self {
+        GenericIndex {
+            first: HashMap::with_capacity(groups),
+            more: HashMap::new(),
+        }
+    }
+
+    /// The groups whose key hashes to `hash`.
+    fn candidates(&self, hash: u64) -> impl Iterator<Item = usize> + '_ {
+        self.first
+            .get(&hash)
+            .copied()
+            .into_iter()
+            .chain(self.more.get(&hash).into_iter().flatten().copied())
+    }
+
+    fn insert(&mut self, hash: u64, group: usize) {
+        match self.first.entry(hash) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(group);
+            }
+            std::collections::hash_map::Entry::Occupied(_) => {
+                self.more.entry(hash).or_default().push(group);
+            }
+        }
+    }
 }
 
 /// An incremental `Combine`: chunks of partial `GROUP BY` rows pushed one
@@ -459,6 +508,8 @@ pub(crate) struct Combiner {
     first_seen: Vec<u64>,
     /// Scratch: this chunk's row -> group id (or [`NEW_GROUP`]).
     row_group: Vec<usize>,
+    /// How many groups to size for at the first chunk, when known.
+    expected_groups: Option<usize>,
 }
 
 impl Combiner {
@@ -472,6 +523,7 @@ impl Combiner {
             index: KeyIndex::Undecided,
             first_seen: Vec::new(),
             row_group: Vec::new(),
+            expected_groups: None,
         }
     }
 
@@ -499,6 +551,12 @@ impl Combiner {
         merge_columns(&self.ops, chunk, &mut self.acc, &self.row_group)
     }
 
+    /// Sizes the accumulators for `groups` groups up front, for a merge
+    /// that knows its bound (`combine_partials`).
+    fn expect_groups(&mut self, groups: usize) {
+        self.expected_groups = Some(groups);
+    }
+
     /// First chunk: fixes the row width, resolves the slot ops, sizes the
     /// accumulators from its row count (one partial row per group per
     /// segment makes that the group count, or close) and picks the key
@@ -515,7 +573,7 @@ impl Combiner {
             });
         }
         self.ops = slot_ops(&self.parts, num_slots)?;
-        let expected_groups = chunk_len(chunk);
+        let expected_groups = self.expected_groups.unwrap_or_else(|| chunk_len(chunk));
         self.acc = (0..num_slots)
             .map(|_| Vec::with_capacity(expected_groups))
             .collect();
@@ -525,7 +583,7 @@ impl Combiner {
         self.index = if int_key {
             KeyIndex::Int(IntKeyTable::with_capacity(expected_groups))
         } else {
-            KeyIndex::Generic(HashMap::with_capacity(expected_groups))
+            KeyIndex::Generic(GenericIndex::with_capacity(expected_groups))
         };
         self.num_slots = Some(num_slots);
         Ok(num_slots)
@@ -580,9 +638,9 @@ impl Combiner {
             .map(|column| column.as_slice())
             .collect();
         let hashes = hash_columns_by_row(&key_columns, num_groups, |g| g);
-        let mut map: HashMap<u64, Vec<usize>> = HashMap::with_capacity(num_groups);
+        let mut map = GenericIndex::with_capacity(num_groups);
         for (g, hash) in hashes.into_iter().enumerate() {
-            map.entry(hash).or_default().push(g);
+            map.insert(hash, g);
         }
         self.index = KeyIndex::Generic(map);
     }
@@ -611,8 +669,7 @@ impl Combiner {
             .collect();
         let hashes = hash_columns_by_row(&key_columns, n, |row| row);
         for r in start..n {
-            let bucket = map.entry(hashes[r]).or_default();
-            let existing = bucket.iter().copied().find(|&g| {
+            let existing = map.candidates(hashes[r]).find(|&g| {
                 key_columns
                     .iter()
                     .enumerate()
@@ -624,7 +681,7 @@ impl Combiner {
                     self.row_group.push(g);
                 }
                 None => {
-                    bucket.push(self.first_seen.len());
+                    map.insert(hashes[r], self.first_seen.len());
                     push_new_group(&mut self.acc, chunk, r);
                     self.first_seen.push(order(r));
                     self.row_group.push(NEW_GROUP);
@@ -718,14 +775,27 @@ fn reorder_by_first_seen(mut acc: Vec<Vec<Value>>, first_seen: &[u64]) -> Vec<Ve
     if first_seen.windows(2).all(|w| w[0] <= w[1]) {
         return acc;
     }
+    // `perm[i]` is the group that lands at `i`. Applied in place by
+    // following its cycles, so no column is copied (#643).
     let mut perm: Vec<usize> = (0..first_seen.len()).collect();
     perm.sort_unstable_by_key(|&g| first_seen[g]);
-    for column in &mut acc {
-        let reordered: Vec<Value> = perm
-            .iter()
-            .map(|&g| std::mem::replace(&mut column[g], Value::Null))
-            .collect();
-        *column = reordered;
+    let mut done = vec![false; perm.len()];
+    for start in 0..perm.len() {
+        if done[start] {
+            continue;
+        }
+        let mut i = start;
+        loop {
+            done[i] = true;
+            let next = perm[i];
+            if next == start {
+                break;
+            }
+            for column in &mut acc {
+                column.swap(i, next);
+            }
+            i = next;
+        }
     }
     acc
 }
@@ -797,6 +867,31 @@ mod tests {
 
     use super::super::engine::finalize;
     use super::*;
+
+    /// #643 review: the in-place reorder handles a fixed point, a
+    /// 2-cycle and a longer cycle, moving every column together.
+    #[test]
+    fn reorder_by_first_seen_permutes_every_column_in_place() {
+        // Groups 0..6 in creation order; their first-seen keys put them in
+        // the order 1, 0, 2, 5, 3, 4: a 2-cycle (0 1), a fixed point (2),
+        // and a 3-cycle (3 4 5).
+        let first_seen = [10, 5, 20, 40, 50, 30];
+        let col = |tag: &str| -> Vec<Value> {
+            (0..6)
+                .map(|g| Value::Str(format!("{tag}{g}").into()))
+                .collect()
+        };
+        let out = reorder_by_first_seen(vec![col("a"), col("b")], &first_seen);
+        let want = |tag: &str| -> Vec<Value> {
+            [1, 0, 2, 5, 3, 4]
+                .iter()
+                .map(|g| Value::Str(format!("{tag}{g}").into()))
+                .collect()
+        };
+        assert_eq!(out, vec![want("a"), want("b")]);
+        let sorted = reorder_by_first_seen(vec![col("a")], &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(sorted, vec![col("a")]);
+    }
 
     fn chunk(columns: Vec<Vec<Value>>) -> Chunk {
         columns.into_iter().map(Arc::new).collect()
@@ -881,7 +976,7 @@ mod tests {
             w.push_chunk(c, |row| order_key(segment, row)).unwrap();
             w.finish_partial()
         };
-        let merged = combine_partials(&parts, 2, &[worker(&b, 1), worker(&a, 0)]).unwrap();
+        let merged = combine_partials(&parts, 2, vec![worker(&b, 1), worker(&a, 0)]).unwrap();
         assert_eq!(merged.into_rows(), expected, "first-seen order is kept");
         let mut all = rows_of(&[a, b]);
         all.rotate_left(1);
@@ -1294,7 +1389,7 @@ mod tests {
         }
         // A worker that claimed nothing contributes an empty partial.
         partials.push(Combiner::new(&parts, 1).finish_partial());
-        let merged = combine_partials(&parts, 1, &partials).unwrap();
+        let merged = combine_partials(&parts, 1, partials).unwrap();
         assert_eq!(merged, direct);
         assert_eq!(
             merged
@@ -1311,7 +1406,7 @@ mod tests {
         let parts = [AggPart::GroupKey, AggPart::Sum];
         let partial = (int_chunk(&[Some(1), Some(2)], &[1, 2]), vec![0u64]);
         assert!(matches!(
-            combine_partials(&parts, 1, &[partial]),
+            combine_partials(&parts, 1, vec![partial]),
             Err(VmError::MalformedProgram {
                 opcode: "Combine",
                 ..
@@ -1330,36 +1425,36 @@ mod tests {
     // `chunk.is_empty() || chunk_len(chunk) == 0`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_combine_combine_partials_4f421cb8__v1_column_less_partial_is_skipped() {
+    fn mcdc__vm_combine_combine_partials_1974628c__v1_column_less_partial_is_skipped() {
         let parts = [AggPart::GroupKey, AggPart::Sum];
         let real = (int_chunk(&[Some(1)], &[5]), vec![0u64]);
         // A worker that claimed nothing: no columns at all (first leaf
         // true), and its empty first-seen list must not trip the
         // length check.
         let empty: Chunk = Vec::new();
-        let merged = combine_partials(&parts, 1, &[(empty, Vec::new()), real]).unwrap();
+        let merged = combine_partials(&parts, 1, vec![(empty, Vec::new()), real]).unwrap();
         assert_eq!(merged.into_rows(), vec![vec![Value::Int(1), Value::Int(5)]]);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_combine_combine_partials_4f421cb8__v2_zero_row_partial_is_skipped() {
+    fn mcdc__vm_combine_combine_partials_1974628c__v2_zero_row_partial_is_skipped() {
         let parts = [AggPart::GroupKey, AggPart::Sum];
         let real = (int_chunk(&[Some(1)], &[5]), vec![0u64]);
         // Columns present (first leaf false) but no rows (second leaf
         // true) -- again the length check must not fire.
         let zero_rows = (int_chunk(&[], &[]), Vec::new());
-        let merged = combine_partials(&parts, 1, &[zero_rows, real]).unwrap();
+        let merged = combine_partials(&parts, 1, vec![zero_rows, real]).unwrap();
         assert_eq!(merged.into_rows(), vec![vec![Value::Int(1), Value::Int(5)]]);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_combine_combine_partials_4f421cb8__v3_populated_partials_are_merged() {
+    fn mcdc__vm_combine_combine_partials_1974628c__v3_populated_partials_are_merged() {
         let parts = [AggPart::GroupKey, AggPart::Sum];
         let a = (int_chunk(&[Some(1), Some(2)], &[5, 7]), vec![0u64, 1]);
         let b = (int_chunk(&[Some(1)], &[3]), vec![2u64]);
-        let merged = combine_partials(&parts, 1, &[a, b]).unwrap();
+        let merged = combine_partials(&parts, 1, vec![a, b]).unwrap();
         assert_eq!(
             merged.into_rows(),
             vec![

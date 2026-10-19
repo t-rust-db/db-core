@@ -4,12 +4,20 @@
 
 use std::fmt;
 
+/// A malformed RLE/Bit-Packed Hybrid or DELTA_BINARY_PACKED stream. Page
+/// data is untrusted, so every inconsistency is an error, never a panic.
 #[derive(Debug)]
 pub enum EncodingError {
+    /// The stream ends inside a varint, a run, or a miniblock.
     UnexpectedEof,
+    /// A varint longer than the ten bytes a `u64` needs.
     InvalidVarint,
-    /// A block size or count varint does not fit `usize`.
+    /// A block size or count varint does not fit `usize` or exceeds its
+    /// sanity limit, or a run's byte size overflows `usize`.
     InvalidLength(u64),
+    /// A bit width wider than the values it packs: 32 bits for levels and
+    /// dictionary indices, 64 for DELTA_BINARY_PACKED deltas.
+    InvalidBitWidth(u32),
 }
 
 impl fmt::Display for EncodingError {
@@ -18,13 +26,40 @@ impl fmt::Display for EncodingError {
             EncodingError::UnexpectedEof => write!(f, "unexpected end of input"),
             EncodingError::InvalidVarint => write!(f, "varint too long"),
             EncodingError::InvalidLength(n) => write!(f, "length out of range: {n}"),
+            EncodingError::InvalidBitWidth(w) => write!(f, "bit width out of range: {w}"),
         }
     }
 }
 
 impl std::error::Error for EncodingError {}
 
+/// Result alias for the page-level decoders.
 pub type Result<T> = std::result::Result<T, EncodingError>;
+
+/// The most values reserved up front from a caller- or header-supplied
+/// count alone. RLE runs and zero-width miniblocks legitimately expand a
+/// few bytes into any number of values, so the count cannot be checked
+/// against the input size; past this the output grows as values are
+/// actually decoded, instead of a forged count claiming gigabytes at once.
+const MAX_PREALLOC_VALUES: usize = 1 << 20;
+
+/// The largest DELTA_BINARY_PACKED block accepted. The spec sets no
+/// maximum, but writers use 128 (parquet-mr, Arrow) to a few thousand
+/// values; a forged block size is what lets zero-width miniblocks turn a
+/// few bytes into an arbitrary number of values, so it is capped.
+const MAX_DELTA_BLOCK_SIZE: u64 = 1 << 16;
+
+/// The most values a DELTA_BINARY_PACKED page can hold: a page's value
+/// count is an `i32` in its header.
+const MAX_DELTA_VALUES: u64 = i32::MAX as u64;
+
+/// A varint used as a length/count that must not exceed `max`.
+fn bounded(v: u64, max: u64) -> Result<usize> {
+    if v > max {
+        return Err(EncodingError::InvalidLength(v));
+    }
+    length(v)
+}
 
 /// A varint used as a length/count: must fit `usize`.
 fn length(v: u64) -> Result<usize> {
@@ -32,10 +67,11 @@ fn length(v: u64) -> Result<usize> {
 }
 
 /// Zigzag decoding without a reinterpreting cast: the magnitude half always
-/// fits (`raw >> 1 < 2^63`), the sign is `-1` or `0`.
+/// fits (`raw >> 1 < 2^63`), the sign is `-1` or `0` (negating 0 or 1
+/// cannot wrap).
 fn zigzag_decode(raw: u64) -> i64 {
     let half = i64::try_from(raw >> 1).unwrap_or(i64::MAX);
-    half ^ -i64::from(raw & 1 == 1)
+    half ^ i64::from(raw & 1 == 1).wrapping_neg()
 }
 
 /// The two's-complement reinterpretation the DELTA_BINARY_PACKED encoding
@@ -48,28 +84,91 @@ fn u64_bits_as_i64(raw: u64) -> i64 {
     raw as i64
 }
 
-fn read_unsigned_varint(buf: &[u8], pos: &mut usize) -> Result<u64> {
+/// Read an unsigned LEB128 varint from the front of `rest`, advancing it
+/// past the varint.
+fn read_unsigned_varint(rest: &mut &[u8]) -> Result<u64> {
     let mut result: u64 = 0;
     let mut shift = 0u32;
     loop {
         if shift >= 70 {
             return Err(EncodingError::InvalidVarint);
         }
-        let b = *buf.get(*pos).ok_or(EncodingError::UnexpectedEof)?;
-        *pos += 1;
-        result |= ((b & 0x7f) as u64) << shift;
+        let (&b, tail) = rest.split_first().ok_or(EncodingError::UnexpectedEof)?;
+        *rest = tail;
+        result |= u64::from(b & 0x7f) << shift;
         if b & 0x80 == 0 {
-            break;
+            return Ok(result);
         }
-        shift += 7;
+        shift = shift.saturating_add(7);
     }
-    Ok(result)
+}
+
+/// Unpack consecutive `bit_width`-bit values (1..=64), LSB-first, from
+/// `bytes`, passing each whole value to `emit`; trailing bits too few for
+/// a whole value are dropped. A byte at a time is shifted into an
+/// accumulator, so there is no per-bit work and no indexing.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "`bits` stays in 0..72: it grows by 8 only while below `bit_width` <= 64, and shrinks by `bit_width` only when at least that"
+)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the value is masked to `bit_width` <= 64 bits before narrowing to u64"
+)]
+#[inline(always)]
+fn unpack_bits(bytes: &[u8], bit_width: u32, mut emit: impl FnMut(u64)) {
+    if !(1..=64).contains(&bit_width) {
+        return;
+    }
+    let mask = u64::MAX >> (64 - bit_width);
+    if bit_width <= 56 {
+        // A u64 accumulator holds up to 55 pending bits plus one byte.
+        let mut acc: u64 = 0;
+        let mut bits: u32 = 0;
+        for &b in bytes {
+            acc |= u64::from(b) << bits;
+            bits += 8;
+            while bits >= bit_width {
+                emit(acc & mask);
+                acc >>= bit_width;
+                bits -= bit_width;
+            }
+        }
+    } else {
+        let mut acc: u128 = 0;
+        let mut bits: u32 = 0;
+        for &b in bytes {
+            acc |= u128::from(b) << bits;
+            bits += 8;
+            while bits >= bit_width {
+                emit(acc as u64 & mask);
+                acc >>= bit_width;
+                bits -= bit_width;
+            }
+        }
+    }
+}
+
+/// The 8 values of one bit-packed group of `bit_width` (1..=8) bits each,
+/// held LSB-first in `g`.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "`i * bit_width` is at most 7 * 8"
+)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "`i < 8`, and each value is masked to `bit_width` <= 8 bits"
+)]
+#[inline(always)]
+fn group_values(g: u64, bit_width: u32) -> [u32; 8] {
+    let mask = !(u64::MAX << bit_width);
+    std::array::from_fn(|i| ((g >> (i as u32 * bit_width)) & mask) as u32)
 }
 
 /// Decode `num_values` levels from the RLE/Bit-Packed Hybrid format used for
 /// Parquet definition and repetition levels (and dictionary indices).
 /// `bit_width` is the number of bits needed to represent the largest
-/// possible level value.
+/// possible level value, at most 32.
 ///
 /// Spec: https://parquet.apache.org/docs/file-format/data-pages/encodings/#rle
 pub fn decode_hybrid_rle_bitpacked(
@@ -77,57 +176,67 @@ pub fn decode_hybrid_rle_bitpacked(
     bit_width: u32,
     num_values: usize,
 ) -> Result<Vec<u32>> {
-    let mut out = Vec::with_capacity(num_values);
+    if bit_width > 32 {
+        return Err(EncodingError::InvalidBitWidth(bit_width));
+    }
+    let mut out = Vec::with_capacity(num_values.min(MAX_PREALLOC_VALUES));
     if bit_width == 0 {
         out.resize(num_values, 0);
         return Ok(out);
     }
+    let width = bit_width as usize;
 
-    let mut pos = 0usize;
+    let mut rest = data;
     while out.len() < num_values {
-        let header = read_unsigned_varint(data, &mut pos)?;
-        let is_bit_packed = header & 1 == 1;
-        let run_len = (header >> 1) as usize;
+        let header = read_unsigned_varint(&mut rest)?;
+        let run_len = length(header >> 1)?;
+        let remaining = num_values.saturating_sub(out.len());
 
-        if is_bit_packed {
+        if header & 1 == 1 {
             // `run_len` groups of 8 values, each group packed into
-            // `bit_width` bytes (LSB-first bit order).
-            let num_groups = run_len;
-            let byte_count = num_groups * bit_width as usize;
-            let bytes = data
-                .get(pos..pos + byte_count)
+            // `bit_width` bytes (LSB-first bit order). The whole run must
+            // be present, but only the bytes holding values still wanted
+            // are unpacked.
+            let byte_count = run_len
+                .checked_mul(width)
+                .ok_or(EncodingError::InvalidLength(header >> 1))?;
+            let (bytes, tail) = rest
+                .split_at_checked(byte_count)
                 .ok_or(EncodingError::UnexpectedEof)?;
-            pos += byte_count;
-
-            let mut bit_pos = 0usize;
-            for _ in 0..num_groups * 8 {
-                if out.len() >= num_values {
-                    break;
+            rest = tail;
+            let wanted = remaining.saturating_mul(width).div_ceil(8);
+            let bytes = bytes.get(..wanted).unwrap_or(bytes);
+            let bytes = if width <= 8 {
+                // Whole groups fit a u64: 8 values per load, no per-value
+                // bookkeeping (levels and dictionaries up to 256 entries).
+                let mut groups = bytes.chunks_exact(width);
+                for group in &mut groups {
+                    let g = group
+                        .iter()
+                        .rev()
+                        .fold(0u64, |acc, &b| (acc << 8) | u64::from(b));
+                    out.extend_from_slice(&group_values(g, bit_width));
                 }
-                let mut value: u32 = 0;
-                for bit in 0..bit_width as usize {
-                    let global_bit = bit_pos + bit;
-                    let byte = bytes[global_bit / 8];
-                    let b = (byte >> (global_bit % 8)) & 1;
-                    value |= (b as u32) << bit;
-                }
-                out.push(value);
-                bit_pos += bit_width as usize;
-            }
+                groups.remainder()
+            } else {
+                bytes
+            };
+            // Masked to `bit_width <= 32` bits, so the conversion holds.
+            unpack_bits(bytes, bit_width, |v| {
+                out.push(u32::try_from(v).unwrap_or(u32::MAX));
+            });
         } else {
             // RLE run: `run_len` repetitions of a single value packed into
-            // ceil(bit_width / 8) bytes, little-endian.
-            let value_byte_count = bit_width.div_ceil(8) as usize;
-            let bytes = data
-                .get(pos..pos + value_byte_count)
+            // ceil(bit_width / 8) bytes (at most 4), little-endian.
+            let (bytes, tail) = rest
+                .split_at_checked(bit_width.div_ceil(8) as usize)
                 .ok_or(EncodingError::UnexpectedEof)?;
-            pos += value_byte_count;
-            let mut value: u32 = 0;
-            for (i, b) in bytes.iter().enumerate() {
-                value |= (*b as u32) << (8 * i);
-            }
-            let take = run_len.min(num_values - out.len());
-            out.resize(out.len() + take, value);
+            rest = tail;
+            let value = bytes
+                .iter()
+                .rev()
+                .fold(0u32, |acc, &b| (acc << 8) | u32::from(b));
+            out.extend(std::iter::repeat_n(value, run_len.min(remaining)));
         }
     }
 
@@ -135,34 +244,9 @@ pub fn decode_hybrid_rle_bitpacked(
     Ok(out)
 }
 
-fn read_zigzag_varint(buf: &[u8], pos: &mut usize) -> Result<i64> {
-    let raw = read_unsigned_varint(buf, pos)?;
+fn read_zigzag_varint(rest: &mut &[u8]) -> Result<i64> {
+    let raw = read_unsigned_varint(rest)?;
     Ok(zigzag_decode(raw))
-}
-
-/// Unpack `count` `bit_width`-bit unsigned values, packed LSB-first with no
-/// group header (the DELTA_BINARY_PACKED miniblock layout — plain
-/// bit-packing, unlike the RLE/Bit-Packed Hybrid format above).
-fn unpack_bit_packed(data: &[u8], bit_width: u32, count: usize) -> Result<Vec<u64>> {
-    if bit_width == 0 {
-        return Ok(vec![0; count]);
-    }
-    let byte_count = (count * bit_width as usize).div_ceil(8);
-    let bytes = data.get(..byte_count).ok_or(EncodingError::UnexpectedEof)?;
-    let mut out = Vec::with_capacity(count);
-    let mut bit_pos = 0usize;
-    for _ in 0..count {
-        let mut value: u64 = 0;
-        for bit in 0..bit_width as usize {
-            let global_bit = bit_pos + bit;
-            let byte = bytes[global_bit / 8];
-            let b = (byte >> (global_bit % 8)) & 1;
-            value |= (b as u64) << bit;
-        }
-        out.push(value);
-        bit_pos += bit_width as usize;
-    }
-    Ok(out)
 }
 
 /// Decode a DELTA_BINARY_PACKED-encoded stream of `i64` values (used for
@@ -172,44 +256,68 @@ fn unpack_bit_packed(data: &[u8], bit_width: u32, count: usize) -> Result<Vec<u6
 /// zigzag `first_value`), followed by blocks of `block_size` values each; a
 /// block starts with a zigzag `min_delta` and one bit-width byte per
 /// miniblock, then the miniblocks themselves (each `block_size /
-/// miniblocks_per_block` plain bit-packed values — the packed value plus
-/// `min_delta` is the delta from the previous value).
+/// miniblocks_per_block` plain bit-packed values, LSB-first with no group
+/// header -- the packed value plus `min_delta` is the delta from the
+/// previous value).
+///
+/// `max_values` is the page's value count: a stream claiming more is
+/// corrupt.
 ///
 /// Spec: https://parquet.apache.org/docs/file-format/data-pages/encodings/#delta-encoding-delta_binary_packed--5
-pub fn decode_delta_binary_packed(data: &[u8]) -> Result<Vec<i64>> {
-    let mut pos = 0usize;
-    let block_size = length(read_unsigned_varint(data, &mut pos)?)?;
-    let miniblocks_per_block = length(read_unsigned_varint(data, &mut pos)?)?;
-    let total_count = length(read_unsigned_varint(data, &mut pos)?)?;
-    let first_value = read_zigzag_varint(data, &mut pos)?;
+pub fn decode_delta_binary_packed(data: &[u8], max_values: usize) -> Result<Vec<i64>> {
+    let mut rest = data;
+    let block_size = bounded(read_unsigned_varint(&mut rest)?, MAX_DELTA_BLOCK_SIZE)?;
+    let miniblocks_per_block = length(read_unsigned_varint(&mut rest)?)?;
+    // The stream's own count may not pass the page's: it alone would
+    // otherwise size the output (zero-width miniblocks cost no bytes).
+    let max = MAX_DELTA_VALUES.min(u64::try_from(max_values).unwrap_or(u64::MAX));
+    let total_count = bounded(read_unsigned_varint(&mut rest)?, max)?;
+    let first_value = read_zigzag_varint(&mut rest)?;
 
-    let mut out = Vec::with_capacity(total_count);
+    let mut out = Vec::with_capacity(total_count.min(MAX_PREALLOC_VALUES));
     if total_count == 0 {
         return Ok(out);
     }
     out.push(first_value);
     let mut prev = first_value;
     let values_per_miniblock = block_size.checked_div(miniblocks_per_block).unwrap_or(0);
+    let mut packed_values = Vec::new();
 
     while out.len() < total_count {
-        let min_delta = read_zigzag_varint(data, &mut pos)?;
-        let mut bit_widths = Vec::with_capacity(miniblocks_per_block);
-        for _ in 0..miniblocks_per_block {
-            bit_widths.push(*data.get(pos).ok_or(EncodingError::UnexpectedEof)? as u32);
-            pos += 1;
-        }
-        for bit_width in bit_widths {
+        let min_delta = read_zigzag_varint(&mut rest)?;
+        let (bit_widths, tail) = rest
+            .split_at_checked(miniblocks_per_block)
+            .ok_or(EncodingError::UnexpectedEof)?;
+        rest = tail;
+        for &bit_width in bit_widths {
             if out.len() >= total_count {
                 break;
             }
-            let packed = unpack_bit_packed(&data[pos..], bit_width, values_per_miniblock)?;
-            pos += (values_per_miniblock * bit_width as usize).div_ceil(8);
-            for raw in packed {
-                if out.len() >= total_count {
-                    break;
+            let bit_width = u32::from(bit_width);
+            if bit_width > 64 {
+                return Err(EncodingError::InvalidBitWidth(bit_width));
+            }
+            let byte_count = values_per_miniblock
+                .checked_mul(bit_width as usize)
+                .ok_or(EncodingError::InvalidLength(u64::from(bit_width)))?
+                .div_ceil(8);
+            let (packed, tail) = rest
+                .split_at_checked(byte_count)
+                .ok_or(EncodingError::UnexpectedEof)?;
+            rest = tail;
+            let wanted = values_per_miniblock.min(total_count.saturating_sub(out.len()));
+            // Deltas are unsigned offsets from `min_delta`, summed with the
+            // two's-complement wrap the encoding defines for 64-bit widths.
+            if bit_width == 0 {
+                for _ in 0..wanted {
+                    prev = prev.wrapping_add(min_delta);
+                    out.push(prev);
                 }
-                // Deltas are unsigned offsets from `min_delta`, summed with the
-                // two's-complement wrap the encoding defines for 64-bit widths.
+                continue;
+            }
+            packed_values.clear();
+            unpack_bits(packed, bit_width, |v| packed_values.push(v));
+            for &raw in packed_values.iter().take(wanted) {
                 prev = prev
                     .wrapping_add(min_delta)
                     .wrapping_add(u64_bits_as_i64(raw));
@@ -222,7 +330,8 @@ pub fn decode_delta_binary_packed(data: &[u8]) -> Result<Vec<i64>> {
 
 /// Number of bits needed to represent values in `0..=max_level`.
 pub fn bit_width_for_max_level(max_level: u32) -> u32 {
-    32 - max_level.leading_zeros()
+    // `leading_zeros()` is at most 32: cannot saturate.
+    u32::BITS.saturating_sub(max_level.leading_zeros())
 }
 
 /// Map decoded definition levels to a presence mask: `true` where the value
@@ -385,7 +494,7 @@ mod tests {
         buf.push(0); // miniblock 2 bit width (unused padding, decoder stops before reading it)
         pack_bits(&mut buf, &[7, 0, 9, 12], 4);
 
-        let values = decode_delta_binary_packed(&buf).unwrap();
+        let values = decode_delta_binary_packed(&buf, usize::MAX).unwrap();
         assert_eq!(values, vec![100, 105, 103, 110, 120]);
     }
 
@@ -396,7 +505,7 @@ mod tests {
         write_varint(&mut buf, 2);
         write_varint(&mut buf, 0);
         write_zigzag(&mut buf, 0);
-        let values = decode_delta_binary_packed(&buf).unwrap();
+        let values = decode_delta_binary_packed(&buf, usize::MAX).unwrap();
         assert!(values.is_empty());
     }
 
@@ -407,7 +516,7 @@ mod tests {
         write_varint(&mut buf, 2);
         write_varint(&mut buf, 1);
         write_zigzag(&mut buf, 42);
-        let values = decode_delta_binary_packed(&buf).unwrap();
+        let values = decode_delta_binary_packed(&buf, usize::MAX).unwrap();
         assert_eq!(values, vec![42]);
     }
 }
@@ -433,5 +542,168 @@ mod tests_289 {
             length(u64::MAX),
             Err(EncodingError::InvalidLength(u64::MAX))
         ));
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    reason = "test code: hand-built varints"
+)]
+mod malformed_input {
+    //! #657: inputs that panicked or allocated without bound before the
+    //! lint burn-down. Each now fails with an error.
+
+    use super::*;
+
+    /// A bit-packed run whose `run_len * bit_width` wraps `usize`: debug
+    /// builds overflowed the multiplication, release builds wrapped it to
+    /// a 2-byte run and then indexed past it (`run_len * 8` values of 3
+    /// bits each).
+    #[test]
+    fn a_bit_packed_run_whose_byte_size_overflows_is_invalid_length() {
+        let run_len: u64 = u64::MAX / 3 + 1;
+        let mut data = Vec::new();
+        let mut header = (run_len << 1) | 1;
+        while header >= 0x80 {
+            data.push((header as u8) | 0x80);
+            header >>= 7;
+        }
+        data.push(header as u8);
+        data.extend_from_slice(&[0xff, 0xff]);
+        assert!(matches!(
+            decode_hybrid_rle_bitpacked(&data, 3, 100),
+            Err(EncodingError::InvalidLength(n)) if n == run_len
+        ));
+    }
+
+    /// A dictionary page's bit-width byte is untrusted: past 32 the value
+    /// bytes shifted a `u32` by 32 or more (a debug-build panic).
+    #[test]
+    fn a_bit_width_over_32_is_invalid_bit_width() {
+        let rle_run = [0x80, 0x20, 1, 0xff, 0xff, 0xff, 0xff, 0x0f];
+        assert!(matches!(
+            decode_hybrid_rle_bitpacked(&rle_run, 33, 64),
+            Err(EncodingError::InvalidBitWidth(33))
+        ));
+        assert_eq!(
+            EncodingError::InvalidBitWidth(33).to_string(),
+            "bit width out of range: 33"
+        );
+    }
+
+    /// The widest legal width still decodes, both as a run and packed.
+    #[test]
+    fn a_32_bit_width_decodes_runs_and_packed_groups() {
+        let mut data = vec![2 << 1, 0x78, 0x56, 0x34, 0x12, (1 << 1) | 1];
+        let packed: Vec<u32> = (0..8).map(|i| u32::MAX - i).collect();
+        for v in &packed {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut expected = vec![0x1234_5678, 0x1234_5678];
+        expected.extend_from_slice(&packed);
+        assert_eq!(
+            decode_hybrid_rle_bitpacked(&data, 32, 10).unwrap(),
+            expected
+        );
+    }
+
+    /// A forged `num_values` only reserves a bounded buffer up front; a
+    /// stream that runs out errors instead of filling it.
+    #[test]
+    fn a_forged_value_count_fails_on_the_missing_data() {
+        assert!(matches!(
+            decode_hybrid_rle_bitpacked(&[2 << 1, 1], 1, usize::MAX),
+            Err(EncodingError::UnexpectedEof)
+        ));
+    }
+
+    fn varints(values: &[u64]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &v in values {
+            let mut v = v;
+            while v >= 0x80 {
+                out.push((v as u8) | 0x80);
+                v >>= 7;
+            }
+            out.push(v as u8);
+        }
+        out
+    }
+
+    /// A total count past `i32::MAX`: before #657 `Vec::with_capacity`
+    /// of it panicked with "capacity overflow" (or aborted on the
+    /// allocation for counts that fit).
+    #[test]
+    fn a_delta_total_count_past_a_page_count_is_invalid_length() {
+        let data = varints(&[128, 4, 1 << 62, 0]);
+        assert!(matches!(
+            decode_delta_binary_packed(&data, usize::MAX),
+            Err(EncodingError::InvalidLength(n)) if n == 1 << 62
+        ));
+    }
+
+    /// A stream claiming more values than its page: zero-width miniblocks
+    /// cost no bytes, so the stream's own count alone would size the output.
+    #[test]
+    fn a_delta_total_count_past_the_page_is_invalid_length() {
+        let mut data = varints(&[128, 1, 1_000_000, 0, 0]);
+        data.push(0);
+        assert!(matches!(
+            decode_delta_binary_packed(&data, 10),
+            Err(EncodingError::InvalidLength(1_000_000))
+        ));
+    }
+
+    /// A huge miniblock count: the bit widths were collected into a
+    /// `Vec::with_capacity(miniblocks_per_block)` before any were read.
+    #[test]
+    fn a_delta_miniblock_count_past_the_input_is_unexpected_eof() {
+        let data = varints(&[128, 1 << 40, 10, 0, 0]);
+        assert!(matches!(
+            decode_delta_binary_packed(&data, usize::MAX),
+            Err(EncodingError::UnexpectedEof)
+        ));
+    }
+
+    /// A huge block of zero-width miniblocks: before #657 a single
+    /// miniblock allocated `vec![0; block_size]` (8 TB here).
+    #[test]
+    fn a_delta_block_size_past_the_cap_is_invalid_length() {
+        let mut data = varints(&[1 << 40, 1, 1 << 30, 0, 0]);
+        data.push(0);
+        assert!(matches!(
+            decode_delta_binary_packed(&data, usize::MAX),
+            Err(EncodingError::InvalidLength(n)) if n == 1 << 40
+        ));
+    }
+
+    /// A miniblock bit width past 64 shifted a `u64` out of range.
+    #[test]
+    fn a_delta_bit_width_over_64_is_invalid_bit_width() {
+        let mut data = varints(&[128, 4, 10, 0, 0]);
+        data.extend_from_slice(&[65, 0, 0, 0]);
+        data.extend_from_slice(&[0; 300]);
+        assert!(matches!(
+            decode_delta_binary_packed(&data, usize::MAX),
+            Err(EncodingError::InvalidBitWidth(65))
+        ));
+    }
+
+    /// 64-bit-wide miniblocks take the 128-bit accumulator path.
+    #[test]
+    fn a_delta_64_bit_miniblock_decodes() {
+        // block 32, one miniblock; first value 0, min delta 0, width 64,
+        // then 32 deltas of u64::MAX (two's-complement -1 each).
+        let mut data = varints(&[32, 1, 3, 0, 0]);
+        data.push(64);
+        for _ in 0..32 {
+            data.extend_from_slice(&u64::MAX.to_le_bytes());
+        }
+        assert_eq!(
+            decode_delta_binary_packed(&data, usize::MAX).unwrap(),
+            vec![0, -1, -2]
+        );
     }
 }

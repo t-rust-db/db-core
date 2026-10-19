@@ -8,9 +8,9 @@
 //!
 //! This module is the designated `dyn` boundary (see the `mvl-limit`
 //! Makefile target): everything above the VFS stays in the qualified
-//! subset. It is no longer an `unsafe` boundary (#66) — `fcntl`/`-shm`
-//! access here goes through safe `nix`/`std` APIs, and the crate is
-//! `#![forbid(unsafe_code)]` with no local override anywhere.
+//! subset. `unsafe` is denied here; the one exception is
+//! [`fcntl`], which overrides it locally for the POSIX advisory-lock
+//! calls, under ADR 0016's documented carve-out.
 
 #![deny(unsafe_code)]
 

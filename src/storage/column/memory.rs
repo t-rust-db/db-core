@@ -16,6 +16,7 @@ pub struct MemoryVfs {
 }
 
 impl MemoryVfs {
+    /// An empty in-memory VFS.
     pub fn new() -> Self {
         Self::default()
     }
@@ -55,15 +56,17 @@ impl VfsFile for MemoryFile {
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        let Ok(offset) = usize::try_from(offset) else {
+        // An offset at or past the end (or past `usize`) reads nothing.
+        let Some(available) = usize::try_from(offset)
+            .ok()
+            .and_then(|offset| self.contents.get(offset..))
+        else {
             return Ok(0);
         };
-        if offset >= self.contents.len() {
-            return Ok(0);
-        }
-        let available = &self.contents[offset..];
         let n = available.len().min(buf.len());
-        buf[..n].copy_from_slice(&available[..n]);
+        if let (Some(to), Some(from)) = (buf.get_mut(..n), available.get(..n)) {
+            to.copy_from_slice(from);
+        }
         Ok(n)
     }
 

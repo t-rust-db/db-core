@@ -63,6 +63,9 @@ pub enum FunctionError {
     /// A runtime error sqlite3 raises from the function itself, with its
     /// message (`malformed JSON`, ...) (#651).
     Sql(String),
+    /// A string or blob would exceed [`MAX_LENGTH`] (sqlite3's
+    /// `SQLITE_MAX_LENGTH`): "string or blob too big" (#659).
+    TooBig,
 }
 
 impl std::fmt::Display for FunctionError {
@@ -73,6 +76,7 @@ impl std::fmt::Display for FunctionError {
             }
             FunctionError::IntegerOverflow => write!(f, "integer overflow"),
             FunctionError::Sql(message) => write!(f, "{message}"),
+            FunctionError::TooBig => write!(f, "string or blob too big"),
         }
     }
 }
@@ -343,15 +347,20 @@ fn instr(args: &[Value]) -> Result<Value, FunctionError> {
     ))
 }
 
-/// SQLite's default `SQLITE_MAX_LENGTH` -- the largest blob/string this
-/// build will materialize. Bounds `zeroblob()` so a huge requested size
-/// returns a clamped result instead of an unbounded allocation.
-const MAX_BLOB_LEN: i64 = 1_000_000_000;
+/// sqlite3's default `SQLITE_MAX_LENGTH`: the longest string or blob a
+/// function builds. Past it the call is [`FunctionError::TooBig`], as in
+/// sqlite3, never a huge allocation (#659).
+pub const MAX_LENGTH: usize = 1_000_000_000;
 
-#[allow(clippy::cast_sign_loss)]
+/// `zeroblob(N)`: `N` zero bytes (fewer than 0 is 0); more than
+/// [`MAX_LENGTH`] is "string or blob too big".
 fn zeroblob(args: &[Value]) -> Result<Value, FunctionError> {
-    let n = crate::coerce::cast_to_integer(&args[0]).clamp(0, MAX_BLOB_LEN);
-    Ok(Value::Blob(vec![0u8; n as usize].into()))
+    let n = crate::coerce::cast_to_integer(&args[0]).max(0);
+    let n = usize::try_from(n)
+        .ok()
+        .filter(|n| *n <= MAX_LENGTH)
+        .ok_or(FunctionError::TooBig)?;
+    Ok(Value::Blob(vec![0u8; n].into()))
 }
 
 /// `substr(x, y[, z])`: `y` (1-based, negative counts from the end)
@@ -1574,6 +1583,20 @@ mod tests {
         );
     }
 
+    /// #656: `json_extract` over JSON nested past the parser's depth cap
+    /// is NULL (malformed), not a stack overflow.
+    #[test]
+    fn json_extract_over_too_deep_nesting_is_null() {
+        let deep = format!("{}1{}", "{\"a\":".repeat(100_000), "}".repeat(100_000));
+        assert_eq!(
+            v(
+                "json_extract",
+                &[Value::Text(deep.into()), Value::Text("$.a".into())]
+            ),
+            Value::Null
+        );
+    }
+
     #[test]
     fn length_counts_chars_for_text_bytes_for_blob() {
         assert_eq!(
@@ -1775,11 +1798,20 @@ mod tests {
     }
 
     #[test]
-    fn zeroblob_clamps_oversized_length() {
-        let Value::Blob(b) = v("zeroblob", &[Value::Integer(i64::MAX)]) else {
-            panic!("expected blob");
-        };
-        assert_eq!(i64::try_from(b.len()).unwrap(), MAX_BLOB_LEN);
+    fn zeroblob_past_max_length_is_too_big() {
+        // #659: past `MAX_LENGTH` is an error, as in sqlite3, not a
+        // clamped 1 GB allocation.
+        for n in [i64::MAX, 1_000_000_001] {
+            assert_eq!(
+                call("zeroblob", &[Value::Integer(n)]),
+                Err(FunctionError::TooBig)
+            );
+        }
+        assert_eq!(FunctionError::TooBig.to_string(), "string or blob too big");
+        assert_eq!(
+            v("zeroblob", &[Value::Integer(3)]),
+            Value::Blob(vec![0, 0, 0].into())
+        );
         assert_eq!(
             v("zeroblob", &[Value::Integer(-1)]),
             Value::Blob(vec![].into())

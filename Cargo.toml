@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.140.0"
+version = "0.146.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -23,6 +23,11 @@ path = "tests/unit/layer_isolation_test.rs"
 [[test]]
 name = "unit_mcdc_discharge"
 path = "tests/unit/mcdc_discharge_test.rs"
+
+[[test]]
+name = "unit_parquet_file_corruption"
+path = "tests/unit/parquet_file_corruption_test.rs"
+required-features = ["storage-column"]
 
 [[test]]
 name = "unit_vm_row_hooks"

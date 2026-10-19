@@ -4,6 +4,84 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.146.0] - 2026-10-18
+
+### Fixed
+
+- **Corrupt Parquet files return errors instead of panicking** (#657). The Parquet reader has met the crate-wide lint bar since this release: no unchecked arithmetic, indexing or casts, and no module-level allows. Crafted or damaged input that used to panic now gets an error:
+  - footer and schema: an empty schema, `num_children` past the element count or `i32::MAX`, deep schema chains, deep Thrift nesting, and huge decimal scales;
+  - RLE/bit-packed and delta encodings: bit widths over 32/64, run-length overflow, and huge header counts or block sizes;
+  - nested columns: level or value streams shorter than the rows need;
+  - timestamps: `TIMESTAMP_MILLIS` and INT96 values outside `i64` microseconds, which give the new `FileError::TimestampOutOfRange`.
+- **Header fields no longer drive up-front allocations** (#657). Snappy's buffer comes from the block's declared length, capped at 22× the compressed bytes (the most any op expands to). ZSTD's up-front buffer is capped at 64 MiB, and page assembly no longer reserves `num_values` slots taken straight from the header. Delta streams with a block size above 65,536, or claiming more values than their page, are rejected, and so is a `FIXED_LEN_BYTE_ARRAY` column with `type_length` 0. Schema leaf paths are capped at 64 MiB in all (`schema_tree::leaf_paths` now returns `Option`). A run-length or zero-width stream can still legitimately expand to the page's `num_values` (up to `i32::MAX`).
+- New error variants: `EncodingError::InvalidBitWidth` and `NestedError::TruncatedLeafData`.
+- A mutation test (`unit_parquet_file_corruption`) and per-decoder fuzz tests run hundreds of mutations of every fixture through every reader and fail on any panic.
+
+## [0.145.0] - 2026-10-18
+
+### Changed
+
+- **Decimal overflow has its own error** (#660). A decimal `SUM` or decimal arithmetic past DECIMAL(38) is now `VmError::DecimalOverflow` ("decimal overflow (past DECIMAL(38))"), not "integer overflow". A client that matched `VmError::IntegerOverflow` for decimal overflow must also match the new variant.
+
+### Fixed
+
+- **Stale docs** (#660). `storage::row::vfs` no longer claims `unsafe` has "no local override anywhere": `fcntl` has ADR 0016's documented carve-out. A stale `#[allow(unused_imports)]` on an import that is in use is gone.
+
+## [0.144.0] - 2026-10-18
+
+### Fixed
+
+- **`DROP VIEW` (and `DROP TABLE`/`DROP INDEX`) delete the `sqlite_master` row by type and name** (#658). `btree::delete_master_row` and `SchemaStorage::delete_master_row` take a `kind` and match the type too, so a same-named object of another kind is never the row removed (a trigger named like a view, in a file sqlite3 wrote). A `SchemaStorage` implementation outside the crate needs the new `kind` argument.
+- **No memory is leaked per error** (#658). `BtreeError::MasterEntryNotFound` and `BtreeError::InvalidRootPage` carried a name leaked with `Box::leak`. They now carry no name: `BtreeError` stays free of drop glue for the hot seek path (#679), and the row engine's storage adapter, which knows the name, adds it to its message.
+- **`zeroblob(N)` past 1e9 is "string or blob too big"** (#659), as in sqlite3, instead of a clamped 1 GB allocation. The limit is the new public `functions::MAX_LENGTH`, sqlite3's `SQLITE_MAX_LENGTH`, and the error is the new `FunctionError::TooBig`. The row engine reports it in sqlite3's words (new `ExecError::TooBig`).
+
+## [0.143.0] - 2026-10-18
+
+### Fixed
+
+- **Deeply nested JSON no longer crashes the process** (#656, security). The JSON parser (`json_path`, used by `json_extract` and by JSON Lines ingest) recursed once per object level with no cap, so a document nested about 50,000 levels deep overflowed the stack. That included one hostile log line at ingest.
+  - Nesting is now capped at sqlite3's `JSON_MAX_DEPTH` of 1000 (`json_path::MAX_DEPTH`).
+  - A deeper document is malformed: `json_extract` returns NULL, and an ingested line is kept whole as its message, as any malformed line is.
+  - Documents a million levels deep are refused cleanly.
+  - A table's `manifest.json` refuses arrays nested more than 8 deep, where objects inside arrays used to recurse without a cap. Real manifests nest one or two.
+
+## [0.142.0] - 2026-10-18
+
+### Fixed
+
+- **A long operator chain no longer crashes the process** (#655, security). Before, `SELECT 1+1+...` or `WHERE a AND b AND ...` with about 10,000 terms overflowed the stack and aborted the whole process. The parser's `MAX_EXPR_DEPTH` (200) bounds its own recursion only, while a flat chain is parsed by a loop into a left-deep tree as tall as the chain, and validation, planning, the VMs and `Drop` all recurse over that tree.
+  - The parser now caps expression height at sqlite3's `SQLITE_MAX_EXPR_DEPTH` of 1000, with sqlite3's message, `Expression tree is too large (maximum depth 1000)`. sqlite3 3.53.4 accepts the same boundary: 1000 `+` terms, 999 `AND`-ed comparisons.
+  - The cap covers every flat loop: AND/OR, comparisons and postfix operators, arithmetic and `||`, `COLLATE`, and column-dialect subscript chains (`m['a']['b']...`).
+  - As in sqlite3, parentheses are not a level.
+  - Each operand is measured once, so a very wide operand (a 100k-element `IN` list) costs no more than it did before.
+  - Once a statement is too tall the parser builds nothing taller, so a 100k-term chain is refused in milliseconds.
+  - A release build runs an expression at the limit in under 1 MiB of stack.
+
+## [0.141.0] - 2026-10-18
+
+### Changed
+
+- **Lower peak memory for scans and aggregates** (#643). Measured on 10M events (`make bench-events` data, macOS peak footprint):
+
+  | query | before | after | DuckDB |
+  |---|---:|---:|---:|
+  | `count(*) WHERE day = X` | 97 MB | 41 MB | |
+  | `count(*) WHERE name = 'a' OR name = 'b'` | 167 MB | 54 MB | |
+  | sessions with events A and B (`COUNT(DISTINCT)`, 504k groups) | 586 MB RSS | 292 MB (324 MB RSS) | 140 MB (154 MB RSS) |
+  | `GROUP BY session_id` (648k groups) | 400 MB | 338 MB | 102 MB |
+
+  The changes:
+  - **A segment's body runs in slices of `SLICE_ROWS` (16,384) rows** (for filters, expressions and aggregates; `ORDER BY ... LIMIT` and bare `LIMIT` scans still read a segment whole). The VM materializes its registers row by row, so a worker used to hold a whole row group's worth of every register: up to `row_group_max_rows`, 1M by default. It now holds one slice's worth, so memory no longer grows with the row-group size. Only bodies of row-wise and partial-aggregate opcodes slice; joins, windows and sources still see the segment whole. Partials merge as per-segment ones do, and group order is unchanged.
+  - **New crate-internal helpers:** `Column::slice` and `Batch::slice`.
+  - **A segment's slices fold into one partial before the merge**, on the path that does not pre-aggregate per worker, so the merge never sees a group once per slice.
+  - **The final merge sizes its accumulators once**, frees each worker's partial as soon as it is merged, and orders groups in place instead of copying the columns.
+  - **The generic group-key index keeps one map entry per group** instead of allocating a `Vec` for each.
+
+### Known limits
+
+- High-cardinality `GROUP BY` still uses 2-3x DuckDB's memory. Group keys and accumulators are 32-byte `Value`s; typed accumulators are a follow-up.
+- `... WHERE ... LIMIT n` without `ORDER BY` still collects every matching row before cutting to `n`.
+
 ## [0.140.0] - 2026-10-18
 
 ### Fixed

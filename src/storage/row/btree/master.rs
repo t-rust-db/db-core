@@ -19,7 +19,7 @@
 use super::{page1_header_start, write_leaf_page, BtreeError};
 use crate::storage::row::header::DatabaseHeader;
 use crate::storage::row::pager::Pager;
-use crate::storage::row::record::{decode_record, encode_record, TextEncoding, Value};
+use crate::storage::row::record::{decode_record, encode_record, Value};
 
 /// The fixed root page of `sqlite_master` (SQLite file-format convention:
 /// always page 1).
@@ -103,31 +103,6 @@ fn max_rowid(
     Ok(max)
 }
 
-/// Finds the rowid of the row in the table b-tree rooted at `root_page`
-/// whose column at `key_column` (0-based) decodes to the text `key`, or
-/// `None` if no such row exists.
-fn find_rowid_by_text_column(
-    pager: &mut Pager,
-    header: &DatabaseHeader,
-    root_page: u32,
-    key_column: usize,
-    key: &str,
-    encoding: TextEncoding,
-) -> Result<Option<i64>, BtreeError> {
-    let mut cursor = crate::storage::row::btree::TableCursor::new(&*pager, header, root_page);
-    let mut row = cursor.first_row()?;
-    while let Some(r) = row {
-        let values = decode_record(&r.payload, encoding)?;
-        if let Some(Value::Text(s)) = values.get(key_column) {
-            if s.as_ref() == key {
-                return Ok(Some(r.rowid));
-            }
-        }
-        row = cursor.next_row()?;
-    }
-    Ok(None)
-}
-
 /// Inserts one row into `sqlite_master` for a newly created table or
 /// index (`CREATE TABLE`/`CREATE INDEX`). Does not bump the schema
 /// cookie — callers do that once per statement via
@@ -151,25 +126,33 @@ pub fn insert_master_row(
     super::insert_row(pager, header, SQLITE_MASTER_ROOT_PAGE, next_rowid, &payload)
 }
 
-/// Deletes the `sqlite_master` row named `name` (`DROP TABLE`/`DROP
-/// INDEX`). Does not bump the schema cookie — see [`insert_master_row`].
-/// Returns `Err(BtreeError::MasterEntryNotFound)` if no such row exists.
+/// Deletes the `sqlite_master` row of type `kind` (`table`, `index`,
+/// `view`) named `name` (`DROP TABLE`/`DROP INDEX`/`DROP VIEW`). Matching
+/// the type too means a same-named object of another kind -- a trigger,
+/// in a file sqlite3 wrote -- is never the row removed (#658). Does not
+/// bump the schema cookie — see [`insert_master_row`]. Returns
+/// `Err(BtreeError::MasterEntryNotFound)` if no such row exists.
 pub fn delete_master_row(
     pager: &mut Pager,
     header: &DatabaseHeader,
+    kind: &str,
     name: &str,
 ) -> Result<(), BtreeError> {
-    let rowid = find_rowid_by_text_column(
-        pager,
-        header,
-        SQLITE_MASTER_ROOT_PAGE,
-        1,
-        name,
-        header.text_encoding,
-    )?
-    .ok_or_else(|| BtreeError::MasterEntryNotFound {
-        name: Box::leak(name.to_string().into_boxed_str()),
-    })?;
+    let mut cursor =
+        crate::storage::row::btree::TableCursor::new(&*pager, header, SQLITE_MASTER_ROOT_PAGE);
+    let mut row = cursor.first_row()?;
+    let mut found = None;
+    while let Some(r) = row {
+        let values = decode_record(&r.payload, header.text_encoding)?;
+        if let (Some(Value::Text(t)), Some(Value::Text(n))) = (values.first(), values.get(1)) {
+            if t.as_ref() == kind && n.as_ref() == name {
+                found = Some(r.rowid);
+                break;
+            }
+        }
+        row = cursor.next_row()?;
+    }
+    let rowid = found.ok_or(BtreeError::MasterEntryNotFound)?;
     super::delete_row(pager, header, SQLITE_MASTER_ROOT_PAGE, rowid)
 }
 
@@ -225,15 +208,10 @@ fn find_master_rootpage(
         let values = decode_record(&r.payload, header.text_encoding)?;
         if let (Some(Value::Text(n)), Some(Value::Integer(rp))) = (values.get(1), values.get(3)) {
             if n.as_ref() == name {
-                let rootpage = u32::try_from(*rp).map_err(|_| BtreeError::InvalidRootPage {
-                    name: Box::leak(name.to_string().into_boxed_str()),
-                    rootpage: *rp,
-                })?;
+                let rootpage = u32::try_from(*rp)
+                    .map_err(|_| BtreeError::InvalidRootPage { rootpage: *rp })?;
                 if rootpage == 0 {
-                    return Err(BtreeError::InvalidRootPage {
-                        name: Box::leak(name.to_string().into_boxed_str()),
-                        rootpage: *rp,
-                    });
+                    return Err(BtreeError::InvalidRootPage { rootpage: *rp });
                 }
                 return Ok(Some(rootpage));
             }
@@ -458,10 +436,50 @@ mod tests {
         assert_eq!(values[1], Value::Text("t".to_string().into()));
         assert_eq!(values[3], Value::Integer(2));
 
-        delete_master_row(&mut pager, &header, "t").unwrap();
+        delete_master_row(&mut pager, &header, "table", "t").unwrap();
         let mut cursor2 =
             crate::storage::row::btree::TableCursor::new(&pager, &header, SQLITE_MASTER_ROOT_PAGE);
         assert!(cursor2.first_row().unwrap().is_none());
+    }
+
+    /// #658: deletion matches type and name, so a trigger sharing a view's
+    /// name (as in a file sqlite3 wrote) is never the row removed.
+    #[test]
+    fn delete_master_row_matches_type_and_name() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        for (kind, sql) in [
+            (
+                "trigger",
+                "CREATE TRIGGER x AFTER INSERT ON t BEGIN SELECT 1; END",
+            ),
+            ("view", "CREATE VIEW x AS SELECT 1"),
+        ] {
+            insert_master_row(
+                &mut pager,
+                &header,
+                &MasterEntry {
+                    kind: kind.to_string(),
+                    name: "x".to_string(),
+                    tbl_name: "t".to_string(),
+                    rootpage: 0,
+                    sql: sql.to_string(),
+                },
+            )
+            .unwrap();
+        }
+        assert!(matches!(
+            delete_master_row(&mut pager, &header, "table", "x"),
+            Err(BtreeError::MasterEntryNotFound)
+        ));
+        delete_master_row(&mut pager, &header, "view", "x").unwrap();
+        let mut cursor =
+            crate::storage::row::btree::TableCursor::new(&pager, &header, SQLITE_MASTER_ROOT_PAGE);
+        let row = cursor.first_row().unwrap().unwrap();
+        let values = decode_record(&row.payload, header.text_encoding).unwrap();
+        assert_eq!(values[0], Value::Text("trigger".to_string().into()));
+        assert!(cursor.next_row().unwrap().is_none());
     }
 
     #[test]
@@ -470,8 +488,8 @@ mod tests {
         let (vfs, header) = minimal_db(page_size);
         let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
 
-        let err = delete_master_row(&mut pager, &header, "nope").unwrap_err();
-        assert!(matches!(err, BtreeError::MasterEntryNotFound { .. }));
+        let err = delete_master_row(&mut pager, &header, "table", "nope").unwrap_err();
+        assert!(matches!(err, BtreeError::MasterEntryNotFound));
     }
 
     #[test]

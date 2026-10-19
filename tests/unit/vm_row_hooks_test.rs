@@ -115,7 +115,7 @@ impl SchemaStorage for MinimalStorage {
     ) -> Result<(), SchemaStorageError> {
         Ok(())
     }
-    fn delete_master_row(&mut self, _: &str) -> Result<(), SchemaStorageError> {
+    fn delete_master_row(&mut self, _: &str, _: &str) -> Result<(), SchemaStorageError> {
         Ok(())
     }
     fn bump_schema_cookie(&mut self) -> Result<(), SchemaStorageError> {

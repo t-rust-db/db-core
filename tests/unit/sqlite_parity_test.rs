@@ -1198,3 +1198,60 @@ fn drop_view_journal_mode_and_transaction_rules_match_sqlite3() {
         .to_string();
     assert!(err.contains("0 values were supplied"), "{err}");
 }
+
+/// #655: an expression at sqlite3's height limit (1000) runs end to end
+/// -- parse, codegen and VM all recurse over it -- and one level more, or
+/// a 100k-term chain, is refused, not a crash. A release build runs the
+/// limit in under 1 MiB of stack (2 MiB worker threads are fine); debug
+/// frames are about ten times larger, so this test gives itself room.
+#[test]
+fn expression_height_limit_matches_sqlite3_and_never_aborts() {
+    std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(expression_height_limit)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn expression_height_limit() {
+    let db = TempDb::new("expr-height");
+    let mut e = engine(&db);
+    let chain = |n: usize, term: &str, op: &str| vec![term; n].join(op);
+    let rows = e
+        .run_query(&format!("SELECT {}", chain(1000, "1", "+")))
+        .expect("1000 terms run")
+        .rows;
+    assert_eq!(rows, vec![vec![Cell::Int(1000)]]);
+    let rows = e
+        .run_query(&format!(
+            "SELECT count(*) FROM w WHERE {}",
+            chain(999, "1=1", " AND ")
+        ))
+        .expect("999 ANDs run")
+        .rows;
+    assert_eq!(rows, vec![vec![Cell::Int(1)]]);
+    for sql in [
+        format!("SELECT {}", chain(1001, "1", "+")),
+        format!("SELECT {}", chain(100_000, "1", "+")),
+        format!("SELECT 1 FROM w WHERE {}", chain(100_000, "1=1", " AND ")),
+    ] {
+        let err = e.run_query(&sql).unwrap_err().to_string();
+        assert!(err.contains("Expression tree is too large"), "{err}");
+    }
+}
+
+/// #659: past `functions::MAX_LENGTH` sqlite3 says "string or blob too
+/// big", and so does the row engine -- not a 1 GB allocation.
+#[test]
+fn zeroblob_past_max_length_is_too_big() {
+    let db = TempDb::new("zeroblob");
+    let mut e = engine(&db);
+    let err = e
+        .run_query("SELECT length(zeroblob(1000000001))")
+        .unwrap_err()
+        .to_string();
+    assert!(err.ends_with("string or blob too big"), "{err}");
+    let rows = e.run_query("SELECT length(zeroblob(5))").unwrap().rows;
+    assert_eq!(rows, vec![vec![Cell::Int(5)]]);
+}

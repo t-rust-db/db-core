@@ -132,25 +132,19 @@ pub enum BtreeError {
 
     /// A `sqlite_master` entry names a rootpage number outside the valid page range.
     ///
-    /// `name` is leaked (via [`Box::leak`]) rather than owned as a `String`:
-    /// this is a cold, rare corruption-detection path, and leaking here keeps
-    /// `BtreeError` itself free of drop glue (`needs_drop::<BtreeError>() ==
-    /// false`), which matters because it is constructed on the hot
-    /// `TableCursor::seek` path (see #679).
+    /// Carries no entry name: `BtreeError` stays free of drop glue
+    /// (`needs_drop::<BtreeError>() == false`), which matters because it
+    /// is constructed on the hot `TableCursor::seek` path (see #679), and
+    /// it no longer leaks one per error (#658). Callers that know the name
+    /// add it to their own message.
     InvalidRootPage {
-        /// Name of the offending `sqlite_master` entry.
-        name: &'static str,
         /// Out-of-range rootpage value.
         rootpage: i64,
     },
 
-    /// A delete targeted a `sqlite_master` entry that does not exist.
-    ///
-    /// `name` is leaked for the same reason as [`BtreeError::InvalidRootPage`].
-    MasterEntryNotFound {
-        /// Name of the entry that could not be found.
-        name: &'static str,
-    },
+    /// A delete targeted a `sqlite_master` entry that does not exist. No
+    /// name, for the same reason as [`BtreeError::InvalidRootPage`].
+    MasterEntryNotFound,
 
     /// An internal invariant was violated; the message describes what was expected.
     Internal(&'static str),
@@ -231,14 +225,13 @@ impl std::fmt::Display for BtreeError {
             }
             BtreeError::DuplicateKey => write!(f, "cannot insert duplicate index key"),
             BtreeError::KeyNotFound => write!(f, "cannot delete index key: no such entry"),
-            BtreeError::InvalidRootPage { name, rootpage } => write!(
+            BtreeError::InvalidRootPage { rootpage } => write!(
                 f,
-                "sqlite_master entry {name:?} has out-of-range rootpage {rootpage}"
+                "a sqlite_master entry has out-of-range rootpage {rootpage}"
             ),
-            BtreeError::MasterEntryNotFound { name } => write!(
-                f,
-                "cannot delete sqlite_master entry {name:?}: no such entry"
-            ),
+            BtreeError::MasterEntryNotFound => {
+                write!(f, "cannot delete sqlite_master entry: no such entry")
+            }
             BtreeError::Internal(msg) => write!(f, "internal invariant violated: {msg}"),
         }
     }
@@ -376,16 +369,12 @@ mod tests {
             "cannot delete index key: no such entry"
         );
         assert_eq!(
-            BtreeError::InvalidRootPage {
-                name: "t",
-                rootpage: -1
-            }
-            .to_string(),
-            "sqlite_master entry \"t\" has out-of-range rootpage -1"
+            BtreeError::InvalidRootPage { rootpage: -1 }.to_string(),
+            "a sqlite_master entry has out-of-range rootpage -1"
         );
         assert_eq!(
-            BtreeError::MasterEntryNotFound { name: "t" }.to_string(),
-            "cannot delete sqlite_master entry \"t\": no such entry"
+            BtreeError::MasterEntryNotFound.to_string(),
+            "cannot delete sqlite_master entry: no such entry"
         );
         assert_eq!(
             BtreeError::Internal("bad state").to_string(),

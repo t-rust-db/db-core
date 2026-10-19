@@ -5,10 +5,15 @@
 
 use crate::storage::parquet::thrift::{self, ThriftError, Value};
 
+/// Why a page header could not be decoded.
 #[derive(Debug)]
 pub enum PageError {
+    /// The Thrift compact-protocol bytes are malformed or truncated.
     Thrift(ThriftError),
+    /// A `PageHeader.type` this reader does not handle (e.g. `DATA_PAGE_V2`).
     UnsupportedPageType(i32),
+    /// A `DATA_PAGE` or `DICTIONARY_PAGE` header without its type-specific
+    /// sub-header.
     MissingDataPageHeader,
 }
 
@@ -32,16 +37,23 @@ impl From<ThriftError> for PageError {
     }
 }
 
+/// Result of decoding a page header.
 pub type Result<T> = std::result::Result<T, PageError>;
 
 /// `parquet.thrift` `Encoding` enum (values relevant to this reader).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoding {
+    /// `PLAIN` (0).
     Plain,
+    /// `PLAIN_DICTIONARY` (2), the Parquet 1.0 dictionary encoding.
     PlainDictionary,
+    /// `RLE` (3), the RLE/Bit-Packed Hybrid encoding.
     Rle,
+    /// `DELTA_BINARY_PACKED` (5).
     DeltaBinaryPacked,
+    /// `RLE_DICTIONARY` (8), the Parquet 2.0 dictionary encoding.
     RleDictionary,
+    /// Any other encoding value, kept as read (`-1` when the field is absent).
     Other(i32),
 }
 
@@ -58,30 +70,49 @@ impl From<i32> for Encoding {
     }
 }
 
+/// `DataPageHeader`: the sub-header of a `DATA_PAGE` (v1).
 #[derive(Debug, Clone, PartialEq)]
 pub struct DataPageHeader {
+    /// Number of values in the page, nulls included. Read as is from the
+    /// file, so it may be negative or larger than the page body allows.
     pub num_values: i32,
+    /// Encoding of the values.
     pub encoding: Encoding,
+    /// Encoding of the definition levels.
     pub definition_level_encoding: Encoding,
+    /// Encoding of the repetition levels.
     pub repetition_level_encoding: Encoding,
 }
 
+/// `DictionaryPageHeader`: the sub-header of a `DICTIONARY_PAGE`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DictionaryPageHeader {
+    /// Number of dictionary entries. Read as is from the file, so it may be
+    /// negative or larger than the page body allows.
     pub num_values: i32,
+    /// Encoding of the entries.
     pub encoding: Encoding,
 }
 
+/// The kind of a page, with its type-specific sub-header.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PageType {
+    /// A `DATA_PAGE` (v1).
     Data(DataPageHeader),
+    /// A `DICTIONARY_PAGE`.
     Dictionary(DictionaryPageHeader),
 }
 
+/// `PageHeader`: the header in front of every page of a column chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageHeader {
+    /// Size of the page body after decompression, in bytes (as read; may be
+    /// negative in a corrupt file).
     pub uncompressed_page_size: i32,
+    /// Size of the page body as stored, in bytes (as read; may be negative
+    /// in a corrupt file).
     pub compressed_page_size: i32,
+    /// The page's kind and sub-header.
     pub page_type: PageType,
 }
 

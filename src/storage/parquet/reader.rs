@@ -10,14 +10,21 @@ use crate::storage::parquet::encoding::{self, EncodingError};
 use crate::storage::parquet::page::{DataPageHeader, Encoding};
 use std::fmt;
 
+/// Why a page body could not be decoded.
 #[derive(Debug)]
 pub enum ReadError {
+    /// The level or index stream is malformed.
     Encoding(EncodingError),
+    /// The page body ends before the values its header promises.
     UnexpectedEof,
     /// A page header's `num_values` is negative.
     InvalidValueCount(i32),
+    /// A `BYTE_ARRAY` value read as a string is not valid UTF-8.
     InvalidUtf8,
+    /// A dictionary index points past the end of the dictionary.
     DictionaryIndexOutOfRange(u32),
+    /// A nested column's leaf has a physical type the nested reader does not
+    /// decode.
     UnsupportedNestedPhysicalType(crate::storage::parquet::footer::PhysicalType),
 }
 
@@ -46,6 +53,7 @@ impl From<EncodingError> for ReadError {
     }
 }
 
+/// Result of decoding a page body.
 pub type Result<T> = std::result::Result<T, ReadError>;
 
 /// A page header's `num_values` as a count: negative is corrupt input.
@@ -72,12 +80,14 @@ fn split_definition_levels<'a>(
 /// One RLE/Bit-Packed Hybrid level section: a 4-byte little-endian length
 /// prefix followed by that many bytes of level data.
 fn read_level_section(buf: &[u8], max_level: u32, num_values: usize) -> Result<(Vec<u32>, &[u8])> {
-    let len_bytes = buf.get(0..4).ok_or(ReadError::UnexpectedEof)?;
-    let len = u32::from_le_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]) as usize;
-    let levels_bytes = buf.get(4..4 + len).ok_or(ReadError::UnexpectedEof)?;
+    let (len_bytes, rest) = buf
+        .split_first_chunk::<4>()
+        .ok_or(ReadError::UnexpectedEof)?;
+    let len = u32::from_le_bytes(*len_bytes) as usize;
+    let (levels_bytes, rest) = rest.split_at_checked(len).ok_or(ReadError::UnexpectedEof)?;
     let bit_width = encoding::bit_width_for_max_level(max_level);
     let levels = encoding::decode_hybrid_rle_bitpacked(levels_bytes, bit_width, num_values)?;
-    Ok((levels, &buf[4 + len..]))
+    Ok((levels, rest))
 }
 
 /// Split a nested/repeated data page body into
@@ -113,11 +123,17 @@ pub fn split_rep_def_levels<'a>(
 /// (dictionary-encoded nested leaves aren't supported yet, see #89).
 #[derive(Debug, Clone, PartialEq)]
 pub enum LeafScalar {
+    /// An `INT32` value.
     Int32(i32),
+    /// An `INT64` value.
     Int64(i64),
+    /// A `FLOAT` value.
     Float(f32),
+    /// A `DOUBLE` value.
     Double(f64),
+    /// A `BOOLEAN` value.
     Bool(bool),
+    /// A `BYTE_ARRAY` value, which must be UTF-8.
     Str(String),
 }
 
@@ -139,14 +155,34 @@ pub fn read_plain_scalar(
         PhysicalType::Boolean => {
             let byte = *buf.first().ok_or(ReadError::UnexpectedEof)?;
             let bit = (byte >> (*bit_pos % 8)) & 1;
-            *bit_pos += 1;
+            *bit_pos = bit_pos.checked_add(1).ok_or(ReadError::UnexpectedEof)?;
             if (*bit_pos).is_multiple_of(8) {
-                *buf = &buf[1..];
+                *buf = buf.get(1..).ok_or(ReadError::UnexpectedEof)?;
             }
             Ok(LeafScalar::Bool(bit == 1))
         }
         other => Err(ReadError::UnsupportedNestedPhysicalType(other)),
     }
+}
+
+/// One presence flag per value: `level == max_def_level` for each of
+/// `definition_levels` (as [`encoding::null_mask`]), or `num_values` times
+/// `true` when there are none (a `REQUIRED` column). Lazy, so a corrupt
+/// `num_values` costs no up-front allocation.
+fn presence(
+    definition_levels: &[u32],
+    max_def_level: u32,
+    num_values: usize,
+) -> impl Iterator<Item = bool> + '_ {
+    let all_present = if definition_levels.is_empty() {
+        num_values
+    } else {
+        0
+    };
+    definition_levels
+        .iter()
+        .map(move |&level| level == max_def_level)
+        .chain(std::iter::repeat_n(true, all_present))
 }
 
 /// Walk `definition_levels` (or, if empty, assume every value is present),
@@ -159,18 +195,20 @@ fn assemble<T>(
     mut read_value: impl FnMut(&mut &[u8]) -> Result<T>,
 ) -> Result<Vec<Option<T>>> {
     let num_values = value_count(header.num_values)?;
-    let mut out = Vec::with_capacity(num_values);
-    if definition_levels.is_empty() {
-        for _ in 0..num_values {
-            out.push(Some(read_value(&mut values)?));
-        }
+    // Sized by what the page can hold, not by `num_values` alone, which a
+    // corrupt header can set to `i32::MAX`: the levels are already decoded,
+    // and without them every value takes at least one bit of `values`.
+    let capacity = if definition_levels.is_empty() {
+        num_values.min(values.len().saturating_mul(8))
     } else {
-        for present in encoding::null_mask(definition_levels, max_def_level) {
-            if present {
-                out.push(Some(read_value(&mut values)?));
-            } else {
-                out.push(None);
-            }
+        definition_levels.len()
+    };
+    let mut out = Vec::with_capacity(capacity);
+    for present in presence(definition_levels, max_def_level, num_values) {
+        if present {
+            out.push(Some(read_value(&mut values)?));
+        } else {
+            out.push(None);
         }
     }
     Ok(out)
@@ -228,7 +266,9 @@ fn read_plain_fixed_len_byte_array(buf: &mut &[u8], len: usize) -> Result<Vec<u8
 /// writers still emit): a Julian day number plus nanoseconds within that day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Int96 {
+    /// Julian day number (2_440_588 is 1970-01-01).
     pub julian_day: i32,
+    /// Nanoseconds since midnight of that day.
     pub time_nanos: i64,
 }
 
@@ -328,14 +368,16 @@ fn assemble_dictionary<T: Clone>(
     dictionary: &[T],
 ) -> Result<Vec<Option<T>>> {
     let num_values = value_count(header.num_values)?;
-    let mut out = Vec::with_capacity(num_values);
-    let mut idx_iter = indices.iter();
-    let presents: Vec<bool> = if definition_levels.is_empty() {
-        vec![true; num_values]
+    // As in `assemble`: decoded levels, or one index per value, bound the
+    // size rather than the header's `num_values`.
+    let capacity = if definition_levels.is_empty() {
+        num_values.min(indices.len())
     } else {
-        encoding::null_mask(definition_levels, max_def_level)
+        definition_levels.len()
     };
-    for present in presents {
+    let mut out = Vec::with_capacity(capacity);
+    let mut idx_iter = indices.iter();
+    for present in presence(definition_levels, max_def_level, num_values) {
         if present {
             let idx = *idx_iter.next().ok_or(ReadError::UnexpectedEof)?;
             let value = dictionary
@@ -356,9 +398,9 @@ fn present_count(header: &DataPageHeader, definition_levels: &[u32], max_def_lev
     if definition_levels.is_empty() {
         usize::try_from(header.num_values).unwrap_or(0)
     } else {
-        encoding::null_mask(definition_levels, max_def_level)
-            .into_iter()
-            .filter(|&p| p)
+        definition_levels
+            .iter()
+            .filter(|&&level| level == max_def_level)
             .count()
     }
 }
@@ -381,14 +423,8 @@ pub fn read_dictionary_index_column(
     let (levels, index_bytes) = split_definition_levels(page_body, header, max_def_level)?;
     let indices =
         read_dictionary_indices(index_bytes, present_count(header, &levels, max_def_level))?;
-    let presents: Vec<bool> = if levels.is_empty() {
-        vec![true; value_count(header.num_values)?]
-    } else {
-        encoding::null_mask(&levels, max_def_level)
-    };
     let mut idx_iter = indices.into_iter();
-    presents
-        .into_iter()
+    presence(&levels, max_def_level, value_count(header.num_values)?)
         .map(|present| {
             if present {
                 Ok(Some(idx_iter.next().ok_or(ReadError::UnexpectedEof)?))
@@ -411,15 +447,10 @@ pub fn read_int64_column(
     }
     let (levels, values) = split_definition_levels(page_body, header, max_def_level)?;
     if header.encoding == Encoding::DeltaBinaryPacked {
-        let decoded = encoding::decode_delta_binary_packed(values)?;
+        let num_values = value_count(header.num_values)?;
+        let decoded = encoding::decode_delta_binary_packed(values, num_values)?;
         let mut decoded = decoded.into_iter();
-        let presents: Vec<bool> = if levels.is_empty() {
-            vec![true; value_count(header.num_values)?]
-        } else {
-            encoding::null_mask(&levels, max_def_level)
-        };
-        presents
-            .into_iter()
+        presence(&levels, max_def_level, value_count(header.num_values)?)
             .map(|present| {
                 if present {
                     Ok(Some(decoded.next().ok_or(ReadError::UnexpectedEof)?))
@@ -469,7 +500,7 @@ pub fn read_double_column(
 /// `T::default()`) and, for a nullable column (`max_def_level > 0`),
 /// `present` gets one flag per row, `true` for a non-NULL row. A
 /// `REQUIRED` column appends nothing to `present`, so a caller reads
-/// `present.is_empty()` as "every row present". Unlike [`assemble`] there
+/// `present.is_empty()` as "every row present". Unlike `assemble` there
 /// is no `Option<T>` per value and no `Vec<bool>` null mask in between:
 /// the definition levels are read once, and when they say every value is
 /// present -- the common case for a nullable column that happens to hold
@@ -615,11 +646,12 @@ pub fn read_boolean_column(
     let read_bit = move |buf: &mut &[u8]| -> Result<bool> {
         let byte = *values.get(bit_pos / 8).ok_or(ReadError::UnexpectedEof)?;
         let bit = (byte >> (bit_pos % 8)) & 1;
-        bit_pos += 1;
+        bit_pos = bit_pos.checked_add(1).ok_or(ReadError::UnexpectedEof)?;
         let _ = buf; // values are consumed via the shared bit cursor, not `buf`
         Ok(bit == 1)
     };
-    assemble(header, &levels, max_def_level, &[][..], read_bit)
+    // `values` goes in only to size the output; `read_bit` reads it itself.
+    assemble(header, &levels, max_def_level, values, read_bit)
 }
 
 /// Read a PLAIN_DICTIONARY/RLE_DICTIONARY-encoded BOOLEAN column from a
@@ -1536,6 +1568,99 @@ mod tests_289 {
         assert!(matches!(
             decode_dictionary_boolean(&[], -7),
             Err(ReadError::InvalidValueCount(-7))
+        ));
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test code fails fast (db-core#230)"
+)]
+mod tests_657 {
+    use super::*;
+
+    fn header(num_values: i32) -> DataPageHeader {
+        DataPageHeader {
+            num_values,
+            encoding: Encoding::Plain,
+            definition_level_encoding: Encoding::Rle,
+            repetition_level_encoding: Encoding::Rle,
+        }
+    }
+
+    /// #657: `num_values` comes from the page header, so a corrupt
+    /// `i32::MAX` with an 8-byte body must fail on the body, not first
+    /// reserve `i32::MAX` output slots (tens of GB).
+    #[test]
+    fn huge_num_values_is_bounded_by_the_page_body() {
+        let body = 7i64.to_le_bytes();
+        let huge = header(i32::MAX);
+        assert!(matches!(
+            read_int64_column(&body, &huge, 0),
+            Err(ReadError::UnexpectedEof)
+        ));
+        assert!(matches!(
+            read_string_column(&body, &huge, 0),
+            Err(ReadError::UnexpectedEof)
+        ));
+        assert!(matches!(
+            read_boolean_column(&body, &huge, 0),
+            Err(ReadError::UnexpectedEof)
+        ));
+    }
+
+    /// #657: a level section whose length prefix runs past the page is
+    /// `UnexpectedEof`, as is a page too short for the prefix itself.
+    #[test]
+    fn level_section_length_past_the_page_is_eof() {
+        assert!(matches!(
+            read_level_section(&[1, 0], 1, 1),
+            Err(ReadError::UnexpectedEof)
+        ));
+        assert!(matches!(
+            read_level_section(&[9, 0, 0, 0, 0], 1, 1),
+            Err(ReadError::UnexpectedEof)
+        ));
+        assert!(matches!(
+            read_level_section(&[0xFF, 0xFF, 0xFF, 0xFF], 1, 1),
+            Err(ReadError::UnexpectedEof)
+        ));
+    }
+
+    /// `presence` matches `encoding::null_mask` with levels, and is all
+    /// `true` without.
+    #[test]
+    fn presence_matches_null_mask() {
+        let levels = [1, 0, 1, 1, 0];
+        assert_eq!(
+            presence(&levels, 1, levels.len()).collect::<Vec<_>>(),
+            encoding::null_mask(&levels, 1)
+        );
+        assert_eq!(presence(&[], 1, 3).collect::<Vec<_>>(), [true; 3]);
+    }
+
+    /// A nested BOOLEAN leaf reads bit by bit and moves to the next byte
+    /// after eight bits; past the last byte is `UnexpectedEof`.
+    #[test]
+    fn plain_scalar_booleans_advance_a_byte_every_eight_bits() {
+        use crate::storage::parquet::footer::PhysicalType;
+        let bytes = [0b1000_0001u8];
+        let mut buf: &[u8] = &bytes;
+        let mut bit_pos = 0usize;
+        let mut bits = Vec::new();
+        for _ in 0..8 {
+            match read_plain_scalar(&mut buf, PhysicalType::Boolean, &mut bit_pos).unwrap() {
+                LeafScalar::Bool(b) => bits.push(b),
+                other => panic!("expected a boolean, got {other:?}"),
+            }
+        }
+        assert_eq!(bits, [true, false, false, false, false, false, false, true]);
+        assert!(buf.is_empty());
+        assert!(matches!(
+            read_plain_scalar(&mut buf, PhysicalType::Boolean, &mut bit_pos),
+            Err(ReadError::UnexpectedEof)
         ));
     }
 }
