@@ -1038,8 +1038,125 @@ fn parse_function_descriptor(descriptor: &str) -> Option<(&str, usize)> {
 /// Executes one instruction against `vm`, returning where control flow
 /// goes next. `pc` is this instruction's own address (needed by
 /// `Once`'s per-address guard).
-#[allow(clippy::too_many_lines)]
 fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
+        Opcode::Init
+        | Opcode::Goto
+        | Opcode::Once
+        | Opcode::BeginSubrtn
+        | Opcode::Gosub
+        | Opcode::Return
+        | Opcode::Halt
+        | Opcode::IsNull
+        | Opcode::NotNull
+        | Opcode::IfNot
+        | Opcode::MustBeInt
+        | Opcode::OffsetLimit
+        | Opcode::IfPos
+        | Opcode::IfNotZero
+        | Opcode::DecrJumpZero => step_control(vm, pc, instr),
+        Opcode::Eq
+        | Opcode::Ge
+        | Opcode::Gt
+        | Opcode::Le
+        | Opcode::Lt
+        | Opcode::RealAffinity
+        | Opcode::Cast
+        | Opcode::Add
+        | Opcode::Subtract
+        | Opcode::Multiply
+        | Opcode::Divide
+        | Opcode::Remainder
+        | Opcode::Not
+        | Opcode::BitAnd
+        | Opcode::BitOr
+        | Opcode::ShiftLeft
+        | Opcode::ShiftRight
+        | Opcode::BitNot
+        | Opcode::Concat
+        | Opcode::Function => step_expr(vm, instr),
+        Opcode::Integer
+        | Opcode::Int64
+        | Opcode::Real
+        | Opcode::Blob
+        | Opcode::Null
+        | Opcode::String8
+        | Opcode::Variable
+        | Opcode::Copy
+        | Opcode::MakeRecord
+        | Opcode::ResultRow => step_value(vm, instr),
+        Opcode::Next => step_next(vm, instr),
+        Opcode::Column => step_column(vm, instr),
+        Opcode::Rewind
+        | Opcode::Last
+        | Opcode::Rowid
+        | Opcode::SeekRowid
+        | Opcode::NullRow
+        | Opcode::Sequence
+        | Opcode::Count
+        | Opcode::AutoIndexInsert
+        | Opcode::AutoIndexSeek
+        | Opcode::AutoIndexRowid
+        | Opcode::AutoIndexNext
+        | Opcode::OpenRead
+        | Opcode::OpenWrite
+        | Opcode::OpenDup
+        | Opcode::OpenPseudo
+        | Opcode::OpenEphemeral
+        | Opcode::IdxRewind
+        | Opcode::IdxLast
+        | Opcode::IdxNext
+        | Opcode::IdxPrev
+        | Opcode::IdxRowid
+        | Opcode::SeekIndexEq
+        | Opcode::SeekIndexGE
+        | Opcode::IdxCompareGT
+        | Opcode::IdxCompareGE
+        | Opcode::IdxLE
+        | Opcode::Found
+        | Opcode::Filter
+        | Opcode::FilterAdd
+        | Opcode::NoConflict => step_cursor_ops(vm, instr),
+        Opcode::SorterOpen
+        | Opcode::SorterInsert
+        | Opcode::SorterSort
+        | Opcode::Sort
+        | Opcode::HashAggRewind
+        | Opcode::SorterNext
+        | Opcode::HashAggNext
+        | Opcode::SorterData
+        | Opcode::HashAggOpen
+        | Opcode::HashAggFind
+        | Opcode::HashAggStep
+        | Opcode::HashAggData
+        | Opcode::AggStep
+        | Opcode::AggFinal
+        | Opcode::AggReset => step_sort_agg(vm, instr),
+        Opcode::Insert
+        | Opcode::Update
+        | Opcode::Delete
+        | Opcode::NewRowid
+        | Opcode::IdxInsert
+        | Opcode::IdxDelete => step_write(vm, instr),
+        Opcode::Transaction
+        | Opcode::AutoCommit
+        | Opcode::SetJournalMode
+        | Opcode::Synchronous
+        | Opcode::IntegrityCheck
+        | Opcode::CreateTable
+        | Opcode::CreateView
+        | Opcode::DropView
+        | Opcode::CreateIndex
+        | Opcode::DropTable
+        | Opcode::DropIndex
+        | Opcode::Analyze => step_schema(vm, instr),
+    }
+}
+
+/// [`step`] for one family: jumps, branches and subroutines. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_control(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> {
     match instr.opcode {
         Opcode::Init => Ok(if instr.p2 == 0 {
             Step::Next
@@ -1169,6 +1286,18 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             })
         }
 
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_control"),
+        }),
+    }
+}
+
+/// [`step`] for one family: comparisons, arithmetic, casts and scalar functions. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::Eq => compare_jump(vm, instr, |o| o == Ordering::Equal),
         Opcode::Ge => compare_jump(vm, instr, |o| o != Ordering::Less),
         Opcode::Gt => compare_jump(vm, instr, |o| o == Ordering::Greater),
@@ -1190,6 +1319,57 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         Opcode::BitNot => bit_not(vm, instr),
         Opcode::Concat => binary_op_reversed(vm, instr, coerce::concat),
 
+        Opcode::Function => {
+            let descriptor = match &instr.p4 {
+                P4::Str(s) => s.as_str(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "Function",
+                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
+                    })
+                }
+            };
+            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
+                ExecError::MalformedInstruction {
+                    opcode: "Function",
+                    reason: format!("malformed function descriptor {descriptor:?}"),
+                }
+            })?;
+            let mut args = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let reg = instr
+                    .p2
+                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "Function",
+                        index: instr.p2,
+                    })?;
+                args.push(vm.register(reg)?.clone());
+            }
+            let result = functions::call(name, &args).map_err(|e| match e {
+                // A limit sqlite3 reports in its own words (#659).
+                functions::FunctionError::TooBig => ExecError::TooBig,
+                e => ExecError::MalformedInstruction {
+                    opcode: "Function",
+                    reason: e.to_string(),
+                },
+            })?;
+            vm.set_register(instr.p3, result)?;
+            Ok(Step::Next)
+        }
+
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_expr"),
+        }),
+    }
+}
+
+/// [`step`] for one family: constants, register copies, records and result rows. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_value(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::Integer => {
             vm.set_register(instr.p2, Value::Integer(i64::from(instr.p1)))?;
             Ok(Step::Next)
@@ -1325,6 +1505,18 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_value"),
+        }),
+    }
+}
+
+/// [`step`] for one family: opening, moving and reading table and index cursors. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::Rewind => {
             vm.clear_null_row(instr.p1)?;
             let has_row = vm.cursor_mut(instr.p1)?.rewind();
@@ -1332,15 +1524,6 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
                 Step::Next
             } else {
                 Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::Next => {
-            vm.clear_null_row(instr.p1)?;
-            let has_row = vm.cursor_mut(instr.p1)?.next();
-            Ok(if has_row {
-                Step::Jump(to_pc(instr.p2))
-            } else {
-                Step::Next
             })
         }
         Opcode::Last => {
@@ -1351,28 +1534,6 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             } else {
                 Step::Jump(to_pc(instr.p2))
             })
-        }
-        Opcode::Column => {
-            // A negative column index used to read as NULL through the
-            // `as usize` wrap; it is a malformed program (#260).
-            let col = usize::try_from(instr.p2).map_err(|_| ExecError::MalformedInstruction {
-                opcode: "Column",
-                reason: format!("column index {} is negative", instr.p2),
-            })?;
-            let value = if vm.is_null_row(instr.p1)? {
-                Value::Null
-            } else if let Some(reg) = vm.pseudo_reg(instr.p1) {
-                vm.pseudo_column(instr.p1, reg, col, "Column")?
-            } else {
-                vm.cursor(instr.p1)?
-                    .column(col)
-                    .ok_or(ExecError::NoCurrentRow {
-                        opcode: "Column",
-                        slot: instr.p1,
-                    })?
-            };
-            vm.set_register(instr.p3, value)?;
-            Ok(Step::Next)
         }
         Opcode::Rowid => {
             // sqlite-rs: a NullRow'd cursor reads NULL for its rowid too.
@@ -1542,6 +1703,224 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.open_cursor(instr.p1, cursor)?;
             Ok(Step::Next)
         }
+        Opcode::IdxRewind => {
+            let has_row = vm.cursor_mut(instr.p1)?.rewind();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxLast => {
+            let has_row = vm.cursor_mut(instr.p1)?.last();
+            Ok(if has_row {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxNext => {
+            let has_row = vm.cursor_mut(instr.p1)?.next();
+            Ok(if has_row {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxPrev => {
+            let has_row = vm.cursor_mut(instr.p1)?.prev();
+            Ok(if has_row {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxRowid => {
+            let rowid =
+                vm.cursor(instr.p1)?
+                    .idx_rowid()
+                    .ok_or(ExecError::MalformedInstruction {
+                        opcode: "IdxRowid",
+                        reason: "cursor slot is not an index cursor, or has no current entry"
+                            .to_string(),
+                    })?;
+            vm.set_register(instr.p2, Value::Integer(rowid))?;
+            Ok(Step::Next)
+        }
+        Opcode::SeekIndexEq => {
+            let (key, collations) = key_from_registers(vm, "SeekIndexEq", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key, &collations);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::SeekIndexGE => {
+            let (key, collations) = key_from_registers(vm, "SeekIndexGE", instr.p3, &instr.p4)?;
+            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key, &collations);
+            Ok(if found {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxCompareGT => {
+            let (key, collations) = key_from_registers(vm, "IdxCompareGT", instr.p3, &instr.p4)?;
+            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
+                ExecError::MalformedInstruction {
+                    opcode: "IdxCompareGT",
+                    reason: "cursor slot is not an index cursor, or has no current entry"
+                        .to_string(),
+                },
+            )?;
+            Ok(if cmp == Ordering::Greater {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::IdxCompareGE => {
+            let (key, collations) = key_from_registers(vm, "IdxCompareGE", instr.p3, &instr.p4)?;
+            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
+                ExecError::MalformedInstruction {
+                    opcode: "IdxCompareGE",
+                    reason: "cursor slot is not an index cursor, or has no current entry"
+                        .to_string(),
+                },
+            )?;
+            Ok(if cmp == Ordering::Less {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::IdxLE => {
+            let (key, collations) = key_from_registers(vm, "IdxLE", instr.p3, &instr.p4)?;
+            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
+                ExecError::MalformedInstruction {
+                    opcode: "IdxLE",
+                    reason: "cursor slot is not an index cursor, or has no current entry"
+                        .to_string(),
+                },
+            )?;
+            Ok(if cmp != Ordering::Greater {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::Found => {
+            let (key, collations) = key_from_registers(vm, "Found", instr.p3, &instr.p4)?;
+            let cursor = vm.cursor_mut(instr.p1)?;
+            // Ephemeral index (DISTINCT / IN-subquery): membership of the
+            // normalized key; real index: a seek.
+            let found = match cursor.found(&key, &collations) {
+                Some(present) => present,
+                None => cursor.seek_index_eq(&key, &collations),
+            };
+            Ok(if found {
+                Step::Jump(to_pc(instr.p2))
+            } else {
+                Step::Next
+            })
+        }
+        Opcode::Filter => {
+            let (key, collations) = key_from_registers(vm, "Filter", instr.p3, &instr.p4)?;
+            let maybe_present = vm.cursor(instr.p1)?.filter_maybe_present(&key, &collations);
+            Ok(if maybe_present {
+                Step::Next
+            } else {
+                Step::Jump(to_pc(instr.p2))
+            })
+        }
+        Opcode::FilterAdd => {
+            let (key, collations) = key_from_registers(vm, "FilterAdd", instr.p3, &instr.p4)?;
+            vm.cursor_mut(instr.p1)?.filter_add(&key, &collations);
+            Ok(Step::Next)
+        }
+        Opcode::NoConflict => {
+            let (key, collations) = key_from_registers(vm, "NoConflict", instr.p3, &instr.p4)?;
+            let count = i32::try_from(key.len()).unwrap_or(i32::MAX);
+            let cursor = vm.cursor_mut(instr.p1)?;
+            // Ephemeral index: membership of the normalized key; real
+            // index: a seek. sqlite-rs (`cursor::no_conflict`): on a
+            // conflict the conflicting entry's rowid lands in the register
+            // right after the probe (`p3 + count`) so OR REPLACE / OR
+            // IGNORE can SeekRowid straight to the displaced row.
+            let found = match cursor.found(&key, &collations) {
+                Some(present) => present,
+                None => cursor.seek_index_eq(&key, &collations),
+            };
+            if found {
+                let rowid = cursor.idx_rowid();
+                if let Some(rowid) = rowid {
+                    let dest =
+                        instr
+                            .p3
+                            .checked_add(count)
+                            .ok_or(ExecError::RegisterRangeTooLarge {
+                                opcode: "NoConflict",
+                                count,
+                            })?;
+                    vm.set_register(dest, Value::Integer(rowid))?;
+                }
+                Ok(Step::Next)
+            } else {
+                Ok(Step::Jump(to_pc(instr.p2)))
+            }
+        }
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_cursor_ops"),
+        }),
+    }
+}
+
+/// [`Opcode::Next`]: dispatched by [`step`] directly, not through
+/// this family's `match` -- it runs once per row of every scan.
+#[inline(always)]
+fn step_next(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    vm.clear_null_row(instr.p1)?;
+    let has_row = vm.cursor_mut(instr.p1)?.next();
+    Ok(if has_row {
+        Step::Jump(to_pc(instr.p2))
+    } else {
+        Step::Next
+    })
+}
+
+/// [`Opcode::Column`]: dispatched by [`step`] directly, like
+/// [`step_next`] -- it runs once per column read of every row.
+#[inline(always)]
+fn step_column(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    // A negative column index used to read as NULL through the
+    // `as usize` wrap; it is a malformed program (#260).
+    let col = usize::try_from(instr.p2).map_err(|_| ExecError::MalformedInstruction {
+        opcode: "Column",
+        reason: format!("column index {} is negative", instr.p2),
+    })?;
+    let value = if vm.is_null_row(instr.p1)? {
+        Value::Null
+    } else if let Some(reg) = vm.pseudo_reg(instr.p1) {
+        vm.pseudo_column(instr.p1, reg, col, "Column")?
+    } else {
+        vm.cursor(instr.p1)?
+            .column(col)
+            .ok_or(ExecError::NoCurrentRow {
+                opcode: "Column",
+                slot: instr.p1,
+            })?
+    };
+    vm.set_register(instr.p3, value)?;
+    Ok(Step::Next)
+}
+
+/// [`step`] for one family: sorters, hash aggregation and aggregate accumulators. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::SorterOpen => {
             let keys = match &instr.p4 {
                 P4::SortKey(keys) => keys.clone(),
@@ -1638,11 +2017,11 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             let found = vm.cursor_mut(instr.p1)?.hash_agg_find(blob);
             if !found {
                 return Err(ExecError::MalformedInstruction {
-                    opcode: "HashAggFind",
-                    reason:
-                        "cursor slot is not a hash-aggregation cursor, or the record blob does not decode"
-                            .to_string(),
-                });
+                opcode: "HashAggFind",
+                reason:
+                    "cursor slot is not a hash-aggregation cursor, or the record blob does not decode"
+                        .to_string(),
+            });
             }
             Ok(Step::Next)
         }
@@ -1728,6 +2107,88 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             vm.set_register(instr.p2, blob)?;
             Ok(Step::Next)
         }
+        Opcode::AggStep => {
+            let (name, arity, collation) = match &instr.p4 {
+                P4::AggFunc {
+                    name,
+                    arity,
+                    collation,
+                } => (name.as_str(), *arity, *collation),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "AggStep",
+                        reason: format!("expected an AggFunc P4, got {other:?}"),
+                    })
+                }
+            };
+            let mut args = Vec::with_capacity(arity);
+            for i in 0..arity {
+                let reg = instr
+                    .p2
+                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                    .ok_or(ExecError::RegisterOutOfRange {
+                        opcode: "AggStep",
+                        index: instr.p2,
+                    })?;
+                args.push(vm.register(reg)?.clone());
+            }
+            let current = if instr.p5 == 0 {
+                vm.take_agg_context(instr.p1)?
+            } else {
+                None
+            };
+            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {
+                ExecError::MalformedInstruction {
+                    opcode: "AggStep",
+                    reason: e.to_string(),
+                }
+            })?;
+            vm.set_agg_context(instr.p1, updated)?;
+            Ok(Step::Next)
+        }
+        Opcode::AggFinal => {
+            let descriptor = match &instr.p4 {
+                P4::Str(s) => s.as_str(),
+                other => {
+                    return Err(ExecError::MalformedInstruction {
+                        opcode: "AggFinal",
+                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
+                    })
+                }
+            };
+            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
+                ExecError::MalformedInstruction {
+                    opcode: "AggFinal",
+                    reason: format!("malformed aggregate descriptor {descriptor:?}"),
+                }
+            })?;
+            let state = vm.agg_context(instr.p1)?;
+            let result =
+                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {
+                    opcode: "AggFinal",
+                    reason: e.to_string(),
+                })?;
+            vm.set_register(instr.p3, result)?;
+            vm.clear_agg_context(instr.p1)?;
+            Ok(Step::Next)
+        }
+        Opcode::AggReset => {
+            vm.clear_agg_context(instr.p1)?;
+            Ok(Step::Next)
+        }
+
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_sort_agg"),
+        }),
+    }
+}
+
+/// [`step`] for one family: row and index writes. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::Insert => {
             let rowid = match vm.register(instr.p2)? {
                 Value::Integer(i) => *i,
@@ -1828,115 +2289,93 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
-        Opcode::Function => {
-            let descriptor = match &instr.p4 {
-                P4::Str(s) => s.as_str(),
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "Function",
-                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
-                    })
-                }
-            };
-            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
-                ExecError::MalformedInstruction {
-                    opcode: "Function",
-                    reason: format!("malformed function descriptor {descriptor:?}"),
-                }
-            })?;
-            let mut args = Vec::with_capacity(arity);
-            for i in 0..arity {
-                let reg = instr
-                    .p2
-                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-                    .ok_or(ExecError::RegisterOutOfRange {
-                        opcode: "Function",
-                        index: instr.p2,
-                    })?;
-                args.push(vm.register(reg)?.clone());
+        Opcode::Delete => {
+            let deleted = vm.cursor_mut(instr.p1)?.delete();
+            if !deleted {
+                return Err(ExecError::MalformedInstruction {
+                    opcode: "Delete",
+                    reason: "cursor slot does not support deletion".to_string(),
+                });
             }
-            let result = functions::call(name, &args).map_err(|e| match e {
-                // A limit sqlite3 reports in its own words (#659).
-                functions::FunctionError::TooBig => ExecError::TooBig,
-                e => ExecError::MalformedInstruction {
-                    opcode: "Function",
-                    reason: e.to_string(),
-                },
-            })?;
-            vm.set_register(instr.p3, result)?;
             Ok(Step::Next)
         }
-
-        Opcode::AggStep => {
-            let (name, arity, collation) = match &instr.p4 {
-                P4::AggFunc {
-                    name,
-                    arity,
-                    collation,
-                } => (name.as_str(), *arity, *collation),
+        Opcode::NewRowid => {
+            let next = vm.cursor(instr.p1)?.next_rowid();
+            // sqlite-rs: p5 != 0 with P4::Str(table) is AUTOINCREMENT —
+            // the schema hook consults/updates sqlite_sequence so a rowid
+            // is never reused after a delete.
+            let rowid = if instr.p5 != 0 {
+                let table = match &instr.p4 {
+                P4::Str(name) => name.clone(),
                 other => {
                     return Err(ExecError::MalformedInstruction {
-                        opcode: "AggStep",
-                        reason: format!("expected an AggFunc P4, got {other:?}"),
+                        opcode: "NewRowid",
+                        reason: format!(
+                            "AUTOINCREMENT requested (P5 nonzero) but P4 is not a table-name string, got {other:?}"
+                        ),
                     })
                 }
             };
-            let mut args = Vec::with_capacity(arity);
-            for i in 0..arity {
-                let reg = instr
-                    .p2
-                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-                    .ok_or(ExecError::RegisterOutOfRange {
-                        opcode: "AggStep",
-                        index: instr.p2,
-                    })?;
-                args.push(vm.register(reg)?.clone());
-            }
-            let current = if instr.p5 == 0 {
-                vm.take_agg_context(instr.p1)?
+                let max_from_table = next.saturating_sub(1);
+                vm.schema_storage
+                    .as_deref_mut()
+                    .ok_or(ExecError::SchemaStorageMissing { opcode: "NewRowid" })?
+                    .autoincrement_rowid(&table, max_from_table)
+                    .map_err(ExecError::SchemaStorageFailed)?
             } else {
-                None
+                next
             };
-            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {
-                ExecError::MalformedInstruction {
-                    opcode: "AggStep",
-                    reason: e.to_string(),
-                }
-            })?;
-            vm.set_agg_context(instr.p1, updated)?;
+            vm.set_register(instr.p2, Value::Integer(rowid))?;
             Ok(Step::Next)
         }
-        Opcode::AggFinal => {
-            let descriptor = match &instr.p4 {
-                P4::Str(s) => s.as_str(),
-                other => {
-                    return Err(ExecError::MalformedInstruction {
-                        opcode: "AggFinal",
-                        reason: format!("expected a \"name(arity)\" string P4, got {other:?}"),
-                    })
-                }
+        Opcode::IdxInsert | Opcode::IdxDelete => {
+            let opcode = if instr.opcode == Opcode::IdxInsert {
+                "IdxInsert"
+            } else {
+                "IdxDelete"
             };
-            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
-                ExecError::MalformedInstruction {
-                    opcode: "AggFinal",
-                    reason: format!("malformed aggregate descriptor {descriptor:?}"),
+            let (key, collations) = key_from_registers(vm, opcode, instr.p2, &instr.p4)?;
+            let ok = if instr.opcode == Opcode::IdxInsert {
+                // sqlite-rs: on an ephemeral index the stored row is the key
+                // columns plus `p5` trailing payload columns.
+                let total = key.len().checked_add(usize::from(instr.p5)).ok_or(
+                    ExecError::RegisterRangeTooLarge {
+                        opcode,
+                        count: i32::from(instr.p5),
+                    },
+                )?;
+                let stored = register_range(vm, opcode, instr.p2, total)?;
+                let cursor = vm.cursor_mut(instr.p1)?;
+                match cursor.ephemeral_idx_insert(&key, &collations, stored) {
+                    Some(ok) => ok,
+                    None => cursor.idx_insert(key),
                 }
-            })?;
-            let state = vm.agg_context(instr.p1)?;
-            let result =
-                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {
-                    opcode: "AggFinal",
-                    reason: e.to_string(),
-                })?;
-            vm.set_register(instr.p3, result)?;
-            vm.clear_agg_context(instr.p1)?;
-            Ok(Step::Next)
-        }
-        Opcode::AggReset => {
-            vm.clear_agg_context(instr.p1)?;
+            } else {
+                vm.cursor_mut(instr.p1)?.idx_delete(&key)
+            };
+            if !ok {
+                return Err(ExecError::MalformedInstruction {
+                    opcode,
+                    reason:
+                        "cursor slot does not support this index operation, or no matching entry"
+                            .to_string(),
+                });
+            }
             Ok(Step::Next)
         }
 
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_write"),
+        }),
+    }
+}
+
+/// [`step`] for one family: transactions, pragmas and DDL. `step` sends
+/// only these opcodes here.
+#[inline(always)]
+fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
+    match instr.opcode {
         Opcode::Transaction => {
             if !vm.autocommit {
                 return Err(ExecError::TransactionAlreadyActive);
@@ -2023,81 +2462,6 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             };
             for line in result.map_err(ExecError::TransactionFailed)? {
                 vm.emit_row(vec![Value::Text(line.into())]);
-            }
-            Ok(Step::Next)
-        }
-
-        Opcode::Delete => {
-            let deleted = vm.cursor_mut(instr.p1)?.delete();
-            if !deleted {
-                return Err(ExecError::MalformedInstruction {
-                    opcode: "Delete",
-                    reason: "cursor slot does not support deletion".to_string(),
-                });
-            }
-            Ok(Step::Next)
-        }
-        Opcode::NewRowid => {
-            let next = vm.cursor(instr.p1)?.next_rowid();
-            // sqlite-rs: p5 != 0 with P4::Str(table) is AUTOINCREMENT —
-            // the schema hook consults/updates sqlite_sequence so a rowid
-            // is never reused after a delete.
-            let rowid = if instr.p5 != 0 {
-                let table = match &instr.p4 {
-                    P4::Str(name) => name.clone(),
-                    other => {
-                        return Err(ExecError::MalformedInstruction {
-                            opcode: "NewRowid",
-                            reason: format!(
-                                "AUTOINCREMENT requested (P5 nonzero) but P4 is not a table-name string, got {other:?}"
-                            ),
-                        })
-                    }
-                };
-                let max_from_table = next.saturating_sub(1);
-                vm.schema_storage
-                    .as_deref_mut()
-                    .ok_or(ExecError::SchemaStorageMissing { opcode: "NewRowid" })?
-                    .autoincrement_rowid(&table, max_from_table)
-                    .map_err(ExecError::SchemaStorageFailed)?
-            } else {
-                next
-            };
-            vm.set_register(instr.p2, Value::Integer(rowid))?;
-            Ok(Step::Next)
-        }
-        Opcode::IdxInsert | Opcode::IdxDelete => {
-            let opcode = if instr.opcode == Opcode::IdxInsert {
-                "IdxInsert"
-            } else {
-                "IdxDelete"
-            };
-            let (key, collations) = key_from_registers(vm, opcode, instr.p2, &instr.p4)?;
-            let ok = if instr.opcode == Opcode::IdxInsert {
-                // sqlite-rs: on an ephemeral index the stored row is the key
-                // columns plus `p5` trailing payload columns.
-                let total = key.len().checked_add(usize::from(instr.p5)).ok_or(
-                    ExecError::RegisterRangeTooLarge {
-                        opcode,
-                        count: i32::from(instr.p5),
-                    },
-                )?;
-                let stored = register_range(vm, opcode, instr.p2, total)?;
-                let cursor = vm.cursor_mut(instr.p1)?;
-                match cursor.ephemeral_idx_insert(&key, &collations, stored) {
-                    Some(ok) => ok,
-                    None => cursor.idx_insert(key),
-                }
-            } else {
-                vm.cursor_mut(instr.p1)?.idx_delete(&key)
-            };
-            if !ok {
-                return Err(ExecError::MalformedInstruction {
-                    opcode,
-                    reason:
-                        "cursor slot does not support this index operation, or no matching entry"
-                            .to_string(),
-                });
             }
             Ok(Step::Next)
         }
@@ -2270,173 +2634,10 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
             Ok(Step::Next)
         }
 
-        Opcode::IdxRewind => {
-            let has_row = vm.cursor_mut(instr.p1)?.rewind();
-            Ok(if has_row {
-                Step::Next
-            } else {
-                Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::IdxLast => {
-            let has_row = vm.cursor_mut(instr.p1)?.last();
-            Ok(if has_row {
-                Step::Next
-            } else {
-                Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::IdxNext => {
-            let has_row = vm.cursor_mut(instr.p1)?.next();
-            Ok(if has_row {
-                Step::Jump(to_pc(instr.p2))
-            } else {
-                Step::Next
-            })
-        }
-        Opcode::IdxPrev => {
-            let has_row = vm.cursor_mut(instr.p1)?.prev();
-            Ok(if has_row {
-                Step::Jump(to_pc(instr.p2))
-            } else {
-                Step::Next
-            })
-        }
-        Opcode::IdxRowid => {
-            let rowid =
-                vm.cursor(instr.p1)?
-                    .idx_rowid()
-                    .ok_or(ExecError::MalformedInstruction {
-                        opcode: "IdxRowid",
-                        reason: "cursor slot is not an index cursor, or has no current entry"
-                            .to_string(),
-                    })?;
-            vm.set_register(instr.p2, Value::Integer(rowid))?;
-            Ok(Step::Next)
-        }
-        Opcode::SeekIndexEq => {
-            let (key, collations) = key_from_registers(vm, "SeekIndexEq", instr.p3, &instr.p4)?;
-            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key, &collations);
-            Ok(if found {
-                Step::Next
-            } else {
-                Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::SeekIndexGE => {
-            let (key, collations) = key_from_registers(vm, "SeekIndexGE", instr.p3, &instr.p4)?;
-            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key, &collations);
-            Ok(if found {
-                Step::Next
-            } else {
-                Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::IdxCompareGT => {
-            let (key, collations) = key_from_registers(vm, "IdxCompareGT", instr.p3, &instr.p4)?;
-            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
-                ExecError::MalformedInstruction {
-                    opcode: "IdxCompareGT",
-                    reason: "cursor slot is not an index cursor, or has no current entry"
-                        .to_string(),
-                },
-            )?;
-            Ok(if cmp == Ordering::Greater {
-                Step::Jump(to_pc(instr.p2))
-            } else {
-                Step::Next
-            })
-        }
-        Opcode::IdxCompareGE => {
-            let (key, collations) = key_from_registers(vm, "IdxCompareGE", instr.p3, &instr.p4)?;
-            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
-                ExecError::MalformedInstruction {
-                    opcode: "IdxCompareGE",
-                    reason: "cursor slot is not an index cursor, or has no current entry"
-                        .to_string(),
-                },
-            )?;
-            Ok(if cmp == Ordering::Less {
-                Step::Next
-            } else {
-                Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::IdxLE => {
-            let (key, collations) = key_from_registers(vm, "IdxLE", instr.p3, &instr.p4)?;
-            let cmp = vm.cursor(instr.p1)?.idx_compare(&key, &collations).ok_or(
-                ExecError::MalformedInstruction {
-                    opcode: "IdxLE",
-                    reason: "cursor slot is not an index cursor, or has no current entry"
-                        .to_string(),
-                },
-            )?;
-            Ok(if cmp != Ordering::Greater {
-                Step::Jump(to_pc(instr.p2))
-            } else {
-                Step::Next
-            })
-        }
-        Opcode::Found => {
-            let (key, collations) = key_from_registers(vm, "Found", instr.p3, &instr.p4)?;
-            let cursor = vm.cursor_mut(instr.p1)?;
-            // Ephemeral index (DISTINCT / IN-subquery): membership of the
-            // normalized key; real index: a seek.
-            let found = match cursor.found(&key, &collations) {
-                Some(present) => present,
-                None => cursor.seek_index_eq(&key, &collations),
-            };
-            Ok(if found {
-                Step::Jump(to_pc(instr.p2))
-            } else {
-                Step::Next
-            })
-        }
-        Opcode::Filter => {
-            let (key, collations) = key_from_registers(vm, "Filter", instr.p3, &instr.p4)?;
-            let maybe_present = vm.cursor(instr.p1)?.filter_maybe_present(&key, &collations);
-            Ok(if maybe_present {
-                Step::Next
-            } else {
-                Step::Jump(to_pc(instr.p2))
-            })
-        }
-        Opcode::FilterAdd => {
-            let (key, collations) = key_from_registers(vm, "FilterAdd", instr.p3, &instr.p4)?;
-            vm.cursor_mut(instr.p1)?.filter_add(&key, &collations);
-            Ok(Step::Next)
-        }
-        Opcode::NoConflict => {
-            let (key, collations) = key_from_registers(vm, "NoConflict", instr.p3, &instr.p4)?;
-            let count = i32::try_from(key.len()).unwrap_or(i32::MAX);
-            let cursor = vm.cursor_mut(instr.p1)?;
-            // Ephemeral index: membership of the normalized key; real
-            // index: a seek. sqlite-rs (`cursor::no_conflict`): on a
-            // conflict the conflicting entry's rowid lands in the register
-            // right after the probe (`p3 + count`) so OR REPLACE / OR
-            // IGNORE can SeekRowid straight to the displaced row.
-            let found = match cursor.found(&key, &collations) {
-                Some(present) => present,
-                None => cursor.seek_index_eq(&key, &collations),
-            };
-            if found {
-                let rowid = cursor.idx_rowid();
-                if let Some(rowid) = rowid {
-                    let dest =
-                        instr
-                            .p3
-                            .checked_add(count)
-                            .ok_or(ExecError::RegisterRangeTooLarge {
-                                opcode: "NoConflict",
-                                count,
-                            })?;
-                    vm.set_register(dest, Value::Integer(rowid))?;
-                }
-                Ok(Step::Next)
-            } else {
-                Ok(Step::Jump(to_pc(instr.p2)))
-            }
-        }
+        other => Err(ExecError::MalformedInstruction {
+            opcode: "step",
+            reason: format!("{other:?} dispatched to step_schema"),
+        }),
     }
 }
 
