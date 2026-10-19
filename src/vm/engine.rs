@@ -28,7 +28,7 @@ use super::batch::{
 };
 use super::combine::{
     combine_chunks, combine_partials, eval_agg_expr, finish_avg, merge_slot, order_key, slot_ops,
-    Combiner, SlotOp,
+    Combiner, Partial, SlotOp,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -240,7 +240,7 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
     body: &[Opcode],
     agg_parts: &[AggPart],
     num_group_keys: usize,
-) -> Result<Vec<(Chunk, Vec<u64>)>> {
+) -> Result<Vec<Partial>> {
     let items: Vec<(usize, &S)> = segments.iter().enumerate().collect();
     run_morsels_fold(
         &items,
@@ -284,7 +284,7 @@ fn run_parallel_segment_partials<S: Segment>(
             }
             Ok(())
         })?;
-        let (chunk, _) = combiner.finish_partial();
+        let chunk = combiner.finish_partial().into_chunk();
         // No slice emitted a chunk (every row filtered out): no partial.
         Ok(if chunk.is_empty() {
             QueryOutput::default()
@@ -1582,7 +1582,7 @@ mod tests {
 #[cfg(test)]
 mod preaggregation_tests {
     use super::super::batch::{
-        chunk_len, run_parallel, AggFunc, AggPart, Batch, Instruction, Opcode, Program, Value,
+        run_parallel, AggFunc, AggPart, Batch, Instruction, Opcode, Program, Value,
     };
     use super::super::combine::combine_chunks;
     use super::{run, run_parallel_preaggregate, InMemorySegment};
@@ -1646,15 +1646,12 @@ mod preaggregation_tests {
             run_parallel_preaggregate(&segs, &body, &[AggPart::GroupKey, AggPart::Sum], 1).unwrap();
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
         assert!(partials.len() <= threads.min(num_segments));
-        let total: usize = partials.iter().map(|(c, _)| chunk_len(c)).sum();
+        let total: usize = partials.iter().map(super::Partial::len).sum();
         assert!(
             total <= threads * groups as usize,
             "{total} partial rows for {threads} threads x {groups} groups"
         );
         assert!(total < num_segments * groups as usize / 2 || threads * 2 > num_segments);
-        for (chunk, first_seen) in &partials {
-            assert_eq!(first_seen.len(), chunk_len(chunk));
-        }
     }
 
     /// The pre-aggregated `run()` must produce exactly what the direct
