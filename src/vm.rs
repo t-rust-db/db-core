@@ -50,6 +50,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "vm-batch")]
+pub(crate) mod acc_column;
+#[cfg(feature = "vm-batch")]
 pub mod batch;
 #[cfg(feature = "vm-batch")]
 pub mod column;

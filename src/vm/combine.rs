@@ -32,9 +32,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::acc_column::AccColumn;
 use super::batch::{
-    agg_cmp, apply_map_op, chunk_len, hash_columns_by_row, AggOperand, AggPart, Chunk, HiddenPart,
-    MapOp, QueryOutput, Result, Value, VmError,
+    agg_cmp, apply_map_op, chunk_len, hash_columns_by_row, mix_hash, AggOperand, AggPart, Chunk,
+    HiddenPart, MapOp, QueryOutput, Result, Value, VmError, HASH_SEED,
 };
 use super::int_key_table::IntKeyTable;
 
@@ -330,7 +331,7 @@ pub(crate) fn combine_chunks(
 pub(crate) fn combine_partials(
     parts: &[AggPart],
     num_group_keys: usize,
-    partials: Vec<(Chunk, Vec<u64>)>,
+    partials: Vec<Partial>,
 ) -> Result<QueryOutput> {
     let mut combiner = Combiner::new(parts, num_group_keys);
     // Sized once, so the accumulators rarely double-and-copy while the
@@ -338,31 +339,49 @@ pub(crate) fn combine_partials(
     // partial and at most the sum of them; workers sharing keys make the
     // sum an overestimate up to `threads` times, and a key table sized
     // for it is written in full, so take the middle.
-    let sizes = partials.iter().map(|(_, first_seen)| first_seen.len());
+    let sizes = partials.iter().map(|partial| partial.first_seen.len());
     let largest = sizes.clone().max().unwrap_or(0);
     let total: usize = sizes.sum();
     combiner.expect_groups(largest.max(total / 2));
     // By value: each worker's partial is dropped as soon as it is merged,
     // not held until the last one is (#643).
-    for (chunk, first_seen) in partials {
-        if chunk.is_empty() || chunk_len(&chunk) == 0 {
-            continue;
-        }
-        if first_seen.len() != chunk_len(&chunk) {
-            return Err(VmError::MalformedProgram {
-                opcode: "Combine",
-                reason: format!(
-                    "partial carries {} first-seen keys for {} rows",
-                    first_seen.len(),
-                    chunk_len(&chunk)
-                ),
-            });
-        }
-        combiner.push_chunk(&chunk, |row| {
-            first_seen.get(row).copied().unwrap_or(u64::MAX)
-        })?;
+    for partial in partials {
+        combiner.push_partial(&partial)?;
     }
     combiner.finish()
+}
+
+/// A [`Combiner`]'s still-mergeable state, [`Combiner::finish_partial`]:
+/// one accumulator column per slot, typed keys kept typed (#643), and
+/// each group's first-seen key for [`combine_partials`] to order by. No
+/// columns when no chunk was ever pushed.
+#[derive(Debug, Default)]
+pub(crate) struct Partial {
+    columns: Vec<AccColumn>,
+    first_seen: Vec<u64>,
+}
+
+impl Partial {
+    /// The groups, as one chunk of the input's width and slot layout.
+    pub(crate) fn into_chunk(self) -> Chunk {
+        self.columns
+            .into_iter()
+            .map(|column| Arc::new(column.into_values()))
+            .collect()
+    }
+
+    /// How many groups it holds.
+    pub(crate) fn len(&self) -> usize {
+        self.columns.first().map_or(0, AccColumn::len)
+    }
+}
+
+/// The key hash of group `g` -- what [`hash_columns_by_row`] gives the
+/// same key as a row of `Value`s.
+fn acc_key_hash(key_columns: &[AccColumn], g: usize) -> u64 {
+    key_columns
+        .iter()
+        .fold(HASH_SEED, |acc, column| mix_hash(acc, column.hash(g)))
 }
 
 /// Every chunk must have `num_slots` columns of one common length.
@@ -404,7 +423,7 @@ fn is_int_key_column(column: &[Value]) -> bool {
 fn merge_columns(
     ops: &[SlotOp],
     chunk: &Chunk,
-    acc: &mut [Vec<Value>],
+    acc: &mut [AccColumn],
     row_group: &[usize],
 ) -> Result<()> {
     for (c, op) in ops.iter().enumerate() {
@@ -415,11 +434,36 @@ fn merge_columns(
         let acc_column = &mut acc[c];
         for (r, &g) in row_group.iter().enumerate() {
             if g != NEW_GROUP {
-                merge_slot(*op, &mut acc_column[g], &column[r])?;
+                merge_entry(*op, acc_column, g, &column[r])?;
             }
         }
     }
     Ok(())
+}
+
+/// [`merge_slot`] of `from` into group `g` of `column`; a typed `COUNT`
+/// column adds in place, with `merge_slot`'s semantics and error.
+fn merge_entry(op: SlotOp, column: &mut AccColumn, g: usize, from: &Value) -> Result<()> {
+    if op == SlotOp::Count && matches!(column, AccColumn::Ints { .. }) {
+        return column
+            .add_int(g, partial_i64(from)?)
+            .ok_or_else(|| VmError::MalformedProgram {
+                opcode: "Combine",
+                reason: "partial COUNT overflowed i64".to_string(),
+            });
+    }
+    merge_slot(op, aggregate_slot(column, g)?, from)
+}
+
+/// Group `g`'s entry in an aggregate column, which is never a typed key
+/// column.
+fn aggregate_slot(column: &mut AccColumn, g: usize) -> Result<&mut Value> {
+    column
+        .value_mut(g)
+        .ok_or_else(|| VmError::MalformedProgram {
+            opcode: "Combine",
+            reason: format!("aggregate slot of group {g} is missing or a typed key column"),
+        })
 }
 
 /// Copies row `r` of `chunk` in as a new group's initial state.
@@ -427,9 +471,9 @@ fn merge_columns(
     clippy::indexing_slicing,
     reason = "`column[r]`: `r < chunk_len(chunk)` and every column has that many rows (validated)"
 )]
-fn push_new_group(acc: &mut [Vec<Value>], chunk: &Chunk, r: usize) {
+fn push_new_group(acc: &mut [AccColumn], chunk: &Chunk, r: usize) {
     for (slot, column) in acc.iter_mut().zip(chunk) {
-        slot.push(column[r].clone());
+        slot.push_value(&column[r]);
     }
 }
 
@@ -501,8 +545,9 @@ pub(crate) struct Combiner {
     ops: Vec<SlotOp>,
     /// Set by the first chunk; `None` until then.
     num_slots: Option<usize>,
-    /// Column-major accumulators, one entry per group, in first-seen order.
-    acc: Vec<Vec<Value>>,
+    /// Column-major accumulators, one entry per group, in first-seen
+    /// order; key columns typed where they can be (#643).
+    acc: Vec<AccColumn>,
     index: KeyIndex,
     /// Each group's smallest [`order_key`] -- see there.
     first_seen: Vec<u64>,
@@ -574,19 +619,56 @@ impl Combiner {
         }
         self.ops = slot_ops(&self.parts, num_slots)?;
         let expected_groups = self.expected_groups.unwrap_or_else(|| chunk_len(chunk));
-        self.acc = (0..num_slots)
-            .map(|_| Vec::with_capacity(expected_groups))
+        self.acc = chunk
+            .iter()
+            .enumerate()
+            .map(|(c, column)| {
+                let count = self.ops.get(c) == Some(&SlotOp::Count);
+                AccColumn::for_values(c < self.num_group_keys, count, column, expected_groups)
+            })
             .collect();
-        self.first_seen = Vec::with_capacity(expected_groups);
         let int_key =
             self.num_group_keys == 1 && chunk.first().is_some_and(|keys| is_int_key_column(keys));
+        self.start_index(int_key, expected_groups);
+        self.num_slots = Some(num_slots);
+        Ok(num_slots)
+    }
+
+    /// [`Self::start`] for a first input that is a partial: its columns'
+    /// kinds carry over.
+    fn start_partial(&mut self, partial: &Partial) -> Result<usize> {
+        let num_slots = partial.columns.len();
+        if self.num_group_keys > num_slots {
+            return Err(VmError::MalformedProgram {
+                opcode: "Combine",
+                reason: format!(
+                    "{} group keys but the partial has {num_slots} columns",
+                    self.num_group_keys
+                ),
+            });
+        }
+        self.ops = slot_ops(&self.parts, num_slots)?;
+        let expected_groups = self.expected_groups.unwrap_or_else(|| partial.len());
+        self.acc = partial
+            .columns
+            .iter()
+            .map(|column| AccColumn::like(column, expected_groups))
+            .collect();
+        let int_key = self.num_group_keys == 1
+            && matches!(partial.columns.first(), Some(AccColumn::Ints { .. }));
+        self.start_index(int_key, expected_groups);
+        self.num_slots = Some(num_slots);
+        Ok(num_slots)
+    }
+
+    /// The key index and first-seen keys, sized for `expected_groups`.
+    fn start_index(&mut self, int_key: bool, expected_groups: usize) {
+        self.first_seen = Vec::with_capacity(expected_groups);
         self.index = if int_key {
             KeyIndex::Int(IntKeyTable::with_capacity(expected_groups))
         } else {
             KeyIndex::Generic(GenericIndex::with_capacity(expected_groups))
         };
-        self.num_slots = Some(num_slots);
-        Ok(num_slots)
     }
 
     /// Rows -> groups through the integer table. `Ok(None)` when every
@@ -631,16 +713,10 @@ impl Combiner {
     /// without losing anything.
     fn demote_to_generic(&mut self) {
         let num_groups = self.first_seen.len();
-        let key_columns: Vec<&[Value]> = self
-            .acc
-            .iter()
-            .take(self.num_group_keys)
-            .map(|column| column.as_slice())
-            .collect();
-        let hashes = hash_columns_by_row(&key_columns, num_groups, |g| g);
+        let key_columns = self.acc.get(..self.num_group_keys).unwrap_or(&[]);
         let mut map = GenericIndex::with_capacity(num_groups);
-        for (g, hash) in hashes.into_iter().enumerate() {
-            map.insert(hash, g);
+        for g in 0..num_groups {
+            map.insert(acc_key_hash(key_columns, g), g);
         }
         self.index = KeyIndex::Generic(map);
     }
@@ -673,7 +749,7 @@ impl Combiner {
                 key_columns
                     .iter()
                     .enumerate()
-                    .all(|(c, column)| self.acc[c][g] == column[r])
+                    .all(|(c, column)| self.acc[c].eq_value(g, &column[r]))
             });
             match existing {
                 Some(g) => {
@@ -701,6 +777,7 @@ impl Combiner {
             return Ok(QueryOutput::default());
         }
         let acc = reorder_by_first_seen(self.acc, &self.first_seen);
+        let acc = acc.into_iter().map(AccColumn::into_values).collect();
         Ok(QueryOutput::new(output_columns(&self.parts, acc)?))
     }
 
@@ -722,17 +799,28 @@ impl Combiner {
             })
             .collect();
         let mut regroup = Combiner::new(&parts, keys);
-        if self.num_slots.is_some() {
-            let first_seen = self.first_seen;
-            let mut acc = self.acc;
-            if let Some(column) = acc.get_mut(keys) {
-                for value in column.iter_mut() {
-                    *value = Value::Int(i64::from(!matches!(value, Value::Null)));
-                }
+        // Only the accumulators and first-seen keys go on: the pair
+        // index is freed before the regroup builds its own (#643).
+        let Combiner {
+            acc: mut columns,
+            first_seen,
+            num_slots,
+            ..
+        } = self;
+        if num_slots.is_some() {
+            if let Some(column) = columns.get_mut(keys) {
+                let n = column.len();
+                let data = (0..n)
+                    .map(|g| i64::from(!column.eq_value(g, &Value::Null)))
+                    .collect();
+                *column = AccColumn::Ints {
+                    data,
+                    nulls: vec![false; n],
+                };
             }
-            let chunk: Chunk = acc.into_iter().map(Arc::new).collect();
-            regroup.push_chunk(&chunk, |row| {
-                first_seen.get(row).copied().unwrap_or(u64::MAX)
+            regroup.push_partial(&Partial {
+                columns,
+                first_seen,
             })?;
         }
         if keys > 0 || regroup.num_slots.is_some() {
@@ -756,11 +844,100 @@ impl Combiner {
     /// merges it like any other partial) plus each group's first-seen key
     /// for [`combine_partials`] to order by. Empty (no columns) when no
     /// chunk was ever pushed.
-    pub(crate) fn finish_partial(self) -> (Chunk, Vec<u64>) {
-        (
-            self.acc.into_iter().map(Arc::new).collect(),
-            self.first_seen,
-        )
+    pub(crate) fn finish_partial(self) -> Partial {
+        Partial {
+            columns: self.acc,
+            first_seen: self.first_seen,
+        }
+    }
+
+    /// Merges a partial in ([`combine_partials`], `COUNT(DISTINCT)`'s
+    /// regrouping): as [`Self::push_chunk`], but key to key -- typed
+    /// columns compare and copy typed, so no `Value` is built per group.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`columns[c]`/`acc[c]`: `c < num_slots`, both have exactly `num_slots` columns (checked); `first_seen[g]`: `g` was pushed before being recorded"
+    )]
+    fn push_partial(&mut self, partial: &Partial) -> Result<()> {
+        if partial.columns.is_empty() {
+            return Ok(());
+        }
+        let num_slots = match self.num_slots {
+            Some(n) => n,
+            None => self.start_partial(partial)?,
+        };
+        let n = partial.len();
+        if partial.columns.len() != num_slots
+            || partial.columns.iter().any(|column| column.len() != n)
+            || partial.first_seen.len() != n
+        {
+            return Err(VmError::MalformedProgram {
+                opcode: "Combine",
+                reason: format!(
+                    "partial of {} columns and {} first-seen keys does not fit {num_slots} slots of {n} rows",
+                    partial.columns.len(),
+                    partial.first_seen.len()
+                ),
+            });
+        }
+        let keys = &partial.columns[..self.num_group_keys];
+        for r in 0..n {
+            let order = partial.first_seen[r];
+            let found = match (&mut self.index, keys.first()) {
+                (KeyIndex::Int(table), Some(AccColumn::Ints { data, nulls })) => {
+                    Some(match (data.get(r), nulls.get(r)) {
+                        (Some(&key), Some(false)) => {
+                            table.get_or_insert(key, self.first_seen.len())?
+                        }
+                        _ => table.null_group_or_insert(self.first_seen.len()),
+                    })
+                }
+                _ => None,
+            };
+            let (g, inserted) = match found {
+                Some(found) => found,
+                None => {
+                    if !matches!(self.index, KeyIndex::Generic(_)) {
+                        self.demote_to_generic();
+                    }
+                    let KeyIndex::Generic(map) = &mut self.index else {
+                        return Err(VmError::MalformedProgram {
+                            opcode: "Combine",
+                            reason: "key index not initialized".to_string(),
+                        });
+                    };
+                    let hash = acc_key_hash(keys, r);
+                    let acc = &self.acc;
+                    let existing = map.candidates(hash).find(|&g| {
+                        keys.iter()
+                            .enumerate()
+                            .all(|(c, column)| acc[c].eq_entry(g, column, r))
+                    });
+                    match existing {
+                        Some(g) => (g, false),
+                        None => {
+                            let g = self.first_seen.len();
+                            map.insert(hash, g);
+                            (g, true)
+                        }
+                    }
+                }
+            };
+            if inserted {
+                for (slot, column) in self.acc.iter_mut().zip(&partial.columns) {
+                    slot.push_entry(column, r);
+                }
+                self.first_seen.push(order);
+                continue;
+            }
+            self.first_seen[g] = self.first_seen[g].min(order);
+            for (c, op) in self.ops.iter().enumerate() {
+                if *op != SlotOp::Key {
+                    merge_entry(*op, &mut self.acc[c], g, &partial.columns[c].value(r))?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -771,7 +948,7 @@ impl Combiner {
     clippy::indexing_slicing,
     reason = "`perm` is a permutation of `0..num_groups` and every column of `acc` has exactly `num_groups` entries"
 )]
-fn reorder_by_first_seen(mut acc: Vec<Vec<Value>>, first_seen: &[u64]) -> Vec<Vec<Value>> {
+fn reorder_by_first_seen(mut acc: Vec<AccColumn>, first_seen: &[u64]) -> Vec<AccColumn> {
     if first_seen.windows(2).all(|w| w[0] <= w[1]) {
         return acc;
     }
@@ -881,16 +1058,49 @@ mod tests {
                 .map(|g| Value::Str(format!("{tag}{g}").into()))
                 .collect()
         };
-        let out = reorder_by_first_seen(vec![col("a"), col("b")], &first_seen);
+        // One plain column and one typed (interned) key column.
+        let typed = |values: Vec<Value>| {
+            let mut column = AccColumn::for_values(true, false, &values, 0);
+            for v in &values {
+                column.push_value(v);
+            }
+            column
+        };
+        let values = |acc: Vec<AccColumn>| -> Vec<Vec<Value>> {
+            acc.into_iter().map(AccColumn::into_values).collect()
+        };
+        let out = reorder_by_first_seen(
+            vec![AccColumn::Values(col("a")), typed(col("b"))],
+            &first_seen,
+        );
         let want = |tag: &str| -> Vec<Value> {
             [1, 0, 2, 5, 3, 4]
                 .iter()
                 .map(|g| Value::Str(format!("{tag}{g}").into()))
                 .collect()
         };
-        assert_eq!(out, vec![want("a"), want("b")]);
-        let sorted = reorder_by_first_seen(vec![col("a")], &[1, 2, 3, 4, 5, 6]);
-        assert_eq!(sorted, vec![col("a")]);
+        assert_eq!(values(out), vec![want("a"), want("b")]);
+        let sorted = reorder_by_first_seen(vec![typed(col("a"))], &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(values(sorted), vec![col("a")]);
+    }
+
+    /// A partial of `chunk`'s rows, its first column a typed key.
+    fn partial(chunk: Chunk, first_seen: Vec<u64>) -> Partial {
+        let columns = chunk
+            .iter()
+            .enumerate()
+            .map(|(c, column)| {
+                let mut acc = AccColumn::for_values(c == 0, false, column, 0);
+                for v in column.iter() {
+                    acc.push_value(v);
+                }
+                acc
+            })
+            .collect();
+        Partial {
+            columns,
+            first_seen,
+        }
     }
 
     fn chunk(columns: Vec<Vec<Value>>) -> Chunk {
@@ -933,6 +1143,65 @@ mod tests {
     fn mcdc__vm_combine_finish_distinct_f71d60b5__v3_ungrouped_nothing_is_one_zero_row() {
         let out = combine_chunks(&[AggPart::DistinctKey], 1, &[]).unwrap();
         assert_eq!(out.into_rows(), vec![vec![Value::Int(0)]]);
+    }
+
+    /// #643: typed accumulator columns are an internal form only. Worker
+    /// partials with an integer key, a string `COUNT(DISTINCT)` key (both
+    /// with NULLs) and a SUM, merged through `combine_partials`, answer
+    /// exactly as one untyped `combine_chunks` over the same chunks --
+    /// values and group order -- also when a later chunk's key column
+    /// turns out not to be all integers (the typed column demotes).
+    #[test]
+    fn typed_partials_merge_as_untyped_chunks_do() {
+        let parts = [AggPart::GroupKey, AggPart::DistinctKey, AggPart::Sum];
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = move |m: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % m
+        };
+        let mut chunks = Vec::new();
+        for segment in 0..12 {
+            let n = 40;
+            let keys: Vec<Value> = (0..n)
+                .map(|_| match next(25) {
+                    0 => Value::Null,
+                    // One late chunk has a float key: the column demotes.
+                    1 if segment == 9 => Value::Float(0.5),
+                    k => Value::Int(i64::try_from(k).unwrap_or(0)),
+                })
+                .collect();
+            let names: Vec<Value> = (0..n)
+                .map(|_| match next(6) {
+                    0 => Value::Null,
+                    k => s(&format!("name{k}")),
+                })
+                .collect();
+            let sums: Vec<Value> = (0..n)
+                .map(|_| Value::Int(i64::try_from(next(100)).unwrap_or(0)))
+                .collect();
+            chunks.push(chunk(vec![keys, names, sums]));
+        }
+        let direct = combine_chunks(&parts, 2, &chunks).unwrap();
+        // Three workers, each claiming every third segment.
+        let partials: Vec<Partial> = (0..3)
+            .map(|worker| {
+                let mut combiner = Combiner::new(&parts, 2);
+                for (segment, c) in chunks.iter().enumerate().skip(worker).step_by(3) {
+                    combiner
+                        .push_chunk(c, |row| order_key(segment, row))
+                        .unwrap();
+                }
+                combiner.finish_partial()
+            })
+            .collect();
+        assert!(partials
+            .iter()
+            .any(|p| matches!(p.columns.get(1), Some(AccColumn::Strs { .. }))));
+        let merged = combine_partials(&parts, 2, partials).unwrap();
+        assert_eq!(merged, direct);
+        assert!(!direct.is_empty());
     }
 
     /// #633: `[k, x, SUM, AVG sum, AVG count]` partials keyed on `(k, x)`
@@ -1404,7 +1673,7 @@ mod tests {
     #[test]
     fn a_partial_with_mismatched_first_seen_keys_is_an_error() {
         let parts = [AggPart::GroupKey, AggPart::Sum];
-        let partial = (int_chunk(&[Some(1), Some(2)], &[1, 2]), vec![0u64]);
+        let partial = partial(int_chunk(&[Some(1), Some(2)], &[1, 2]), vec![0u64]);
         assert!(matches!(
             combine_partials(&parts, 1, vec![partial]),
             Err(VmError::MalformedProgram {
@@ -1421,39 +1690,36 @@ mod tests {
         assert_eq!(order_key(2, 7), (2 << 32) | 7);
     }
 
-    // vm_combine_combine_partials_4f421cb8 (`combine_partials`):
-    // `chunk.is_empty() || chunk_len(chunk) == 0`
+    // An empty partial -- a worker that claimed nothing, or claimed only
+    // filtered-out rows -- merges as nothing.
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__vm_combine_combine_partials_1974628c__v1_column_less_partial_is_skipped() {
+    fn column_less_partial_is_skipped() {
         let parts = [AggPart::GroupKey, AggPart::Sum];
-        let real = (int_chunk(&[Some(1)], &[5]), vec![0u64]);
+        let real = partial(int_chunk(&[Some(1)], &[5]), vec![0u64]);
         // A worker that claimed nothing: no columns at all (first leaf
         // true), and its empty first-seen list must not trip the
         // length check.
         let empty: Chunk = Vec::new();
-        let merged = combine_partials(&parts, 1, vec![(empty, Vec::new()), real]).unwrap();
+        let merged = combine_partials(&parts, 1, vec![partial(empty, Vec::new()), real]).unwrap();
         assert_eq!(merged.into_rows(), vec![vec![Value::Int(1), Value::Int(5)]]);
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__vm_combine_combine_partials_1974628c__v2_zero_row_partial_is_skipped() {
+    fn zero_row_partial_is_skipped() {
         let parts = [AggPart::GroupKey, AggPart::Sum];
-        let real = (int_chunk(&[Some(1)], &[5]), vec![0u64]);
+        let real = partial(int_chunk(&[Some(1)], &[5]), vec![0u64]);
         // Columns present (first leaf false) but no rows (second leaf
         // true) -- again the length check must not fire.
-        let zero_rows = (int_chunk(&[], &[]), Vec::new());
+        let zero_rows = partial(int_chunk(&[], &[]), Vec::new());
         let merged = combine_partials(&parts, 1, vec![zero_rows, real]).unwrap();
         assert_eq!(merged.into_rows(), vec![vec![Value::Int(1), Value::Int(5)]]);
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__vm_combine_combine_partials_1974628c__v3_populated_partials_are_merged() {
+    fn populated_partials_are_merged() {
         let parts = [AggPart::GroupKey, AggPart::Sum];
-        let a = (int_chunk(&[Some(1), Some(2)], &[5, 7]), vec![0u64, 1]);
-        let b = (int_chunk(&[Some(1)], &[3]), vec![2u64]);
+        let a = partial(int_chunk(&[Some(1), Some(2)], &[5, 7]), vec![0u64, 1]);
+        let b = partial(int_chunk(&[Some(1)], &[3]), vec![2u64]);
         let merged = combine_partials(&parts, 1, vec![a, b]).unwrap();
         assert_eq!(
             merged.into_rows(),

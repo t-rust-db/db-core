@@ -109,6 +109,8 @@ for q in "${LABELS[@]}"; do
   timed "q_${q}_sqlite" sqlite3 -csv -cmd ".nullvalue NULL" "$SQLITE_DB" "$sql"
   for engine in dbcore duckdb sqlite; do
     f="$OUT/q_${q}_${engine}.out"
+    # sqlite3 3.53's -csv ends lines with CRLF (RFC 4180); the others LF.
+    tr -d '\r' <"$f" >"$f.tmp" && mv "$f.tmp" "$f"
     if [[ "$q" == cross ]]; then awk -F, '$2 == 2' "$f" >"$f.tmp" && mv "$f.tmp" "$f"; fi
     LC_ALL=C sort "$f" -o "$f"
   done

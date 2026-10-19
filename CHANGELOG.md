@@ -4,6 +4,23 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.148.0] - 2026-10-19
+
+### Changed
+
+- **Typed `GROUP BY` accumulators in the cross-segment merge** (#643). `Combine` keeps each group's key as an 8-byte integer, or as a 4-byte code into the column's own string table, instead of a 32-byte `Value` plus a heap string. `COUNT` slots are 8-byte integers too. Worker partials stay typed into the final merge, so a typed partial is never turned back into `Value`s.
+  - `COUNT(DISTINCT)` frees its `(keys, x)` index before regrouping by the real keys.
+  - `GroupReduce` builds its key columns directly, instead of a `Vec<Value>` per group that was then copied into columns.
+  - Measured on 10M events (`make bench-events`, `cross`: sessions with events A and B, 504k groups):
+    - live heap peak 100 → 78 MB on 1 thread and 104 → 89 MB on 12;
+    - peak RSS 344 → about 290 MB, against DuckDB's 159 MB.
+  - Results and group order are unchanged.
+  - The rest of the RSS gap is allocator retention: the macOS allocator, and mimalloc likewise, keep the freed blocks of vectors that grew while groups accumulated, about 10 MB per worker thread. It is not live db-core data. #643 stays open for the remaining steps.
+
+### Fixed
+
+- **`make bench-events` no longer reports a false mismatch with sqlite3 3.53** (#643). Its `-csv` output ends lines with CRLF, so the comparison now strips the CR.
+
 ## [0.147.0] - 2026-10-19
 
 ### Added

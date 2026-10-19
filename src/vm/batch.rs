@@ -2545,7 +2545,7 @@ const TAG_DICT: u64 = 0x94D0_49BB_1331_11EB;
 /// must hash like the insert did), and every caller -- `GroupReduce`,
 /// `HashBuild`/`HashProbe`, `Combine`'s fallback -- uses this same
 /// function on both sides.
-fn hash_one_value(value: &Value) -> u64 {
+pub(crate) fn hash_one_value(value: &Value) -> u64 {
     match value {
         Value::Int(v) => murmur_finalize(u64::from_ne_bytes(v.to_ne_bytes()) ^ TAG_INT),
         Value::Float(v) => murmur_finalize(v.to_bits() ^ TAG_FLOAT),
@@ -2598,7 +2598,7 @@ pub(crate) fn hash_group_key(values: &[Value]) -> u64 {
 /// (#444). Order-sensitive, so `(a, b)` and `(b, a)` keys land on
 /// different hashes; the multiply-rotate mix keeps the low bits well
 /// distributed for the power-of-two tables downstream.
-const fn mix_hash(acc: u64, value_hash: u64) -> u64 {
+pub(crate) const fn mix_hash(acc: u64, value_hash: u64) -> u64 {
     (acc ^ value_hash)
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         .rotate_left(29)
@@ -2607,7 +2607,7 @@ const fn mix_hash(acc: u64, value_hash: u64) -> u64 {
 /// Seed for [`hash_columns_by_row`]'s accumulators -- non-zero so a
 /// single-column key's hash is a real mix, not just `mix_hash(0, v)`'s
 /// trivially invertible image of `v`.
-const HASH_SEED: u64 = 0x243F_6A88_85A3_08D3;
+pub(crate) const HASH_SEED: u64 = 0x243F_6A88_85A3_08D3;
 
 /// #440: column-wise row hashing for `GroupReduce`/`HashBuild`/`HashProbe` --
 /// folded column by column (outer loop over `columns`, inner loop over
@@ -2776,7 +2776,7 @@ fn group_by_key_views(
     views: &[KeyView],
     num_rows: usize,
     physical: impl Fn(usize) -> usize,
-) -> Result<(Vec<usize>, Vec<Vec<Value>>)> {
+) -> Result<GroupedKeys> {
     let mut hashes = vec![HASH_SEED; num_rows];
     for view in views {
         for (row, acc) in hashes.iter_mut().enumerate() {
@@ -2796,12 +2796,18 @@ fn group_by_key_views(
         }
         row_group.push(group);
     }
-    let group_keys: Vec<Vec<Value>> = first_rows
+    let key_columns = views
         .iter()
-        .map(|&p| views.iter().map(|view| view.value(p)).collect())
+        .map(|view| first_rows.iter().map(|&p| view.value(p)).collect())
         .collect();
-    Ok((row_group, group_keys))
+    Ok((row_group, first_rows.len(), key_columns))
 }
+
+/// A `GroupReduce` grouping: each row's group id, the number of groups,
+/// and one key column per `GROUP BY` key with an entry per group, in
+/// first-seen order -- built column-wise, so no per-group `Vec` is
+/// allocated and copied again into the key registers (#643).
+type GroupedKeys = (Vec<usize>, usize, Vec<Vec<Value>>);
 
 /// `GroupReduce` fast path for `GROUP BY <typed Int column>` (#479): maps
 /// every row to a group id through an [`IntKeyTable`] on the column's
@@ -2820,9 +2826,9 @@ fn int_group_by_single_column(
     valid: &Bitmap,
     num_rows: usize,
     physical: impl Fn(usize) -> usize,
-) -> Result<(Vec<usize>, Vec<Vec<Value>>)> {
+) -> Result<GroupedKeys> {
     let mut table = IntKeyTable::with_capacity(1 << 10);
-    let mut group_keys: Vec<Vec<Value>> = Vec::new();
+    let mut group_keys: Vec<Value> = Vec::new();
     let mut row_group: Vec<usize> = Vec::with_capacity(num_rows);
     for row in 0..num_rows {
         let p = physical(row);
@@ -2832,15 +2838,15 @@ fn int_group_by_single_column(
             table.null_group_or_insert(group_keys.len())
         };
         if inserted {
-            group_keys.push(vec![if valid.get(p) {
+            group_keys.push(if valid.get(p) {
                 Value::Int(data[p])
             } else {
                 Value::Null
-            }]);
+            });
         }
         row_group.push(group);
     }
-    Ok((row_group, group_keys))
+    Ok((row_group, group_keys.len(), vec![group_keys]))
 }
 
 /// `GroupReduce` fast path for `GROUP BY <dict column>` (#457): groups by
@@ -2862,10 +2868,10 @@ fn dict_group_by_single_column(
     valid: &Bitmap,
     num_rows: usize,
     physical: impl Fn(usize) -> usize,
-) -> (Vec<usize>, Vec<Vec<Value>>) {
+) -> GroupedKeys {
     let null_slot = dict.len();
     let mut code_to_group: Vec<Option<usize>> = vec![None; null_slot.saturating_add(1)];
-    let mut group_keys: Vec<Vec<Value>> = Vec::new();
+    let mut group_keys: Vec<Value> = Vec::new();
     let mut row_group = Vec::with_capacity(num_rows);
     for row in 0..num_rows {
         let p = physical(row);
@@ -2885,14 +2891,14 @@ fn dict_group_by_single_column(
                     Value::Str(dict[slot].to_string().into())
                 };
                 let g = group_keys.len();
-                group_keys.push(vec![key]);
+                group_keys.push(key);
                 code_to_group[slot] = Some(g);
                 g
             }
         };
         row_group.push(group);
     }
-    (row_group, group_keys)
+    (row_group, group_keys.len(), vec![group_keys])
 }
 
 /// SQL join-key equality between a probe row and an already-built row's
@@ -4544,7 +4550,7 @@ impl Vm {
                 .map_or(row, |sel| sel.indices[row] as usize)
         };
 
-        let (row_group, group_keys): (Vec<usize>, Vec<Vec<Value>>) = match dict_group_by {
+        let (row_group, num_groups, key_columns): GroupedKeys = match dict_group_by {
             Some((dict, indices, valid)) => {
                 dict_group_by_single_column(&dict, &indices, &valid, num_rows, physical)
             }
@@ -4563,7 +4569,6 @@ impl Vm {
                 None => group_by_key_views(&key_views, num_rows, physical)?,
             },
         };
-        let num_groups = group_keys.len();
 
         for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
             // #477: one `RunningAgg` per group instead of
@@ -4637,8 +4642,7 @@ impl Vm {
         // After the aggregates, which may read a key register as
         // their source (`MIN(k) ... GROUP BY k`): overwriting it
         // first left them the per-group keys, not the rows.
-        for (i, reg) in group_by.iter().enumerate() {
-            let column: Vec<Value> = group_keys.iter().map(|k| k[i].clone()).collect();
+        for (reg, column) in group_by.iter().zip(key_columns) {
             self.registers.insert(*reg, Arc::new(column));
         }
         Ok(())
