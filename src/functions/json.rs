@@ -20,16 +20,11 @@
 //! * **Subtypes.** sqlite3 tags the result of a JSON function with a
 //!   `JSON` subtype, so `json_array(json('[1]'))` nests `[[1]]` while
 //!   `json_array('[1]')` quotes `["[1]"]`. db-core's [`Value`] carries no
-//!   subtype, so each JSON-valued result is recorded here by the identity
-//!   of its `Rc<str>` allocation (address, length, content hash, thread)
-//!   in a small ring of the most recent results ([`mark_json`]). An
-//!   argument is "JSON" when it is that same allocation -- which is what
-//!   the row VM passes when one call's result feeds another within an
-//!   expression, and what a `||` or a column read never is. A freed
-//!   result's address can be reused by an unrelated string; that string
-//!   is only mistaken for JSON if it also has byte-identical content to
-//!   one of the last [`MARK_CAPACITY`] JSON results. `json_extract` (in
-//!   `functions.rs`, not this module) does not mark its results.
+//!   subtype, so the row codegen decides it from the expression instead
+//!   (`codegen::row::expr::json_subtype`) and passes the positions of the
+//!   arguments that carry it ([`call_marked`]). An expression whose
+//!   subtype depends on the row -- `coalesce` over JSON and plain values
+//!   -- is refused rather than guessed.
 //! * **JSONB.** A BLOB argument that passes sqlite3's `jsonArgIsJsonb`
 //!   check is decoded as JSONB, as sqlite3 does (`json_valid` flags 4/8
 //!   and `json_error_position` run the ported `jsonbValidityCheck`). Any
@@ -41,9 +36,7 @@
 //!   `malformed JSON` up front instead of sqlite3's partial or
 //!   operation-specific result. The `jsonb_*` functions are not provided.
 
-use std::hash::{DefaultHasher, Hasher};
 use std::rc::Rc;
-use std::sync::Mutex;
 
 use super::{FunctionError, ScalarFn};
 use crate::value::Value;
@@ -53,20 +46,66 @@ use crate::value::Value;
 pub(super) fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
     match (name, arity) {
         ("json", 1) => Some(json_fn),
-        ("json_array", _) => Some(json_array),
+        ("json_array", _) => Some(|args| json_array(args, &[])),
         ("json_array_length", 1 | 2) => Some(json_array_length),
         ("json_error_position", 1) => Some(json_error_position),
-        ("json_insert", _) => Some(json_insert),
-        ("json_object", _) => Some(json_object),
+        ("json_extract", n) if n >= 2 => Some(json_extract),
+        ("json_insert", _) => Some(|args| json_insert(args, &[])),
+        ("json_object", _) => Some(|args| json_object(args, &[])),
         ("json_patch", 2) => Some(json_patch),
-        ("json_quote", 1) => Some(json_quote),
+        ("json_quote", 1) => Some(|args| json_quote(args, &[])),
         ("json_remove", _) => Some(json_remove),
-        ("json_replace", _) => Some(json_replace),
-        ("json_set", _) => Some(json_set),
+        ("json_replace", _) => Some(|args| json_replace(args, &[])),
+        ("json_set", _) => Some(|args| json_set(args, &[])),
         ("json_type", 1 | 2) => Some(json_type),
         ("json_valid", 1 | 2) => Some(json_valid),
+        (super::JSON_EXTRACT_SUBTYPED, 2) => Some(extract_subtyped),
+        (super::JSON_QUOTE_NULLABLE, 1) => Some(quote_nullable),
         _ => None,
     }
+}
+
+/// `name(args)` for a JSON function whose arguments at the positions in
+/// `json` carry sqlite3's JSON subtype (see the module docs), or `None`
+/// if `name` takes no JSON-valued arguments.
+pub(super) fn call_marked(
+    name: &str,
+    args: &[Value],
+    json: &[usize],
+) -> Option<Result<Value, FunctionError>> {
+    Some(match name {
+        "json_array" => json_array(args, json),
+        "json_insert" => json_insert(args, json),
+        "json_object" => json_object(args, json),
+        "json_quote" => json_quote(args, json),
+        "json_replace" => json_replace(args, json),
+        "json_set" => json_set(args, json),
+        _ => return None,
+    })
+}
+
+/// `json_quote(X)`, but NULL for NULL (#651).
+fn quote_nullable(args: &[Value]) -> Result<Value, FunctionError> {
+    match args.first() {
+        None | Some(Value::Null) => Ok(Value::Null),
+        Some(_) => json_quote(args, &[]),
+    }
+}
+
+/// `json_extract(X, P)` as the argument of a JSON function: sqlite3 gives
+/// an object or array the JSON subtype and any other value none, so this
+/// returns the JSON text the receiving function embeds -- the container
+/// as is, any other value quoted -- and NULL as NULL (#651).
+pub(super) fn extract_subtyped(args: &[Value]) -> Result<Value, FunctionError> {
+    let value = json_extract(args)?;
+    if value == Value::Null {
+        return Ok(Value::Null);
+    }
+    let container = matches!(
+        json_type(args)?,
+        Value::Text(t) if matches!(&*t, "object" | "array")
+    );
+    json_quote(&[value], if container { &[0] } else { &[] })
 }
 
 // ---------------------------------------------------------------------------
@@ -1685,6 +1724,9 @@ enum Lk {
 enum Edit {
     /// Read only.
     Lookup,
+    /// Read only, keeping a copy of the element found in
+    /// [`Walk::extracted`] (`json_extract`).
+    Extract,
     /// `JEDIT_DEL` (`json_remove`).
     Delete,
     /// `JEDIT_REPL` (`json_replace`).
@@ -1729,6 +1771,8 @@ struct Walk {
     edit: Edit,
     /// The value `json_set`/`json_insert`/`json_replace` writes.
     value: Node,
+    /// What an [`Edit::Extract`] found.
+    extracted: std::cell::Cell<Option<Node>>,
 }
 
 /// `jsonLookupStep(node, path[pos..])`, editing in place per `walk.edit`.
@@ -1738,6 +1782,9 @@ fn step(node: &mut Node, walk: &Walk, pos: usize, depth: u32) -> Result<Found, L
         0 => {
             if matches!(walk.edit, Edit::Replace | Edit::Set) {
                 *node = walk.value.clone();
+            }
+            if walk.edit == Edit::Extract {
+                walk.extracted.set(Some(node.clone()));
             }
             Ok(found(node))
         }
@@ -2323,82 +2370,11 @@ fn format_real17(r: f64, zeropad: bool) -> Vec<u8> {
 // SQL value plumbing
 // ---------------------------------------------------------------------------
 
-/// Most recent JSON results remembered for the subtype approximation.
-const MARK_CAPACITY: usize = 64;
-
-/// One remembered JSON result: the identity of its `Rc<str>` allocation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Mark {
-    /// The thread that produced it.
-    thread: std::thread::ThreadId,
-    /// The allocation's address.
-    addr: usize,
-    /// Its length in bytes.
-    len: usize,
-    /// A hash of its content.
-    hash: u64,
-}
-
-/// The ring of recent JSON results (see the module docs on subtypes).
-static MARKS: Mutex<Vec<Mark>> = Mutex::new(Vec::new());
-
-/// The content hash recorded in a [`Mark`].
-fn content_hash(s: &str) -> u64 {
-    let mut h = DefaultHasher::new();
-    h.write(s.as_bytes());
-    h.finish()
-}
-
-/// The [`Mark`] identifying `rc`, with content hash `hash`.
-fn mark_of(rc: &Rc<str>, hash: u64) -> Mark {
-    Mark {
-        thread: std::thread::current().id(),
-        addr: Rc::as_ptr(rc).cast::<u8>().addr(),
-        len: rc.len(),
-        hash,
-    }
-}
-
-/// Record `rc` as a JSON-subtyped result.
-fn mark_json(rc: &Rc<str>) {
-    let mark = mark_of(rc, content_hash(rc));
-    let mut marks = MARKS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    marks.retain(|m| m.addr != mark.addr || m.thread != mark.thread);
-    if marks.len() >= MARK_CAPACITY {
-        marks.remove(0);
-    }
-    marks.push(mark);
-}
-
-/// Whether `v` is a JSON function's result (sqlite3's JSON subtype).
-fn is_json(v: &Value) -> bool {
-    let Value::Text(rc) = v else {
-        return false;
-    };
-    let probe = mark_of(rc, 0);
-    let marks = MARKS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut candidates = marks
-        .iter()
-        .filter(|m| m.addr == probe.addr && m.len == probe.len && m.thread == probe.thread)
-        .peekable();
-    if candidates.peek().is_none() {
-        return false;
-    }
-    let hash = content_hash(rc);
-    candidates.any(|m| m.hash == hash)
-}
-
-/// A JSON function's text result, marked as JSON.
+/// A JSON function's text result.
 fn json_result(bytes: Vec<u8>) -> Value {
     let text = String::from_utf8(bytes)
         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
-    let rc: Rc<str> = Rc::from(text);
-    mark_json(&rc);
-    Value::Text(rc)
+    Value::Text(Rc::from(text))
 }
 
 /// A plain (non-JSON) text result.
@@ -2476,8 +2452,9 @@ fn parse_arg(v: &Value) -> Result<Option<Node>, FunctionError> {
         .map_err(|_| malformed())
 }
 
-/// `jsonFunctionArgToBlob`: an SQL value as the JSON to insert.
-fn value_to_node(v: &Value) -> Result<Node, FunctionError> {
+/// `jsonFunctionArgToBlob`: an SQL value as the JSON to insert; `json`
+/// says it carries the JSON subtype.
+fn value_to_node(v: &Value, json: bool) -> Result<Node, FunctionError> {
     match v {
         Value::Null => Ok(Node::Null),
         Value::Blob(b) => {
@@ -2488,7 +2465,7 @@ fn value_to_node(v: &Value) -> Result<Node, FunctionError> {
             }
         }
         Value::Text(s) => {
-            if is_json(v) {
+            if json {
                 parse_text(s.as_bytes())
                     .map(|(node, _)| node)
                     .map_err(|_| malformed())
@@ -2522,14 +2499,15 @@ fn blob_error() -> FunctionError {
     FunctionError::Sql("JSON cannot hold BLOB values".to_string())
 }
 
-/// `jsonAppendSqlValue`: append an SQL value as JSON.
-fn push_sql_value(out: &mut Vec<u8>, v: &Value) -> Result<(), FunctionError> {
+/// `jsonAppendSqlValue`: append an SQL value as JSON; `json` says it
+/// carries the JSON subtype.
+fn push_sql_value(out: &mut Vec<u8>, v: &Value, json: bool) -> Result<(), FunctionError> {
     match v {
         Value::Null => out.extend_from_slice(b"null"),
         Value::Real(r) => out.extend_from_slice(&format_real17(*r, true)),
         Value::Integer(i) => out.extend_from_slice(i.to_string().as_bytes()),
         Value::Text(s) => {
-            if is_json(v) {
+            if json {
                 out.extend_from_slice(s.as_bytes());
             } else {
                 push_string(out, s.as_bytes());
@@ -2555,7 +2533,7 @@ fn path_error(path: &[u8], lk: Lk) -> FunctionError {
     FunctionError::Sql(format!("bad JSON path: '{text}'"))
 }
 
-/// Render `node` as a marked JSON result.
+/// Render `node` as a JSON result.
 fn node_result(node: &Node) -> Value {
     let mut out = Vec::new();
     render(&mut out, node);
@@ -2568,34 +2546,130 @@ fn lookup_path(root: &mut Node, path: &[u8]) -> Result<Found, Lk> {
         path: path.to_vec(),
         edit: Edit::Lookup,
         value: Node::Null,
+        extracted: std::cell::Cell::new(None),
     };
     step(root, &walk, 0, 0)
+}
+
+/// The element at `path` (the text after `$`) in `root`.
+fn extract_path(root: &mut Node, path: &[u8]) -> Result<Node, Lk> {
+    let walk = Walk {
+        path: path.to_vec(),
+        edit: Edit::Extract,
+        value: Node::Null,
+        extracted: std::cell::Cell::new(None),
+    };
+    step(root, &walk, 0, 0)?;
+    walk.extracted.take().ok_or(Lk::NotFound)
+}
+
+/// `jsonReturnFromBlob`: an object or array as its JSON text, anything
+/// else as its SQL value.
+fn sql_value(node: &Node) -> Value {
+    match node {
+        Node::Null => Value::Null,
+        Node::True => Value::Integer(1),
+        Node::False => Value::Integer(0),
+        Node::Num(jtype, _) => {
+            let mut text = Vec::new();
+            render(&mut text, node);
+            let text = String::from_utf8_lossy(&text);
+            match text.parse::<i64>() {
+                Ok(i) if matches!(*jtype, J_INT | J_INT5) => Value::Integer(i),
+                // An integer past `i64` becomes a REAL, as sqlite3's
+                // `to_double` fallback does.
+                _ => Value::Real(text.parse::<f64>().unwrap_or(0.0)),
+            }
+        }
+        Node::Str(s) => match s.kind {
+            J_TEXTJ | J_TEXT5 => Value::Text(Rc::from(unescape(&s.raw))),
+            _ => Value::Text(Rc::from(String::from_utf8_lossy(&s.raw).as_ref())),
+        },
+        Node::Array(_) | Node::Object(_) => node_result(node),
+    }
+}
+
+/// A JSON string's payload with its escapes decoded.
+fn unescape(raw: &[u8]) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut i = 0usize;
+    while i < raw.len() {
+        if at(raw, i) != b'\\' {
+            let (c, len) = utf8_read(raw.get(i..).unwrap_or(&[]));
+            out.push(char::from_u32(c).unwrap_or(char::REPLACEMENT_CHARACTER));
+            i = add(i, len.max(1));
+            continue;
+        }
+        let (c, len) = unescape_one(raw.get(i..).unwrap_or(&[]));
+        out.push(char::from_u32(c).unwrap_or(char::REPLACEMENT_CHARACTER));
+        i = add(i, len.max(1));
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
 // The SQL functions
 // ---------------------------------------------------------------------------
 
-/// `json(X)`: X minified, JSON5 rewritten as canonical JSON.
-fn json_fn(args: &[Value]) -> Result<Value, FunctionError> {
-    json_remove(args)
-}
-
-/// `json_array(V...)`: a JSON array of the arguments.
-fn json_array(args: &[Value]) -> Result<Value, FunctionError> {
+/// `json_extract(X, P...)`: the element at P as an SQL value (an object
+/// or array as JSON text); with several paths, a JSON array of them.
+pub(super) fn json_extract(args: &[Value]) -> Result<Value, FunctionError> {
+    let Some((first, paths)) = args.split_first() else {
+        return Ok(Value::Null);
+    };
+    let Some(mut root) = parse_arg(first)? else {
+        return Ok(Value::Null);
+    };
     let mut out = vec![b'['];
-    for (k, v) in args.iter().enumerate() {
+    for (k, p) in paths.iter().enumerate() {
+        let Some(path) = value_text(p) else {
+            return Ok(Value::Null);
+        };
+        if at(&path, 0) != b'$' {
+            return Err(path_error(&path, Lk::PathError));
+        }
+        let found = match extract_path(&mut root, path.get(1..).unwrap_or(&[])) {
+            Ok(node) => Some(node),
+            Err(Lk::NotFound) => None,
+            Err(lk) => return Err(path_error(&path, lk)),
+        };
+        if paths.len() == 1 {
+            return Ok(found.as_ref().map_or(Value::Null, sql_value));
+        }
         if k > 0 {
             out.push(b',');
         }
-        push_sql_value(&mut out, v)?;
+        match found {
+            Some(node) => render(&mut out, &node),
+            None => out.extend_from_slice(b"null"),
+        }
     }
     out.push(b']');
     Ok(json_result(out))
 }
 
-/// `json_object(L, V, ...)`: a JSON object of label/value pairs.
-fn json_object(args: &[Value]) -> Result<Value, FunctionError> {
+/// `json(X)`: X minified, JSON5 rewritten as canonical JSON.
+fn json_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    json_remove(args)
+}
+
+/// `json_array(V...)`: a JSON array of the arguments; those at the
+/// positions in `json` carry the JSON subtype.
+fn json_array(args: &[Value], json: &[usize]) -> Result<Value, FunctionError> {
+    let mut out = vec![b'['];
+    for (k, v) in args.iter().enumerate() {
+        if k > 0 {
+            out.push(b',');
+        }
+        push_sql_value(&mut out, v, json.contains(&k))?;
+    }
+    out.push(b']');
+    Ok(json_result(out))
+}
+
+/// `json_object(L, V, ...)`: a JSON object of label/value pairs; the
+/// arguments at the positions in `json` carry the JSON subtype.
+fn json_object(args: &[Value], json: &[usize]) -> Result<Value, FunctionError> {
     if !args.len().is_multiple_of(2) {
         return Err(FunctionError::Sql(
             "json_object() requires an even number of arguments".to_string(),
@@ -2617,7 +2691,8 @@ fn json_object(args: &[Value]) -> Result<Value, FunctionError> {
         }
         push_string(&mut out, label.as_bytes());
         out.push(b':');
-        if let Err(e) = push_sql_value(&mut out, value) {
+        let marked = json.contains(&k.saturating_mul(2).saturating_add(1));
+        if let Err(e) = push_sql_value(&mut out, value, marked) {
             pending.get_or_insert(e);
         }
     }
@@ -2628,11 +2703,12 @@ fn json_object(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(json_result(out))
 }
 
-/// `json_quote(V)`: V as a JSON value.
-fn json_quote(args: &[Value]) -> Result<Value, FunctionError> {
+/// `json_quote(V)`: V as a JSON value; `json` holds 0 when V carries the
+/// JSON subtype.
+fn json_quote(args: &[Value], json: &[usize]) -> Result<Value, FunctionError> {
     let mut out = Vec::new();
     if let Some(v) = args.first() {
-        push_sql_value(&mut out, v)?;
+        push_sql_value(&mut out, v, json.contains(&0))?;
     }
     Ok(json_result(out))
 }
@@ -2699,22 +2775,23 @@ fn json_error_position(args: &[Value]) -> Result<Value, FunctionError> {
 }
 
 /// `json_insert(X, P, V, ...)`: add V at each P that does not exist.
-fn json_insert(args: &[Value]) -> Result<Value, FunctionError> {
-    edit_fn(args, Edit::Insert, "insert")
+fn json_insert(args: &[Value], json: &[usize]) -> Result<Value, FunctionError> {
+    edit_fn(args, json, Edit::Insert, "insert")
 }
 
 /// `json_replace(X, P, V, ...)`: overwrite each P that exists with V.
-fn json_replace(args: &[Value]) -> Result<Value, FunctionError> {
-    edit_fn(args, Edit::Replace, "replace")
+fn json_replace(args: &[Value], json: &[usize]) -> Result<Value, FunctionError> {
+    edit_fn(args, json, Edit::Replace, "replace")
 }
 
 /// `json_set(X, P, V, ...)`: write V at each P, creating it if needed.
-fn json_set(args: &[Value]) -> Result<Value, FunctionError> {
-    edit_fn(args, Edit::Set, "set")
+fn json_set(args: &[Value], json: &[usize]) -> Result<Value, FunctionError> {
+    edit_fn(args, json, Edit::Set, "set")
 }
 
-/// `jsonSetFunc`/`jsonReplaceFunc` + `jsonInsertIntoBlob`.
-fn edit_fn(args: &[Value], edit: Edit, name: &str) -> Result<Value, FunctionError> {
+/// `jsonSetFunc`/`jsonReplaceFunc` + `jsonInsertIntoBlob`; the arguments
+/// at the positions in `json` carry the JSON subtype.
+fn edit_fn(args: &[Value], json: &[usize], edit: Edit, name: &str) -> Result<Value, FunctionError> {
     let Some((first, rest)) = args.split_first() else {
         return Ok(Value::Null);
     };
@@ -2726,7 +2803,7 @@ fn edit_fn(args: &[Value], edit: Edit, name: &str) -> Result<Value, FunctionErro
     let Some(mut root) = parse_arg(first)? else {
         return Ok(Value::Null);
     };
-    for pair in rest.chunks(2) {
+    for (k, pair) in rest.chunks(2).enumerate() {
         let (Some(p), Some(v)) = (pair.first(), pair.get(1)) else {
             break;
         };
@@ -2736,7 +2813,8 @@ fn edit_fn(args: &[Value], edit: Edit, name: &str) -> Result<Value, FunctionErro
         if at(&path, 0) != b'$' {
             return Err(path_error(&path, Lk::PathError));
         }
-        let value = value_to_node(v)?;
+        // The value of pair `k` is argument `2k + 2`.
+        let value = value_to_node(v, json.contains(&k.saturating_mul(2).saturating_add(2)))?;
         if at(&path, 1) == 0 {
             if matches!(edit, Edit::Replace | Edit::Set) {
                 root = value;
@@ -2747,6 +2825,7 @@ fn edit_fn(args: &[Value], edit: Edit, name: &str) -> Result<Value, FunctionErro
             path: path.get(1..).unwrap_or(&[]).to_vec(),
             edit,
             value,
+            extracted: std::cell::Cell::new(None),
         };
         match step(&mut root, &walk, 0, 0) {
             Ok(_) | Err(Lk::NotFound) => {}
@@ -2778,6 +2857,7 @@ fn json_remove(args: &[Value]) -> Result<Value, FunctionError> {
             path: path.get(1..).unwrap_or(&[]).to_vec(),
             edit: Edit::Delete,
             value: Node::Null,
+            extracted: std::cell::Cell::new(None),
         };
         match step(&mut root, &walk, 0, 0) {
             Ok(_) | Err(Lk::NotFound) => {}
@@ -2898,6 +2978,15 @@ mod tests {
     /// `name(args)`, which must succeed.
     fn ok(name: &str, args: &[Value]) -> Value {
         call(name, args).unwrap()
+    }
+
+    /// `name(args)` with the arguments at `json` carrying the JSON
+    /// subtype, which must return TEXT.
+    fn marked(name: &str, args: &[Value], json: &[usize]) -> String {
+        match super::call_marked(name, args, json) {
+            Some(Ok(Value::Text(s))) => s.to_string(),
+            other => panic!("{name}: expected text, got {other:?}"),
+        }
     }
 
     /// `name(args)`, which must return TEXT.
@@ -3084,16 +3173,17 @@ mod tests {
     }
 
     #[test]
-    fn json_array_nests_json_results_but_quotes_text() {
+    fn json_array_nests_json_arguments_but_quotes_text() {
         let inner = ok("json", &[t("[1]")]);
-        assert_eq!(text("json_array", std::slice::from_ref(&inner)), "[[1]]");
+        assert_eq!(
+            marked("json_array", &[inner.clone(), inner], &[0]),
+            r#"[[1],"[1]"]"#
+        );
         assert_eq!(text("json_array", &[t("[1]")]), r#"["[1]"]"#);
-        // A copy of the same text is a different allocation: plain text.
-        let Value::Text(s) = &inner else { panic!() };
-        let copy = Value::Text(Rc::from(s.to_string()));
-        assert_eq!(text("json_array", &[copy]), r#"["[1]"]"#);
         let quoted = ok("json_quote", &[t("x")]);
-        assert_eq!(text("json_array", &[quoted]), r#"["x"]"#);
+        assert_eq!(marked("json_array", &[quoted], &[0]), r#"["x"]"#);
+        assert_eq!(marked("json_quote", &[t("[1]")], &[0]), "[1]");
+        assert_eq!(super::call_marked("json_type", &[t("[1]")], &[0]), None);
     }
 
     #[test]
@@ -3126,7 +3216,10 @@ mod tests {
             r#"{"a":1,"a":2}"#
         );
         let arr = ok("json", &[t("[1,2]")]);
-        assert_eq!(text("json_object", &[t("a"), arr]), r#"{"a":[1,2]}"#);
+        assert_eq!(
+            marked("json_object", &[t("a"), arr], &[1]),
+            r#"{"a":[1,2]}"#
+        );
         assert_eq!(
             text("json_object", &[t("k\"ey"), t("[1,2]")]),
             exp(r#"{"k~"ey":"[1,2]"}"#)
@@ -3262,7 +3355,8 @@ mod tests {
     fn json_set_values() {
         let set = |v: Value| text("json_set", &[t(r#"{"a":1}"#), t("$.a"), v]);
         assert_eq!(set(t("[1]")), r#"{"a":"[1]"}"#);
-        assert_eq!(set(ok("json", &[t("[1]")])), r#"{"a":[1]}"#);
+        let args = [t(r#"{"a":1}"#), t("$.a"), t("[1]"), t("$.b"), t("[2]")];
+        assert_eq!(marked("json_set", &args, &[4]), r#"{"a":"[1]","b":[2]}"#);
         assert_eq!(set(Value::Real(0.1 + 0.2)), r#"{"a":0.30000000000000004}"#);
         assert_eq!(set(Value::Real(f64::INFINITY)), r#"{"a":9e999}"#);
         assert_eq!(set(Value::Null), r#"{"a":null}"#);

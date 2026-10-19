@@ -4209,8 +4209,14 @@ impl Vm {
                         for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
                             *slot = to_scalar_value(&reg[row]);
                         }
-                        let value = crate::functions::call(name, &call_args)
-                            .map_or(Value::Null, from_scalar_value);
+                        // The late-parse `json_extract` (#307), not
+                        // the row engine's sqlite3 one.
+                        let value = if name.eq_ignore_ascii_case("json_extract") {
+                            crate::functions::late_json_extract(&call_args)
+                        } else {
+                            crate::functions::call(name, &call_args)
+                        }
+                        .map_or(Value::Null, from_scalar_value);
                         result.push(value);
                     }
                     result

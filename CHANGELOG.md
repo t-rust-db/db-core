@@ -4,6 +4,31 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.147.0] - 2026-10-19
+
+### Added
+
+- **sqlite3's built-in scalar functions in the row engine** (#651), each checked against sqlite3 3.53.4:
+  - text and core: `char`, `concat`, `concat_ws`, `format`/`printf`, `octet_length`, `random`, `randomblob`, `substring`, `unicode`, `unistr`, `likely`, `unlikely`, `likelihood`, `sqlite_source_id`, `sqlite_compileoption_used`, `sqlite_compileoption_get`, `sqlite_offset`;
+  - connection state: `changes`, `total_changes`, `last_insert_rowid`, answered by the VM (new `vm::row::ConnectionState`, `Vm::set_connection_state`, `Vm::connection_state`);
+  - math: `acos` ... `trunc`, `log` with one and two arguments;
+  - date and time: `date`, `time`, `datetime`, `julianday`, `unixepoch`, `strftime`, `timediff`, with every modifier (`localtime` and `utc` take the local zone as UTC until #653); `'now'` is one instant per statement;
+  - JSON: `json`, `json_array`, `json_array_length`, `json_error_position`, `json_extract`, `json_insert`, `json_object`, `json_patch`, `json_quote`, `json_remove`, `json_replace`, `json_set`, `json_type`, `json_valid`, with JSON5 input and JSONB blobs read.
+- **sqlite3's JSON subtype, decided at compile time.** `json_array(json('[1]'))` nests `[[1]]` while `json_array('[1]')` quotes `["[1]"]`, through `CASE`, `iif`, `coalesce`, `nullif`, `min`/`max`, `COLLATE` and scalar subqueries. An argument whose subtype would depend on the row where it is also compared (`nullif(json_extract(...), '')`) is refused rather than guessed.
+- `make check-row-functions-oracle` runs `tools/row_functions_cases*.sql` through the row engine and sqlite3 and writes the agreed answers to `.expected` files; the new `unit_row_functions_oracle` test holds the row engine to them in CI.
+- New error variant `FunctionError::Sql` carries sqlite3's own message (`malformed JSON`, ...). A client matching `FunctionError` exhaustively needs an arm for it.
+
+### Changed
+
+- **The row engine's `json_extract` is sqlite3's**: it returns objects, takes several paths, reads JSON5, and raises `malformed JSON` instead of returning NULL. The batch engine keeps #307's late-parse `json_extract`.
+- **`iif`/`if` take sqlite3's variadic form** `iif(B1, V1, ..., [E])` and compile as `CASE`; `iif`, `if`, `coalesce` and `ifnull` evaluate lazily, so an argument past the one that decides never runs or raises.
+- **One function registry**: `functions::SCALAR_FUNCTION_NAMES` lists every callable function, and a name not in it is "no such function" when the statement is prepared (`soundex`, which sqlite3 3.53.4 leaves out, included).
+
+### Fixed
+
+- `length(X)` counts the characters before the first NUL, as sqlite3 does.
+- `printf` widths and precisions wrap to 31 bits like sqlite3's; a width, or a digit or `%c` precision, past `MAX_LENGTH` is "string or blob too big" before any output is built, and so is `randomblob(N)` past it. A `%f`/`%e`/`%g` precision is capped at 100,000,000.
+
 ## [0.146.0] - 2026-10-18
 
 ### Fixed

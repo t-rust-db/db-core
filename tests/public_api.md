@@ -611,6 +611,7 @@ pub fn db_core::coerce::checked_rem(&db_core::value::Value, &db_core::value::Val
 pub fn db_core::coerce::checked_sub(&db_core::value::Value, &db_core::value::Value) -> db_core::value::Value
 pub fn db_core::coerce::coerce_text_to_numeric(&str) -> db_core::value::Value
 pub fn db_core::coerce::concat(&db_core::value::Value, &db_core::value::Value) -> db_core::value::Value
+pub fn db_core::coerce::numeric_text(&str) -> core::option::Option<db_core::value::Value>
 pub fn db_core::coerce::shift_left(&db_core::value::Value, &db_core::value::Value) -> db_core::value::Value
 pub fn db_core::coerce::shift_right(&db_core::value::Value, &db_core::value::Value) -> db_core::value::Value
 pub mod db_core::compare
@@ -1185,6 +1186,7 @@ pub fn db_core::engine::stream::StreamEngine::tables(&self) -> core::result::Res
 pub mod db_core::functions
 pub enum db_core::functions::FunctionError
 pub db_core::functions::FunctionError::IntegerOverflow
+pub db_core::functions::FunctionError::Sql(alloc::string::String)
 pub db_core::functions::FunctionError::TooBig
 pub db_core::functions::FunctionError::Unknown
 pub db_core::functions::FunctionError::Unknown::arity: usize
@@ -1203,6 +1205,7 @@ impl core::marker::StructuralPartialEq for db_core::functions::FunctionError
 pub const db_core::functions::MAX_LENGTH: usize
 pub const db_core::functions::SCALAR_FUNCTION_NAMES: &[&str]
 pub fn db_core::functions::call(&str, &[db_core::value::Value]) -> core::result::Result<db_core::value::Value, db_core::functions::FunctionError>
+pub fn db_core::functions::call_at(&str, &[db_core::value::Value], i64) -> core::result::Result<db_core::value::Value, db_core::functions::FunctionError>
 pub fn db_core::functions::exists(&str, usize) -> bool
 pub fn db_core::functions::glob_match(&str, &str) -> bool
 pub fn db_core::functions::like_match(&str, &str, core::option::Option<char>) -> bool
@@ -8495,6 +8498,7 @@ pub fn db_core::vm::row::coerce::checked_rem(&db_core::value::Value, &db_core::v
 pub fn db_core::vm::row::coerce::checked_sub(&db_core::value::Value, &db_core::value::Value) -> db_core::value::Value
 pub fn db_core::vm::row::coerce::coerce_text_to_numeric(&str) -> db_core::value::Value
 pub fn db_core::vm::row::coerce::concat(&db_core::value::Value, &db_core::value::Value) -> db_core::value::Value
+pub fn db_core::vm::row::coerce::numeric_text(&str) -> core::option::Option<db_core::value::Value>
 pub fn db_core::vm::row::coerce::shift_left(&db_core::value::Value, &db_core::value::Value) -> db_core::value::Value
 pub fn db_core::vm::row::coerce::shift_right(&db_core::value::Value, &db_core::value::Value) -> db_core::value::Value
 pub mod db_core::vm::row::compare
@@ -9253,6 +9257,7 @@ pub fn db_core::vm::row::explain::explain(&db_core::vm::row::program::Program) -
 pub mod db_core::vm::row::functions
 pub enum db_core::vm::row::functions::FunctionError
 pub db_core::vm::row::functions::FunctionError::IntegerOverflow
+pub db_core::vm::row::functions::FunctionError::Sql(alloc::string::String)
 pub db_core::vm::row::functions::FunctionError::TooBig
 pub db_core::vm::row::functions::FunctionError::Unknown
 pub db_core::vm::row::functions::FunctionError::Unknown::arity: usize
@@ -9269,6 +9274,7 @@ impl core::fmt::Display for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::functions::FunctionError
 pub fn db_core::vm::row::functions::call(&str, &[db_core::value::Value]) -> core::result::Result<db_core::value::Value, db_core::functions::FunctionError>
+pub fn db_core::vm::row::functions::call_at(&str, &[db_core::value::Value], i64) -> core::result::Result<db_core::value::Value, db_core::functions::FunctionError>
 pub fn db_core::vm::row::functions::glob_match(&str, &str) -> bool
 pub fn db_core::vm::row::functions::like_match(&str, &str, core::option::Option<char>) -> bool
 pub mod db_core::vm::row::logic
@@ -9503,6 +9509,7 @@ impl db_core::vm::row::program::Instruction
 pub fn db_core::vm::row::program::Instruction::new(db_core::vm::row::program::Opcode, i32, i32, i32) -> Self
 pub fn db_core::vm::row::program::Instruction::with_comment(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn db_core::vm::row::program::Instruction::with_p4(db_core::vm::row::program::Opcode, i32, i32, i32, db_core::vm::row::program::P4) -> Self
+pub fn db_core::vm::row::program::Instruction::with_p5(self, u16) -> Self
 impl core::clone::Clone for db_core::vm::row::program::Instruction
 pub fn db_core::vm::row::program::Instruction::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::Instruction
@@ -9558,6 +9565,8 @@ impl core::marker::Copy for db_core::vm::row::program::SortKeyColumn
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::SortKeyColumn
 pub const db_core::vm::row::program::JOURNAL_MODE_DELETE: i32
 pub const db_core::vm::row::program::JOURNAL_MODE_WAL: i32
+pub const db_core::vm::row::program::OPFLAG_LASTROWID: u16
+pub const db_core::vm::row::program::OPFLAG_NCHANGE: u16
 pub const db_core::vm::row::program::SYNCHRONOUS_FULL: i32
 pub const db_core::vm::row::program::SYNCHRONOUS_NORMAL: i32
 pub const db_core::vm::row::program::SYNCHRONOUS_OFF: i32
@@ -9716,10 +9725,26 @@ pub fn db_core::vm::row::vm::Step::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::row::vm::Step
 pub fn db_core::vm::row::vm::Step::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::vm::Step
+pub struct db_core::vm::row::vm::ConnectionState
+pub db_core::vm::row::vm::ConnectionState::changes: i64
+pub db_core::vm::row::vm::ConnectionState::last_insert_rowid: i64
+pub db_core::vm::row::vm::ConnectionState::total_changes: i64
+impl core::clone::Clone for db_core::vm::row::vm::ConnectionState
+pub fn db_core::vm::row::vm::ConnectionState::clone(&self) -> Self
+impl core::cmp::Eq for db_core::vm::row::vm::ConnectionState
+impl core::cmp::PartialEq for db_core::vm::row::vm::ConnectionState
+pub fn db_core::vm::row::vm::ConnectionState::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::vm::row::vm::ConnectionState
+pub fn db_core::vm::row::vm::ConnectionState::default() -> Self
+impl core::fmt::Debug for db_core::vm::row::vm::ConnectionState
+pub fn db_core::vm::row::vm::ConnectionState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::vm::row::vm::ConnectionState
+impl core::marker::StructuralPartialEq for db_core::vm::row::vm::ConnectionState
 pub struct db_core::vm::row::vm::Vm
 impl db_core::vm::row::vm::Vm
 pub fn db_core::vm::row::vm::Vm::autocommit(&self) -> bool
 pub fn db_core::vm::row::vm::Vm::bind_params(&mut self, alloc::vec::Vec<db_core::value::Value>)
+pub fn db_core::vm::row::vm::Vm::connection_state(&self, bool) -> db_core::vm::row::vm::ConnectionState
 pub fn db_core::vm::row::vm::Vm::emit_row(&mut self, alloc::vec::Vec<db_core::value::Value>)
 pub fn db_core::vm::row::vm::Vm::new() -> Self
 pub fn db_core::vm::row::vm::Vm::open_cursor(&mut self, i32, alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>) -> core::result::Result<(), db_core::vm::row::vm::ExecError>
@@ -9727,6 +9752,7 @@ pub fn db_core::vm::row::vm::Vm::register(&self, i32) -> core::result::Result<&d
 pub fn db_core::vm::row::vm::Vm::reserve_registers(&mut self, i32)
 pub fn db_core::vm::row::vm::Vm::rows(&self) -> &[alloc::vec::Vec<db_core::value::Value>]
 pub fn db_core::vm::row::vm::Vm::set_autocommit(&mut self, bool)
+pub fn db_core::vm::row::vm::Vm::set_connection_state(&mut self, db_core::vm::row::vm::ConnectionState)
 pub fn db_core::vm::row::vm::Vm::set_cursor_factory(&mut self, alloc::boxed::Box<dyn db_core::vm::row::cursor_factory::CursorFactory>)
 pub fn db_core::vm::row::vm::Vm::set_register(&mut self, i32, db_core::value::Value) -> core::result::Result<(), db_core::vm::row::vm::ExecError>
 pub fn db_core::vm::row::vm::Vm::set_schema_storage(&mut self, alloc::boxed::Box<dyn db_core::vm::row::schema_storage::SchemaStorage>)
@@ -9841,6 +9867,7 @@ impl core::fmt::Display for db_core::vm::row::vm::ExecError
 pub fn db_core::vm::row::vm::ExecError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::vm::row::FunctionError
 pub db_core::vm::row::FunctionError::IntegerOverflow
+pub db_core::vm::row::FunctionError::Sql(alloc::string::String)
 pub db_core::vm::row::FunctionError::TooBig
 pub db_core::vm::row::FunctionError::Unknown
 pub db_core::vm::row::FunctionError::Unknown::arity: usize
@@ -10129,6 +10156,21 @@ pub fn db_core::vm::row::cursor::AutoIndexCursor::seek_index_ge(&mut self, &[db_
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sequence_base(&self) -> i64
 pub fn db_core::vm::row::cursor::AutoIndexCursor::sorter_insert(&mut self, alloc::rcs::rc::Rc<[u8]>) -> bool
 pub fn db_core::vm::row::cursor::AutoIndexCursor::update_payload(&mut self, i64, &alloc::rcs::rc::Rc<[u8]>) -> core::option::Option<bool>
+pub struct db_core::vm::row::ConnectionState
+pub db_core::vm::row::ConnectionState::changes: i64
+pub db_core::vm::row::ConnectionState::last_insert_rowid: i64
+pub db_core::vm::row::ConnectionState::total_changes: i64
+impl core::clone::Clone for db_core::vm::row::vm::ConnectionState
+pub fn db_core::vm::row::vm::ConnectionState::clone(&self) -> Self
+impl core::cmp::Eq for db_core::vm::row::vm::ConnectionState
+impl core::cmp::PartialEq for db_core::vm::row::vm::ConnectionState
+pub fn db_core::vm::row::vm::ConnectionState::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::vm::row::vm::ConnectionState
+pub fn db_core::vm::row::vm::ConnectionState::default() -> Self
+impl core::fmt::Debug for db_core::vm::row::vm::ConnectionState
+pub fn db_core::vm::row::vm::ConnectionState::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::vm::row::vm::ConnectionState
+impl core::marker::StructuralPartialEq for db_core::vm::row::vm::ConnectionState
 pub struct db_core::vm::row::CursorFactoryError(pub alloc::string::String)
 impl core::clone::Clone for db_core::vm::row::cursor_factory::CursorFactoryError
 pub fn db_core::vm::row::cursor_factory::CursorFactoryError::clone(&self) -> Self
@@ -10378,6 +10420,7 @@ impl db_core::vm::row::program::Instruction
 pub fn db_core::vm::row::program::Instruction::new(db_core::vm::row::program::Opcode, i32, i32, i32) -> Self
 pub fn db_core::vm::row::program::Instruction::with_comment(self, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn db_core::vm::row::program::Instruction::with_p4(db_core::vm::row::program::Opcode, i32, i32, i32, db_core::vm::row::program::P4) -> Self
+pub fn db_core::vm::row::program::Instruction::with_p5(self, u16) -> Self
 impl core::clone::Clone for db_core::vm::row::program::Instruction
 pub fn db_core::vm::row::program::Instruction::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::row::program::Instruction
@@ -10524,6 +10567,7 @@ pub struct db_core::vm::row::Vm
 impl db_core::vm::row::vm::Vm
 pub fn db_core::vm::row::vm::Vm::autocommit(&self) -> bool
 pub fn db_core::vm::row::vm::Vm::bind_params(&mut self, alloc::vec::Vec<db_core::value::Value>)
+pub fn db_core::vm::row::vm::Vm::connection_state(&self, bool) -> db_core::vm::row::vm::ConnectionState
 pub fn db_core::vm::row::vm::Vm::emit_row(&mut self, alloc::vec::Vec<db_core::value::Value>)
 pub fn db_core::vm::row::vm::Vm::new() -> Self
 pub fn db_core::vm::row::vm::Vm::open_cursor(&mut self, i32, alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>) -> core::result::Result<(), db_core::vm::row::vm::ExecError>
@@ -10531,6 +10575,7 @@ pub fn db_core::vm::row::vm::Vm::register(&self, i32) -> core::result::Result<&d
 pub fn db_core::vm::row::vm::Vm::reserve_registers(&mut self, i32)
 pub fn db_core::vm::row::vm::Vm::rows(&self) -> &[alloc::vec::Vec<db_core::value::Value>]
 pub fn db_core::vm::row::vm::Vm::set_autocommit(&mut self, bool)
+pub fn db_core::vm::row::vm::Vm::set_connection_state(&mut self, db_core::vm::row::vm::ConnectionState)
 pub fn db_core::vm::row::vm::Vm::set_cursor_factory(&mut self, alloc::boxed::Box<dyn db_core::vm::row::cursor_factory::CursorFactory>)
 pub fn db_core::vm::row::vm::Vm::set_register(&mut self, i32, db_core::value::Value) -> core::result::Result<(), db_core::vm::row::vm::ExecError>
 pub fn db_core::vm::row::vm::Vm::set_schema_storage(&mut self, alloc::boxed::Box<dyn db_core::vm::row::schema_storage::SchemaStorage>)
@@ -10542,6 +10587,8 @@ pub fn db_core::vm::row::vm::Vm::default() -> Self
 pub const db_core::vm::row::JOURNAL_MODE_DELETE: i32
 pub const db_core::vm::row::JOURNAL_MODE_WAL: i32
 pub const db_core::vm::row::MAX_EPHEMERAL_ROWS: usize
+pub const db_core::vm::row::OPFLAG_LASTROWID: u16
+pub const db_core::vm::row::OPFLAG_NCHANGE: u16
 pub const db_core::vm::row::SYNCHRONOUS_FULL: i32
 pub const db_core::vm::row::SYNCHRONOUS_NORMAL: i32
 pub const db_core::vm::row::SYNCHRONOUS_OFF: i32

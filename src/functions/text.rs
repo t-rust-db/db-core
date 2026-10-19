@@ -20,7 +20,7 @@
 
 use std::hash::{BuildHasher, Hasher};
 
-use super::{as_text, FunctionError, ScalarFn};
+use super::{as_text, FunctionError, ScalarFn, MAX_LENGTH};
 use crate::value::Value;
 
 /// The function named `name` (lowercase) at `arity`, if this family has
@@ -156,6 +156,9 @@ fn randomblob(args: &[Value]) -> Result<Value, FunctionError> {
         .map_or(1, crate::coerce::cast_to_integer)
         .max(1);
     let n = usize::try_from(n).unwrap_or(1);
+    if n > MAX_LENGTH {
+        return Err(FunctionError::TooBig);
+    }
     let mut bytes = Vec::with_capacity(n);
     while bytes.len() < n {
         bytes.extend(random_u64().to_ne_bytes());
@@ -273,12 +276,18 @@ fn printf(args: &[Value]) -> Result<Value, FunctionError> {
         let Some(spec) = Spec::parse(&mut chars, &mut rest) else {
             return Ok(finish(out, converted));
         };
+        if spec.too_big() {
+            return Err(FunctionError::TooBig);
+        }
         let arg = if spec.takes_arg() { rest.next() } else { None };
         let Some(piece) = spec.convert(arg) else {
             return Ok(finish(out, false));
         };
         converted = true;
         out.push_str(&piece);
+        if out.len() > MAX_LENGTH {
+            return Err(FunctionError::TooBig);
+        }
     }
     Ok(finish(out, converted))
 }
@@ -379,26 +388,48 @@ impl Spec {
         }
         if chars.peek() == Some(&'*') {
             chars.next();
-            let w = int_arg(args.next());
+            let w = star_arg(args.next());
             spec.left |= w < 0;
-            spec.width = usize::try_from(w.unsigned_abs()).unwrap_or(usize::MAX);
+            // `INT_MIN` has no absolute value: no width.
+            spec.width = if w == i32::MIN {
+                0
+            } else {
+                usize::try_from(w.unsigned_abs()).unwrap_or(0)
+            };
         } else {
             spec.width = digits(chars);
         }
         if chars.peek() == Some(&'.') {
             chars.next();
-            spec.precision = Some(if chars.peek() == Some(&'*') {
+            spec.precision = if chars.peek() == Some(&'*') {
                 chars.next();
-                usize::try_from(int_arg(args.next()).unsigned_abs()).unwrap_or(usize::MAX)
+                // A negative precision counts as its absolute value, and
+                // `INT_MIN` as none.
+                match star_arg(args.next()) {
+                    i32::MIN => None,
+                    p => usize::try_from(p.unsigned_abs()).ok(),
+                }
             } else {
-                digits(chars)
-            });
+                Some(digits(chars))
+            };
         }
         while chars.peek() == Some(&'l') {
             chars.next();
         }
         spec.conversion = chars.next()?;
         Some(spec)
+    }
+
+    /// Whether the output is sure to pass [`MAX_LENGTH`]: a width past
+    /// it, or a precision past it where precision is a minimum length
+    /// (digits, `%c`'s repeat count) rather than a cut or capped.
+    fn too_big(&self) -> bool {
+        let precision_pads = !matches!(
+            self.conversion,
+            's' | 'z' | 'q' | 'Q' | 'w' | 'f' | 'e' | 'E' | 'g' | 'G'
+        );
+        self.width > MAX_LENGTH
+            || (precision_pads && self.precision.is_some_and(|p| p > MAX_LENGTH))
     }
 
     /// Whether the conversion consumes an argument.
@@ -562,7 +593,7 @@ impl Spec {
     fn real(&self, x: f64) -> String {
         let negative = x.is_sign_negative() && x != 0.0 && !x.is_nan();
         let (exact, exp) = decode(x);
-        let precision = self.precision.unwrap_or(6);
+        let precision = self.precision.unwrap_or(6).min(FP_PRECISION_LIMIT);
         let p = i64::try_from(precision).unwrap_or(i64::MAX);
         let shown = match self.conversion {
             'f' => exp.saturating_add(1).saturating_add(p),
@@ -720,17 +751,27 @@ fn alternate_form_2(s: &str) -> String {
     format!("{mantissa}{exponent}")
 }
 
-/// Reads decimal digits (a width or precision).
+/// A width or precision written as digits: sqlite3 accumulates it in an
+/// unsigned 32-bit int and keeps the low 31 bits (`%5000000000s` is
+/// 705032704 wide).
 fn digits(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> usize {
-    let mut n = 0_usize;
+    let mut n = 0_u32;
     while let Some(d) = chars.peek().and_then(|c| c.to_digit(10)) {
         chars.next();
-        n = n
-            .saturating_mul(10)
-            .saturating_add(usize::try_from(d).unwrap_or(0));
+        n = n.wrapping_mul(10).wrapping_add(d);
     }
-    n
+    usize::try_from(n & 0x7fff_ffff).unwrap_or(0)
 }
+
+/// A `*` width or precision: sqlite3 reads the argument as a C `int`.
+fn star_arg(v: Option<&Value>) -> i32 {
+    let [a, b, c, d, ..] = int_arg(v).to_le_bytes();
+    i32::from_le_bytes([a, b, c, d])
+}
+
+/// `SQLITE_FP_PRECISION_LIMIT`: a `%f`/`%e`/`%g` precision past it counts
+/// as it.
+const FP_PRECISION_LIMIT: usize = 100_000_000;
 
 /// `n` in `radix`, lowercase.
 fn to_radix(mut n: u128, radix: u32) -> String {
@@ -832,6 +873,34 @@ mod tests {
 
     fn p(args: &[Value]) -> Value {
         call("printf", args).unwrap()
+    }
+
+    /// #651: past `MAX_LENGTH` is "string or blob too big", decided
+    /// before the output is built; widths and precisions wrap to 31 bits.
+    #[test]
+    fn printf_and_randomblob_past_max_length_are_too_big() {
+        use super::super::FunctionError;
+        let i = Value::Integer;
+        for args in [
+            vec![t("%1000000001d"), i(1)],
+            vec![t("%.1000000001x"), i(1)],
+            vec![t("%*d"), i(1_000_000_001), i(1)],
+            vec![t("%.*c"), i(1_000_000_001), t("x")],
+        ] {
+            assert_eq!(
+                call("printf", &args),
+                Err(FunctionError::TooBig),
+                "{args:?}"
+            );
+        }
+        assert_eq!(
+            call("randomblob", &[i(1_000_000_001)]),
+            Err(FunctionError::TooBig)
+        );
+        assert_eq!(p(&[t("%4294967298d|"), i(1)]), t(" 1|"));
+        assert_eq!(p(&[t("%.5000000000s|"), t("abc")]), t("abc|"));
+        assert_eq!(p(&[t("%*d|"), i(-2_147_483_648), i(1)]), t("1|"));
+        assert_eq!(p(&[t("%.*d|"), i(-3), i(1)]), t("001|"));
     }
 
     /// Expectations from sqlite3 3.53.4.

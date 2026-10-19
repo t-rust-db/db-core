@@ -8,6 +8,11 @@ engine's half runs through examples/row_oracle; sqlite3 runs each line in
 reals as doubles; an error must be an error on both sides. A line ending
 in `-- nondeterministic` is only checked for erroring alike.
 
+When every line agrees, db-core's answers are written next to the cases
+as `<cases>.expected` (a nondeterministic line as `ERROR` or `OK`): the
+unit test `unit_row_functions_oracle` checks the row engine against that
+file in CI, where sqlite3 is not installed.
+
 Usage: tools/check_row_functions_oracle.py [cases.sql]
 """
 import subprocess
@@ -69,6 +74,7 @@ def main():
     lines = [l for l in open(CASES).read().splitlines() if l.strip() and not l.startswith("--")]
     assert len(ours) == len(lines), (len(ours), len(lines))
     bad = 0
+    expected = []
     for sql, got in zip(lines, ours):
         want = sqlite(sql)
         nondet = sql.rstrip().endswith("-- nondeterministic")
@@ -76,7 +82,11 @@ def main():
         if not same:
             bad += 1
             print(f"MISMATCH: {sql}\n  db-core: {got}\n  sqlite3: {want}")
+        expected.append(("ERROR" if got == "ERROR" else "OK") if nondet else got)
     print(f"check-row-functions-oracle: {len(lines) - bad}/{len(lines)} agree with sqlite3 {EXPECTED}")
+    if not bad:
+        with open(CASES.removesuffix(".sql") + ".expected", "w") as f:
+            f.write("".join(line + "\n" for line in expected))
     sys.exit(1 if bad else 0)
 
 

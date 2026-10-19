@@ -1386,6 +1386,12 @@ fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
                     })
                 }
             };
+            // `name(arity);json=0,2`: the arguments at those positions
+            // carry sqlite3's JSON subtype (#651).
+            let (descriptor, json) = match descriptor.split_once(";json=") {
+                Some((call, positions)) => (call, Some(positions)),
+                None => (descriptor, None),
+            };
             let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
                 ExecError::MalformedInstruction {
                     opcode: "Function",
@@ -1416,7 +1422,21 @@ fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
                     })?;
                 args.push(vm.register(reg)?.clone());
             }
-            let result = functions::call_at(name, &args, vm.statement_now_ns).map_err(|e| match e {
+            let result = match json {
+                Some(positions) => {
+                    let positions = positions
+                        .split(',')
+                        .map(str::parse)
+                        .collect::<Result<Vec<usize>, _>>()
+                        .map_err(|_| ExecError::MalformedInstruction {
+                            opcode: "Function",
+                            reason: format!("malformed JSON argument positions {positions:?}"),
+                        })?;
+                    crate::functions::call_marked(name, &args, &positions)
+                }
+                None => functions::call_at(name, &args, vm.statement_now_ns),
+            };
+            let result = result.map_err(|e| match e {
                 // A limit sqlite3 reports in its own words (#659).
                 functions::FunctionError::TooBig => ExecError::TooBig,
                 e => ExecError::MalformedInstruction {

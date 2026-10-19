@@ -113,7 +113,8 @@ fn length(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(match &args[0] {
         Value::Null => Value::Null,
         Value::Blob(b) => Value::Integer(len_to_i64(b.len())),
-        Value::Text(s) => Value::Integer(len_to_i64(s.chars().count())),
+        // sqlite3 counts the characters before the first NUL (#651).
+        Value::Text(s) => Value::Integer(len_to_i64(s.chars().take_while(|&c| c != '\0').count())),
         other => Value::Integer(len_to_i64(as_text(other).chars().count())),
     })
 }
@@ -682,9 +683,25 @@ fn glob_fn(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(Value::Integer(i64::from(glob_match(&text, &pattern))))
 }
 
+/// `iif(B1, V1, ..., [E])`/`if(...)`: the value after the first true
+/// condition, else `E` (NULL without one). The row codegen compiles it
+/// as the lazy `CASE` it is in sqlite3 (#651); this is the eager form.
 fn iif(args: &[Value]) -> Result<Value, FunctionError> {
-    let cond = match &args[0] {
-        Value::Null => false,
+    let mut pairs = args.chunks_exact(2);
+    for pair in pairs.by_ref() {
+        if let [cond, value] = pair {
+            if is_true(cond) {
+                return Ok(value.clone());
+            }
+        }
+    }
+    Ok(pairs.remainder().first().cloned().unwrap_or(Value::Null))
+}
+
+/// Whether `v` is true as a condition: non-zero once read as a number.
+fn is_true(v: &Value) -> bool {
+    match v {
+        Value::Null | Value::Blob(_) => false,
         Value::Integer(i) => *i != 0,
         Value::Real(r) => *r != 0.0,
         Value::Text(s) => match crate::coerce::coerce_text_to_numeric(s) {
@@ -692,13 +709,7 @@ fn iif(args: &[Value]) -> Result<Value, FunctionError> {
             Value::Real(r) => r != 0.0,
             _ => false,
         },
-        Value::Blob(_) => false,
-    };
-    Ok(if cond {
-        args[1].clone()
-    } else {
-        args[2].clone()
-    })
+    }
 }
 
 /// Every overlapping 3-byte window of `text`'s UTF-8 bytes, in order.
@@ -722,7 +733,7 @@ pub fn trigram_key(t: [u8; 3]) -> i64 {
     i64::from(t[0]) << 16 | i64::from(t[1]) << 8 | i64::from(t[2])
 }
 
-/// `json_extract(text, path)` -- late parse of embedded JSON (#307,
+/// The batch engine's `json_extract(text, path)` -- late parse of embedded JSON (#307,
 /// ADR 0018 "late `json_extract`" for structure the ingest-time parser
 /// left as a string). Malformed JSON, a missing path or a path through
 /// a non-object all return `Value::Null` rather than an error, matching
@@ -730,8 +741,9 @@ pub fn trigram_key(t: [u8; 3]) -> i64 {
 /// `instr`); a nested object/array leaf also returns `Value::Null` --
 /// re-serializing a parsed [`crate::json_path::JsonValue::Object`] back
 /// to JSON text is unscoped work with no caller today ([`JsonValue::Array`]
-/// keeps its raw text, so extracting an array leaf does work).
-fn json_extract(args: &[Value]) -> Result<Value, FunctionError> {
+/// keeps its raw text, so extracting an array leaf does work). The row
+/// engine's `json_extract` is sqlite3's ([`json`], #651).
+pub(crate) fn late_json_extract(args: &[Value]) -> Result<Value, FunctionError> {
     if args.iter().any(|v| matches!(v, Value::Null)) {
         return Ok(Value::Null);
     }
@@ -1343,16 +1355,42 @@ pub fn call_at(name: &str, args: &[Value], now_ns: i64) -> Result<Value, Functio
     }
 }
 
-/// Every scalar function `call` dispatches, kept next to it deliberately
-/// so the two can't drift apart -- adding a name here without a matching
-/// arm in `call` (or vice versa) is a copy/paste error away, not a
-/// silent divergence discovered later. A client-side completion popup
+/// [`call`] for a JSON function whose arguments at the positions in
+/// `json` carry sqlite3's JSON subtype, which the row codegen decides
+/// (#651): `json_array(json('[1]'))` nests the array where
+/// `json_array('[1]')` quotes the text.
+pub(crate) fn call_marked(
+    name: &str,
+    args: &[Value],
+    json: &[usize],
+) -> Result<Value, FunctionError> {
+    json::call_marked(&name.to_ascii_lowercase(), args, json).unwrap_or_else(|| call(name, args))
+}
+
+/// The internal name the row codegen gives `json_extract(X, P)` when its
+/// result feeds a JSON function: sqlite3's result there is JSON for an
+/// object or array and a plain value otherwise, which this variant
+/// returns as JSON text either way (#651). SQL cannot name it unquoted.
+pub(crate) const JSON_EXTRACT_SUBTYPED: &str = "json_extract;subtype";
+
+/// The internal name of `json_quote(X)` that keeps NULL as NULL, which
+/// the row codegen wraps a plain value in where a JSON function's
+/// argument is JSON on other rows (#651). SQL cannot name it unquoted.
+pub(crate) const JSON_QUOTE_NULLABLE: &str = "json_quote;nullable";
+
+/// Every scalar function `call` dispatches, by family, kept next to it
+/// deliberately so the two can't drift apart -- adding a name here
+/// without a matching arm in `call` (or vice versa) is a copy/paste error
+/// away, not a silent divergence discovered later; a test checks every
+/// name here is callable. A name not here is "no such function" when the
+/// statement is prepared, as in sqlite3 (#651). A client-side completion popup
 /// (t-rust-db/db-studio#46) consumes this instead of hand-maintaining
 /// its own function-name list. Aggregate names (`COUNT`/`SUM`/...) and
 /// window functions aren't included -- they're recognized by each
 /// planner's own validator (e.g. `parser::column::is_known_agg_name`),
 /// not this scalar registry.
 pub const SCALAR_FUNCTION_NAMES: &[&str] = &[
+    // Core (sqlite-rs #64/#68/#90, #307).
     "length",
     "upper",
     "lower",
@@ -1372,6 +1410,7 @@ pub const SCALAR_FUNCTION_NAMES: &[&str] = &[
     "instr",
     "zeroblob",
     "iif",
+    "if",
     "substr",
     "trim",
     "ltrim",
@@ -1382,38 +1421,12 @@ pub const SCALAR_FUNCTION_NAMES: &[&str] = &[
     "json_extract",
     "logfmt_extract",
     "regexp_extract",
-];
-
-/// Dispatches `name(args)` by name and arity into this module's
-/// registry, per `Opcode::Function`.
-pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {
-    match lookup(name, args.len()) {
-        Some(f) => f(args),
-        None => Err(FunctionError::Unknown {
-            name: name.to_string(),
-            arity: args.len(),
-        }),
-    }
-}
-
-/// Whether [`call`] knows `name` at `arity`: codegen refuses an unknown
-/// call up front, as sqlite3 does when it prepares the statement (#562).
-pub fn exists(name: &str, arity: usize) -> bool {
-    lookup(name, arity).is_some()
-}
-
-/// sqlite3 built-in scalar functions [`call`] does not implement yet. A
-/// call to one is not refused when the statement compiles -- sqlite3
-/// would run it -- but fails if a row reaches it, as before #562.
-const SQLITE_ONLY_FUNCTION_NAMES: &[&str] = &[
+    // Text and connection state (#651).
     "changes",
     "char",
     "concat",
     "concat_ws",
-    "date",
-    "datetime",
     "format",
-    "julianday",
     "last_insert_rowid",
     "likelihood",
     "likely",
@@ -1421,20 +1434,16 @@ const SQLITE_ONLY_FUNCTION_NAMES: &[&str] = &[
     "printf",
     "random",
     "randomblob",
-    "soundex",
     "sqlite_compileoption_get",
     "sqlite_compileoption_used",
     "sqlite_offset",
     "sqlite_source_id",
-    "strftime",
     "substring",
-    "time",
-    "timediff",
     "total_changes",
     "unicode",
     "unistr",
-    "unixepoch",
     "unlikely",
+    // Math (#651).
     "acos",
     "acosh",
     "asin",
@@ -1464,6 +1473,15 @@ const SQLITE_ONLY_FUNCTION_NAMES: &[&str] = &[
     "tan",
     "tanh",
     "trunc",
+    // Date and time (#651).
+    "date",
+    "datetime",
+    "julianday",
+    "strftime",
+    "time",
+    "timediff",
+    "unixepoch",
+    // JSON (#651).
     "json",
     "json_array",
     "json_array_length",
@@ -1479,15 +1497,32 @@ const SQLITE_ONLY_FUNCTION_NAMES: &[&str] = &[
     "json_valid",
 ];
 
+/// Dispatches `name(args)` by name and arity into this module's
+/// registry, per `Opcode::Function`.
+pub fn call(name: &str, args: &[Value]) -> Result<Value, FunctionError> {
+    match lookup(name, args.len()) {
+        Some(f) => f(args),
+        None => Err(FunctionError::Unknown {
+            name: name.to_string(),
+            arity: args.len(),
+        }),
+    }
+}
+
+/// Whether [`call`] knows `name` at `arity`: codegen refuses an unknown
+/// call up front, as sqlite3 does when it prepares the statement (#562).
+pub fn exists(name: &str, arity: usize) -> bool {
+    lookup(name, arity).is_some()
+}
+
 /// What sqlite3 says when it prepares a call to `name` with `arity`
 /// arguments, if it refuses it (#562): `None` for a function [`call`]
-/// implements at that arity, or an sqlite3 built-in it does not (left to
-/// fail at run time).
+/// implements at that arity.
 pub fn prepare_error(name: &str, arity: usize) -> Option<String> {
-    let lower = name.to_ascii_lowercase();
-    if exists(name, arity) || SQLITE_ONLY_FUNCTION_NAMES.contains(&lower.as_str()) {
+    if exists(name, arity) {
         return None;
     }
+    let lower = name.to_ascii_lowercase();
     Some(if SCALAR_FUNCTION_NAMES.contains(&lower.as_str()) {
         format!("wrong number of arguments to function {lower}()")
     } else {
@@ -1526,7 +1561,7 @@ fn core_lookup(name: &str, arity: usize) -> Option<ScalarFn> {
         ("sign", 1) => Some(sign),
         ("instr", 2) => Some(instr),
         ("zeroblob", 1) => Some(zeroblob),
-        ("iif", 3) => Some(iif),
+        ("iif" | "if", n) if n >= 2 => Some(iif),
         ("substr", 2 | 3) => Some(substr),
         ("trim", 1 | 2) => Some(trim_fn),
         ("ltrim", 1 | 2) => Some(ltrim_fn),
@@ -1534,7 +1569,6 @@ fn core_lookup(name: &str, arity: usize) -> Option<ScalarFn> {
         ("replace", 3) => Some(replace_fn),
         ("like", 2 | 3) => Some(like_fn),
         ("glob", 2) => Some(glob_fn),
-        ("json_extract", 2) => Some(json_extract),
         ("logfmt_extract", 2) => Some(logfmt_extract),
         ("regexp_extract", 3) => Some(regexp_extract),
         _ => None,
@@ -1584,17 +1618,37 @@ mod tests {
     }
 
     /// #656: `json_extract` over JSON nested past the parser's depth cap
-    /// is NULL (malformed), not a stack overflow.
+    /// is NULL in the batch engine and `malformed JSON` in the row engine,
+    /// as in sqlite3 -- not a stack overflow.
     #[test]
     fn json_extract_over_too_deep_nesting_is_null() {
         let deep = format!("{}1{}", "{\"a\":".repeat(100_000), "}".repeat(100_000));
+        let args = [Value::Text(deep.into()), Value::Text("$.a".into())];
+        assert_eq!(late_json_extract(&args), Ok(Value::Null));
         assert_eq!(
-            v(
-                "json_extract",
-                &[Value::Text(deep.into()), Value::Text("$.a".into())]
-            ),
-            Value::Null
+            call("json_extract", &args),
+            Err(FunctionError::Sql("malformed JSON".to_string()))
         );
+    }
+
+    /// #651: one registry -- every listed name is callable at some arity,
+    /// once, and an unlisted one is unknown when the statement prepares.
+    #[test]
+    fn every_listed_function_is_callable() {
+        let mut seen = std::collections::HashSet::new();
+        for name in SCALAR_FUNCTION_NAMES {
+            assert!(seen.insert(*name), "{name} listed twice");
+            assert!((0..=6).any(|n| exists(name, n)), "{name} is not callable");
+        }
+        assert_eq!(
+            prepare_error("soundex", 1),
+            Some("no such function: soundex".to_string())
+        );
+        assert_eq!(
+            prepare_error("iif", 1),
+            Some("wrong number of arguments to function iif()".to_string())
+        );
+        assert_eq!(prepare_error("IF", 3), None);
     }
 
     #[test]

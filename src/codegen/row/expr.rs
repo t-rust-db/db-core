@@ -22,6 +22,7 @@
 //! mode, e.g. column reads and affinity/collation lookups).
 
 mod cond;
+mod json_subtype;
 // File is `expr_value.rs`, not `value.rs`: MC/DC obligation ids used to be
 // keyed by basename+line and this module collided with the crate-level
 // `src/value.rs`. Ids are module-path-qualified since mvl-rust#121, so the
