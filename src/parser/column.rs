@@ -16,7 +16,7 @@
 //! [`crate::codegen::row`] already does. [`validate_select`] is where
 //! "column's grammar becomes an enforced subset" (ADR 0002's second
 //! amendment) actually happens: a `Select` outside this subset (a real
-//! JOIN condition shape, `WITH`, `UNION`, `HAVING`, non-integer `LIMIT`, a
+//! JOIN condition shape, `WITH`, `UNION`, non-integer `LIMIT`, a
 //! second `ORDER BY` term, ...) is rejected here with
 //! [`ParseError::Unexpected`], not silently miscompiled -- and, as a side
 //! effect, table aliases (`FROM orders o`) are resolved in place, rewriting
@@ -795,10 +795,6 @@ fn validate_select(select: &mut Select) -> Result<()> {
     if !select.compound.is_empty() {
         return Err(unsupported(select.span, "UNION".into()));
     }
-    if select.having.is_some() {
-        return Err(unsupported(select.span, "HAVING".into()));
-    }
-
     // (alias, real_table) in FROM-then-JOIN order; deferred into `aliases`
     // below rather than inserted directly, so a self-join (two aliases for
     // the same real table -- e.g. `log AS a JOIN log AS b`, ADR-0022,
@@ -887,6 +883,9 @@ fn validate_select(select: &mut Select) -> Result<()> {
         }
         for e in &mut select.group_by {
             resolve_expr_aliases(e, &aliases);
+        }
+        if let Some(having) = &mut select.having {
+            resolve_expr_aliases(having, &aliases);
         }
         for term in &mut select.order_by {
             resolve_expr_aliases(&mut term.expr, &aliases);
@@ -1025,8 +1024,91 @@ fn validate_select(select: &mut Select) -> Result<()> {
             return Err(unsupported(select.span, message));
         }
     }
+    if let Some(having) = &select.having {
+        validate_having(having, select, has_agg, has_window)?;
+    }
 
     Ok(())
+}
+
+/// Validates `HAVING` (#644): an expression over the groups, so the same
+/// rule as a select item -- a column outside an aggregate must be a
+/// `GROUP BY` key, or a select-list alias, which the planner substitutes
+/// -- with aggregates allowed, `COUNT(DISTINCT x)` included. Without
+/// `GROUP BY`, the query must aggregate: its one group is the whole input.
+fn validate_having(
+    having: &AstExpr,
+    select: &Select,
+    has_agg: bool,
+    has_window: bool,
+) -> Result<()> {
+    if has_window {
+        return Err(unsupported(
+            having.span,
+            "HAVING alongside a window function".into(),
+        ));
+    }
+    // `validate_expr` refuses `DISTINCT` inside an expression; here a
+    // `COUNT(DISTINCT x)` is checked on its own and validated as `COUNT(x)`.
+    let mut plain = having.clone();
+    clear_distinct(&mut plain)?;
+    validate_expr(&mut plain, true)?;
+    let group_by: Vec<String> = select
+        .group_by
+        .iter()
+        .map(column_name)
+        .collect::<Result<_>>()?;
+    if group_by.is_empty() && !has_agg && !expr_contains_agg(having) {
+        return Err(unsupported(
+            having.span,
+            "HAVING requires GROUP BY or an aggregate".into(),
+        ));
+    }
+    let mut known = group_by;
+    known.extend(select.columns.iter().filter_map(|col| match col {
+        crate::parser::ast::ResultColumn::Expr {
+            alias: Some(alias), ..
+        } => Some(alias.clone()),
+        _ => None,
+    }));
+    match ungrouped_column(having, &known)? {
+        Some(name) => Err(unsupported(
+            having.span,
+            format!("column `{name}` must be a GROUP BY key or inside an aggregate"),
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Checks every `DISTINCT` aggregate call in `expr` and clears its flag.
+fn clear_distinct(expr: &mut AstExpr) -> Result<()> {
+    let span = expr.span;
+    match &mut expr.kind {
+        ExprKind::FunctionCall {
+            name,
+            distinct,
+            args,
+            ..
+        } if is_known_agg_name(name) => {
+            validate_distinct(span, name, *distinct, args)?;
+            *distinct = false;
+            Ok(())
+        }
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Is { lhs, rhs, .. }
+        | ExprKind::Like {
+            expr: lhs,
+            pattern: rhs,
+            ..
+        } => {
+            clear_distinct(lhs)?;
+            clear_distinct(rhs)
+        }
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Paren(inner) => clear_distinct(inner),
+        _ => Ok(()),
+    }
 }
 
 fn from_outcome(message: String, span: Span) -> ParseError {

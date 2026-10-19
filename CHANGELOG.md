@@ -4,6 +4,25 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.149.0] - 2026-10-19
+
+### Added
+
+- **`HAVING` in the column engine's SQL subset** (#644). It filters the merged groups before `DISTINCT`, `ORDER BY` and `LIMIT`. It may read:
+  - `GROUP BY` keys;
+  - the select list's aggregates and its aliases (`count(*) AS n ... HAVING n > 1`);
+  - aggregates the select list does not show, which are merged as extra columns that never reach the output;
+  - `COUNT(DISTINCT x)` when the select list has it too.
+
+  Without `GROUP BY`, the query's one group can be filtered out, leaving no rows. It works the same over a cross-mode join. `HAVING` runs as a `Filter` in `Combine`'s post-aggregation projection (#623), so EXPLAIN shows it there.
+- **Refusals, worded as for the select list:**
+  - a column that is neither a key nor aggregated;
+  - `HAVING` without `GROUP BY` and without an aggregate;
+  - `HAVING` alongside a window function;
+  - a `COUNT(DISTINCT ...)` in `HAVING` that is not in the select list (a query has one distinct key).
+- `make check-column-oracle` has nine `HAVING` cases against DuckDB.
+- `make bench-events` runs the A-and-B sessions query with `HAVING count(DISTINCT name) = 2` on every engine, instead of filtering afterwards.
+
 ## [0.148.0] - 2026-10-19
 
 ### Changed

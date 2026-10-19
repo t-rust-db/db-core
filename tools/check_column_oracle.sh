@@ -28,6 +28,17 @@ FIXTURES=(
 
 # db_core_sql|duckdb_sql, "__TABLE__" substituted per fixture below.
 QUERIES=(
+  # #644: HAVING over select-list aggregates, HAVING-only aggregates,
+  # aliases, keys, COUNT(DISTINCT), no GROUP BY, with WHERE/ORDER/LIMIT.
+  "SELECT region, sum(amount) FROM __TABLE__ GROUP BY region HAVING sum(amount) > 7812000 ORDER BY region|SELECT region, sum(amount)::DECIMAL(18,2) FROM __TABLE__ GROUP BY region HAVING sum(amount) > 7812000 ORDER BY region"
+  "SELECT region FROM __TABLE__ GROUP BY region HAVING min(amount) > 6 ORDER BY region|SELECT region FROM __TABLE__ GROUP BY region HAVING min(amount) > 6 ORDER BY region"
+  "SELECT region, count(*) AS n FROM __TABLE__ GROUP BY region HAVING n = 1250 AND max(amount) - min(amount) < 12490 ORDER BY region|SELECT region, count(*) AS n FROM __TABLE__ GROUP BY region HAVING n = 1250 AND max(amount) - min(amount) < 12490 ORDER BY region"
+  "SELECT region FROM __TABLE__ GROUP BY region HAVING region <> 'north' OR region IS NULL ORDER BY region|SELECT region FROM __TABLE__ GROUP BY region HAVING region <> 'north' OR region IS NULL ORDER BY region"
+  "SELECT region, avg(amount) FROM __TABLE__ GROUP BY region HAVING avg(amount) >= 6250 ORDER BY region|SELECT region, avg(amount)::DECIMAL(18,2) FROM __TABLE__ GROUP BY region HAVING avg(amount) >= 6250 ORDER BY region"
+  "SELECT region, count(DISTINCT id) FROM __TABLE__ WHERE id > 2500 GROUP BY region HAVING count(DISTINCT id) > 600 ORDER BY region|SELECT region, count(DISTINCT id) FROM __TABLE__ WHERE id > 2500 GROUP BY region HAVING count(DISTINCT id) > 600 ORDER BY region"
+  "SELECT count(*) FROM __TABLE__ HAVING count(*) > 10|SELECT count(*) FROM __TABLE__ HAVING count(*) > 10"
+  "SELECT count(*) FROM __TABLE__ HAVING sum(amount) < 0|SELECT count(*) FROM __TABLE__ HAVING sum(amount) < 0"
+  "SELECT region, count(*) FROM __TABLE__ WHERE amount > 100 GROUP BY region HAVING sum(amount) > 7800000 ORDER BY region DESC LIMIT 2|SELECT region, count(*) FROM __TABLE__ WHERE amount > 100 GROUP BY region HAVING sum(amount) > 7800000 ORDER BY region DESC LIMIT 2"
   "SELECT count(*) FROM __TABLE__|SELECT count(*) FROM __TABLE__"
   "SELECT region, count(*) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, count(*) FROM __TABLE__ GROUP BY region ORDER BY region"
   "SELECT region, sum(amount) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, sum(amount)::DECIMAL(18,2) FROM __TABLE__ GROUP BY region ORDER BY region"
