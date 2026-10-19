@@ -695,13 +695,11 @@ fn compile_negate_value(em: &mut Emitter, reg: &mut RegAlloc, src: i32) -> i32 {
 /// `iif(B1, V1, ..., [E])` (or `if`) at `call`'s span as the `CASE WHEN
 /// B1 THEN V1 ... [ELSE E] END` it means.
 pub(super) fn iif_as_case(call: &Expr, args: &[Expr]) -> Expr {
-    let pairs = args.chunks_exact(2);
-    let else_ = pairs.remainder().first().cloned().map(Box::new);
+    let (pairs, rest) = args.as_chunks::<2>();
+    let else_ = rest.first().cloned().map(Box::new);
     let whens = pairs
-        .filter_map(|pair| match pair {
-            [when, then] => Some((when.clone(), then.clone())),
-            _ => None,
-        })
+        .iter()
+        .map(|[when, then]| (when.clone(), then.clone()))
         .collect();
     Expr {
         kind: ExprKind::Case {

@@ -687,15 +687,13 @@ fn glob_fn(args: &[Value]) -> Result<Value, FunctionError> {
 /// condition, else `E` (NULL without one). The row codegen compiles it
 /// as the lazy `CASE` it is in sqlite3 (#651); this is the eager form.
 fn iif(args: &[Value]) -> Result<Value, FunctionError> {
-    let mut pairs = args.chunks_exact(2);
-    for pair in pairs.by_ref() {
-        if let [cond, value] = pair {
-            if is_true(cond) {
-                return Ok(value.clone());
-            }
+    let (pairs, rest) = args.as_chunks::<2>();
+    for [cond, value] in pairs {
+        if is_true(cond) {
+            return Ok(value.clone());
         }
     }
-    Ok(pairs.remainder().first().cloned().unwrap_or(Value::Null))
+    Ok(rest.first().cloned().unwrap_or(Value::Null))
 }
 
 /// Whether `v` is true as a condition: non-zero once read as a number,
