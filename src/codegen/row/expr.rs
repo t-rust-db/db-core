@@ -22,6 +22,7 @@
 //! mode, e.g. column reads and affinity/collation lookups).
 
 mod cond;
+mod json_subtype;
 // File is `expr_value.rs`, not `value.rs`: MC/DC obligation ids used to be
 // keyed by basename+line and this module collided with the crate-level
 // `src/value.rs`. Ids are module-path-qualified since mvl-rust#121, so the
@@ -30,6 +31,7 @@ mod cond;
 mod value;
 
 pub(crate) use cond::{column_index, compile_cond, ensure_label, has_rowid, virtual_rowid_index};
+pub(crate) use json_subtype::{carries_json_subtype, mark as json_subtype_marks};
 pub(crate) use value::{
     collation_of, compile_value, emit_column_read, expr_affinity, expr_collation,
     is_aggregate_call, is_rowid_field,

@@ -191,11 +191,11 @@ pub use explain::{explain, ExplainRow};
 pub use functions::FunctionError;
 pub use program::{
     AnalyzeIndexTarget, AnalyzeTarget, GroupKeyColumn, Instruction, Opcode, Program, SortKeyColumn,
-    JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_NORMAL,
-    SYNCHRONOUS_OFF, SYNCHRONOUS_QUERY, TRANSACTION_MODE_DEFERRED, TRANSACTION_MODE_EXCLUSIVE,
-    TRANSACTION_MODE_IMMEDIATE,
+    JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, OPFLAG_LASTROWID, OPFLAG_NCHANGE, P4, SYNCHRONOUS_FULL,
+    SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF, SYNCHRONOUS_QUERY, TRANSACTION_MODE_DEFERRED,
+    TRANSACTION_MODE_EXCLUSIVE, TRANSACTION_MODE_IMMEDIATE,
 };
 pub use record::{decode_column, decode_record, encode_record, RecordError};
 pub use schema_storage::{SchemaStorage, SchemaStorageError};
 pub use transaction::{Transaction, TransactionError};
-pub use vm::{execute, ExecError, Step, Vm};
+pub use vm::{execute, ConnectionState, ExecError, Step, Vm};

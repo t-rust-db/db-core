@@ -299,13 +299,30 @@ pub(crate) fn is_falsy(v: &Value) -> bool {
             Value::Real(r) => r == 0.0,
             _ => true,
         },
-        Value::Blob(_) => true,
+        // A blob reads as the text of its bytes, as in sqlite3
+        // (`sqlite3VdbeBooleanValue`): `x'31'` is true (#651).
+        Value::Blob(b) => is_falsy(&Value::Text(String::from_utf8_lossy(b).as_ref().into())),
     }
 }
 
 /// A pseudo slot's header cache (#258): the record blob last decoded
 /// through it and that blob's parsed `(serial_type, offset)` entries.
 type PseudoHeader = (Rc<[u8]>, Vec<(u64, usize)>);
+
+/// A connection's counters that outlive one program (#651): what
+/// `changes()`, `total_changes()` and `last_insert_rowid()` report. A
+/// consumer running statements one `Vm` at a time seeds each `Vm` with
+/// [`Vm::set_connection_state`] and reads it back with
+/// [`Vm::connection_state`], as it does [`Vm::autocommit`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ConnectionState {
+    /// Rows the most recent completed INSERT/UPDATE/DELETE changed.
+    pub changes: i64,
+    /// Rows every INSERT/UPDATE/DELETE so far changed.
+    pub total_changes: i64,
+    /// The rowid of the most recent successful INSERT into a rowid table.
+    pub last_insert_rowid: i64,
+}
 
 /// The VM's mutable execution state: a register file of `Value` cells,
 /// a disjoint cursor-slot table, a disjoint aggregate-context slot
@@ -326,6 +343,14 @@ pub struct Vm {
     /// this flag is the only real effect `Transaction`/`AutoCommit`
     /// have, since `db-core` has no pager of its own.
     autocommit: bool,
+    /// The connection's counters as of this program's start (#651);
+    /// `last_insert_rowid` moves as rows are inserted.
+    connection: ConnectionState,
+    /// Rows this program's `OPFLAG_NCHANGE` writes changed so far.
+    statement_changes: i64,
+    /// What `'now'` means while this program runs (#651), set by
+    /// [`execute`].
+    statement_now_ns: i64,
     /// A consumer's pager, installed via
     /// [`Self::set_transaction_hook`], observing/driving real
     /// transaction semantics when `Opcode::Transaction`/`AutoCommit`
@@ -382,6 +407,9 @@ impl Default for Vm {
             once_fired: HashSet::new(),
             params: Vec::new(),
             autocommit: true,
+            connection: ConnectionState::default(),
+            statement_changes: 0,
+            statement_now_ns: 0,
             transaction_hook: None,
             cursor_factory: None,
             cursor_roots: Vec::new(),
@@ -439,6 +467,37 @@ impl Vm {
     /// means "a `BEGIN` from an earlier program is still open".
     pub fn set_autocommit(&mut self, autocommit: bool) {
         self.autocommit = autocommit;
+    }
+
+    /// Seeds the connection's counters (see [`ConnectionState`]).
+    pub fn set_connection_state(&mut self, state: ConnectionState) {
+        self.connection = state;
+    }
+
+    /// The connection's counters after this program. `counts_changes`
+    /// says whether it was an INSERT/UPDATE/DELETE: then `changes` becomes
+    /// the rows it changed (0 included), as in sqlite3; any other
+    /// statement leaves `changes` as it was.
+    pub fn connection_state(&self, counts_changes: bool) -> ConnectionState {
+        ConnectionState {
+            changes: if counts_changes {
+                self.statement_changes
+            } else {
+                self.connection.changes
+            },
+            total_changes: self
+                .connection
+                .total_changes
+                .saturating_add(self.statement_changes),
+            last_insert_rowid: self.connection.last_insert_rowid,
+        }
+    }
+
+    /// Counts one write toward `changes()` when `p5` says so (#651).
+    fn count_change(&mut self, p5: u16) {
+        if p5 & super::program::OPFLAG_NCHANGE != 0 {
+            self.statement_changes = self.statement_changes.saturating_add(1);
+        }
     }
 
     /// The database's text encoding (header byte 56); decoded `Insert`
@@ -1329,12 +1388,31 @@ fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
                     })
                 }
             };
+            // `name(arity);json=0,2`: the arguments at those positions
+            // carry sqlite3's JSON subtype (#651).
+            let (descriptor, json) = match descriptor.split_once(";json=") {
+                Some((call, positions)) => (call, Some(positions)),
+                None => (descriptor, None),
+            };
             let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {
                 ExecError::MalformedInstruction {
                     opcode: "Function",
                     reason: format!("malformed function descriptor {descriptor:?}"),
                 }
             })?;
+            // The connection's counters live in the VM, not the pure
+            // function registry (#651). `total_changes` includes this
+            // statement's writes so far, as in sqlite3.
+            let connection = match (name.to_ascii_lowercase().as_str(), arity) {
+                ("changes", 0) => Some(vm.connection.changes),
+                ("total_changes", 0) => Some(vm.connection_state(false).total_changes),
+                ("last_insert_rowid", 0) => Some(vm.connection.last_insert_rowid),
+                _ => None,
+            };
+            if let Some(n) = connection {
+                vm.set_register(instr.p3, Value::Integer(n))?;
+                return Ok(Step::Next);
+            }
             let mut args = Vec::with_capacity(arity);
             for i in 0..arity {
                 let reg = instr
@@ -1346,7 +1424,21 @@ fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
                     })?;
                 args.push(vm.register(reg)?.clone());
             }
-            let result = functions::call(name, &args).map_err(|e| match e {
+            let result = match json {
+                Some(positions) => {
+                    let positions = positions
+                        .split(',')
+                        .map(|p| p.parse::<usize>().ok().filter(|&p| p < arity))
+                        .collect::<Option<Vec<usize>>>()
+                        .ok_or_else(|| ExecError::MalformedInstruction {
+                            opcode: "Function",
+                            reason: format!("malformed JSON argument positions {positions:?}"),
+                        })?;
+                    crate::functions::call_marked(name, &args, &positions)
+                }
+                None => functions::call_at(name, &args, vm.statement_now_ns),
+            };
+            let result = result.map_err(|e| match e {
                 // A limit sqlite3 reports in its own words (#659).
                 functions::FunctionError::TooBig => ExecError::TooBig,
                 e => ExecError::MalformedInstruction {
@@ -2230,6 +2322,10 @@ fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
                     reason: "cursor slot does not support insertion".to_string(),
                 });
             }
+            vm.count_change(instr.p5);
+            if instr.p5 & super::program::OPFLAG_LASTROWID != 0 {
+                vm.connection.last_insert_rowid = rowid;
+            }
             Ok(Step::Next)
         }
 
@@ -2286,6 +2382,7 @@ fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
                     reason: "cursor slot does not support update".to_string(),
                 });
             }
+            vm.count_change(instr.p5);
             Ok(Step::Next)
         }
 
@@ -2297,6 +2394,7 @@ fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
                     reason: "cursor slot does not support deletion".to_string(),
                 });
             }
+            vm.count_change(instr.p5);
             Ok(Step::Next)
         }
         Opcode::NewRowid => {
@@ -2644,6 +2742,9 @@ fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
 /// Runs `program` to completion (or the first error/step-limit),
 /// returning the rows [`Opcode::ResultRow`] emitted.
 pub fn execute(vm: &mut Vm, program: &Program) -> Result<Vec<Vec<Value>>, ExecError> {
+    // `'now'` is one instant for the whole statement, as in sqlite3 (#651).
+    use crate::clock::{Clock, SystemClock};
+    vm.statement_now_ns = SystemClock.now_ns();
     // Sizing the register file to the highest register the program
     // names is a cheap linear pass that keeps `set_register` from
     // resizing inside the loop (#254). Only register operands count:
@@ -2840,6 +2941,38 @@ mod tests {
             Instruction::new(Opcode::Halt, 0, 0, 0),
         ]);
         assert_eq!(rows, vec![vec![Value::Integer(42)]]);
+    }
+
+    /// #651: `;json=` names the arguments carrying the JSON subtype; a
+    /// position that is not an argument is a malformed instruction.
+    #[test]
+    fn function_json_marks_nest_and_out_of_range_marks_are_malformed() {
+        let program = |descriptor: &str| {
+            Program::new(vec![
+                Instruction::with_p4(Opcode::String8, 0, 0, 0, P4::Str("[1]".to_string())),
+                Instruction::with_p4(Opcode::Function, 0, 0, 1, P4::Str(descriptor.to_string())),
+                Instruction::new(Opcode::ResultRow, 1, 1, 0),
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ])
+        };
+        let rows = execute(&mut Vm::new(), &program("json_array(1);json=0")).unwrap();
+        assert_eq!(rows, vec![vec![Value::Text("[[1]]".into())]]);
+        for bad in [
+            "json_array(1);json=1",
+            "json_array(1);json=",
+            "json_array(1);json=x",
+        ] {
+            assert!(
+                matches!(
+                    execute(&mut Vm::new(), &program(bad)),
+                    Err(ExecError::MalformedInstruction {
+                        opcode: "Function",
+                        ..
+                    })
+                ),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

@@ -146,3 +146,39 @@ fn batch_codegen_survives_the_deepest_expression_nesting_the_parser_accepts() {
         }
     });
 }
+
+/// The deepest nesting of `wrap` around `json('[1]')` that the parser
+/// accepts, as a `SELECT ... FROM t`.
+fn deepest_accepted(wrap: impl Fn(&str) -> String) -> String {
+    let mut expr = "json('[1]')".to_string();
+    let mut deepest = None;
+    for _ in 0..200 {
+        let next = wrap(&expr);
+        let sql = format!("SELECT {next} FROM t");
+        if !matches!(parse_select(&sql), ParseOutcome::Accepted(_)) {
+            break;
+        }
+        deepest = Some(sql);
+        expr = next;
+    }
+    deepest.unwrap()
+}
+
+#[test]
+fn row_codegen_survives_the_deepest_json_subtype_nesting_the_parser_accepts() {
+    // #651: the JSON-subtype classifier and the `iif`-as-`CASE` lowering
+    // recurse alongside `compile_value`.
+    on_2mib_stack(|| {
+        for sql in [
+            deepest_accepted(|e| format!("json_array(iif(a, {e}, 'x'))")),
+            deepest_accepted(|e| format!("json_array(coalesce(a, {e}, 'x'))")),
+            deepest_accepted(|e| {
+                format!("json_object('k', CASE WHEN a THEN {e} ELSE json_extract(a, '$') END)")
+            }),
+            deepest_accepted(|e| format!("json_array(({e}))")),
+        ] {
+            let program = compile_statement(&sql, &[schema()], &[]).unwrap();
+            assert!(!program.instructions.is_empty());
+        }
+    });
+}

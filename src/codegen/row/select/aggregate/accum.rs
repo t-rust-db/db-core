@@ -3,6 +3,7 @@
 use super::super::limit_scan::{emit_limit_guard, emit_offset_guard, LimitState};
 use super::super::projection::{compile_row_values, result_columns};
 use super::super::*;
+use crate::codegen::row::expr::{carries_json_subtype, json_subtype_marks};
 
 /// One aggregate call's `AggStep`/`AggFinal` binding (#263): `name`
 /// selects the accumulator kind in `crate::vm::row::aggregate`, `arg` is
@@ -165,13 +166,19 @@ pub(in crate::codegen::row::select) fn find_aggregates(expr: &Expr, out: &mut Ve
 /// expression can compile against the flush-time synthetic
 /// schema/record via the ordinary (aggregate-unaware) `compile_value`/
 /// `compile_cond` machinery.
+///
+/// A column carries no JSON subtype, so the JSON functions' arguments are
+/// checked here, before their aggregates disappear (#651): one that would
+/// need a guess is refused, and a `min`/`max` of a JSON value -- whose
+/// result keeps the subtype in sqlite3 -- reads back as `json(field)`,
+/// the same text, subtyped.
 pub(in crate::codegen::row::select) fn substitute_aggregates(
     expr: &Expr,
     agg_slots: &[AggSlot],
     synthetic_names: &[String],
-) -> Expr {
+) -> Result<Expr, CodegenError> {
     if let Some(pos) = agg_slots.iter().position(|slot| slot.call == *expr) {
-        return Expr {
+        let field = Expr {
             kind: ExprKind::Column {
                 table: None,
                 catalog: None,
@@ -182,13 +189,36 @@ pub(in crate::codegen::row::select) fn substitute_aggregates(
             },
             span: expr.span,
         };
+        let keeps_json = agg_slots.get(pos).is_some_and(|slot| {
+            matches!(slot.name.to_ascii_lowercase().as_str(), "min" | "max")
+                && slot.arg.as_ref().is_some_and(carries_json_subtype)
+        });
+        if !keeps_json {
+            return Ok(field);
+        }
+        return Ok(Expr {
+            kind: ExprKind::FunctionCall {
+                name: "json".to_string(),
+                distinct: false,
+                args: FunctionArgs::List(vec![field]),
+                tail: None,
+            },
+            span: expr.span,
+        });
+    }
+    if let ExprKind::FunctionCall {
+        name,
+        args: FunctionArgs::List(args),
+        ..
+    } = &expr.kind
+    {
+        json_subtype_marks(&name.to_ascii_lowercase(), args)?;
     }
     // #612: through every expression form, as `find_aggregates` finds
-    // them. The rewrite itself cannot fail.
+    // them.
     map_subexprs(expr, &mut |sub: &Expr| {
-        Ok(substitute_aggregates(sub, agg_slots, synthetic_names))
+        substitute_aggregates(sub, agg_slots, synthetic_names)
     })
-    .unwrap_or_else(|_| expr.clone())
 }
 
 /// `expr` with each direct sub-expression replaced by `f` of it (#612):
@@ -579,7 +609,7 @@ where
     let flush_scope = Scope::single_shared(&synthetic_schema, flush_cursor).with_catalog(catalog);
     let skip_label = em.new_label();
     if let Some(having) = &select.having {
-        let rewritten = substitute_aggregates(having, agg_slots, &synthetic_names);
+        let rewritten = substitute_aggregates(having, agg_slots, &synthetic_names)?;
         compile_cond(
             em,
             reg,
@@ -598,14 +628,16 @@ where
     let rewritten_columns: Vec<ResultColumn> = select
         .columns
         .iter()
-        .map(|col| match col {
-            ResultColumn::Expr { expr, alias } => ResultColumn::Expr {
-                expr: substitute_aggregates(expr, agg_slots, &synthetic_names),
-                alias: alias.clone(),
-            },
-            other => other.clone(),
+        .map(|col| {
+            Ok(match col {
+                ResultColumn::Expr { expr, alias } => ResultColumn::Expr {
+                    expr: substitute_aggregates(expr, agg_slots, &synthetic_names)?,
+                    alias: alias.clone(),
+                },
+                other => other.clone(),
+            })
         })
-        .collect();
+        .collect::<Result<_, CodegenError>>()?;
     let throwaway = Select {
         with_clause: None,
         distinct: None,

@@ -96,7 +96,9 @@ use crate::parser::ast::{
 };
 use crate::parser::row::error::ParseOutcome;
 use crate::parser::row::parse_create_table;
-use crate::vm::row::{affinity_of, Instruction, Opcode, Program, P4};
+use crate::vm::row::{
+    affinity_of, Instruction, Opcode, Program, OPFLAG_LASTROWID, OPFLAG_NCHANGE, P4,
+};
 
 /// Process-wide cache of parsed `CREATE TABLE` DDL, keyed by the exact
 /// `schema.sql` text — content-addressed, since the parse result depends
@@ -849,12 +851,10 @@ fn compile_row(
         record_reg,
         P4::Affinity(affinities),
     ));
-    em.emit(Instruction::new(
-        Opcode::Insert,
-        TABLE_CURSOR,
-        rowid_reg,
-        record_reg,
-    ));
+    em.emit(
+        Instruction::new(Opcode::Insert, TABLE_CURSOR, rowid_reg, record_reg)
+            .with_p5(OPFLAG_NCHANGE | OPFLAG_LASTROWID),
+    );
 
     if !schema.indexes.is_empty() {
         // The new row's values are already sitting in `col_regs`/

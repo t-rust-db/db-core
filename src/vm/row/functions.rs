@@ -2,4 +2,4 @@
 //! 0010/#122) — re-exported here so `super::functions::*` paths inside
 //! `vm::row` stay put.
 
-pub use crate::functions::{call, glob_match, like_match, FunctionError};
+pub use crate::functions::{call, call_at, glob_match, like_match, FunctionError};

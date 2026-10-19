@@ -27,6 +27,14 @@ pub const TRANSACTION_MODE_IMMEDIATE: i32 = 1;
 /// `BEGIN EXCLUSIVE`.
 pub const TRANSACTION_MODE_EXCLUSIVE: i32 = 2;
 
+/// `p5` flag on `Insert`/`Update`/`Delete` (sqlite3's `OPFLAG_NCHANGE`):
+/// the write counts toward `changes()`/`total_changes()` (#651). Writes
+/// to ephemeral tables and deletes by `REPLACE` resolution don't carry it.
+pub const OPFLAG_NCHANGE: u16 = 0x01;
+/// `p5` flag on `Insert` (sqlite3's `OPFLAG_LASTROWID`): the row's rowid
+/// becomes `last_insert_rowid()` (#651).
+pub const OPFLAG_LASTROWID: u16 = 0x20;
+
 /// `PRAGMA journal_mode`'s two supported values, carried through
 /// `Opcode::SetJournalMode`'s `p1` (db-core#97).
 pub const JOURNAL_MODE_DELETE: i32 = 0;
@@ -646,6 +654,12 @@ impl Instruction {
             p5: 0,
             comment: None,
         }
+    }
+
+    /// Sets `p5` (e.g. [`OPFLAG_NCHANGE`]).
+    pub fn with_p5(mut self, p5: u16) -> Self {
+        self.p5 = p5;
+        self
     }
 
     /// Attaches an `EXPLAIN` comment to this instruction.

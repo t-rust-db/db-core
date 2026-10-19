@@ -320,6 +320,21 @@ pub(crate) fn compile_value(
             if let Some(message) = crate::functions::prepare_error(name, arg_exprs.len()) {
                 return Err(CodegenError::Rejected(message));
             }
+            // sqlite3 evaluates these lazily: an argument past the one
+            // that decides never runs, so it cannot raise an error (#651).
+            let lower = name.to_ascii_lowercase();
+            match (lower.as_str(), arg_exprs.len()) {
+                ("iif" | "if", n) if n >= 2 => {
+                    return compile_value(em, reg, scope, &iif_as_case(expr, arg_exprs));
+                }
+                ("coalesce", n) | ("ifnull", n) if n >= 2 => {
+                    return compile_coalesce(em, reg, scope, arg_exprs);
+                }
+                _ => {}
+            }
+            // Which arguments carry sqlite3's JSON subtype (#651).
+            let (json, rewritten) = super::json_subtype::mark(&lower, arg_exprs)?;
+            let arg_exprs = rewritten.as_deref().unwrap_or(arg_exprs);
             // `Function` reads its arguments from a contiguous register
             // window starting at P2, so the args must land next to each
             // other. Reserving the window up front and *then* compiling
@@ -361,11 +376,12 @@ pub(crate) fn compile_value(
                 0,
                 first,
                 dest,
-                P4::Str(format!(
-                    "{}({})",
-                    name.to_ascii_lowercase(),
-                    arg_exprs.len()
-                )),
+                P4::Str(if json.is_empty() {
+                    format!("{lower}({})", arg_exprs.len())
+                } else {
+                    let positions: Vec<String> = json.iter().map(usize::to_string).collect();
+                    format!("{lower}({});json={}", arg_exprs.len(), positions.join(","))
+                }),
             ));
             Ok(dest)
         }
@@ -674,6 +690,46 @@ fn compile_negate_value(em: &mut Emitter, reg: &mut RegAlloc, src: i32) -> i32 {
     let out = reg.alloc();
     em.emit(Instruction::new(Opcode::Not, src, out, 0));
     out
+}
+
+/// `iif(B1, V1, ..., [E])` (or `if`) at `call`'s span as the `CASE WHEN
+/// B1 THEN V1 ... [ELSE E] END` it means.
+pub(super) fn iif_as_case(call: &Expr, args: &[Expr]) -> Expr {
+    let (pairs, rest) = args.as_chunks::<2>();
+    let else_ = rest.first().cloned().map(Box::new);
+    let whens = pairs
+        .iter()
+        .map(|[when, then]| (when.clone(), then.clone()))
+        .collect();
+    Expr {
+        kind: ExprKind::Case {
+            operand: None,
+            whens,
+            else_,
+        },
+        span: call.span,
+    }
+}
+
+/// `coalesce(args)`/`ifnull(args)`: each argument in turn into one
+/// register, stopping at the first that is not NULL.
+fn compile_coalesce(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    args: &[Expr],
+) -> Result<i32, CodegenError> {
+    let dest = reg.alloc();
+    let end = em.new_label();
+    for (i, arg) in args.iter().enumerate() {
+        emit_branch_into(em, reg, scope, arg, dest)?;
+        if i.saturating_add(1) < args.len() {
+            let addr = em.emit(Instruction::new(Opcode::NotNull, dest, 0, 0));
+            em.patch_p2(addr, end);
+        }
+    }
+    em.place(end);
+    Ok(dest)
 }
 
 /// CASE's branch results (each computed into its own register) must

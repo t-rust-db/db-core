@@ -33,7 +33,7 @@ use crate::storage::row::header::{DatabaseHeader, HEADER_LEN};
 use crate::storage::row::pager::Pager;
 use crate::storage::row::schema::read_schema_and_views;
 use crate::storage::row::vfs::{PageSource, UnixVfs, Vfs};
-use crate::vm::row::{execute, explain, Program, Vm};
+use crate::vm::row::{execute, explain, ConnectionState, Opcode, Program, Vm, OPFLAG_NCHANGE};
 
 use super::{
     single_statement, Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow,
@@ -57,6 +57,9 @@ pub struct RowEngine {
     /// Carried across statements: outside `BEGIN ... COMMIT` every
     /// statement is its own transaction and flushes on a clean `Halt`.
     autocommit: bool,
+    /// Carried across statements too: what `changes()`,
+    /// `total_changes()` and `last_insert_rowid()` report (#651).
+    connection: ConnectionState,
 }
 
 impl std::fmt::Debug for RowEngine {
@@ -155,6 +158,7 @@ impl RowEngine {
         let source: Rc<dyn PageSource> = Rc::clone(&self.pager) as Rc<dyn PageSource>;
         let mut vm = Vm::new();
         vm.set_text_encoding(self.header.text_encoding);
+        vm.set_connection_state(self.connection);
         vm.set_cursor_factory(Box::new(StorageFactory::read_only(
             Rc::clone(&source),
             self.header,
@@ -168,6 +172,7 @@ impl RowEngine {
         let mut vm = Vm::new();
         vm.set_text_encoding(self.header.text_encoding);
         vm.set_autocommit(self.autocommit);
+        vm.set_connection_state(self.connection);
         vm.set_cursor_factory(Box::new(StorageFactory::writable(
             Rc::clone(&pager),
             Rc::clone(&pager),
@@ -226,6 +231,13 @@ impl RowEngine {
             })?;
         }
         self.autocommit = vm.autocommit();
+        // An INSERT/UPDATE/DELETE is a program with a counted write in it,
+        // even one that changed no rows (#651).
+        let counts_changes = program.instructions.iter().any(|i| {
+            matches!(i.opcode, Opcode::Insert | Opcode::Update | Opcode::Delete)
+                && i.p5 & OPFLAG_NCHANGE != 0
+        });
+        self.connection = vm.connection_state(counts_changes);
         Ok(QueryResult {
             columns: Vec::new(),
             rows: rows
@@ -294,6 +306,7 @@ impl Engine for RowEngine {
             pager: Rc::new(RefCell::new(pager)),
             catalog: RefCell::new(None),
             autocommit: true,
+            connection: ConnectionState::default(),
         })
     }
 
