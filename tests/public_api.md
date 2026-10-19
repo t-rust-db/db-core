@@ -7965,8 +7965,8 @@ pub db_core::vm::batch::Opcode::Reduce::src: core::option::Option<usize>
 pub db_core::vm::batch::Opcode::Scan
 pub db_core::vm::batch::Opcode::ScanSource(db_core::vm::batch::ScanSource)
 pub db_core::vm::batch::Opcode::Sort
-pub db_core::vm::batch::Opcode::Sort::col: usize
-pub db_core::vm::batch::Opcode::Sort::descending: bool
+pub db_core::vm::batch::Opcode::Sort::hidden: usize
+pub db_core::vm::batch::Opcode::Sort::keys: alloc::borrow::Cow<'static, [(usize, bool)]>
 pub db_core::vm::batch::Opcode::Window
 pub db_core::vm::batch::Opcode::Window::arg: core::option::Option<usize>
 pub db_core::vm::batch::Opcode::Window::dst: usize
@@ -8264,6 +8264,7 @@ pub fn db_core::engine::cross_mode::RowTableSource::next_batch(&mut self) -> cor
 impl db_core::vm::batch::Source for db_core::storage::stream::adapter::TailSource
 pub fn db_core::storage::stream::adapter::TailSource::next_batch(&mut self) -> core::option::Option<db_core::vm::batch::Batch>
 pub fn db_core::vm::batch::compare_for_order(&db_core::vm::batch::Value, &db_core::vm::batch::Value, bool) -> core::cmp::Ordering
+pub fn db_core::vm::batch::compare_rows_for_order(&[db_core::vm::batch::Value], &[db_core::vm::batch::Value], &[(usize, bool)]) -> core::cmp::Ordering
 pub fn db_core::vm::batch::numeric_cmp(&db_core::vm::batch::Value, &db_core::vm::batch::Value) -> core::option::Option<core::cmp::Ordering>
 pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode]) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::batch::run_parallel_streaming<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], impl core::ops::function::FnMut(db_core::vm::batch::Chunk) -> db_core::vm::batch::Result<()>) -> db_core::vm::batch::Result<()>
@@ -8377,7 +8378,7 @@ pub fn db_core::vm::engine::NoResolver::resolve(&self, &db_core::vm::batch::Scan
 impl<F: core::ops::function::Fn(&db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>> db_core::vm::engine::ScanSourceResolver for F
 pub fn F::resolve(&self, &db_core::vm::batch::ScanSource) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub fn db_core::vm::engine::bounded_scan_limit(&db_core::vm::batch::Program) -> core::option::Option<usize>
-pub fn db_core::vm::engine::finalize(&[db_core::vm::batch::AggPart], usize, bool, core::option::Option<(usize, bool)>, core::option::Option<usize>, alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
+pub fn db_core::vm::engine::finalize(&[db_core::vm::batch::AggPart], usize, bool, &[(usize, bool)], core::option::Option<usize>, alloc::vec::Vec<alloc::vec::Vec<db_core::vm::batch::Value>>) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::is_streamable(&db_core::vm::batch::Program) -> bool
 pub fn db_core::vm::engine::run<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::run_join(&db_core::vm::batch::Batch, &db_core::vm::batch::Batch, &db_core::vm::engine::JoinProgram) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>

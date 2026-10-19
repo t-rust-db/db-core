@@ -1067,25 +1067,99 @@ fn aggregate_call_label(name: &str, distinct: bool, args: &FunctionArgs) -> Opti
     }
 }
 
-/// The single `ORDER BY` term's resolved output-column reference (a bare
-/// column name or a `SELECT`-list aggregate's rendered label), and whether
-/// it's descending. `select.order_by` has at most one term once `select`
-/// has passed `parser::column`'s validator.
-fn select_order_by(select: &Select) -> Option<(String, bool)> {
-    let term = select.order_by.first()?;
-    let column = match &term.expr.kind {
-        ExprKind::Column { .. } => expr_column_name(&term.expr)?,
-        ExprKind::FunctionCall {
-            name,
-            distinct,
-            args,
-            tail,
-        } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
-            aggregate_call_label(name, *distinct, args)?
-        }
-        _ => return None,
-    };
-    Some((column, term.desc.unwrap_or(false)))
+/// Each `ORDER BY` term's resolved output-column reference (a bare column
+/// name or a `SELECT`-list aggregate's rendered label), and whether it's
+/// descending, most significant first (#645). A term with no such
+/// reference is left out; `parser::column`'s validator admits none.
+fn select_order_by(select: &Select) -> Vec<(String, bool)> {
+    select
+        .order_by
+        .iter()
+        .filter_map(|term| {
+            let column = match &term.expr.kind {
+                ExprKind::Column { .. } => expr_column_name(&term.expr)?,
+                ExprKind::FunctionCall {
+                    name,
+                    distinct,
+                    args,
+                    tail,
+                } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
+                    aggregate_call_label(name, *distinct, args)?
+                }
+                _ => return None,
+            };
+            Some((column, term.desc.unwrap_or(false)))
+        })
+        .collect()
+}
+
+/// [`Opcode::Sort`] for `select`'s `ORDER BY` (#645): each term's output
+/// position, most significant first, with its plan comment; `None`
+/// without one.
+///
+/// A term is a `SELECT`-list item -- a column by name or alias, an
+/// aggregate by [`same_aggregate`] -- or, when `extra` is given (a query
+/// that neither groups nor aggregates), a column outside the list: it is
+/// loaded into `extra`'s context and emitted after the list, and the
+/// `Sort` drops it again (`hidden`). Anything else is refused; such a
+/// term used to drop the sort silently.
+fn order_sort(
+    select: &Select,
+    mut extra: Option<(&mut Ctx, &mut Vec<usize>)>,
+) -> Result<Option<(Opcode, String)>> {
+    let terms = select_order_by(select);
+    if terms.is_empty() {
+        return Ok(None);
+    }
+    let mut keys = Vec::with_capacity(terms.len());
+    let mut hidden = 0usize;
+    for (term, (label, descending)) in select.order_by.iter().zip(&terms) {
+        let pos = select
+            .columns
+            .iter()
+            .position(|item| match (item, &term.expr.kind) {
+                (ResultColumn::Expr { expr, .. }, ExprKind::FunctionCall { .. }) => {
+                    same_aggregate(expr, &term.expr)
+                }
+                _ => select_item_label(item) == *label,
+            });
+        let pos = match (pos, &mut extra, &term.expr.kind) {
+            (Some(pos), _, _) => pos,
+            (None, Some((ctx, regs)), ExprKind::Column { .. }) => {
+                if matches!(select.distinct, Some(Distinctness::Distinct)) {
+                    return Err(PlanError::UnsupportedSelectItem(format!(
+                        "ORDER BY {label}: with SELECT DISTINCT, an ORDER BY term must be in the SELECT list"
+                    )));
+                }
+                let reg = ctx.load_column(label);
+                regs.push(reg);
+                hidden = hidden.saturating_add(1);
+                regs.len().saturating_sub(1)
+            }
+            (None, ..) => {
+                return Err(PlanError::UnsupportedSelectItem(format!(
+                    "ORDER BY {label}: in a grouped or aggregate query, only a SELECT-list column or aggregate can be sorted on"
+                )))
+            }
+        };
+        keys.push((pos, *descending));
+    }
+    Ok(Some((
+        Opcode::Sort {
+            keys: keys.into(),
+            hidden,
+        },
+        format!("ORDER BY {}", order_by_text(&terms)),
+    )))
+}
+
+/// `a, b DESC`: the `ORDER BY` terms as plan text.
+fn order_by_text(terms: &[(String, bool)]) -> String {
+    terms
+        .iter()
+        .map(|(column, descending)| format!("{column}{}", if *descending { " DESC" } else { "" }))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Expand every `SELECT *` in `select.columns` into one plain column
@@ -1801,6 +1875,13 @@ pub fn compile(select: &Select) -> Result<Program> {
         );
     }
 
+    // `ORDER BY` (#645), resolved before `Emit`: a query that neither
+    // groups nor aggregates may sort on a column it does not select,
+    // emitted after the list.
+    let sort = order_sort(
+        select,
+        agg_parts.is_empty().then_some((&mut ctx, &mut emit_regs)),
+    )?;
     ctx.push_commented(
         Opcode::Emit {
             registers: emit_regs.into(),
@@ -1808,10 +1889,6 @@ pub fn compile(select: &Select) -> Result<Program> {
         format!("SELECT {}", output_column_names(select).join(", ")),
     );
 
-    let order_by_named = select_order_by(select);
-    let order_by = order_by_named.clone().and_then(|(column, descending)| {
-        select_output_index(select, &column).map(|pos| (pos, descending))
-    });
     let limit = select_limit(select);
     let has_agg = classify_items(select)?
         .iter()
@@ -1853,12 +1930,8 @@ pub fn compile(select: &Select) -> Result<Program> {
         },
         combine_comment,
     );
-    if let Some((col, descending)) = order_by {
-        let column = order_by_named.map_or_else(String::new, |(c, _)| c);
-        ctx.push_commented(
-            Opcode::Sort { col, descending },
-            format!("ORDER BY {column}{}", if descending { " DESC" } else { "" }),
-        );
+    if let Some((sort, comment)) = sort {
+        ctx.push_commented(sort, comment);
     }
     if let Some(n) = limit {
         ctx.push_commented(Opcode::Limit { n }, format!("LIMIT {n}"));
@@ -2609,10 +2682,7 @@ pub fn compile_window(select: &Select) -> Result<Program> {
         format!("SELECT {}", output_column_names(select).join(", ")),
     ));
 
-    let order_by_named = select_order_by(select);
-    let order_by = order_by_named.clone().and_then(|(column, descending)| {
-        select_output_index(select, &column).map(|pos| (pos, descending))
-    });
+    let sort = order_sort(select, None)?;
     let limit = select_limit(select);
     program.push(Instruction::with_comment(
         Opcode::Combine {
@@ -2624,12 +2694,8 @@ pub fn compile_window(select: &Select) -> Result<Program> {
         },
         "concatenate segments".to_string(),
     ));
-    if let Some((col, descending)) = order_by {
-        let column = order_by_named.map_or_else(String::new, |(c, _)| c);
-        program.push(Instruction::with_comment(
-            Opcode::Sort { col, descending },
-            format!("ORDER BY {column}{}", if descending { " DESC" } else { "" }),
-        ));
+    if let Some((sort, comment)) = sort {
+        program.push(Instruction::with_comment(sort, comment));
     }
     if let Some(n) = limit {
         program.push(Instruction::with_comment(
@@ -2696,20 +2762,6 @@ fn grouped_output_order(items: &[Item], num_group_keys: usize) -> Vec<usize> {
         return Vec::new();
     }
     order
-}
-
-/// Resolves an `ORDER BY` reference to its position in the `SELECT`
-/// list, matching against each item's rendered output label -- not just
-/// a bare column -- so `ORDER BY COUNT(x)` resolves to a `SELECT
-/// COUNT(x)` item the same way `ORDER BY x` resolves to `SELECT x`
-/// (#131: `parser::column`'s `ORDER BY` validation renders an aggregate
-/// reference through the identical [`select_item_label`] format for
-/// exactly this reason).
-fn select_output_index(select: &Select, column: &str) -> Option<usize> {
-    select
-        .columns
-        .iter()
-        .position(|item| select_item_label(item) == column)
 }
 
 /// Derive each `SELECT`-list item's output column header (e.g. `SUM(amount)`,
@@ -2946,14 +2998,9 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
         }
     }
 
-    if let Some((column, descending)) = select_order_by(select) {
-        b.push(
-            0,
-            format!(
-                "ORDER BY: {column}{}",
-                if descending { " DESC" } else { "" }
-            ),
-        );
+    let order_by = select_order_by(select);
+    if !order_by.is_empty() {
+        b.push(0, format!("ORDER BY: {}", order_by_text(&order_by)));
     }
     if let Some(limit) = select_limit(select) {
         b.push(0, format!("LIMIT: {limit}"));
@@ -3115,7 +3162,7 @@ fn render_operands(op: &Opcode) -> String {
             }
             operands
         }
-        Opcode::Sort { col, descending } => format!("col={col} descending={descending}"),
+        Opcode::Sort { keys, hidden } => format!("keys={keys:?} hidden={hidden}"),
         Opcode::Limit { n } => format!("n={n}"),
         Opcode::Call { dst, name, args } => format!("dst={dst} name={name} args={args:?}"),
     }
@@ -3515,7 +3562,7 @@ fn referenced_columns(select: &Select) -> Result<Vec<String>> {
             push_unique(&mut out, join.right_col.clone());
         }
     }
-    if let Some((column, _)) = select_order_by(select) {
+    for (column, _) in select_order_by(select) {
         // #131: an `ORDER BY` referencing a SELECT-list aggregate carries
         // that aggregate's rendered label (e.g. `COUNT(x)`), not a real
         // column name -- its underlying column, if any, is already
@@ -3729,8 +3776,8 @@ mod tests {
         assert_eq!(
             tail[1].opcode,
             Opcode::Sort {
-                col: 1,
-                descending: true,
+                keys: vec![(1, true)].into(),
+                hidden: 0
             }
         );
         assert_eq!(tail[1].comment.as_deref(), Some("ORDER BY val DESC"));
@@ -3763,8 +3810,8 @@ mod tests {
         assert_eq!(
             tail[1].opcode,
             Opcode::Sort {
-                col: 1,
-                descending: true,
+                keys: vec![(1, true)].into(),
+                hidden: 0
             }
         );
     }
@@ -4051,10 +4098,7 @@ mod tests {
         assert!(matches!(combine, Some(Opcode::Combine { .. })));
         assert!(matches!(
             sort,
-            Some(Opcode::Sort {
-                col: 0,
-                descending: false,
-            })
+            Some(Opcode::Sort { keys, .. }) if keys[..] == [(0, false)]
         ));
         assert!(limit.is_none());
         assert!(body
@@ -4490,6 +4534,141 @@ mod tests {
             compile(&select),
             Err(PlanError::UnsupportedSelectItem(m)) if m.contains("must also be in the SELECT list")
         ));
+    }
+
+    /// `(a, b)` rows with NULLs in both, split over `segments` segments.
+    fn run_ab(sql_text: &str, segments: usize) -> Vec<Vec<Value>> {
+        use crate::vm::engine::{run, InMemorySegment};
+        let rows = [
+            (Some(1), None),
+            (Some(1), Some(2)),
+            (None, Some(1)),
+            (Some(2), None),
+            (None, None),
+        ];
+        let schema = ["a".to_string(), "b".to_string()];
+        let select = expand_star(&sql::parse(sql_text).unwrap(), &schema).unwrap();
+        let program = compile(&select).unwrap();
+        let cell = |v: Option<i64>| v.map_or(Value::Null, Value::Int);
+        let segs: Vec<InMemorySegment> = rows
+            .chunks(rows.len().div_ceil(segments))
+            .map(|part| {
+                InMemorySegment(
+                    crate::vm::batch::Batch::new(part.len())
+                        .with_column("a", part.iter().map(|r| cell(r.0)).collect())
+                        .with_column("b", part.iter().map(|r| cell(r.1)).collect()),
+                )
+            })
+            .collect();
+        run(&segs, &program).unwrap().into_rows()
+    }
+
+    /// #645: `ORDER BY` with several terms sorts by each in turn, NULLs
+    /// last for every term in either direction (DuckDB's default, checked
+    /// against `duckdb` with these rows), over one segment and three.
+    #[test]
+    fn order_by_several_terms_sorts_by_each_in_turn() {
+        let i = |v: i64| Value::Int(v);
+        let n = Value::Null;
+        for segments in [1, 3] {
+            assert_eq!(
+                run_ab("SELECT a, b FROM t ORDER BY a DESC, b", segments),
+                vec![
+                    vec![i(2), n.clone()],
+                    vec![i(1), i(2)],
+                    vec![i(1), n.clone()],
+                    vec![n.clone(), i(1)],
+                    vec![n.clone(), n.clone()],
+                ],
+            );
+            assert_eq!(
+                run_ab("SELECT a, b FROM t ORDER BY a, b DESC", segments),
+                vec![
+                    vec![i(1), i(2)],
+                    vec![i(1), n.clone()],
+                    vec![i(2), n.clone()],
+                    vec![n.clone(), i(1)],
+                    vec![n.clone(), n.clone()],
+                ],
+            );
+            // A key the select list does not show sorts, then is dropped.
+            assert_eq!(
+                run_ab("SELECT b FROM t ORDER BY a DESC, b", segments),
+                vec![
+                    vec![n.clone()],
+                    vec![i(2)],
+                    vec![n.clone()],
+                    vec![i(1)],
+                    vec![n.clone()]
+                ],
+            );
+            assert_eq!(
+                run_ab("SELECT b FROM t ORDER BY a, b DESC LIMIT 2", segments),
+                vec![vec![i(2)], vec![n.clone()]],
+            );
+            assert_eq!(
+                run_ab("SELECT a FROM t ORDER BY b LIMIT 1", segments),
+                vec![vec![n.clone()]],
+            );
+        }
+        for segments in [1, 256] {
+            let k = i64::try_from(segments).unwrap();
+            let s = |v: &str| Value::Str(v.to_string().into());
+            // Grouped: an aggregate term, then a key.
+            assert_eq!(
+                run_grouped(
+                    "SELECT region, COUNT(*), MIN(amount) FROM t GROUP BY region \
+                     ORDER BY COUNT(*) DESC, MIN(amount)",
+                    segments
+                ),
+                vec![
+                    vec![s("b"), Value::Int(2 * k), Value::Int(3)],
+                    vec![s("a"), Value::Int(2 * k), Value::Int(5)],
+                ],
+            );
+            // `COUNT(DISTINCT x)` resolves to its select item.
+            assert_eq!(
+                run_grouped(
+                    "SELECT region, COUNT(DISTINCT amount) FROM t GROUP BY region \
+                     ORDER BY COUNT(DISTINCT amount), region DESC",
+                    segments
+                ),
+                vec![vec![s("b"), Value::Int(2)], vec![s("a"), Value::Int(2)]],
+            );
+        }
+    }
+
+    /// #645: `ORDER BY` refusals, which used to drop the sort silently,
+    /// and the plan text.
+    #[test]
+    fn order_by_refusals_and_plan_text() {
+        let schema = ["region".to_string(), "amount".to_string()];
+        let plan = |q: &str| compile(&expand_star(&sql::parse(q).unwrap(), &schema).unwrap());
+        assert!(matches!(
+            plan("SELECT region, COUNT(*) FROM t GROUP BY region ORDER BY amount"),
+            Err(PlanError::UnsupportedSelectItem(m)) if m.contains("grouped or aggregate")
+        ));
+        assert!(matches!(
+            plan("SELECT region, COUNT(*) FROM t GROUP BY region ORDER BY SUM(amount)"),
+            Err(PlanError::UnsupportedSelectItem(_))
+        ));
+        assert!(matches!(
+            plan("SELECT DISTINCT region FROM t ORDER BY amount"),
+            Err(PlanError::UnsupportedSelectItem(m)) if m.contains("SELECT DISTINCT")
+        ));
+        let program = plan("SELECT region FROM t ORDER BY region DESC, amount").unwrap();
+        let sort = program
+            .instructions
+            .iter()
+            .find(|i| matches!(i.opcode, Opcode::Sort { .. }))
+            .unwrap();
+        assert_eq!(
+            sort.comment.as_deref(),
+            Some("ORDER BY region DESC, amount")
+        );
+        assert!(
+            matches!(&sort.opcode, Opcode::Sort { keys, hidden: 1 } if keys[..] == [(0, true), (1, false)])
+        );
     }
 
     fn sorted(mut rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {

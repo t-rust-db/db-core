@@ -30,11 +30,13 @@ for tool in sqlite3 duckdb python3; do
 done
 
 echo "building benches/events.rs (release)..."
+# The bench target's executable, by name: the build can emit other binaries
+# (the ingest probes), and the last executable is not necessarily this one.
 BIN="$(cargo bench --bench events --no-run --message-format=json 2>/dev/null |
   python3 -c 'import json,sys
 for line in sys.stdin:
     j = json.loads(line)
-    if j.get("executable"): print(j["executable"])' | tail -1)"
+    if j.get("executable") and j.get("target", {}).get("name") == "events": print(j["executable"])' | tail -1)"
 
 if /usr/bin/time -l true 2>/dev/null; then TIME_FLAG=-l; else TIME_FLAG=-v; fi
 
@@ -83,9 +85,8 @@ SQL
 timed ingest_sqlite sqlite3 "$SQLITE_DB" ".read $OUT/sqlite_load.sql"
 rm -f "$CSV"
 
-# The queries. db-core's subset has one ORDER BY term, so replay orders
-# by session alone; the row store and DuckDB run the same SQL so the
-# answers compare, and every result is compared as sorted rows.
+# The queries. The row store and DuckDB run the same SQL so the answers
+# compare, and every result is compared as sorted rows.
 S=$((EVENTS / 40))
 N=1000
 LABELS=(stats replay session cross)
@@ -93,7 +94,7 @@ LABELS=(stats replay session cross)
 sql_for() {
   case "$1" in
     stats) echo "SELECT day, name, count(*), sum(amount) FROM events GROUP BY day, name" ;;
-    replay) echo "SELECT session_id, request_id, name FROM events WHERE session_id >= $S AND session_id < $((S + N)) ORDER BY session_id" ;;
+    replay) echo "SELECT session_id, request_id, name FROM events WHERE session_id >= $S AND session_id < $((S + N)) ORDER BY session_id, request_id" ;;
     session) echo "SELECT request_id, name, amount FROM events WHERE session_id = $S" ;;
     cross) echo "SELECT session_id, count(DISTINCT name) FROM events WHERE name = 'search' OR name = 'checkout' GROUP BY session_id HAVING count(DISTINCT name) = 2" ;;
   esac

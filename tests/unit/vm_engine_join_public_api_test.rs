@@ -31,7 +31,7 @@ fn finalize_merges_groups_sorts_and_limits() {
         &[AggPart::GroupKey, AggPart::Sum],
         1,
         false,
-        None,
+        &[],
         None,
         rows,
     )
@@ -62,7 +62,7 @@ fn finalize_never_merges_groups_whose_keys_only_match_when_stringified() {
         &[AggPart::GroupKey, AggPart::Sum],
         1,
         false,
-        None,
+        &[],
         None,
         rows,
     )
@@ -84,7 +84,7 @@ fn finalize_applies_order_by_then_limit() {
         vec![Value::Int(1)],
         vec![Value::Int(2)],
     ];
-    let out = finalize(&[], 0, false, Some((0, false)), Some(2), rows).unwrap();
+    let out = finalize(&[], 0, false, &[(0, false)], Some(2), rows).unwrap();
     assert_eq!(out, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
 }
 
@@ -139,8 +139,8 @@ fn bounded_scan_limit_recognizes_a_bare_limit_plan_and_declines_others() {
             project: Vec::new().into(),
         }),
         Instruction::new(Opcode::Sort {
-            col: 0,
-            descending: false,
+            keys: vec![(0, false)].into(),
+            hidden: 0,
         }),
         Instruction::new(Opcode::Limit { n: 5 }),
     ]);

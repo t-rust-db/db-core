@@ -992,7 +992,7 @@ fn finalize_rejects_a_non_numeric_partial_aggregate() {
         &[AggPart::Sum],
         0,
         false,
-        None,
+        &[],
         None,
         vec![vec![Value::Null], vec![Value::Int(3)]],
     )
@@ -1003,7 +1003,7 @@ fn finalize_rejects_a_non_numeric_partial_aggregate() {
             &[AggPart::Sum],
             0,
             false,
-            None,
+            &[],
             None,
             vec![vec![Value::Str("x".into())], vec![Value::Int(3)]],
         ),

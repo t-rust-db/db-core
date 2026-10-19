@@ -747,14 +747,18 @@ pub enum Opcode {
         project: Cow<'static, [Opcode]>,
     },
     /// Final `ORDER BY` over the whole (already merged) result: sorts by
-    /// output column `col`, `descending` or ascending. A sequential-phase
-    /// opcode, like [`Opcode::Combine`]/[`Opcode::Limit`] -- see
+    /// each `(output column, descending)` key in turn, a later key only
+    /// breaking ties of the earlier ones (#645). A sequential-phase opcode,
+    /// like [`Opcode::Combine`]/[`Opcode::Limit`] -- see
     /// [`Program::split_finalize`].
     Sort {
-        /// Output column index to sort by.
-        col: usize,
-        /// `true` for descending, `false` for ascending.
-        descending: bool,
+        /// The sort keys, most significant first: an output column index
+        /// and `true` for descending.
+        keys: Cow<'static, [(usize, bool)]>,
+        /// How many trailing output columns exist only to sort on (an
+        /// `ORDER BY` column not in the `SELECT` list): dropped once the
+        /// rows are sorted and limited.
+        hidden: usize,
     },
     /// Final `LIMIT`: keep only the first `n` rows of the whole
     /// (already merged, and sorted if [`Opcode::Sort`] preceded this)
@@ -1816,6 +1820,23 @@ pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Or
             }
         }
     }
+}
+
+/// Two output rows in `ORDER BY` order (#645): [`compare_for_order`] on
+/// each `(column, descending)` key in turn until one differs. A key past
+/// either row's end compares equal.
+pub fn compare_rows_for_order(
+    a: &[Value],
+    b: &[Value],
+    keys: &[(usize, bool)],
+) -> std::cmp::Ordering {
+    keys.iter()
+        .map(|&(col, descending)| match (a.get(col), b.get(col)) {
+            (Some(x), Some(y)) => compare_for_order(x, y, descending),
+            _ => std::cmp::Ordering::Equal,
+        })
+        .find(|ord| ord.is_ne())
+        .unwrap_or(std::cmp::Ordering::Equal)
 }
 
 /// A heap candidate for [`top_n_reduce_output`]/[`top_n_merge`]: the
