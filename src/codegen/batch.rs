@@ -291,7 +291,7 @@ fn expr_column_name(expr: &AstExpr) -> Option<String> {
 fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
-        ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3)
+        ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
     ) || crate::vm::map_fns::MAP_FUNCTIONS
         .iter()
         .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
@@ -1041,6 +1041,20 @@ fn literal_value(lit: &AstLiteral) -> Value {
     }
 }
 
+/// `OFFSET m` (a non-negative integer literal, as the column validator
+/// requires); 0 without one (#679).
+fn select_offset(select: &Select) -> usize {
+    match select
+        .limit
+        .as_ref()
+        .and_then(|l| l.offset.as_ref())
+        .map(|o| &o.kind)
+    {
+        Some(ExprKind::Literal(AstLiteral::Integer(m))) => usize::try_from(*m).unwrap_or(0),
+        _ => 0,
+    }
+}
+
 fn select_limit(select: &Select) -> Option<usize> {
     let limit = select.limit.as_ref()?;
     match &limit.limit.kind {
@@ -1344,6 +1358,28 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
         // `Value::Null` at runtime ([`Opcode::Call`]'s own doc comment),
         // the same fallback every other out-of-subset shape in this
         // function gets.
+        // `x ILIKE p`, which the column dialect parses as `ilike(x, p)`
+        // (#679): a case-insensitive LIKE.
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(list),
+            tail: None,
+            ..
+        } if name.eq_ignore_ascii_case("ilike") && list.len() == 2 => {
+            let a = list.first().map_or(0, |e| compile_expr(e, ctx));
+            let b = list.get(1).map_or(0, |e| compile_expr(e, ctx));
+            let dst = ctx.alloc();
+            ctx.push(Opcode::Map {
+                dst,
+                op: MapOp::Like {
+                    negated: false,
+                    nocase: true,
+                },
+                a,
+                b,
+            });
+            dst
+        }
         ExprKind::FunctionCall {
             distinct: _,
             name,
@@ -1398,7 +1434,10 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
             let op = if *glob {
                 MapOp::Glob { negated: *negated }
             } else {
-                MapOp::Like { negated: *negated }
+                MapOp::Like {
+                    negated: *negated,
+                    nocase: false,
+                }
             };
             ctx.push(Opcode::Map { dst, op, a, b });
             dst
@@ -1573,6 +1612,14 @@ fn mask_filtered_source(
 pub fn compile(select: &Select) -> Result<Program> {
     if select.scope.is_some() {
         return Err(PlanError::ScopeClauseUnsupported);
+    }
+    // `compile_semi_join` takes a whole-WHERE `IN (SELECT ...)` off before
+    // calling here; any subquery left would compile to a constant FALSE --
+    // a wrong answer, not an error (#679).
+    if has_subquery_condition(select) {
+        return Err(PlanError::UnsupportedSemiJoin(
+            "IN (SELECT ...) or EXISTS inside a condition (only a whole-WHERE `col IN (SELECT ...)` runs, through column-rs's multi-table session)".into(),
+        ));
     }
     if has_range_vector_call(select) {
         return Err(PlanError::ScopeClauseUnsupported);
@@ -1934,10 +1981,52 @@ pub fn compile(select: &Select) -> Result<Program> {
         ctx.push_commented(sort, comment);
     }
     if let Some(n) = limit {
-        ctx.push_commented(Opcode::Limit { n }, format!("LIMIT {n}"));
+        let offset = select_offset(select);
+        let comment = match offset {
+            0 => format!("LIMIT {n}"),
+            m => format!("LIMIT {n} OFFSET {m}"),
+        };
+        ctx.push_commented(Opcode::Limit { n, offset }, comment);
     }
 
     Ok(Program::new(ctx.program))
+}
+
+/// Whether `select`'s WHERE, HAVING or select list holds an `IN (SELECT
+/// ...)` or `EXISTS` (#679): the single-table plan cannot run one, and
+/// used to compile it to FALSE.
+pub fn has_subquery_condition(select: &Select) -> bool {
+    let items = select.columns.iter().filter_map(|col| match col {
+        ResultColumn::Expr { expr, .. } => Some(expr),
+        _ => None,
+    });
+    select
+        .where_clause
+        .iter()
+        .chain(select.having.iter())
+        .chain(items)
+        .any(expr_has_subquery)
+}
+
+fn expr_has_subquery(expr: &AstExpr) -> bool {
+    match &expr.kind {
+        ExprKind::InSubquery { .. } | ExprKind::Exists { .. } => true,
+        ExprKind::Binary { lhs, rhs, .. }
+        | ExprKind::Is { lhs, rhs, .. }
+        | ExprKind::Like {
+            expr: lhs,
+            pattern: rhs,
+            ..
+        } => expr_has_subquery(lhs) || expr_has_subquery(rhs),
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Paren(inner) => expr_has_subquery(inner),
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        } => list.iter().any(expr_has_subquery),
+        _ => false,
+    }
 }
 
 /// Split a (possibly qualified) column name into `(table_prefix, column)`.
@@ -2532,9 +2621,11 @@ pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram> {
 /// `LAST_VALUE`, `SUM`/`AVG`/`COUNT OVER`). Window functions need the
 /// whole table materialized (partitioning and sorting happen over the
 /// entire input), so the caller runs this program over a single in-memory
-/// segment. `WHERE` and plain aggregates aren't supported combined with
-/// window functions in this minimal implementation -- only plain columns
-/// and window items in `SELECT`; an aggregate or `*` item emits NULL.
+/// segment. `WHERE` filters the rows before the windows see them, as in
+/// DuckDB (#679: it used to be dropped). Plain aggregates aren't supported
+/// combined with window functions in this minimal implementation -- only
+/// plain columns and window items in `SELECT`; an aggregate or `*` item
+/// emits NULL.
 ///
 /// `LAST_VALUE`'s default frame (`RANGE UNBOUNDED PRECEDING .. CURRENT
 /// ROW`, per the SQL standard when `ORDER BY` is present in `OVER`) makes
@@ -2622,6 +2713,15 @@ pub fn compile_window(select: &Select) -> Result<Program> {
             _ => None,
         })
         .collect();
+    // WHERE before the windows (#679): the Filter's selection applies to
+    // every register loaded above, and `Window` resolves it first.
+    if let Some(where_clause) = &select.where_clause {
+        let predicate = compile_expr(where_clause, &mut ctx);
+        ctx.push_commented(
+            Opcode::Filter { predicate },
+            format!("WHERE {}", expr_to_string(where_clause)),
+        );
+    }
     let mut program = ctx.program;
     let mut next_reg = ctx.next_reg;
     let mut null_reg: Option<usize> = None;
@@ -2699,7 +2799,10 @@ pub fn compile_window(select: &Select) -> Result<Program> {
     }
     if let Some(n) = limit {
         program.push(Instruction::with_comment(
-            Opcode::Limit { n },
+            Opcode::Limit {
+                n,
+                offset: select_offset(select),
+            },
             format!("LIMIT {n}"),
         ));
     }
@@ -3163,7 +3266,7 @@ fn render_operands(op: &Opcode) -> String {
             operands
         }
         Opcode::Sort { keys, hidden } => format!("keys={keys:?} hidden={hidden}"),
-        Opcode::Limit { n } => format!("n={n}"),
+        Opcode::Limit { n, offset } => format!("n={n} offset={offset}"),
         Opcode::Call { dst, name, args } => format!("dst={dst} name={name} args={args:?}"),
     }
 }
@@ -3781,7 +3884,7 @@ mod tests {
             }
         );
         assert_eq!(tail[1].comment.as_deref(), Some("ORDER BY val DESC"));
-        assert_eq!(tail[2].opcode, Opcode::Limit { n: 5 });
+        assert_eq!(tail[2].opcode, Opcode::Limit { n: 5, offset: 0 });
         assert_eq!(tail[2].comment.as_deref(), Some("LIMIT 5"));
         assert!(program.instructions.iter().all(|i| i.comment.is_some()));
     }
@@ -4534,6 +4637,118 @@ mod tests {
             compile(&select),
             Err(PlanError::UnsupportedSelectItem(m)) if m.contains("must also be in the SELECT list")
         ));
+    }
+
+    /// #679: an `IN (SELECT ...)` or `EXISTS` anywhere in WHERE, HAVING or
+    /// the select list is refused by `compile` -- it used to compile to
+    /// FALSE -- while a query without one plans as before.
+    #[test]
+    fn a_subquery_condition_anywhere_is_refused() {
+        let schema = ["region".to_string(), "amount".to_string()];
+        let plan = |q: &str| compile(&expand_star(&sql::parse(q).unwrap(), &schema).unwrap());
+        for q in [
+            "SELECT region FROM t WHERE amount > 0 AND amount IN (SELECT amount FROM t)",
+            "SELECT region FROM t WHERE EXISTS (SELECT amount FROM t)",
+            "SELECT region FROM t WHERE NOT (amount IN (SELECT amount FROM t))",
+            "SELECT region FROM t WHERE amount IN (SELECT amount FROM t)",
+        ] {
+            let select = sql::parse(q).unwrap();
+            assert!(has_subquery_condition(&select), "{q}");
+            assert!(
+                matches!(plan(q), Err(PlanError::UnsupportedSemiJoin(_))),
+                "{q}"
+            );
+        }
+        let plain =
+            sql::parse("SELECT region FROM t WHERE amount > 0 OR region LIKE 'a%'").unwrap();
+        assert!(!has_subquery_condition(&plain));
+        assert!(plan("SELECT region FROM t WHERE amount > 0 OR region LIKE 'a%'").is_ok());
+    }
+
+    /// #679: `LIMIT n OFFSET m` is planned with its offset and skips `m`
+    /// rows on every path -- the bounded scan (no ORDER BY), the top-N
+    /// (one key), a multi-key sort and a grouped query -- over one segment
+    /// and three.
+    #[test]
+    fn offset_is_planned_and_skips_rows_on_every_path() {
+        let schema = ["a".to_string(), "b".to_string()];
+        let select = expand_star(
+            &sql::parse("SELECT a FROM t LIMIT 2 OFFSET 1").unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let program = compile(&select).unwrap();
+        let limit = program.instructions.last().unwrap();
+        assert_eq!(limit.opcode, Opcode::Limit { n: 2, offset: 1 });
+        assert_eq!(limit.comment.as_deref(), Some("LIMIT 2 OFFSET 1"));
+        let i = |v: i64| Value::Int(v);
+        for segments in [1, 3] {
+            // Rows (a): 1, 1, NULL, 2, NULL -- in file order without ORDER BY.
+            assert_eq!(
+                run_ab("SELECT a FROM t LIMIT 2 OFFSET 1", segments),
+                [[i(1)], [Value::Null]]
+            );
+            assert_eq!(
+                run_ab("SELECT a FROM t ORDER BY a DESC LIMIT 2 OFFSET 1", segments),
+                [[i(1)], [i(1)]]
+            );
+            assert_eq!(
+                run_ab(
+                    "SELECT a, b FROM t ORDER BY a, b LIMIT 1 OFFSET 1",
+                    segments
+                ),
+                [[i(1), Value::Null]]
+            );
+            assert_eq!(
+                run_ab(
+                    "SELECT a, COUNT(*) FROM t GROUP BY a ORDER BY a LIMIT 5 OFFSET 2",
+                    segments
+                ),
+                [[Value::Null, i(2)]]
+            );
+            assert!(run_ab("SELECT a FROM t LIMIT 2 OFFSET 9", segments).is_empty());
+        }
+    }
+
+    /// #679: a window query's WHERE filters the rows before the windows
+    /// see them -- it used to be dropped, numbering every row of the
+    /// table. Expected rows from `duckdb` on the same five rows.
+    #[test]
+    fn window_functions_apply_where_first() {
+        use crate::vm::engine::{run, InMemorySegment};
+        let rows = [
+            (Some(1), None),
+            (Some(1), Some(2)),
+            (None, Some(1)),
+            (Some(2), None),
+            (None, None),
+        ];
+        let cell = |v: Option<i64>| v.map_or(Value::Null, Value::Int);
+        let batch = crate::vm::batch::Batch::new(rows.len())
+            .with_column("a", rows.iter().map(|r| cell(r.0)).collect())
+            .with_column("b", rows.iter().map(|r| cell(r.1)).collect());
+        let select = sql::parse(
+            "SELECT a, b, count(b) OVER (PARTITION BY a), row_number() OVER (PARTITION BY a ORDER BY b) \
+             FROM t WHERE b IS NOT NULL OR a = 2",
+        )
+        .unwrap();
+        let program = compile_window(&select).unwrap();
+        assert!(program
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, Opcode::Filter { .. })));
+        let mut got = run(&[InMemorySegment(batch)], &program)
+            .unwrap()
+            .into_rows();
+        got.sort_by_key(|r| format!("{r:?}"));
+        let i = |v: i64| Value::Int(v);
+        let mut want = vec![
+            vec![i(1), i(2), i(1), i(1)],
+            vec![i(2), Value::Null, i(0), i(1)],
+            vec![Value::Null, i(1), i(1), i(1)],
+        ];
+        want.sort_by_key(|r| format!("{r:?}"));
+        assert_eq!(got, want);
     }
 
     /// `(a, b)` rows with NULLs in both, split over `segments` segments.

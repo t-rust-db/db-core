@@ -969,7 +969,7 @@ fn render_opcode(op: &Opcode) -> String {
                 keys.join(", ")
             )
         }
-        Opcode::Limit { n } => format!("Opcode::Limit {{ n: {n} }}"),
+        Opcode::Limit { n, offset } => format!("Opcode::Limit {{ n: {n}, offset: {offset} }}"),
         // No caller-side planner emits these three yet -- the join/semi-
         // join/window bypass shapes ([`render_joined`]/
         // [`render_semi_join`]/[`render_windowed`]) still reconstruct a
@@ -1034,7 +1034,9 @@ fn render_map_op(op: MapOp) -> String {
         MapOp::Concat => "Concat".to_string(),
         MapOp::Neg => "Neg".to_string(),
         MapOp::MaskIf => "MaskIf".to_string(),
-        MapOp::Like { negated } => format!("Like {{ negated: {negated} }}"),
+        MapOp::Like { negated, nocase } => {
+            format!("Like {{ negated: {negated}, nocase: {nocase} }}")
+        }
         MapOp::Glob { negated } => format!("Glob {{ negated: {negated} }}"),
     }
 }
@@ -1161,7 +1163,7 @@ mod tests {
                 },
                 "ORDER BY region DESC",
             ),
-            Instruction::with_comment(Opcode::Limit { n: 10 }, "LIMIT 10"),
+            Instruction::with_comment(Opcode::Limit { n: 10, offset: 0 }, "LIMIT 10"),
         ]);
         let src = render_flat(
             "column_rs",
@@ -1179,7 +1181,7 @@ mod tests {
             "{src}"
         );
         assert!(
-            src.contains("Opcode::Limit { n: 10 }, // LIMIT 10"),
+            src.contains("Opcode::Limit { n: 10, offset: 0 }, // LIMIT 10"),
             "{src}"
         );
         assert!(!src.contains("const AGG_PARTS"), "{src}");
@@ -1304,7 +1306,7 @@ mod tests {
             ),
             "{src}"
         );
-        assert!(src.contains("Opcode::Limit { n: 10 }"), "{src}");
+        assert!(src.contains("Opcode::Limit { n: 10, offset: 0 }"), "{src}");
     }
 
     #[test]
@@ -1412,7 +1414,7 @@ mod tests {
                 keys: vec![(0, false)].into(),
                 hidden: 0,
             },
-            Opcode::Limit { n: 10 },
+            Opcode::Limit { n: 10, offset: 0 },
         ] {
             let rendered = render_opcode(&op);
             assert!(!rendered.is_empty());

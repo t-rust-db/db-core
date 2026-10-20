@@ -103,7 +103,10 @@ fn map_like_and_glob_filter_by_pattern_and_negate() {
         }),
         Instruction::new(Opcode::Map {
             dst: 2,
-            op: MapOp::Like { negated: false },
+            op: MapOp::Like {
+                negated: false,
+                nocase: false,
+            },
             a: 0,
             b: 1,
         }),

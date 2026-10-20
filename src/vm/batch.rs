@@ -417,6 +417,9 @@ pub enum MapOp {
     Like {
         /// `true` for `NOT LIKE`.
         negated: bool,
+        /// `true` for `ILIKE`: both sides lowercased first. Plain `LIKE`
+        /// is case-sensitive, as in DuckDB (#679).
+        nocase: bool,
     },
     /// `a GLOB b` (`negated`: `NOT GLOB`) -- Unix glob match (`*`/`?`/
     /// `[...]`), per [`crate::functions::glob_match`].
@@ -760,12 +763,15 @@ pub enum Opcode {
         /// rows are sorted and limited.
         hidden: usize,
     },
-    /// Final `LIMIT`: keep only the first `n` rows of the whole
-    /// (already merged, and sorted if [`Opcode::Sort`] preceded this)
-    /// result. A sequential-phase opcode -- see [`Program::split_finalize`].
+    /// Final `LIMIT n OFFSET m`: skip the first `offset` rows of the
+    /// whole (already merged, and sorted if [`Opcode::Sort`] preceded
+    /// this) result, then keep at most `n`. A sequential-phase opcode --
+    /// see [`Program::split_finalize`].
     Limit {
         /// Maximum number of rows to keep.
         n: usize,
+        /// Rows to skip first (#679: it used to be ignored).
+        offset: usize,
     },
     /// Elementwise scalar function call: `registers[dst] = functions::call(
     /// name, [registers[a] for a in args])`, per row. Dispatches into
@@ -1131,6 +1137,32 @@ impl QueryOutput {
 }
 
 impl QueryOutput {
+    /// The output without its first `n` rows (`OFFSET`, #679), across
+    /// chunks; `Arc` clones of whole chunks past the cut, a copy of the one
+    /// chunk it falls in.
+    pub(crate) fn skip_rows(self, n: usize) -> Self {
+        let mut out = Self::default();
+        let mut skip = n;
+        for chunk in self.chunks {
+            let len = chunk_len(&chunk);
+            if skip >= len {
+                skip = skip.saturating_sub(len);
+                continue;
+            }
+            if skip == 0 {
+                out.push_chunk(chunk);
+                continue;
+            }
+            let tail: Chunk = chunk
+                .iter()
+                .map(|column| Arc::new(column.get(skip..).unwrap_or(&[]).to_vec()))
+                .collect();
+            skip = 0;
+            out.push_chunk(tail);
+        }
+        out
+    }
+
     /// Reorders every chunk's columns so output column `i` is current
     /// column `order[i]` (#585, `Opcode::Combine`'s `output_order`). An
     /// empty `order` is the identity. `Arc` clones only, no payload copy.
@@ -2439,6 +2471,15 @@ pub enum VmError {
         /// Name of the [`Opcode`] variant (or engine phase) that failed.
         opcode: &'static str,
     },
+    /// A string compared with a number or boolean does not convert to its
+    /// type (#679), as DuckDB raises a conversion error rather than
+    /// answering "no match".
+    Conversion {
+        /// The string that did not convert.
+        value: String,
+        /// The type it was converted to.
+        to: &'static str,
+    },
 }
 
 impl fmt::Display for VmError {
@@ -2473,6 +2514,12 @@ impl fmt::Display for VmError {
             VmError::IntegerOverflow { opcode } => write!(f, "{opcode}: integer overflow"),
             VmError::DecimalOverflow { opcode } => {
                 write!(f, "{opcode}: decimal overflow (past DECIMAL(38))")
+            }
+            VmError::Conversion { value, to } => {
+                write!(
+                    f,
+                    "conversion error: could not convert string '{value}' to {to}"
+                )
             }
         }
     }
@@ -5613,8 +5660,32 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     if matches!(op, MapOp::IsNotNull) {
         return Ok(Value::Bool(!matches!(a, Value::Null)));
     }
+    // AND/OR are SQL's three-valued logic, so they too must see a `Null`
+    // operand (#679): `TRUE OR NULL` is TRUE and `FALSE AND NULL` is
+    // FALSE, not NULL -- the null-propagation rule below dropped those
+    // rows from every WHERE and HAVING.
+    if matches!(op, MapOp::And | MapOp::Or) {
+        return Ok(three_valued(op, truth(a), truth(b)));
+    }
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Ok(Value::Null);
+    }
+    // A string compared with a number or a boolean is converted to that
+    // type first, as DuckDB does (#679): `id = '5'` matches row 5 instead
+    // of never matching, and `id = 'abc'` is an error.
+    if matches!(
+        op,
+        MapOp::Eq | MapOp::Ne | MapOp::Lt | MapOp::Le | MapOp::Gt | MapOp::Ge
+    ) {
+        match (a, b) {
+            (Value::Str(s), other) if !matches!(other, Value::Str(_)) => {
+                return apply_map_op(op, &convert_str_like(s, other)?, b);
+            }
+            (other, Value::Str(s)) if !matches!(other, Value::Str(_)) => {
+                return apply_map_op(op, a, &convert_str_like(s, other)?);
+            }
+            _ => {}
+        }
     }
     use std::cmp::Ordering::{Equal, Greater, Less};
     Ok(match op {
@@ -5666,8 +5737,13 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
                 Value::Null
             }
         }
-        MapOp::Like { negated } => {
-            let matched = crate::functions::like_match(&a.to_string(), &b.to_string(), None);
+        MapOp::Like { negated, nocase } => {
+            let (text, pattern) = (a.to_string(), b.to_string());
+            let matched = if nocase {
+                crate::functions::like_match_exact(&text.to_lowercase(), &pattern.to_lowercase())
+            } else {
+                crate::functions::like_match_exact(&text, &pattern)
+            };
             Value::Bool(matched != negated)
         }
         MapOp::Glob { negated } => {
@@ -5751,6 +5827,57 @@ fn as_bool(v: &Value) -> bool {
     matches!(v, Value::Bool(true))
 }
 
+/// `s` converted to the type of `like` for a comparison with it (#679):
+/// integer text for an integer, any number for a float or decimal,
+/// `true`/`false` (or `t`/`f`, `1`/`0`) for a boolean; anything else is a
+/// [`VmError::Conversion`], as in DuckDB.
+fn convert_str_like(s: &str, like: &Value) -> Result<Value> {
+    let text = s.trim();
+    let fail = |to: &'static str| VmError::Conversion {
+        value: s.to_string(),
+        to,
+    };
+    match like {
+        Value::Int(_) => text
+            .parse::<i64>()
+            .map(Value::Int)
+            .map_err(|_| fail("INTEGER")),
+        Value::Float(_) | Value::Decimal { .. } => text
+            .parse::<f64>()
+            .ok()
+            .filter(|f| f.is_finite())
+            .map(Value::Float)
+            .ok_or_else(|| fail("DOUBLE")),
+        Value::Bool(_) => match text.to_ascii_lowercase().as_str() {
+            "true" | "t" | "1" => Ok(Value::Bool(true)),
+            "false" | "f" | "0" => Ok(Value::Bool(false)),
+            _ => Err(fail("BOOLEAN")),
+        },
+        // Strings compare as strings; a map compares as its text.
+        _ => Ok(Value::Str(Cow::Owned(s.to_string()))),
+    }
+}
+
+/// A value as a SQL truth value: `None` for NULL (unknown).
+fn truth(v: &Value) -> Option<bool> {
+    match v {
+        Value::Null => None,
+        other => Some(as_bool(other)),
+    }
+}
+
+/// `AND`/`OR` over SQL truth values (Kleene's logic): a FALSE side decides
+/// `AND`, a TRUE side decides `OR`, otherwise an unknown side makes the
+/// result unknown (NULL).
+fn three_valued(op: MapOp, a: Option<bool>, b: Option<bool>) -> Value {
+    let decided = op == MapOp::Or;
+    match (a, b) {
+        (Some(x), _) | (_, Some(x)) if x == decided => Value::Bool(decided),
+        (Some(_), Some(_)) => Value::Bool(!decided),
+        _ => Value::Null,
+    }
+}
+
 /// Row `i` of a typed `Int`/`Float` [`Column`] as `(value, is_int)`, or
 /// `None` if `i` is NULL, out of range, or `column` isn't `Int`/`Float`.
 /// A plain function (not a lifetime-carrying wrapper type) because
@@ -5822,6 +5949,107 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #679: a string compared with a number or a boolean is converted to
+    /// its type first, either side; one that does not convert is a
+    /// `Conversion` error, as in DuckDB.
+    #[test]
+    fn a_string_compared_with_a_number_is_converted() {
+        let s = |v: &str| Value::Str(v.to_string().into());
+        let cmp = |op, a: &Value, b: &Value| apply_map_op(op, a, b);
+        assert_eq!(
+            cmp(MapOp::Eq, &Value::Int(5), &s("5")).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            cmp(MapOp::Lt, &s(" 4 "), &Value::Int(5)).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            cmp(MapOp::Ne, &Value::Int(5), &s("5")).unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            cmp(MapOp::Gt, &Value::Float(100.5), &s("100")).unwrap(),
+            Value::Bool(true)
+        );
+        let d15 = Value::Decimal {
+            unscaled: 15,
+            scale: 1,
+        };
+        assert_eq!(cmp(MapOp::Ge, &d15, &s("1.5")).unwrap(), Value::Bool(true));
+        assert_eq!(
+            cmp(MapOp::Eq, &Value::Bool(true), &s("TRUE")).unwrap(),
+            Value::Bool(true)
+        );
+        assert_eq!(cmp(MapOp::Eq, &s("x"), &s("x")).unwrap(), Value::Bool(true));
+        assert_eq!(cmp(MapOp::Eq, &Value::Null, &s("x")).unwrap(), Value::Null);
+        for (a, b, to) in [
+            (Value::Int(5), s("abc"), "INTEGER"),
+            (Value::Int(5), s("1.5"), "INTEGER"),
+            (Value::Float(1.0), s("nan-ish"), "DOUBLE"),
+            (Value::Bool(true), s("maybe"), "BOOLEAN"),
+        ] {
+            match cmp(MapOp::Eq, &a, &b) {
+                Err(VmError::Conversion { to: t, .. }) => assert_eq!(t, to),
+                other => panic!("{a:?} = {b:?}: {other:?}"),
+            }
+        }
+        assert!(VmError::Conversion {
+            value: "abc".into(),
+            to: "INTEGER"
+        }
+        .to_string()
+        .contains("could not convert string 'abc' to INTEGER"));
+    }
+
+    /// #679: `OFFSET` drops rows across chunk boundaries -- whole chunks,
+    /// part of one, all of them, none.
+    #[test]
+    fn skip_rows_drops_leading_rows_across_chunks() {
+        let chunk = |vals: &[i64]| -> Chunk {
+            vec![Arc::new(vals.iter().map(|&v| Value::Int(v)).collect())]
+        };
+        let output = || {
+            let mut out = QueryOutput::default();
+            for part in [&[1, 2][..], &[3, 4, 5][..], &[6][..]] {
+                out.push_chunk(chunk(part));
+            }
+            out
+        };
+        let firsts = |out: QueryOutput| -> Vec<Value> {
+            out.into_rows().into_iter().map(|r| r[0].clone()).collect()
+        };
+        let ints = |v: &[i64]| v.iter().map(|&i| Value::Int(i)).collect::<Vec<_>>();
+        assert_eq!(firsts(output().skip_rows(0)), ints(&[1, 2, 3, 4, 5, 6]));
+        assert_eq!(firsts(output().skip_rows(2)), ints(&[3, 4, 5, 6]));
+        assert_eq!(firsts(output().skip_rows(3)), ints(&[4, 5, 6]));
+        assert_eq!(firsts(output().skip_rows(6)), ints(&[]));
+        assert_eq!(firsts(output().skip_rows(99)), ints(&[]));
+    }
+
+    /// #679: AND/OR over TRUE, FALSE and NULL is Kleene's three-valued
+    /// logic -- the full 3x3 truth table through `apply_map_op`.
+    #[test]
+    fn and_or_follow_three_valued_logic() {
+        let (t, f, n) = (Value::Bool(true), Value::Bool(false), Value::Null);
+        let and = |a: &Value, b: &Value| apply_map_op(MapOp::And, a, b).unwrap();
+        let or = |a: &Value, b: &Value| apply_map_op(MapOp::Or, a, b).unwrap();
+        for (a, b, want_and, want_or) in [
+            (&t, &t, &t, &t),
+            (&t, &f, &f, &t),
+            (&t, &n, &n, &t),
+            (&f, &t, &f, &t),
+            (&f, &f, &f, &f),
+            (&f, &n, &f, &n),
+            (&n, &t, &n, &t),
+            (&n, &f, &f, &n),
+            (&n, &n, &n, &n),
+        ] {
+            assert_eq!(and(a, b), *want_and, "{a:?} AND {b:?}");
+            assert_eq!(or(a, b), *want_or, "{a:?} OR {b:?}");
+        }
+    }
 
     #[test]
     fn query_output_from_rows_round_trips_through_into_rows() {

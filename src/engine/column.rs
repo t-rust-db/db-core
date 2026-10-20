@@ -52,6 +52,8 @@ pub struct BatchEngine {
     data: MmapRegion,
     table: String,
     leaves: Vec<Leaf>,
+    /// The TIMESTAMP columns and their units per second (#679).
+    timestamps: Vec<(String, i64)>,
     num_rows: i64,
     num_row_groups: usize,
 }
@@ -90,7 +92,9 @@ impl BatchEngine {
 
     /// Parses one `SELECT` for this table; see [`parse_select`].
     fn parse_for_table(&self, sql: &str) -> Result<Select, EngineError> {
-        parse_select(sql, &self.table, &self.column_names(), "this file")
+        let mut select = parse_select(sql, &self.table, &self.column_names(), "this file")?;
+        timestamp_literals(&mut select, &self.timestamps)?;
+        Ok(select)
     }
 }
 
@@ -119,10 +123,12 @@ fn parse_select(
             format!("JOIN with `{right}`: a single-file engine has one table; use column-rs's multi-table session"),
         ));
     }
-    if in_subquery(&select).is_some() {
+    // Anywhere in the query, not only as the whole WHERE: elsewhere it
+    // used to compile to FALSE (#679).
+    if planner::has_subquery_condition(&select) {
         return Err(EngineError::new(
             ErrorKind::Unsupported,
-            "IN (SELECT ...) needs a second table; a single-file engine has one",
+            "IN (SELECT ...) and EXISTS are not supported by a single-file engine",
         ));
     }
     if select.columns.iter().any(is_window_column) {
@@ -172,6 +178,117 @@ fn leaf_columns(file: &ParquetFile<'_>) -> Vec<Leaf> {
             Some((f.name, f.leaves.start, pt))
         })
         .collect()
+}
+
+/// The file's TIMESTAMP columns (`TIMESTAMP_MILLIS` / `TIMESTAMP_MICROS`)
+/// and how many of their units make a second. They decode as plain
+/// integers, so a quoted timestamp compared with one must become that
+/// integer before planning ([`timestamp_literals`], #679).
+fn timestamp_columns(file: &ParquetFile<'_>) -> Vec<(String, i64)> {
+    use crate::storage::parquet::footer::ConvertedType;
+    file.fields()
+        .into_iter()
+        .filter_map(|f| match f.element.converted_type {
+            Some(ConvertedType::TimestampMillis) => Some((f.name, 1_000)),
+            Some(ConvertedType::TimestampMicros) => Some((f.name, 1_000_000)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Rewrites every comparison of a TIMESTAMP column with a quoted value
+/// in WHERE and HAVING into a comparison with the column's integer units
+/// (#679): `ts >= '2026-01-02'` compared the raw microseconds with text
+/// and matched nothing. A quoted value that is no timestamp is an error,
+/// as in DuckDB.
+pub(crate) fn timestamp_literals(
+    select: &mut Select,
+    timestamps: &[(String, i64)],
+) -> Result<(), EngineError> {
+    if timestamps.is_empty() {
+        return Ok(());
+    }
+    if let Some(e) = select.where_clause.as_mut() {
+        rewrite_timestamp_literals(e, timestamps)?;
+    }
+    if let Some(e) = select.having.as_mut() {
+        rewrite_timestamp_literals(e, timestamps)?;
+    }
+    Ok(())
+}
+
+fn rewrite_timestamp_literals(
+    expr: &mut Expr,
+    timestamps: &[(String, i64)],
+) -> Result<(), EngineError> {
+    let units = |e: &Expr| match &e.kind {
+        ExprKind::Column { name, .. } => timestamps
+            .iter()
+            .find(|(c, _)| c.eq_ignore_ascii_case(name))
+            .map(|(_, per_second)| *per_second),
+        _ => None,
+    };
+    match &mut expr.kind {
+        ExprKind::Binary {
+            op:
+                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,
+            lhs,
+            rhs,
+        } => {
+            let (lhs_units, rhs_units) = (units(lhs), units(rhs));
+            for (per_second, literal) in [(lhs_units, &mut **rhs), (rhs_units, &mut **lhs)] {
+                if let (Some(per_second), ExprKind::Literal(Literal::Str(text))) =
+                    (per_second, &literal.kind)
+                {
+                    let value = timestamp_units(text, per_second).ok_or_else(|| {
+                        EngineError::new(
+                            ErrorKind::Compile,
+                            format!("conversion error: '{text}' is not a timestamp"),
+                        )
+                    })?;
+                    literal.kind = ExprKind::Literal(Literal::Integer(value));
+                    break;
+                }
+            }
+            Ok(())
+        }
+        ExprKind::Binary { lhs, rhs, .. } => {
+            rewrite_timestamp_literals(lhs, timestamps)?;
+            rewrite_timestamp_literals(rhs, timestamps)
+        }
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Paren(inner) => {
+            rewrite_timestamp_literals(inner, timestamps)
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `text` (`YYYY-MM-DD`, optionally with `[T ]HH:MM[:SS[.fraction]]`, UTC)
+/// in `per_second` units since the epoch; `None` if it is no timestamp.
+fn timestamp_units(text: &str, per_second: i64) -> Option<i64> {
+    let text = text.trim();
+    let (whole, fraction) = match text.split_once('.') {
+        Some((whole, fraction)) => (whole, fraction),
+        None => (text, ""),
+    };
+    if !fraction.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let seconds = match crate::functions::call(
+        "unixepoch",
+        &[crate::value::Value::Text(whole.to_string().into())],
+    ) {
+        Ok(crate::value::Value::Integer(s)) => s,
+        _ => return None,
+    };
+    // The fraction to the unit's precision (truncated past it).
+    let digits = per_second.checked_ilog10().unwrap_or(0) as usize;
+    let mut sub: String = fraction.chars().take(digits).collect();
+    while sub.len() < digits {
+        sub.push('0');
+    }
+    let sub: i64 = if sub.is_empty() { 0 } else { sub.parse().ok()? };
+    seconds.checked_mul(per_second)?.checked_add(sub)
 }
 
 /// A top-level `MAP` field of two leaves.
@@ -935,16 +1052,6 @@ fn from_table(select: &Select) -> Result<&str, EngineError> {
         .ok_or_else(|| EngineError::new(ErrorKind::Compile, "unknown table: <no table>"))
 }
 
-fn in_subquery(select: &Select) -> Option<&Select> {
-    match &select.where_clause {
-        Some(Expr {
-            kind: ExprKind::InSubquery { subquery, .. },
-            ..
-        }) => Some(subquery),
-        _ => None,
-    }
-}
-
 fn is_window_column(column: &ResultColumn) -> bool {
     match column {
         ResultColumn::Expr {
@@ -1044,10 +1151,15 @@ impl Engine for BatchEngine {
             .open(path)
             .and_then(|f| f.mmap())
             .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())))?;
-        let (leaves, num_rows, num_row_groups) = {
+        let (leaves, timestamps, num_rows, num_row_groups) = {
             let file =
                 ParquetFile::open(&data).map_err(|e| EngineError::new(ErrorKind::Open, e))?;
-            (leaf_columns(&file), file.num_rows(), file.num_row_groups())
+            (
+                leaf_columns(&file),
+                timestamp_columns(&file),
+                file.num_rows(),
+                file.num_row_groups(),
+            )
         };
         let table = path
             .file_stem()
@@ -1059,6 +1171,7 @@ impl Engine for BatchEngine {
             data,
             table,
             leaves,
+            timestamps,
             num_rows,
             num_row_groups,
         })
@@ -1136,7 +1249,69 @@ mod tests {
         BatchEngine, Engine as _, ErrorKind, Leaf, ParquetFile, Path, PhysicalType, PlanError,
         Program, RowGroupSegment, Value,
     };
+    use super::{timestamp_literals, timestamp_units};
     use crate::parser::ast::Select;
+
+    /// #679: a quoted date or timestamp in a column's units -- micro- and
+    /// milliseconds, a fraction kept to the unit's precision -- and `None`
+    /// for text that is no timestamp.
+    #[test]
+    fn timestamp_units_parse_dates_times_and_fractions() {
+        let day = 1_767_225_600; // 2026-01-01T00:00:00Z
+        assert_eq!(
+            timestamp_units("2026-01-01", 1_000_000),
+            Some(day * 1_000_000)
+        );
+        assert_eq!(
+            timestamp_units("2026-01-01 10:00:00", 1_000_000),
+            Some((day + 36_000) * 1_000_000)
+        );
+        assert_eq!(
+            timestamp_units("2026-01-01T00:00:01.5", 1_000_000),
+            Some((day + 1) * 1_000_000 + 500_000)
+        );
+        assert_eq!(
+            timestamp_units("2026-01-01 00:00:00.123456789", 1_000),
+            Some(day * 1_000 + 123)
+        );
+        assert_eq!(timestamp_units("not a time", 1_000_000), None);
+        assert_eq!(timestamp_units("2026-01-01 00:00:00.12x", 1_000_000), None);
+    }
+
+    /// #679: comparisons of a TIMESTAMP column with a quoted value become
+    /// integer comparisons, either side, in WHERE and HAVING; other
+    /// columns and other shapes are left alone; a bad timestamp is an
+    /// error.
+    #[test]
+    fn timestamp_literals_rewrite_comparisons_with_timestamp_columns() {
+        let ts = [("ts".to_string(), 1_000_000)];
+        let rewrite = |q: &str| {
+            let mut select = crate::parser::column::parse(q).unwrap();
+            timestamp_literals(&mut select, &ts).map(|()| select)
+        };
+        let select = rewrite(
+            "SELECT count(*) FROM t WHERE ts >= '2026-01-01' AND ('2026-01-02' > ts OR s = '2026-01-01')",
+        )
+        .unwrap();
+        let text = format!("{}", select.where_clause.unwrap());
+        assert!(text.contains("1767225600000000"), "{text}");
+        assert!(text.contains("1767312000000000"), "{text}");
+        assert!(
+            text.contains("'2026-01-01'"),
+            "a non-timestamp column keeps its text: {text}"
+        );
+        let grouped = rewrite("SELECT s FROM t GROUP BY s HAVING max(ts) > '2026-01-01'").unwrap();
+        assert!(
+            format!("{}", grouped.having.unwrap()).contains("'2026-01-01'"),
+            "an aggregate's column is not a bare column"
+        );
+        assert!(rewrite("SELECT count(*) FROM t WHERE ts = 'yesterday-ish'").is_err());
+        assert!(timestamp_literals(
+            &mut crate::parser::column::parse("SELECT a FROM t").unwrap(),
+            &[]
+        )
+        .is_ok());
+    }
     use crate::vm::batch::Segment as _;
 
     #[test]

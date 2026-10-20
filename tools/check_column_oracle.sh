@@ -28,6 +28,22 @@ FIXTURES=(
 
 # db_core_sql|duckdb_sql, "__TABLE__" substituted per fixture below.
 QUERIES=(
+  # #679: silent wrong answers -- OFFSET on every path, quoted values
+  # compared with number columns, case-sensitive LIKE, regexp_extract
+  # without a match.
+  "SELECT id FROM __TABLE__ ORDER BY id LIMIT 2 OFFSET 3|SELECT id FROM __TABLE__ ORDER BY id LIMIT 2 OFFSET 3"
+  "SELECT id FROM __TABLE__ ORDER BY id DESC LIMIT 3 OFFSET 4998|SELECT id FROM __TABLE__ ORDER BY id DESC LIMIT 3 OFFSET 4998"
+  "SELECT region, id FROM __TABLE__ ORDER BY region, id LIMIT 2 OFFSET 1250|SELECT region, id FROM __TABLE__ ORDER BY region, id LIMIT 2 OFFSET 1250"
+  "SELECT region, count(*) FROM __TABLE__ GROUP BY region ORDER BY region LIMIT 2 OFFSET 1|SELECT region, count(*) FROM __TABLE__ GROUP BY region ORDER BY region LIMIT 2 OFFSET 1"
+  "SELECT count(*) FROM __TABLE__ WHERE id = '5'|SELECT count(*) FROM __TABLE__ WHERE id = '5'"
+  "SELECT count(*) FROM __TABLE__ WHERE id <> '5'|SELECT count(*) FROM __TABLE__ WHERE id <> '5'"
+  "SELECT count(*) FROM __TABLE__ WHERE id < '5'|SELECT count(*) FROM __TABLE__ WHERE id < '5'"
+  "SELECT count(*) FROM __TABLE__ WHERE '5' = id|SELECT count(*) FROM __TABLE__ WHERE '5' = id"
+  "SELECT count(*) FROM __TABLE__ WHERE amount > '100'|SELECT count(*) FROM __TABLE__ WHERE amount > '100'"
+  "SELECT count(*) FROM __TABLE__ WHERE region LIKE 'NORTH'|SELECT count(*) FROM __TABLE__ WHERE region LIKE 'NORTH'"
+  "SELECT count(*) FROM __TABLE__ WHERE region LIKE 'north'|SELECT count(*) FROM __TABLE__ WHERE region LIKE 'north'"
+  "SELECT count(*) FROM __TABLE__ WHERE region ILIKE 'NORTH'|SELECT count(*) FROM __TABLE__ WHERE region ILIKE 'NORTH'"
+  "SELECT count(*) FROM __TABLE__ WHERE regexp_extract(region, '(n)', 1) = ''|SELECT count(*) FROM __TABLE__ WHERE regexp_extract(region, '(n)', 1) = ''"
   # #645: ORDER BY with several terms, mixed directions, a key the
   # SELECT list does not show, an aggregate key, and LIMIT after them.
   "SELECT region, id FROM __TABLE__ WHERE id > 4980 ORDER BY region DESC, id|SELECT region, id FROM __TABLE__ WHERE id > 4980 ORDER BY region DESC, id"
@@ -75,6 +91,26 @@ QUERIES=(
 )
 
 echo "building examples/column_oracle (release)..."
+# #679: NULLs in every typed column, mixed-case text, a decimal and a
+# timestamp (tools/gen_parquet_fixtures.sh) -- three-valued AND/OR, quoted
+# values against number, decimal and timestamp columns, LIKE/ILIKE case.
+NULL_TYPES=tests/fixtures/parquet/null_types.parquet
+NULL_TYPES_QUERIES=(
+  "SELECT id FROM __TABLE__ WHERE n > 0 OR d > 100 ORDER BY id"
+  "SELECT id FROM __TABLE__ WHERE NOT (n > 5 AND d > 0) ORDER BY id"
+  "SELECT id FROM __TABLE__ WHERE n < 100 AND (d > 100 OR n > 0) ORDER BY id"
+  "SELECT id FROM __TABLE__ WHERE NOT (n > 5 OR d > 100) ORDER BY id"
+  "SELECT s, count(*) FROM __TABLE__ GROUP BY s HAVING count(*) > 5 OR max(d) > 1 ORDER BY s"
+  "SELECT id FROM __TABLE__ WHERE d >= '1.5' ORDER BY id"
+  "SELECT count(*) FROM __TABLE__ WHERE ts >= '2026-01-02'"
+  "SELECT id FROM __TABLE__ WHERE ts < '2026-01-02 12:00:00' ORDER BY id"
+  "SELECT id FROM __TABLE__ WHERE ts = '2026-01-03 00:00:00' ORDER BY id"
+  "SELECT id FROM __TABLE__ WHERE lvl LIKE 'err%' ORDER BY id"
+  "SELECT id FROM __TABLE__ WHERE lvl ILIKE 'err%' ORDER BY id"
+  "SELECT id FROM __TABLE__ WHERE lvl NOT ILIKE 'err%' ORDER BY id"
+  "SELECT id FROM __TABLE__ WHERE s GLOB 'B' ORDER BY id"
+)
+
 cargo build --release --example column_oracle -q
 
 fail=0
@@ -98,6 +134,19 @@ for fixture in "${FIXTURES[@]}"; do
       fail=1
     fi
   done
+done
+
+table="$(basename "$NULL_TYPES" .parquet)"
+for q in "${NULL_TYPES_QUERIES[@]}"; do
+  got="$(./target/release/examples/column_oracle "$NULL_TYPES" "${q//__TABLE__/$table}")"
+  want="$(duckdb -csv -noheader -c "${q//__TABLE__/\'$NULL_TYPES\'}")"
+  checked=$((checked + 1))
+  if [[ "$got" != "$want" ]]; then
+    echo "MISMATCH: $NULL_TYPES :: $q"
+    echo "  db-core: $got"
+    echo "  duckdb:  $want"
+    fail=1
+  fi
 done
 
 if [[ "$fail" -ne 0 ]]; then

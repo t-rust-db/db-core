@@ -270,6 +270,38 @@ const INVARIANCE_QUERIES: [&str; 11] = [
     "SELECT s, COUNT(DISTINCT k), SUM(n) FROM logs GROUP BY s ORDER BY s",
 ];
 
+/// #679: in a record table, a TIMESTAMP column compared with a quoted
+/// timestamp compares as a timestamp -- from pages and, after a flush,
+/// from Parquet -- and a quoted value that is no timestamp is an error.
+#[test]
+fn a_timestamp_column_compares_with_a_quoted_timestamp() {
+    let _guard = serial();
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        schema: Some(vec![
+            ColumnSpec::new("id", ColumnType::Int64, false),
+            ColumnSpec::new("ts", ColumnType::TimestampMicros, true),
+        ]),
+        ..TableOptions::default()
+    });
+    let day = 1_767_225_600_000_000; // 2026-01-01T00:00:00Z in microseconds
+    for (id, ts) in [(1, Some(day)), (2, Some(day + 86_400_000_000)), (3, None)] {
+        let ts = ts.map_or(RecordValue::Null, RecordValue::Int);
+        w.append_row(vec![RecordValue::Int(id), ts], Ack::Memory)
+            .unwrap();
+    }
+    let ids = |w: &TableWriter| {
+        rows(
+            w,
+            "SELECT id FROM logs WHERE ts >= '2026-01-01 12:00:00' ORDER BY id",
+        )
+    };
+    assert_eq!(ids(&w), vec![vec![Cell::Int(2)]]);
+    w.flush().unwrap();
+    assert_eq!(ids(&w), vec![vec![Cell::Int(2)]]);
+    assert!(answer(&w, "SELECT id FROM logs WHERE ts < 'soon'").is_err());
+}
+
 /// A record table's (#594) schema for the flush-timing test: unsigned,
 /// decimal, binary and timestamp columns, which a flush writes as their
 /// Parquet types and the engine reads back from both pages and files.

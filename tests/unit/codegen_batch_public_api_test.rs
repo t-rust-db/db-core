@@ -47,7 +47,10 @@ fn compile_where_like_emits_a_like_map_op() {
     assert!(program.instructions.iter().any(|i| matches!(
         i.opcode,
         Opcode::Map {
-            op: MapOp::Like { negated: false },
+            op: MapOp::Like {
+                negated: false,
+                nocase: false
+            },
             ..
         }
     )));
@@ -59,7 +62,10 @@ fn compile_where_not_like_emits_a_negated_like_map_op() {
     assert!(program.instructions.iter().any(|i| matches!(
         i.opcode,
         Opcode::Map {
-            op: MapOp::Like { negated: true },
+            op: MapOp::Like {
+                negated: true,
+                nocase: false
+            },
             ..
         }
     )));

@@ -201,6 +201,7 @@ pub fn db_core::codegen::batch::compile_window(&db_core::parser::ast::Select) ->
 pub fn db_core::codegen::batch::expand_star(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::parser::ast::Select>
 pub fn db_core::codegen::batch::explain(&db_core::parser::ast::Select, impl core::ops::function::Fn(&str) -> db_core::codegen::batch::TableStats) -> db_core::codegen::batch::Result<alloc::vec::Vec<db_core::codegen::batch::PlanNode>>
 pub fn db_core::codegen::batch::explain_opcodes(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<alloc::vec::Vec<db_core::codegen::batch::OpcodeSection>>
+pub fn db_core::codegen::batch::has_subquery_condition(&db_core::parser::ast::Select) -> bool
 pub fn db_core::codegen::batch::output_column_names(&db_core::parser::ast::Select) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::codegen::batch::resolve_group_by(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::parser::ast::Select>
 pub fn db_core::codegen::batch::split_qualified(&str) -> (core::option::Option<&str>, &str)
@@ -1209,6 +1210,7 @@ pub fn db_core::functions::call_at(&str, &[db_core::value::Value], i64) -> core:
 pub fn db_core::functions::exists(&str, usize) -> bool
 pub fn db_core::functions::glob_match(&str, &str) -> bool
 pub fn db_core::functions::like_match(&str, &str, core::option::Option<char>) -> bool
+pub fn db_core::functions::like_match_exact(&str, &str) -> bool
 pub fn db_core::functions::prepare_error(&str, usize) -> core::option::Option<alloc::string::String>
 pub fn db_core::functions::trigram_key([u8; 3]) -> i64
 pub fn db_core::functions::trigrams(&str) -> impl core::iter::traits::iterator::Iterator<Item = [u8; 3]> + '_
@@ -2302,6 +2304,7 @@ pub db_core::parser::row::tokenizer::TokenKind::Float(f64)
 pub db_core::parser::row::tokenizer::TokenKind::Ge
 pub db_core::parser::row::tokenizer::TokenKind::Gt
 pub db_core::parser::row::tokenizer::TokenKind::Identifier(alloc::string::String)
+pub db_core::parser::row::tokenizer::TokenKind::Ilike
 pub db_core::parser::row::tokenizer::TokenKind::Integer(i64)
 pub db_core::parser::row::tokenizer::TokenKind::Keyword(db_core::parser::row::tokenizer::Keyword)
 pub db_core::parser::row::tokenizer::TokenKind::LBracket
@@ -7890,6 +7893,7 @@ pub db_core::vm::batch::MapOp::IsNull
 pub db_core::vm::batch::MapOp::Le
 pub db_core::vm::batch::MapOp::Like
 pub db_core::vm::batch::MapOp::Like::negated: bool
+pub db_core::vm::batch::MapOp::Like::nocase: bool
 pub db_core::vm::batch::MapOp::Lt
 pub db_core::vm::batch::MapOp::MaskIf
 pub db_core::vm::batch::MapOp::Mul
@@ -7945,6 +7949,7 @@ pub db_core::vm::batch::Opcode::HashProbeGroupReduce::kind: db_core::vm::batch::
 pub db_core::vm::batch::Opcode::HashProbeGroupReduce::table: usize
 pub db_core::vm::batch::Opcode::Limit
 pub db_core::vm::batch::Opcode::Limit::n: usize
+pub db_core::vm::batch::Opcode::Limit::offset: usize
 pub db_core::vm::batch::Opcode::LoadColumn
 pub db_core::vm::batch::Opcode::LoadColumn::column: alloc::borrow::Cow<'static, str>
 pub db_core::vm::batch::Opcode::LoadColumn::reg: usize
@@ -8036,6 +8041,9 @@ pub fn db_core::vm::batch::ValueSource::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::marker::Copy for db_core::vm::batch::ValueSource
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ValueSource
 pub enum db_core::vm::batch::VmError
+pub db_core::vm::batch::VmError::Conversion
+pub db_core::vm::batch::VmError::Conversion::to: &'static str
+pub db_core::vm::batch::VmError::Conversion::value: alloc::string::String
 pub db_core::vm::batch::VmError::DecimalOverflow
 pub db_core::vm::batch::VmError::DecimalOverflow::opcode: &'static str
 pub db_core::vm::batch::VmError::IntegerOverflow

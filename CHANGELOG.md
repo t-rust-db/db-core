@@ -4,6 +4,35 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.151.0] - 2026-10-20
+
+### Fixed
+
+- **Eight silent wrong answers in the column engine** (#679, milestone 1 of #678), each now checked against DuckDB 1.5.5, the column engine's reference:
+  1. **AND/OR with NULL** follow three-valued logic: `TRUE OR NULL` is TRUE and `FALSE AND NULL` is FALSE. `WHERE n > 0 OR d > 100` used to drop rows where `d` is NULL; NOT, HAVING and the stream engine were affected the same way.
+  2. **OFFSET is applied.** It was accepted, then ignored, on every path: the top-N, a multi-key sort, grouped queries and the bounded scan.
+  3. **`IN (SELECT ...)` or `EXISTS` inside a larger condition is refused** with an error. It used to compile to FALSE.
+  4. **A quoted value compared with a number or boolean column is converted to that type**, as DuckDB does: `id = '5'` matches row 5, and `amount > '100'` compares numbers. A value that does not convert is an error (new `VmError::Conversion`). Before, the comparison never matched, and `<>` always did.
+  5. **A TIMESTAMP column compared with a quoted date or timestamp compares as a timestamp**, in Parquet files and record tables: `ts >= '2026-01-02'` used to match nothing. A quoted value that is no timestamp is an error. Inside an aggregate (`max(ts) > '...'`) the comparison is an error until the timestamp type lands (#678 milestone 3).
+  6. **`LIKE` is case-sensitive**, as in DuckDB; it used sqlite3's case-insensitive matcher.
+  7. **`regexp_extract` returns `''`** when nothing matches, a group takes no part in the match, or the group number is out of range, as in DuckDB. NULL comes only from a NULL argument.
+  8. **A window query's WHERE filters the rows before the windows**, instead of being dropped (column-rs; `codegen::batch::compile_window`).
+
+### Added
+
+- **`ILIKE` / `NOT ILIKE`** in the column dialect: case-insensitive LIKE, with Unicode lowercasing. It is a token only in the column dialect, so sqlite3's grammar and the row engine are unchanged.
+- **ADR 0030:** the column dialect follows DuckDB where DuckDB and sqlite3 differ (amends ADR 0011).
+- **Tests:** `unit_column_wrong_answers` runs every case as SQL through `BatchEngine::run_query` on the new `null_types.parquet` fixture (NULLs, mixed-case text, a decimal and a timestamp column), and each step has unit tests. `make check-column-oracle` has 22 more cases.
+
+### Changed
+
+- **Behaviour:** `LIKE` in the column and stream engines is case-sensitive. A filter such as `msg LIKE '%error%'` no longer matches `ERROR`; use `ILIKE`.
+- **Public API (breaking):**
+  - `Opcode::Limit` gains `offset`;
+  - `MapOp::Like` gains `nocase`;
+  - `VmError::Conversion` and `TokenKind::Ilike` are new variants.
+  - Code that builds or matches these needs updating.
+
 ## [0.150.0] - 2026-10-19
 
 ### Added

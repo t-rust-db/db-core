@@ -423,7 +423,7 @@ fn validate_window_call(
 fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
-        ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3)
+        ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
     ) || crate::vm::map_fns::MAP_FUNCTIONS
         .iter()
         .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
@@ -1195,6 +1195,17 @@ pub fn parse_explain(sql_text: &str) -> Result<(Explain, Select)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #679: `x [NOT] ILIKE p` parses as `[NOT] ilike(x, p)`, which the
+    /// column subset accepts; `ILIKE ... ESCAPE` is refused.
+    #[test]
+    fn ilike_parses_as_a_call() {
+        let select = parse("SELECT a FROM t WHERE a ILIKE 'x%' AND b NOT ILIKE 'y'").unwrap();
+        let text = format!("{}", select.where_clause.unwrap());
+        assert!(text.contains("ilike(a, 'x%')"), "{text}");
+        assert!(text.contains("NOT ilike(b, 'y')"), "{text}");
+        assert!(parse("SELECT a FROM t WHERE a ILIKE 'x' ESCAPE '!'").is_err());
+    }
     use crate::parser::ast::ResultColumn;
 
     /// #621: `m['k']` is `map_extract_value(m, 'k')`, and a scalar

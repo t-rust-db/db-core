@@ -2032,6 +2032,10 @@ impl Parser {
                     self.advance();
                     self.like_tail(lhs, glob, false)?
                 }
+                TokenKind::Ilike => {
+                    self.advance();
+                    self.ilike_tail(lhs, false)?
+                }
                 TokenKind::Keyword(Keyword::NOT) => match self.peek_at(1).kind.clone() {
                     TokenKind::Null => {
                         self.advance();
@@ -2071,6 +2075,11 @@ impl Parser {
                         self.advance();
                         self.advance();
                         self.like_tail(lhs, glob, true)?
+                    }
+                    TokenKind::Ilike => {
+                        self.advance();
+                        self.advance();
+                        self.ilike_tail(lhs, true)?
                     }
                     _ => break,
                 },
@@ -2278,6 +2287,37 @@ impl Parser {
                 negated,
             },
             span,
+        })
+    }
+
+    /// `x [NOT] ILIKE p` (column dialect, #679) as the call `ilike(x, p)`,
+    /// wrapped in `NOT` when negated: the column planner lowers it to a
+    /// case-insensitive LIKE. `ESCAPE` is not supported with it.
+    fn ilike_tail(&mut self, lhs: Expr, negated: bool) -> PResult<Expr> {
+        let pattern = self.binary_expr(1)?;
+        if self.at_kw(Keyword::ESCAPE) {
+            return self.unsupported("ILIKE ... ESCAPE");
+        }
+        let span = join_span(lhs.span, pattern.span);
+        let call = Expr {
+            kind: ExprKind::FunctionCall {
+                name: "ilike".to_string(),
+                distinct: false,
+                args: FunctionArgs::List(vec![lhs, pattern]),
+                tail: None,
+            },
+            span,
+        };
+        Ok(if negated {
+            Expr {
+                kind: ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    expr: Box::new(call),
+                },
+                span,
+            }
+        } else {
+            call
         })
     }
 
