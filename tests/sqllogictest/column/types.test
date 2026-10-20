@@ -1,0 +1,537 @@
+# typed_nulls: 10000 rows in five row groups, NULLs in every column but id
+# (n INTEGER, f DOUBLE, s TEXT, b BOOLEAN, d DECIMAL(9,2), ts TIMESTAMP),
+# and a skewed group key grp (big 8000, small 1000, tiny 900, NULL 100).
+
+# Scans and NULL counts across row groups.
+
+query IIIIIIII nosort
+SELECT count(*), count(n), count(f), count(s), count(b), count(d), count(ts), count(grp) FROM typed_nulls
+----
+10000
+8572
+9091
+9231
+8000
+9412
+9474
+9900
+
+query IIRTIT nosort
+SELECT id, n, f, s, b, d FROM typed_nulls WHERE id <= 15 ORDER BY id
+----
+1
+-463
+1.625
+(empty)
+0
+-420.81
+2
+-426
+3.25
+GAMMA2
+0
+-341.62
+3
+-389
+4.875
+delta3
+1
+-262.43
+4
+-352
+6.5
+alpha4
+0
+-183.24
+5
+-315
+8.125
+Beta5
+NULL
+-104.05
+6
+-278
+9.75
+GAMMA6
+1
+-24.86
+7
+NULL
+11.375
+delta7
+0
+54.33
+8
+-204
+13.0
+alpha8
+0
+133.52
+9
+-167
+14.625
+Beta9
+1
+212.71
+10
+-130
+16.25
+GAMMA10
+NULL
+291.90
+11
+-93
+NULL
+delta11
+0
+371.09
+12
+-56
+19.5
+alpha12
+1
+450.28
+13
+-19
+21.125
+NULL
+0
+-470.53
+14
+NULL
+22.75
+(empty)
+0
+-391.34
+15
+55
+24.375
+delta15
+NULL
+-312.15
+
+query IIRTIT nosort
+SELECT id, n, f, s, b, d FROM typed_nulls WHERE id >= 2045 AND id <= 2052 ORDER BY id
+----
+2045
+165
+821.375
+Beta45
+NULL
+443.55
+2046
+202
+NULL
+GAMMA46
+1
+-477.26
+2047
+239
+824.625
+delta47
+0
+-398.07
+2048
+276
+826.25
+alpha48
+0
+-318.88
+2049
+313
+827.875
+Beta49
+1
+-239.69
+2050
+350
+829.5
+GAMMA0
+NULL
+-160.50
+2051
+NULL
+831.125
+delta1
+0
+-81.31
+2052
+424
+832.75
+alpha2
+1
+-2.12
+
+# Outside the column subset until #678 milestone 2 (`%`, BETWEEN,
+# COALESCE, length): DuckDB's answer is kept for when it lands.
+skipif db-core
+query IIRTIT nosort
+SELECT id, n, f, s, b, d FROM typed_nulls WHERE id BETWEEN 2045 AND 2052 ORDER BY id
+----
+2045
+165
+821.375
+Beta45
+NULL
+443.55
+2046
+202
+NULL
+GAMMA46
+1
+-477.26
+2047
+239
+824.625
+delta47
+0
+-398.07
+2048
+276
+826.25
+alpha48
+0
+-318.88
+2049
+313
+827.875
+Beta49
+1
+-239.69
+2050
+350
+829.5
+GAMMA0
+NULL
+-160.50
+2051
+NULL
+831.125
+delta1
+0
+-81.31
+2052
+424
+832.75
+alpha2
+1
+-2.12
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE n IS NULL
+----
+1428
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE f IS NOT NULL AND d IS NULL
+----
+535
+
+# Aggregates over each type, NULLs ignored.
+
+query IIIR nosort
+SELECT sum(n), min(n), max(n), avg(n) FROM typed_nulls
+----
+-3254
+-500
+499
+-0.379608026131591
+
+query RRRR nosort
+SELECT sum(f), min(f), max(f), avg(f) FROM typed_nulls
+----
+5687423.375
+0.125
+1250.75
+625.610315146849
+
+query TTT nosort
+SELECT sum(d), min(d), max(d) FROM typed_nulls
+----
+685.82
+-499.94
+499.89
+
+query TTI nosort
+SELECT min(s), max(s), count(DISTINCT s) FROM typed_nulls
+----
+(empty)
+delta9
+101
+
+query TIIIRT nosort
+SELECT grp, count(*), count(n), sum(n), min(f), max(d) FROM typed_nulls GROUP BY grp ORDER BY grp
+----
+big
+8000
+6858
+-2307
+1.625
+499.89
+small
+1000
+857
+1082
+0.125
+499.72
+tiny
+900
+771
+-2747
+0.25
+499.21
+NULL
+100
+86
+718
+2.125
+482.81
+
+query II nosort
+SELECT b, count(*) FROM typed_nulls GROUP BY b ORDER BY b
+----
+0
+5333
+1
+2667
+NULL
+2000
+
+# Comparisons with NULLs, booleans, decimals and timestamps.
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE n > 0 OR f > 1000
+----
+5316
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE NOT (n > 0 AND b)
+----
+7330
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE b
+----
+2667
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE NOT b
+----
+5333
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE d > 0
+----
+4706
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE d >= '-1.5' AND d < '250.25'
+----
+2368
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE ts >= '2026-06-01'
+----
+7350
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE ts < '2026-01-10 12:00:00' AND n IS NOT NULL
+----
+115
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE s = ''
+----
+770
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE s LIKE 'beta%'
+----
+0
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE s ILIKE 'beta%'
+----
+2114
+
+# Expressions over NULLs.
+
+query IIIRT nosort
+SELECT id, n + 1, n * 2 - id, f / 2, d + 1 FROM typed_nulls WHERE id <= 14 ORDER BY id
+----
+1
+-462
+-927
+0.8125
+-419.81
+2
+-425
+-854
+1.625
+-340.62
+3
+-388
+-781
+2.4375
+-261.43
+4
+-351
+-708
+3.25
+-182.24
+5
+-314
+-635
+4.0625
+-103.05
+6
+-277
+-562
+4.875
+-23.86
+7
+NULL
+NULL
+5.6875
+55.33
+8
+-203
+-416
+6.5
+134.52
+9
+-166
+-343
+7.3125
+213.71
+10
+-129
+-270
+8.125
+292.90
+11
+-92
+-197
+NULL
+372.09
+12
+-55
+-124
+9.75
+451.28
+13
+-18
+-51
+10.5625
+-469.53
+14
+NULL
+NULL
+11.375
+-390.34
+
+# Outside the column subset until #678 milestone 2 (`%`, BETWEEN,
+# COALESCE, length): DuckDB's answer is kept for when it lands.
+skipif db-core
+query IIT nosort
+SELECT id, coalesce(n, -1), coalesce(s, 'none') FROM typed_nulls WHERE id % 13 = 0 AND id < 100 ORDER BY id
+----
+13
+-19
+none
+26
+462
+none
+39
+-57
+none
+52
+424
+none
+65
+-95
+none
+78
+386
+none
+91
+-1
+none
+
+# Outside the column subset until #678 milestone 2 (`%`, BETWEEN,
+# COALESCE, length): DuckDB's answer is kept for when it lands.
+skipif db-core
+query IITT nosort
+SELECT id, length(s), upper(s), lower(s) FROM typed_nulls WHERE id <= 14 ORDER BY id
+----
+1
+0
+(empty)
+(empty)
+2
+6
+GAMMA2
+gamma2
+3
+6
+DELTA3
+delta3
+4
+6
+ALPHA4
+alpha4
+5
+5
+BETA5
+beta5
+6
+6
+GAMMA6
+gamma6
+7
+6
+DELTA7
+delta7
+8
+6
+ALPHA8
+alpha8
+9
+5
+BETA9
+beta9
+10
+7
+GAMMA10
+gamma10
+11
+7
+DELTA11
+delta11
+12
+7
+ALPHA12
+alpha12
+13
+NULL
+NULL
+NULL
+14
+0
+(empty)
+(empty)
+
+# Selecting a TIMESTAMP column: the column engine prints it as an
+# integer until the timestamp type lands (#678 milestone 3).
+
+skipif db-core
+query IT nosort
+SELECT id, ts FROM typed_nulls WHERE id <= 3 ORDER BY id
+----
+1
+2026-01-01 01:37:00
+2
+2026-01-01 03:14:00
+3
+2026-01-01 04:51:00
+

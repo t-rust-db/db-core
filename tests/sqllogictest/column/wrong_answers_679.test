@@ -1,0 +1,219 @@
+# #679: the column engine's eight silent wrong answers. Table null_types:
+# five rows, NULLs in every typed column, mixed-case and empty text, a
+# decimal and a timestamp column.
+
+# 1. AND/OR/NOT follow three-valued logic.
+
+query I nosort
+SELECT id FROM null_types WHERE n > 0 OR d > 100 ORDER BY id
+----
+1
+4
+
+query I nosort
+SELECT id FROM null_types WHERE NOT (n > 5 AND d > 0) ORDER BY id
+----
+3
+4
+5
+
+query I nosort
+SELECT id FROM null_types WHERE n < 100 AND (d > 100 OR n > 0) ORDER BY id
+----
+1
+4
+
+query I nosort
+SELECT id FROM null_types WHERE NOT (n > 5 OR d > 100) ORDER BY id
+----
+3
+5
+
+query TI nosort
+SELECT s, count(*) FROM null_types GROUP BY s HAVING count(*) > 5 OR max(d) > 1 ORDER BY s
+----
+a
+1
+b
+1
+
+# 2. OFFSET skips rows on every path.
+
+query I nosort
+SELECT id FROM production ORDER BY id LIMIT 2 OFFSET 3
+----
+4
+5
+
+query I nosort
+SELECT id FROM production ORDER BY id DESC LIMIT 3 OFFSET 4998
+----
+2
+1
+
+query TI nosort
+SELECT region, id FROM production ORDER BY region, id LIMIT 2 OFFSET 1250
+----
+north
+2
+north
+6
+
+query TI nosort
+SELECT region, count(*) FROM production GROUP BY region ORDER BY region LIMIT 2 OFFSET 1
+----
+north
+1250
+south
+1250
+
+query I nosort
+SELECT id FROM production ORDER BY id LIMIT 5 OFFSET 6000
+----
+
+# 3. IN (SELECT ...) and EXISTS inside a larger condition are refused
+# (DuckDB answers them; supporting them is milestone 6 of #678).
+
+statement error
+SELECT count(*) FROM production WHERE id > 0 AND id IN (SELECT id FROM production WHERE id < 5)
+
+statement error
+SELECT count(*) FROM production WHERE EXISTS (SELECT id FROM production WHERE id < 5)
+
+statement error
+SELECT count(*) FROM production WHERE id < 3 OR id IN (SELECT id FROM production WHERE id > 4998)
+
+statement error
+SELECT count(*) FROM production WHERE NOT EXISTS (SELECT id FROM production)
+
+# 4. A quoted value compares as the column's type; one that does not
+# convert is an error, as in DuckDB.
+
+query I nosort
+SELECT count(*) FROM production WHERE id = '5'
+----
+1
+
+query I nosort
+SELECT count(*) FROM production WHERE id <> '5'
+----
+4999
+
+query I nosort
+SELECT count(*) FROM production WHERE id < '5'
+----
+4
+
+query I nosort
+SELECT count(*) FROM production WHERE '5' = id
+----
+1
+
+query I nosort
+SELECT count(*) FROM production WHERE amount > '100'
+----
+4960
+
+query I nosort
+SELECT count(*) FROM production WHERE amount = '12.5'
+----
+1
+
+query I nosort
+SELECT id FROM null_types WHERE d >= '1.5' ORDER BY id
+----
+1
+3
+
+statement error
+SELECT count(*) FROM production WHERE region <> 5
+
+statement error
+SELECT count(*) FROM production WHERE id = 'abc'
+
+# 5. A TIMESTAMP column compares with a quoted date or timestamp.
+
+query I nosort
+SELECT count(*) FROM null_types WHERE ts >= '2026-01-02'
+----
+3
+
+query I nosort
+SELECT id FROM null_types WHERE ts < '2026-01-02 12:00:00' ORDER BY id
+----
+1
+2
+
+query I nosort
+SELECT id FROM null_types WHERE ts = '2026-01-03 00:00:00' ORDER BY id
+----
+5
+
+statement error
+SELECT count(*) FROM null_types WHERE ts > 'not a time'
+
+# 6. LIKE is case-sensitive; ILIKE is not.
+
+query I nosort
+SELECT count(*) FROM production WHERE region LIKE 'NORTH'
+----
+0
+
+query I nosort
+SELECT count(*) FROM production WHERE region LIKE 'north'
+----
+1250
+
+query I nosort
+SELECT count(*) FROM production WHERE region ILIKE 'NORTH'
+----
+1250
+
+query I nosort
+SELECT id FROM null_types WHERE lvl LIKE 'err%' ORDER BY id
+----
+2
+
+query I nosort
+SELECT id FROM null_types WHERE lvl ILIKE 'err%' ORDER BY id
+----
+1
+2
+
+query I nosort
+SELECT id FROM null_types WHERE lvl NOT ILIKE 'err%' ORDER BY id
+----
+3
+4
+
+query I nosort
+SELECT id FROM null_types WHERE s GLOB 'B' ORDER BY id
+----
+4
+
+# 7. regexp_extract without a match is '', NULL only for a NULL argument.
+
+query I nosort
+SELECT count(*) FROM production WHERE regexp_extract(region, '(n)', 1) = ''
+----
+3750
+
+query IT nosort
+SELECT id, regexp_extract(s, '(b)', 1) FROM null_types ORDER BY id
+----
+1
+(empty)
+2
+NULL
+3
+b
+4
+(empty)
+5
+(empty)
+
+# 8. A window query's WHERE filters before the windows: column-rs only
+# (codegen::batch::compile_window); BatchEngine refuses window functions.
+
+statement error
+SELECT id, row_number() OVER (ORDER BY id) FROM production WHERE id > 4998

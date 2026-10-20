@@ -1,0 +1,11 @@
+{
+  "files": [
+    {"file": "codecs.test", "pass": 8, "skip": 0, "fail": 0},
+    {"file": "having_644.test", "pass": 12, "skip": 0, "fail": 0},
+    {"file": "oracle.test", "pass": 21, "skip": 0, "fail": 0},
+    {"file": "order_by_645.test", "pass": 8, "skip": 1, "fail": 0},
+    {"file": "types.test", "pass": 23, "skip": 4, "fail": 0},
+    {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
+  ],
+  "total": {"pass": 109, "skip": 5, "fail": 0}
+}

@@ -127,6 +127,13 @@ name = "unit_column_wrong_answers"
 path = "tests/unit/column_wrong_answers_test.rs"
 required-features = ["engine-column"]
 
+# #680: the column engine's sqllogictest suite, checked against DuckDB's
+# answers committed in tests/sqllogictest/column/*.test.
+[[test]]
+name = "column_sqllogictest"
+path = "tests/sqllogictest/column.rs"
+required-features = ["engine-column"]
+
 [[test]]
 name = "unit_engine_stream_public_api"
 path = "tests/unit/engine_stream_public_api_test.rs"
