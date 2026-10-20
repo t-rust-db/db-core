@@ -20,9 +20,10 @@ use std::sync::Arc;
 
 use super::{
     engine, leaf_columns, opcode_sections, parse_select, plan_err, plan_rows, planner,
-    query_result, single_statement, table_row_groups, type_name, ColumnInfo, Engine, EngineError,
-    ErrorKind, FileStats, Leaf, Mode, OpcodeSection, ParquetFile, PlanRow, Program, QueryResult,
-    RowGroupSegment, Segment, Select, TableInfo, TableSegment, TableStats, Value, VmError,
+    query_result, single_statement, table_row_groups, timestamp_literals, type_name, ColumnInfo,
+    Engine, EngineError, ErrorKind, FileStats, Leaf, Mode, OpcodeSection, ParquetFile, PlanRow,
+    Program, QueryResult, RowGroupSegment, Segment, Select, TableInfo, TableSegment, TableStats,
+    Value, VmError,
 };
 use crate::storage::ingest::snapshot::{cast, physical_type};
 use crate::storage::ingest::{PageBody, RowPage, Snapshot};
@@ -250,7 +251,8 @@ pub fn query_snapshot(
 ) -> Result<QueryResult, EngineError> {
     let schema = snapshot.schema().map_err(open_error)?;
     let stmt = single_statement(sql)?;
-    let select = parse_select(&stmt, table, &column_names(&schema), "this directory")?;
+    let mut select = parse_select(&stmt, table, &column_names(&schema), "this directory")?;
+    timestamp_literals(&mut select, &schema_timestamps(&schema))?;
     let program: Program = planner::compile(&select).map_err(plan_err)?;
     let requests = resolve(&schema, &program.columns_to_load())?;
     let files = snapshot
@@ -325,6 +327,19 @@ pub fn read_snapshot(snapshot: &Snapshot, columns: &[String]) -> Result<Batch, E
         }))
 }
 
+/// The schema's TIMESTAMP columns and their units per second, for
+/// [`timestamp_literals`] (#679).
+fn schema_timestamps(schema: &[ColumnSpec]) -> Vec<(String, i64)> {
+    schema
+        .iter()
+        .filter_map(|s| match s.column_type {
+            ColumnType::TimestampMicros => Some((s.name.clone(), 1_000_000)),
+            ColumnType::TimestampNanos => Some((s.name.clone(), 1_000_000_000)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn column_names(schema: &[ColumnSpec]) -> Vec<String> {
     schema.iter().map(|s| s.name.clone()).collect()
 }
@@ -379,12 +394,14 @@ impl TableEngine {
 
     fn parse(&self, sql: &str) -> Result<Select, EngineError> {
         let stmt = single_statement(sql)?;
-        parse_select(
+        let mut select = parse_select(
             &stmt,
             &self.table,
             &column_names(&self.schema),
             "this directory",
-        )
+        )?;
+        timestamp_literals(&mut select, &schema_timestamps(&self.schema))?;
+        Ok(select)
     }
 
     /// Row groups plus pages.

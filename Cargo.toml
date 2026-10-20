@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.150.0"
+version = "0.151.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -120,6 +120,11 @@ required-features = ["engine-row"]
 [[test]]
 name = "unit_engine_column_public_api"
 path = "tests/unit/engine_column_public_api_test.rs"
+required-features = ["engine-column"]
+
+[[test]]
+name = "unit_column_wrong_answers"
+path = "tests/unit/column_wrong_answers_test.rs"
 required-features = ["engine-column"]
 
 [[test]]

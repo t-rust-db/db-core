@@ -126,7 +126,7 @@ fn bounded_scan_limit_recognizes_a_bare_limit_plan_and_declines_others() {
             output_order: Vec::new().into(),
             project: Vec::new().into(),
         }),
-        Instruction::new(Opcode::Limit { n: 5 }),
+        Instruction::new(Opcode::Limit { n: 5, offset: 0 }),
     ]);
     assert_eq!(bounded_scan_limit(&bare_limit), Some(5));
 
@@ -142,7 +142,7 @@ fn bounded_scan_limit_recognizes_a_bare_limit_plan_and_declines_others() {
             keys: vec![(0, false)].into(),
             hidden: 0,
         }),
-        Instruction::new(Opcode::Limit { n: 5 }),
+        Instruction::new(Opcode::Limit { n: 5, offset: 0 }),
     ]);
     assert_eq!(bounded_scan_limit(&with_sort), None);
 
@@ -155,7 +155,7 @@ fn bounded_scan_limit_recognizes_a_bare_limit_plan_and_declines_others() {
             output_order: Vec::new().into(),
             project: Vec::new().into(),
         }),
-        Instruction::new(Opcode::Limit { n: 5 }),
+        Instruction::new(Opcode::Limit { n: 5, offset: 0 }),
     ]);
     assert_eq!(bounded_scan_limit(&with_filter), None);
 }

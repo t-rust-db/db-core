@@ -32,4 +32,15 @@ duckdb -c "COPY (SELECT * FROM (VALUES
 duckdb -c "COPY (SELECT ['x']::VARCHAR[] AS lst, MAP {1: 'a'} AS ik,
     MAP {'a': 1} AS iv, MAP {'a': '1'} AS m) TO '$DIR/nested_shapes.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet"
+# #679: NULLs in every typed column, mixed-case and empty text, a decimal
+# and a timestamp -- the shapes the column engine answered wrongly
+# (three-valued AND/OR, quoted-value comparisons, timestamps, LIKE case).
+duckdb -c "COPY (SELECT * FROM (VALUES
+    (1, 'a', 10, 1.5::DECIMAL(2,1), TIMESTAMP '2026-01-01 10:00:00', 'Error'),
+    (2, NULL, NULL, NULL, TIMESTAMP '2026-01-02 11:30:00', 'error'),
+    (3, 'b', -7, 2.5::DECIMAL(2,1), NULL, 'WARN'),
+    (4, 'B', 3, NULL, TIMESTAMP '2026-01-02 23:59:59', '%_x'),
+    (5, '', 0, 0.0::DECIMAL(2,1), TIMESTAMP '2026-01-03 00:00:00', NULL)
+  ) t(id, s, n, d, ts, lvl) ORDER BY id) TO '$DIR/null_types.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/null_types.parquet"

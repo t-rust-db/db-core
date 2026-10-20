@@ -112,6 +112,18 @@ impl Segment for InMemorySegment {
 ///   per segment and at the merge (#109) instead of materializing every
 ///   row before the final sort.
 pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput> {
+    let output = run_page(segments, program)?;
+    // `LIMIT n OFFSET m` (#679): every path above kept the first `n + m`
+    // rows; the first `m` are not part of the page.
+    match program.instructions.last().map(|i| &i.opcode) {
+        Some(Opcode::Limit { offset, .. }) if *offset > 0 => Ok(output.skip_rows(*offset)),
+        _ => Ok(output),
+    }
+}
+
+/// [`run`] up to the end of the page: a `LIMIT n OFFSET m` keeps the first
+/// `n + m` rows, and [`run`] drops the first `m`.
+fn run_page<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput> {
     let (body, combine, sort, limit_op) = program.split_finalize();
     let Some(Opcode::Combine {
         agg_parts,
@@ -128,7 +140,9 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
         _ => (&[], 0),
     };
     let limit = match limit_op {
-        Some(Opcode::Limit { n }) => Some(*n),
+        // Every path keeps the first `n + offset` rows; `run` drops the
+        // first `offset` of them at the end (#679).
+        Some(Opcode::Limit { n, offset }) => Some(n.saturating_add(*offset)),
         _ => None,
     };
 
@@ -162,7 +176,7 @@ pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput>
                 .fold(Batch::new(0), |batch, column| {
                     batch.with_column(column, Vec::new())
                 });
-            return run(&[InMemorySegment(empty)], program);
+            return run_page(&[InMemorySegment(empty)], program);
         }
         let combined = if preaggregation_pays(segments.len()) {
             let partials = run_parallel_preaggregate(segments, &body, agg_parts, *num_group_keys)?;
@@ -367,7 +381,9 @@ pub fn is_streamable(program: &Program) -> bool {
         _ => &[],
     };
     let limit = match limit_op {
-        Some(Opcode::Limit { n }) => Some(*n),
+        // Every path keeps the first `n + offset` rows; `run` drops the
+        // first `offset` of them at the end (#679).
+        Some(Opcode::Limit { n, offset }) => Some(n.saturating_add(*offset)),
         _ => None,
     };
     is_identity_finalize(agg_parts, *distinct, output_order, project, order_by, limit)
@@ -408,7 +424,9 @@ pub fn run_streaming<S: Segment>(
         _ => &[],
     };
     let limit = match limit_op {
-        Some(Opcode::Limit { n }) => Some(*n),
+        // Every path keeps the first `n + offset` rows; `run` drops the
+        // first `offset` of them at the end (#679).
+        Some(Opcode::Limit { n, offset }) => Some(n.saturating_add(*offset)),
         _ => None,
     };
     if !is_identity_finalize(agg_parts, *distinct, output_order, project, order_by, limit) {
@@ -454,7 +472,7 @@ pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
     if sort.is_some() {
         return None;
     }
-    let Some(Opcode::Limit { n }) = limit_op else {
+    let Some(Opcode::Limit { n, offset }) = limit_op else {
         return None;
     };
     if *distinct
@@ -465,7 +483,8 @@ pub fn bounded_scan_limit(program: &Program) -> Option<usize> {
     {
         return None;
     }
-    Some(*n)
+    // The rows up to the end of the page; `run` skips the offset.
+    Some(n.saturating_add(*offset))
 }
 
 /// Sequentially scan `segments` in order, running `body` against each
@@ -1136,7 +1155,7 @@ mod tests {
                     output_order: Vec::new().into(),
                     project: Vec::new().into(),
                 },
-                Opcode::Limit { n: 5 },
+                Opcode::Limit { n: 5, offset: 0 },
             ],
             false,
         );
@@ -1156,7 +1175,7 @@ mod tests {
                     output_order: Vec::new().into(),
                     project: Vec::new().into(),
                 },
-                Opcode::Limit { n: 5 },
+                Opcode::Limit { n: 5, offset: 0 },
             ],
             false,
         );
@@ -1175,7 +1194,7 @@ mod tests {
                     output_order: vec![1, 0].into(),
                     project: Vec::new().into(),
                 },
-                Opcode::Limit { n: 5 },
+                Opcode::Limit { n: 5, offset: 0 },
             ],
             false,
         );
@@ -1197,7 +1216,7 @@ mod tests {
                     }]
                     .into(),
                 },
-                Opcode::Limit { n: 5 },
+                Opcode::Limit { n: 5, offset: 0 },
             ],
             false,
         );
@@ -1216,7 +1235,7 @@ mod tests {
                     output_order: Vec::new().into(),
                     project: Vec::new().into(),
                 },
-                Opcode::Limit { n: 5 },
+                Opcode::Limit { n: 5, offset: 0 },
             ],
             true,
         );
@@ -1236,7 +1255,7 @@ mod tests {
                     output_order: Vec::new().into(),
                     project: Vec::new().into(),
                 },
-                Opcode::Limit { n: 5 },
+                Opcode::Limit { n: 5, offset: 0 },
             ],
             false,
         );
@@ -1273,7 +1292,7 @@ mod tests {
                 output_order: Vec::new().into(),
                 project: Vec::new().into(),
             }),
-            Instruction::new(Opcode::Limit { n: 3 }),
+            Instruction::new(Opcode::Limit { n: 3, offset: 0 }),
         ]);
         let rows = run(&segments, &program).unwrap();
         assert_eq!(rows.len(), 3);
@@ -1345,7 +1364,7 @@ mod tests {
                 keys: vec![(0, false)].into(),
                 hidden: 0,
             }),
-            Instruction::new(Opcode::Limit { n: 2 }),
+            Instruction::new(Opcode::Limit { n: 2, offset: 0 }),
         ]);
         let rows = run(&segments, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
@@ -1403,7 +1422,7 @@ mod tests {
                 keys: vec![(0, true)].into(),
                 hidden: 0,
             }),
-            Instruction::new(Opcode::Limit { n: 2 }),
+            Instruction::new(Opcode::Limit { n: 2, offset: 0 }),
         ]);
         let rows = run(&segments, &program).unwrap();
         assert_eq!(rows, vec![vec![Value::Int(3)], vec![Value::Int(2)]]);
@@ -1473,7 +1492,7 @@ mod tests {
                     keys: vec![(0, false)].into(),
                     hidden: 0,
                 },
-                Opcode::Limit { n: 0 },
+                Opcode::Limit { n: 0, offset: 0 },
             ],
         )
         .unwrap();
@@ -1505,11 +1524,11 @@ mod tests {
         }
     }
 
-    // vm_engine_run_90c1a10a (`run`, aggregate branch):
+    // vm_engine_run_page_90c1a10a (`run_page`, aggregate branch):
     // `!*distinct && order_by.is_empty() && limit.is_none()`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_90c1a10a__v1_plain_aggregate_returns_the_merge_directly() {
+    fn mcdc__vm_engine_run_page_90c1a10a__v1_plain_aggregate_returns_the_merge_directly() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(&segments, &group_sum_program(vec![combine(false)])).unwrap();
         assert_eq!(
@@ -1523,7 +1542,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_90c1a10a__v2_distinct_goes_through_finalize() {
+    fn mcdc__vm_engine_run_page_90c1a10a__v2_distinct_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(&segments, &group_sum_program(vec![combine(true)])).unwrap();
         assert_eq!(rows.len(), 2);
@@ -1531,7 +1550,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_90c1a10a__v3_order_by_goes_through_finalize() {
+    fn mcdc__vm_engine_run_page_90c1a10a__v3_order_by_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(
             &segments,
@@ -1555,11 +1574,11 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_90c1a10a__v4_limit_goes_through_finalize() {
+    fn mcdc__vm_engine_run_page_90c1a10a__v4_limit_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(
             &segments,
-            &group_sum_program(vec![combine(false), Opcode::Limit { n: 1 }]),
+            &group_sum_program(vec![combine(false), Opcode::Limit { n: 1, offset: 0 }]),
         )
         .unwrap();
         assert_eq!(rows.len(), 1);
@@ -1724,21 +1743,21 @@ mod mcdc_vectors {
         run(segments, &count_program(grouped)).unwrap().into_rows()
     }
 
-    // vm_engine_run_7330e6cc: `segments.is_empty() && *num_group_keys == 0`
+    // vm_engine_run_page_7330e6cc: `segments.is_empty() && *num_group_keys == 0`
     #[test]
-    fn mcdc__vm_engine_run_7330e6cc__v1_no_segments_ungrouped_is_one_row_of_zero() {
+    fn mcdc__vm_engine_run_page_7330e6cc__v1_no_segments_ungrouped_is_one_row_of_zero() {
         assert_eq!(rows(&[], false), vec![vec![Value::Int(0)]]);
     }
 
     #[test]
-    fn mcdc__vm_engine_run_7330e6cc__v2_with_segments_the_segments_supply_the_row() {
+    fn mcdc__vm_engine_run_page_7330e6cc__v2_with_segments_the_segments_supply_the_row() {
         let segment =
             InMemorySegment(Batch::new(2).with_column("x", vec![Value::Int(1), Value::Int(2)]));
         assert_eq!(rows(&[segment], false), vec![vec![Value::Int(2)]]);
     }
 
     #[test]
-    fn mcdc__vm_engine_run_7330e6cc__v3_no_segments_grouped_is_no_rows() {
+    fn mcdc__vm_engine_run_page_7330e6cc__v3_no_segments_grouped_is_no_rows() {
         assert!(rows(&[], true).is_empty());
     }
 }

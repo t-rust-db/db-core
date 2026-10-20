@@ -90,6 +90,10 @@ pub enum TokenKind {
     LBracket,
     /// `]` closing a subscript.
     RBracket,
+    /// `ILIKE`, case-insensitive `LIKE`: a word only in the column dialect
+    /// ([`Tokenizer::tokenize_with_subscripts`], #679), where it is
+    /// DuckDB's operator; in sqlite3's dialect it stays an identifier.
+    Ilike,
     /// `.`
     Dot,
     /// `+`
@@ -759,7 +763,12 @@ impl Tokenizer {
         let mut tokenizer = Tokenizer::new();
         tokenizer.subscripts = subscripts;
         loop {
-            let tok = tokenizer.next_token(src);
+            let mut tok = tokenizer.next_token(src);
+            if subscripts
+                && matches!(&tok.kind, TokenKind::Identifier(w) if w.eq_ignore_ascii_case("ilike"))
+            {
+                tok.kind = TokenKind::Ilike;
+            }
             tokenizer.after_expr = matches!(
                 tok.kind,
                 TokenKind::Identifier(_) | TokenKind::RParen | TokenKind::RBracket
@@ -1359,6 +1368,20 @@ fn is_ident_continue(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #679: `ILIKE` is an operator only in the column dialect; in
+    /// sqlite3's it stays an identifier.
+    #[test]
+    fn ilike_is_a_token_only_in_the_column_dialect() {
+        let kinds = |toks: Vec<Token>| toks.into_iter().map(|t| t.kind).collect::<Vec<_>>();
+        assert!(
+            kinds(Tokenizer::tokenize_with_subscripts("a ILIKE 'x'")).contains(&TokenKind::Ilike)
+        );
+        assert!(
+            kinds(Tokenizer::tokenize_with_subscripts("a ilike 'x'")).contains(&TokenKind::Ilike)
+        );
+        assert!(!kinds(Tokenizer::tokenize("a ILIKE 'x'")).contains(&TokenKind::Ilike));
+    }
 
     #[test]
     fn subscript_mode_reads_brackets_after_an_expression_as_a_subscript() {

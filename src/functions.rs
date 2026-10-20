@@ -503,10 +503,27 @@ fn replace_fn(args: &[Value]) -> Result<Value, FunctionError> {
 pub fn like_match(text: &str, pattern: &str, escape: Option<char>) -> bool {
     let t: Vec<char> = text.chars().collect();
     let p: Vec<char> = pattern.chars().collect();
-    like_rec(&t, &p, escape, 0, 0)
+    like_rec(&t, &p, escape, false, 0, 0)
 }
 
-fn like_rec(t: &[char], p: &[char], escape: Option<char>, mut ti: usize, mut pi: usize) -> bool {
+/// `LIKE` as DuckDB matches it: case-sensitive, `%` and `_` the only
+/// wildcards (#679). The column engine's `LIKE`; its `ILIKE` lowercases
+/// both sides first. sqlite3's [`like_match`] folds ASCII case instead.
+pub fn like_match_exact(text: &str, pattern: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    like_rec(&t, &p, None, true, 0, 0)
+}
+
+fn like_rec(
+    t: &[char],
+    p: &[char],
+    escape: Option<char>,
+    exact: bool,
+    mut ti: usize,
+    mut pi: usize,
+) -> bool {
+    let same = |a: char, b: char| if exact { a == b } else { ascii_eq(a, b) };
     loop {
         if pi == p.len() {
             return ti == t.len();
@@ -514,7 +531,7 @@ fn like_rec(t: &[char], p: &[char], escape: Option<char>, mut ti: usize, mut pi:
         let pc = p[pi];
         if Some(pc) == escape && pi.saturating_add(1) < p.len() {
             let literal = p[pi.saturating_add(1)];
-            if ti >= t.len() || !ascii_eq(t[ti], literal) {
+            if ti >= t.len() || !same(t[ti], literal) {
                 return false;
             }
             ti = ti.saturating_add(1);
@@ -531,7 +548,7 @@ fn like_rec(t: &[char], p: &[char], escape: Option<char>, mut ti: usize, mut pi:
                     return true;
                 }
                 for start in ti..=t.len() {
-                    if like_rec(t, p, escape, start, pi) {
+                    if like_rec(t, p, escape, exact, start, pi) {
                         return true;
                     }
                 }
@@ -545,7 +562,7 @@ fn like_rec(t: &[char], p: &[char], escape: Option<char>, mut ti: usize, mut pi:
                 pi = pi.saturating_add(1);
             }
             _ => {
-                if ti >= t.len() || !ascii_eq(t[ti], pc) {
+                if ti >= t.len() || !same(t[ti], pc) {
                     return false;
                 }
                 ti = ti.saturating_add(1);
@@ -783,8 +800,9 @@ fn logfmt_extract(args: &[Value]) -> Result<Value, FunctionError> {
 
 /// `regexp_extract(text, pattern, group)` -- capture-group extraction
 /// from the first match of `pattern` in `text` (#307); `group` 0 is the
-/// whole match. No match, an out-of-range group or a malformed pattern
-/// all return `Value::Null`.
+/// whole match. As in DuckDB (#679), no match, a group that did not take
+/// part in the match and an out-of-range group give `''`; NULL comes only
+/// from a NULL argument (or a malformed pattern).
 fn regexp_extract(args: &[Value]) -> Result<Value, FunctionError> {
     if args.iter().any(|v| matches!(v, Value::Null)) {
         return Ok(Value::Null);
@@ -798,13 +816,8 @@ fn regexp_extract(args: &[Value]) -> Result<Value, FunctionError> {
     let Some(re) = regex_lite::compile(&pattern) else {
         return Ok(Value::Null);
     };
-    Ok(match regex_lite::find(&re, &text) {
-        Some(m) => match m.group(group) {
-            Some(s) => Value::Text(s.to_string().into()),
-            None => Value::Null,
-        },
-        None => Value::Null,
-    })
+    let found = regex_lite::find(&re, &text).and_then(|m| m.group(group).map(|s| s.to_string()));
+    Ok(Value::Text(found.unwrap_or_default().into()))
 }
 
 /// A small hand-rolled regex subset for `regexp_extract` (#307): literal
@@ -1583,6 +1596,45 @@ mod tests {
         call(name, args).unwrap()
     }
 
+    /// #679: the column engine's LIKE matches case exactly (DuckDB);
+    /// sqlite3's `like_match` still folds ASCII case for the row engine.
+    #[test]
+    fn like_match_exact_is_case_sensitive() {
+        assert!(like_match_exact("north", "north"));
+        assert!(!like_match_exact("north", "NORTH"));
+        assert!(like_match_exact("error", "err%"));
+        assert!(!like_match_exact("Error", "err%"));
+        assert!(
+            like_match_exact("%_x", "%_x"),
+            "wildcards also match themselves"
+        );
+        assert!(like_match_exact("abc", "a_c"));
+        assert!(
+            like_match("NORTH", "north", None),
+            "sqlite's LIKE is unchanged"
+        );
+    }
+
+    /// #679: `regexp_extract` gives '' for no match, a group that took no
+    /// part, and an out-of-range group, as DuckDB does; NULL only for a
+    /// NULL argument.
+    #[test]
+    fn regexp_extract_without_a_match_is_empty() {
+        let t = |s: &str| Value::Text(s.to_string().into());
+        let r = |s: &str, p: &str, g: i64| v("regexp_extract", &[t(s), t(p), Value::Integer(g)]);
+        assert_eq!(r("ab", "(x)", 1), t(""));
+        assert_eq!(r("ab", "a(x)?b", 1), t(""));
+        assert_eq!(r("ab", "(a)", 5), t(""));
+        assert_eq!(r("ab", "(a)(b)", 2), t("b"));
+        assert_eq!(
+            v(
+                "regexp_extract",
+                &[Value::Null, t("(a)"), Value::Integer(1)]
+            ),
+            Value::Null
+        );
+    }
+
     /// #651: `call_at` hands its instant to the date/time functions.
     #[test]
     fn call_at_fixes_now() {
@@ -2285,30 +2337,30 @@ mod tests {
         assert!(!like_match("x", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`, `like_rec`'s escaped-
+    /// MC/DC vector (obligation `functions_like_rec_9e288648`, `like_rec`'s escaped-
     /// literal decision `ti >= t.len() || !ascii_eq(t[ti], literal)`):
     /// leaf A (text exhausted) true -- no match regardless of `literal`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_8f97ac22__v1_text_exhausted_no_match() {
+    fn mcdc__functions_like_rec_9e288648__v1_text_exhausted_no_match() {
         assert!(!like_match("", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_like_rec_9e288648`): leaf A false, leaf B
     /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_like_rec_8f97ac22__v3_escaped_literal_matches`.
+    /// `mcdc__functions_like_rec_9e288648__v3_escaped_literal_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_8f97ac22__v2_escaped_literal_mismatches() {
+    fn mcdc__functions_like_rec_9e288648__v2_escaped_literal_mismatches() {
         assert!(!like_match("x", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`): both leaves false --
+    /// MC/DC vector (obligation `functions_like_rec_9e288648`): both leaves false --
     /// the escaped literal matches, so matching continues. Independence
-    /// pair for A against `mcdc__functions_like_rec_8f97ac22__v1_text_exhausted_no_match`.
+    /// pair for A against `mcdc__functions_like_rec_9e288648__v1_text_exhausted_no_match`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_8f97ac22__v3_escaped_literal_matches() {
+    fn mcdc__functions_like_rec_9e288648__v3_escaped_literal_matches() {
         assert!(like_match("%", "\\%", Some('\\')));
     }
 
@@ -2342,30 +2394,30 @@ mod tests {
         assert!(like_match("axyz", "a%", None));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`, `like_rec`'s literal
+    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`, `like_rec`'s literal
     /// char decision `ti >= t.len() || !ascii_eq(t[ti], pc)`): leaf A
     /// (text exhausted) true -- no match regardless of `pc`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_ec8f55a3__v1_text_exhausted_no_match() {
+    fn mcdc__functions_like_rec_b8d0afd0__v1_text_exhausted_no_match() {
         assert!(!like_match("", "a", None));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`): leaf A false, leaf B
     /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_like_rec_ec8f55a3__v3_literal_matches`.
+    /// `mcdc__functions_like_rec_b8d0afd0__v3_literal_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_ec8f55a3__v2_literal_mismatches() {
+    fn mcdc__functions_like_rec_b8d0afd0__v2_literal_mismatches() {
         assert!(!like_match("x", "a", None));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`): both leaves false --
+    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`): both leaves false --
     /// the literal matches. Independence pair for A against
-    /// `mcdc__functions_like_rec_ec8f55a3__v1_text_exhausted_no_match`.
+    /// `mcdc__functions_like_rec_b8d0afd0__v1_text_exhausted_no_match`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_ec8f55a3__v3_literal_matches() {
+    fn mcdc__functions_like_rec_b8d0afd0__v3_literal_matches() {
         assert!(like_match("a", "a", None));
     }
 
