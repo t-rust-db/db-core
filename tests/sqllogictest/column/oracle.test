@@ -1,0 +1,278 @@
+# The cases of tools/check_column_oracle.sh not tied to one issue below:
+# baseline aggregates, GROUP BY aliases and expressions (#623), exact
+# integer arithmetic and DOUBLE `/` (#635). Table production: ids 1..5000,
+# four regions, amounts; three row groups.
+
+query I nosort
+SELECT count(*) FROM production
+----
+5000
+
+query TI nosort
+SELECT region, count(*) FROM production GROUP BY region ORDER BY region
+----
+east
+1250
+north
+1250
+south
+1250
+west
+1250
+
+query TR nosort
+SELECT region, sum(amount) FROM production GROUP BY region ORDER BY region
+----
+east
+7818750.0
+north
+7812500.0
+south
+7815625.0
+west
+7809375.0
+
+query TR nosort
+SELECT region, avg(amount) FROM production GROUP BY region ORDER BY region
+----
+east
+6255.0
+north
+6250.0
+south
+6252.5
+west
+6247.5
+
+query TRR nosort
+SELECT region, min(amount), max(amount) FROM production GROUP BY region ORDER BY region
+----
+east
+10.0
+12500.0
+north
+5.0
+12495.0
+south
+7.5
+12497.5
+west
+2.5
+12492.5
+
+query IR nosort
+SELECT id, amount FROM production WHERE id > 4990 ORDER BY id
+----
+4991
+12477.5
+4992
+12480.0
+4993
+12482.5
+4994
+12485.0
+4995
+12487.5
+4996
+12490.0
+4997
+12492.5
+4998
+12495.0
+4999
+12497.5
+5000
+12500.0
+
+query I nosort
+SELECT count(DISTINCT region) FROM production
+----
+4
+
+query TII nosort
+SELECT region, count(DISTINCT amount), count(*) FROM production GROUP BY region ORDER BY region
+----
+east
+1250
+1250
+north
+1250
+1250
+south
+1250
+1250
+west
+1250
+1250
+
+query TI nosort
+SELECT region, count(DISTINCT id) FROM production WHERE id > 2500 GROUP BY region ORDER BY region
+----
+east
+625
+north
+625
+south
+625
+west
+625
+
+# #623: a real column an alias shadows, expressions over keys and
+# aggregates, a select list that is not keys-first.
+
+query II rowsort
+SELECT id - id AS id, count(*) FROM production WHERE id <= 5 GROUP BY id
+----
+0
+1
+0
+1
+0
+1
+0
+1
+0
+1
+
+query IT nosort
+SELECT count(*), region FROM production GROUP BY region ORDER BY region
+----
+1250
+east
+1250
+north
+1250
+south
+1250
+west
+
+query TII nosort
+SELECT region, sum(id) * 2, count(*) + 1 FROM production GROUP BY region ORDER BY region
+----
+east
+6255000
+1251
+north
+6250000
+1251
+south
+6252500
+1251
+west
+6247500
+1251
+
+query TI nosort
+SELECT region, max(id) - min(id) + count(*) FROM production GROUP BY region ORDER BY region
+----
+east
+6246
+north
+6246
+south
+6246
+west
+6246
+
+query I nosort
+SELECT count(*) * 2 + sum(id) FROM production
+----
+12512500
+
+query TI nosort
+SELECT region AS r, count(*) FROM production GROUP BY r ORDER BY r
+----
+east
+1250
+north
+1250
+south
+1250
+west
+1250
+
+query II nosort
+SELECT sum(id) AS id, count(*) FROM production WHERE id <= 3 GROUP BY id ORDER BY id
+----
+1
+1
+2
+1
+3
+1
+
+query II nosort
+SELECT max(id) AS m, count(DISTINCT amount) FROM production GROUP BY region ORDER BY m
+----
+4997
+1250
+4998
+1250
+4999
+1250
+5000
+1250
+
+query TII nosort
+SELECT region, min(region) LIKE 'e%', count(*) FROM production GROUP BY region ORDER BY region
+----
+east
+1
+1250
+north
+0
+1250
+south
+0
+1250
+west
+0
+1250
+
+# #635: integer arithmetic is exact (past 2^53 too) and `/` is DOUBLE.
+
+query III nosort
+SELECT id, id * 3 - 1, id + id FROM production WHERE id > 4995 ORDER BY id
+----
+4996
+14987
+9992
+4997
+14990
+9994
+4998
+14993
+9996
+4999
+14996
+9998
+5000
+14999
+10000
+
+query TI nosort
+SELECT region, sum(id) * 10000000000 + max(id) FROM production GROUP BY region ORDER BY region
+----
+east
+31275000000005000
+north
+31250000000004998
+south
+31262500000004999
+west
+31237500000004997
+
+query IR nosort
+SELECT id, id / 4 FROM production WHERE id > 4995 ORDER BY id
+----
+4996
+1249.0
+4997
+1249.25
+4998
+1249.5
+4999
+1249.75
+5000
+1250.0
+

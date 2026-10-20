@@ -1,0 +1,109 @@
+# The same rows as production.parquet (Zstd), written with the other codecs
+# storage/parquet/compression.rs decodes: Snappy and none.
+
+query IIRR nosort
+SELECT count(*), sum(id), min(amount), max(amount) FROM production_snappy
+----
+5000
+12502500
+2.5
+12500.0
+
+query TIRR nosort
+SELECT region, count(*), sum(amount), avg(amount) FROM production_snappy GROUP BY region ORDER BY region
+----
+east
+1250
+7818750.0
+6255.0
+north
+1250
+7812500.0
+6250.0
+south
+1250
+7815625.0
+6252.5
+west
+1250
+7809375.0
+6247.5
+
+query ITR nosort
+SELECT id, region, amount FROM production_snappy WHERE id > 4995 ORDER BY id
+----
+4996
+east
+12490.0
+4997
+west
+12492.5
+4998
+north
+12495.0
+4999
+south
+12497.5
+5000
+east
+12500.0
+
+query I nosort
+SELECT id FROM production_snappy ORDER BY id LIMIT 2 OFFSET 3
+----
+4
+5
+
+query IIRR nosort
+SELECT count(*), sum(id), min(amount), max(amount) FROM production_uncompressed
+----
+5000
+12502500
+2.5
+12500.0
+
+query TIRR nosort
+SELECT region, count(*), sum(amount), avg(amount) FROM production_uncompressed GROUP BY region ORDER BY region
+----
+east
+1250
+7818750.0
+6255.0
+north
+1250
+7812500.0
+6250.0
+south
+1250
+7815625.0
+6252.5
+west
+1250
+7809375.0
+6247.5
+
+query ITR nosort
+SELECT id, region, amount FROM production_uncompressed WHERE id > 4995 ORDER BY id
+----
+4996
+east
+12490.0
+4997
+west
+12492.5
+4998
+north
+12495.0
+4999
+south
+12497.5
+5000
+east
+12500.0
+
+query I nosort
+SELECT id FROM production_uncompressed ORDER BY id LIMIT 2 OFFSET 3
+----
+4
+5
+

@@ -1,0 +1,106 @@
+# #644: HAVING over select-list aggregates, HAVING-only aggregates,
+# aliases, keys, COUNT(DISTINCT), no GROUP BY, with WHERE/ORDER/LIMIT.
+
+query TR nosort
+SELECT region, sum(amount) FROM production GROUP BY region HAVING sum(amount) > 7812000 ORDER BY region
+----
+east
+7818750.0
+north
+7812500.0
+south
+7815625.0
+
+query T nosort
+SELECT region FROM production GROUP BY region HAVING min(amount) > 6 ORDER BY region
+----
+east
+south
+
+query TI nosort
+SELECT region, count(*) AS n FROM production GROUP BY region HAVING n = 1250 AND max(amount) - min(amount) < 12490 ORDER BY region
+----
+
+query T nosort
+SELECT region FROM production GROUP BY region HAVING region <> 'north' OR region IS NULL ORDER BY region
+----
+east
+south
+west
+
+query TR nosort
+SELECT region, avg(amount) FROM production GROUP BY region HAVING avg(amount) >= 6250 ORDER BY region
+----
+east
+6255.0
+north
+6250.0
+south
+6252.5
+
+query TI nosort
+SELECT region, count(DISTINCT id) FROM production WHERE id > 2500 GROUP BY region HAVING count(DISTINCT id) > 600 ORDER BY region
+----
+east
+625
+north
+625
+south
+625
+west
+625
+
+query I nosort
+SELECT count(*) FROM production HAVING count(*) > 10
+----
+5000
+
+query I nosort
+SELECT count(*) FROM production HAVING sum(amount) < 0
+----
+
+query TI nosort
+SELECT region, count(*) FROM production WHERE amount > 100 GROUP BY region HAVING sum(amount) > 7800000 ORDER BY region DESC LIMIT 2
+----
+west
+1240
+south
+1240
+
+# NULL groups and NULL aggregates on the multi-row-group fixture.
+
+query TII nosort
+SELECT grp, count(*), count(n) FROM typed_nulls GROUP BY grp HAVING count(n) > 100 ORDER BY grp
+----
+big
+8000
+6858
+small
+1000
+857
+tiny
+900
+771
+
+query TI nosort
+SELECT grp, sum(n) FROM typed_nulls GROUP BY grp HAVING sum(n) < 0 OR grp IS NULL ORDER BY grp
+----
+big
+-2307
+tiny
+-2747
+NULL
+718
+
+query TR nosort
+SELECT grp, max(f) FROM typed_nulls WHERE id > 9000 GROUP BY grp HAVING max(f) > 1000 ORDER BY grp
+----
+big
+1250.5
+small
+1236.25
+tiny
+1221.625
+NULL
+1188.75
+

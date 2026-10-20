@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bench-events check-row-functions-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help bench-events check-row-functions-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -241,6 +241,18 @@ check-parquet-write-oracle: ## Parquet writer output reads back identically in D
 	@cargo run --quiet --example parquet_write_oracle -- target/parquet-write-oracle
 	@uv run --quiet --no-project --with duckdb==$(PARQUET_ORACLE_DUCKDB) --with pyarrow==$(PARQUET_ORACLE_PYARROW) \
 		python tools/check_parquet_write_oracle.py target/parquet-write-oracle
+
+# #680: rewrites the expected results of tests/sqllogictest/column/*.test
+# with DuckDB's answers on the same fixtures, so every expectation the
+# column_sqllogictest test checks in CI is DuckDB's, never hand-typed.
+# Local only (ADR 0000 (f)); DuckDB comes through uv, pinned as above.
+refresh-column-sqllogictest: ## Local-only: rewrite the column sqllogictest suite's expected results from the pinned DuckDB (needs uv)
+	@command -v uv >/dev/null 2>&1 || { \
+		echo "uv not found — install from https://docs.astral.sh/uv/"; \
+		exit 1; \
+	}
+	@uv run --quiet --no-project --with duckdb==$(PARQUET_ORACLE_DUCKDB) \
+		python tools/refresh_column_sqllogictest.py tests/sqllogictest/column tests/fixtures/parquet
 
 gen-parquet-fixtures: ## Regenerate the codec-variant Parquet fixtures check-column-oracle reads (tools/gen_parquet_fixtures.sh)
 	@tools/gen_parquet_fixtures.sh

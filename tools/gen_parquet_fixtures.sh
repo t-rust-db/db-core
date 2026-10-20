@@ -43,4 +43,22 @@ duckdb -c "COPY (SELECT * FROM (VALUES
     (5, '', 0, 0.0::DECIMAL(2,1), TIMESTAMP '2026-01-03 00:00:00', NULL)
   ) t(id, s, n, d, ts, lvl) ORDER BY id) TO '$DIR/null_types.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/null_types.parquet"
+# #680: the column sqllogictest suite's NULL-heavy fixture -- 10000 rows,
+# NULLs in every column but id, one column per type the column engine
+# reads (integer, double, text, boolean, decimal, timestamp), five row
+# groups, and a skewed group key (80% / 10% / 9% / 1% NULL). Every value
+# is a function of id, so the file is deterministic.
+duckdb -c "COPY (SELECT
+    i AS id,
+    CASE WHEN i % 7 = 0 THEN NULL ELSE (i * 37) % 1000 - 500 END::INTEGER AS n,
+    CASE WHEN i % 11 = 0 THEN NULL ELSE ((i * 13) % 10007) / 8.0 END::DOUBLE AS f,
+    CASE WHEN i % 13 = 0 THEN NULL WHEN i % 13 = 1 THEN ''
+         ELSE ['alpha', 'Beta', 'GAMMA', 'delta'][1 + i % 4] || (i % 50)::VARCHAR END AS s,
+    CASE WHEN i % 5 = 0 THEN NULL ELSE i % 3 = 0 END AS b,
+    CASE WHEN i % 17 = 0 THEN NULL ELSE ((i * 7919) % 100000 - 50000) / 100 END::DECIMAL(9,2) AS d,
+    CASE WHEN i % 19 = 0 THEN NULL ELSE TIMESTAMP '2026-01-01 00:00:00' + to_minutes(i * 97) END AS ts,
+    CASE WHEN i % 10 < 8 THEN 'big' WHEN i % 10 = 8 THEN 'small' WHEN i % 100 <> 99 THEN 'tiny' END AS grp
+  FROM range(1, 10001) t(i) ORDER BY id)
+  TO '$DIR/typed_nulls.parquet' (FORMAT PARQUET, COMPRESSION 'snappy', ROW_GROUP_SIZE 2048);"
+
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet"

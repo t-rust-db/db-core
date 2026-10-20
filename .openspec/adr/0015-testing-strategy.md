@@ -122,7 +122,14 @@ and runs only in `assurance.yml`'s weekly dashboard, not this workflow.
     external dependency with its own supply chain, and this crate does
     not accept that onto the machine that runs untrusted PRs. Run by hand
     after a change to `storage::column` or `vm::batch`'s aggregate merge
-    path.
+    path. What CI checks instead is the column sqllogictest suite (#680):
+    `tests/sqllogictest/column/*.test` holds queries with DuckDB's answers
+    on the Parquet fixtures, written only by `make
+    refresh-column-sqllogictest` (DuckDB through uv, pinned), and
+    `cargo test --test column_sqllogictest` compares the column engine
+    with them -- DuckDB's answers, without DuckDB on the CI machine.
+    `skipif db-core` keeps DuckDB's answer for a query the engine cannot
+    run yet; `tools/column-sqllogictest-status.json` tallies them.
   - **Stream ("oracle by construction")**: a test independently
     re-derives the expected answer from the fixture's raw bytes -- its
     own facility table, its own substring search -- rather than trusting
