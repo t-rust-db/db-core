@@ -1524,11 +1524,11 @@ mod tests {
         }
     }
 
-    // vm_engine_run_90c1a10a (`run`, aggregate branch):
+    // vm_engine_run_page_90c1a10a (`run_page`, aggregate branch):
     // `!*distinct && order_by.is_empty() && limit.is_none()`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_90c1a10a__v1_plain_aggregate_returns_the_merge_directly() {
+    fn mcdc__vm_engine_run_page_90c1a10a__v1_plain_aggregate_returns_the_merge_directly() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(&segments, &group_sum_program(vec![combine(false)])).unwrap();
         assert_eq!(
@@ -1542,7 +1542,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_90c1a10a__v2_distinct_goes_through_finalize() {
+    fn mcdc__vm_engine_run_page_90c1a10a__v2_distinct_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(&segments, &group_sum_program(vec![combine(true)])).unwrap();
         assert_eq!(rows.len(), 2);
@@ -1550,7 +1550,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_90c1a10a__v3_order_by_goes_through_finalize() {
+    fn mcdc__vm_engine_run_page_90c1a10a__v3_order_by_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(
             &segments,
@@ -1574,7 +1574,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_engine_run_90c1a10a__v4_limit_goes_through_finalize() {
+    fn mcdc__vm_engine_run_page_90c1a10a__v4_limit_goes_through_finalize() {
         let segments = vec![seg(&[(1, 10), (2, 5)]), seg(&[(1, 3)])];
         let rows = run(
             &segments,
@@ -1743,21 +1743,21 @@ mod mcdc_vectors {
         run(segments, &count_program(grouped)).unwrap().into_rows()
     }
 
-    // vm_engine_run_7330e6cc: `segments.is_empty() && *num_group_keys == 0`
+    // vm_engine_run_page_7330e6cc: `segments.is_empty() && *num_group_keys == 0`
     #[test]
-    fn mcdc__vm_engine_run_7330e6cc__v1_no_segments_ungrouped_is_one_row_of_zero() {
+    fn mcdc__vm_engine_run_page_7330e6cc__v1_no_segments_ungrouped_is_one_row_of_zero() {
         assert_eq!(rows(&[], false), vec![vec![Value::Int(0)]]);
     }
 
     #[test]
-    fn mcdc__vm_engine_run_7330e6cc__v2_with_segments_the_segments_supply_the_row() {
+    fn mcdc__vm_engine_run_page_7330e6cc__v2_with_segments_the_segments_supply_the_row() {
         let segment =
             InMemorySegment(Batch::new(2).with_column("x", vec![Value::Int(1), Value::Int(2)]));
         assert_eq!(rows(&[segment], false), vec![vec![Value::Int(2)]]);
     }
 
     #[test]
-    fn mcdc__vm_engine_run_7330e6cc__v3_no_segments_grouped_is_no_rows() {
+    fn mcdc__vm_engine_run_page_7330e6cc__v3_no_segments_grouped_is_no_rows() {
         assert!(rows(&[], true).is_empty());
     }
 }

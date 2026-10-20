@@ -2027,15 +2027,9 @@ impl Parser {
                     self.advance();
                     self.in_tail(lhs, false)?
                 }
-                TokenKind::Keyword(Keyword::LIKE) | TokenKind::Keyword(Keyword::GLOB) => {
-                    let glob = self.at_kw(Keyword::GLOB);
-                    self.advance();
-                    self.like_tail(lhs, glob, false)?
-                }
-                TokenKind::Ilike => {
-                    self.advance();
-                    self.ilike_tail(lhs, false)?
-                }
+                TokenKind::Keyword(Keyword::LIKE)
+                | TokenKind::Keyword(Keyword::GLOB)
+                | TokenKind::Ilike => self.like_op(lhs, false)?,
                 TokenKind::Keyword(Keyword::NOT) => match self.peek_at(1).kind.clone() {
                     TokenKind::Null => {
                         self.advance();
@@ -2069,17 +2063,11 @@ impl Parser {
                         self.advance();
                         self.in_tail(lhs, true)?
                     }
-                    TokenKind::Keyword(Keyword::LIKE) | TokenKind::Keyword(Keyword::GLOB) => {
-                        let glob =
-                            matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::GLOB));
+                    TokenKind::Keyword(Keyword::LIKE)
+                    | TokenKind::Keyword(Keyword::GLOB)
+                    | TokenKind::Ilike => {
                         self.advance();
-                        self.advance();
-                        self.like_tail(lhs, glob, true)?
-                    }
-                    TokenKind::Ilike => {
-                        self.advance();
-                        self.advance();
-                        self.ilike_tail(lhs, true)?
+                        self.like_op(lhs, true)?
                     }
                     _ => break,
                 },
@@ -2288,6 +2276,19 @@ impl Parser {
             },
             span,
         })
+    }
+
+    /// The operator token of `x [NOT] LIKE|GLOB|ILIKE p` is current (any
+    /// `NOT` consumed). Out of line, so the three operators add nothing to
+    /// `binary_expr`'s recursive frame (#118).
+    #[inline(never)]
+    fn like_op(&mut self, lhs: Expr, negated: bool) -> PResult<Expr> {
+        let op = self.peek_at(0).kind.clone();
+        self.advance();
+        match op {
+            TokenKind::Ilike => self.ilike_tail(lhs, negated),
+            _ => self.like_tail(lhs, op == TokenKind::Keyword(Keyword::GLOB), negated),
+        }
     }
 
     /// `x [NOT] ILIKE p` (column dialect, #679) as the call `ilike(x, p)`,

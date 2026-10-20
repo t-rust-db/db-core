@@ -2337,30 +2337,30 @@ mod tests {
         assert!(!like_match("x", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`, `like_rec`'s escaped-
+    /// MC/DC vector (obligation `functions_like_rec_9e288648`, `like_rec`'s escaped-
     /// literal decision `ti >= t.len() || !ascii_eq(t[ti], literal)`):
     /// leaf A (text exhausted) true -- no match regardless of `literal`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_8f97ac22__v1_text_exhausted_no_match() {
+    fn mcdc__functions_like_rec_9e288648__v1_text_exhausted_no_match() {
         assert!(!like_match("", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_like_rec_9e288648`): leaf A false, leaf B
     /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_like_rec_8f97ac22__v3_escaped_literal_matches`.
+    /// `mcdc__functions_like_rec_9e288648__v3_escaped_literal_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_8f97ac22__v2_escaped_literal_mismatches() {
+    fn mcdc__functions_like_rec_9e288648__v2_escaped_literal_mismatches() {
         assert!(!like_match("x", "\\%", Some('\\')));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_8f97ac22`): both leaves false --
+    /// MC/DC vector (obligation `functions_like_rec_9e288648`): both leaves false --
     /// the escaped literal matches, so matching continues. Independence
-    /// pair for A against `mcdc__functions_like_rec_8f97ac22__v1_text_exhausted_no_match`.
+    /// pair for A against `mcdc__functions_like_rec_9e288648__v1_text_exhausted_no_match`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_8f97ac22__v3_escaped_literal_matches() {
+    fn mcdc__functions_like_rec_9e288648__v3_escaped_literal_matches() {
         assert!(like_match("%", "\\%", Some('\\')));
     }
 
@@ -2394,30 +2394,30 @@ mod tests {
         assert!(like_match("axyz", "a%", None));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`, `like_rec`'s literal
+    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`, `like_rec`'s literal
     /// char decision `ti >= t.len() || !ascii_eq(t[ti], pc)`): leaf A
     /// (text exhausted) true -- no match regardless of `pc`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_ec8f55a3__v1_text_exhausted_no_match() {
+    fn mcdc__functions_like_rec_b8d0afd0__v1_text_exhausted_no_match() {
         assert!(!like_match("", "a", None));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`): leaf A false, leaf B
+    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`): leaf A false, leaf B
     /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_like_rec_ec8f55a3__v3_literal_matches`.
+    /// `mcdc__functions_like_rec_b8d0afd0__v3_literal_matches`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_ec8f55a3__v2_literal_mismatches() {
+    fn mcdc__functions_like_rec_b8d0afd0__v2_literal_mismatches() {
         assert!(!like_match("x", "a", None));
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_ec8f55a3`): both leaves false --
+    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`): both leaves false --
     /// the literal matches. Independence pair for A against
-    /// `mcdc__functions_like_rec_ec8f55a3__v1_text_exhausted_no_match`.
+    /// `mcdc__functions_like_rec_b8d0afd0__v1_text_exhausted_no_match`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_ec8f55a3__v3_literal_matches() {
+    fn mcdc__functions_like_rec_b8d0afd0__v3_literal_matches() {
         assert!(like_match("a", "a", None));
     }
 

@@ -5673,15 +5673,16 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     // A string compared with a number or a boolean is converted to that
     // type first, as DuckDB does (#679): `id = '5'` matches row 5 instead
     // of never matching, and `id = 'abc'` is an error.
+    // A map keeps comparing as its text.
     if matches!(
         op,
         MapOp::Eq | MapOp::Ne | MapOp::Lt | MapOp::Le | MapOp::Gt | MapOp::Ge
     ) {
         match (a, b) {
-            (Value::Str(s), other) if !matches!(other, Value::Str(_)) => {
+            (Value::Str(s), other) if converts_from_str(other) => {
                 return apply_map_op(op, &convert_str_like(s, other)?, b);
             }
-            (other, Value::Str(s)) if !matches!(other, Value::Str(_)) => {
+            (other, Value::Str(s)) if converts_from_str(other) => {
                 return apply_map_op(op, a, &convert_str_like(s, other)?);
             }
             _ => {}
@@ -5827,10 +5828,18 @@ fn as_bool(v: &Value) -> bool {
     matches!(v, Value::Bool(true))
 }
 
+/// A string compared with `v` is converted to `v`'s type first (#679).
+fn converts_from_str(v: &Value) -> bool {
+    matches!(
+        v,
+        Value::Int(_) | Value::Float(_) | Value::Decimal { .. } | Value::Bool(_)
+    )
+}
+
 /// `s` converted to the type of `like` for a comparison with it (#679):
 /// integer text for an integer, any number for a float or decimal,
-/// `true`/`false` (or `t`/`f`, `1`/`0`) for a boolean; anything else is a
-/// [`VmError::Conversion`], as in DuckDB.
+/// `true`/`false` (or `t`/`f`, `1`/`0`) for a boolean; text that does not
+/// convert is a [`VmError::Conversion`], as in DuckDB.
 fn convert_str_like(s: &str, like: &Value) -> Result<Value> {
     let text = s.trim();
     let fail = |to: &'static str| VmError::Conversion {
@@ -5848,13 +5857,12 @@ fn convert_str_like(s: &str, like: &Value) -> Result<Value> {
             .filter(|f| f.is_finite())
             .map(Value::Float)
             .ok_or_else(|| fail("DOUBLE")),
-        Value::Bool(_) => match text.to_ascii_lowercase().as_str() {
+        // A boolean: the only other type `converts_from_str` admits.
+        _ => match text.to_ascii_lowercase().as_str() {
             "true" | "t" | "1" => Ok(Value::Bool(true)),
             "false" | "f" | "0" => Ok(Value::Bool(false)),
             _ => Err(fail("BOOLEAN")),
         },
-        // Strings compare as strings; a map compares as its text.
-        _ => Ok(Value::Str(Cow::Owned(s.to_string()))),
     }
 }
 

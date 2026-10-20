@@ -28060,20 +28060,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_row_grammar_equality_expr_a1f87426",
+    "id": "parser_row_grammar_equality_expr_cc16bafb",
     "file": "src/parser/row/grammar.rs",
     "line": 1965,
-    "decision": "match self.peek().kind.clone() {\n                TokenKind::Eq => {\n                    self.advance();\n                    let rhs = self.binary_expr(1)?;\n                    bin(BinaryOp::Eq, lhs, rhs)\n                }\n                TokenKind::Ne => {\n                    self.advance();\n                    let rhs = self.binary_expr(1)?;\n                    bin(BinaryOp::Ne, lhs, rhs)\n                }\n                TokenKind::Keyword(Keyword::IS) => {\n                    self.advance();\n                    let negated = self.eat_kw(Keyword::NOT);\n                    let rhs = self.binary_expr(1)?;\n                    let span = join_span(lhs.span, rhs.span);\n                    Expr {\n                        kind: ExprKind::Is {\n                            lhs: Box::new(lhs),\n                            rhs: Box::new(rhs),\n                            negated,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::ISNULL) => {\n                    let end = self.advance_span();\n                    let span = join_span(lhs.span, end);\n                    Expr {\n                        kind: ExprKind::IsNull {\n                            expr: Box::new(lhs),\n                            negated: false,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::NOTNULL) => {\n                    let end = self.advance_span();\n                    let span = join_span(lhs.span, end);\n                    Expr {\n                        kind: ExprKind::IsNull {\n                            expr: Box::new(lhs),\n                            negated: true,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::BETWEEN) => {\n                    self.advance();\n                    let (lo, hi) = self.between_tail()?;\n                    let span = join_span(lhs.span, hi.span);\n                    Expr {\n                        kind: ExprKind::Between {\n                            expr: Box::new(lhs),\n                            lo: Box::new(lo),\n                            hi: Box::new(hi),\n                            negated: false,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::IN) => {\n                    self.advance();\n                    self.in_tail(lhs, false)?\n                }\n                TokenKind::Keyword(Keyword::LIKE) | TokenKind::Keyword(Keyword::GLOB) => {\n                    let glob = self.at_kw(Keyword::GLOB);\n                    self.advance();\n                    self.like_tail(lhs, glob, false)?\n                }\n                TokenKind::Ilike => {\n                    self.advance();\n                    self.ilike_tail(lhs, false)?\n                }\n                TokenKind::Keyword(Keyword::NOT) => match self.peek_at(1).kind.clone() {\n                    TokenKind::Null => {\n                        self.advance();\n                        let end = self.advance_span();\n                        let span = join_span(lhs.span, end);\n                        Expr {\n                            kind: ExprKind::IsNull {\n                                expr: Box::new(lhs),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::BETWEEN) => {\n                        self.advance();\n                        self.advance();\n                        let (lo, hi) = self.between_tail()?;\n                        let span = join_span(lhs.span, hi.span);\n                        Expr {\n                            kind: ExprKind::Between {\n                                expr: Box::new(lhs),\n                                lo: Box::new(lo),\n                                hi: Box::new(hi),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::IN) => {\n                        self.advance();\n                        self.advance();\n                        self.in_tail(lhs, true)?\n                    }\n                    TokenKind::Keyword(Keyword::LIKE) | TokenKind::Keyword(Keyword::GLOB) => {\n                        let glob =\n                            matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::GLOB));\n                        self.advance();\n                        self.advance();\n                        self.like_tail(lhs, glob, true)?\n                    }\n                    TokenKind::Ilike => {\n                        self.advance();\n                        self.advance();\n                        self.ilike_tail(lhs, true)?\n                    }\n                    _ => break,\n                },\n                _ => break,\n            }",
+    "decision": "match self.peek().kind.clone() {\n                TokenKind::Eq => {\n                    self.advance();\n                    let rhs = self.binary_expr(1)?;\n                    bin(BinaryOp::Eq, lhs, rhs)\n                }\n                TokenKind::Ne => {\n                    self.advance();\n                    let rhs = self.binary_expr(1)?;\n                    bin(BinaryOp::Ne, lhs, rhs)\n                }\n                TokenKind::Keyword(Keyword::IS) => {\n                    self.advance();\n                    let negated = self.eat_kw(Keyword::NOT);\n                    let rhs = self.binary_expr(1)?;\n                    let span = join_span(lhs.span, rhs.span);\n                    Expr {\n                        kind: ExprKind::Is {\n                            lhs: Box::new(lhs),\n                            rhs: Box::new(rhs),\n                            negated,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::ISNULL) => {\n                    let end = self.advance_span();\n                    let span = join_span(lhs.span, end);\n                    Expr {\n                        kind: ExprKind::IsNull {\n                            expr: Box::new(lhs),\n                            negated: false,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::NOTNULL) => {\n                    let end = self.advance_span();\n                    let span = join_span(lhs.span, end);\n                    Expr {\n                        kind: ExprKind::IsNull {\n                            expr: Box::new(lhs),\n                            negated: true,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::BETWEEN) => {\n                    self.advance();\n                    let (lo, hi) = self.between_tail()?;\n                    let span = join_span(lhs.span, hi.span);\n                    Expr {\n                        kind: ExprKind::Between {\n                            expr: Box::new(lhs),\n                            lo: Box::new(lo),\n                            hi: Box::new(hi),\n                            negated: false,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::IN) => {\n                    self.advance();\n                    self.in_tail(lhs, false)?\n                }\n                TokenKind::Keyword(Keyword::LIKE)\n                | TokenKind::Keyword(Keyword::GLOB)\n                | TokenKind::Ilike => self.like_op(lhs, false)?,\n                TokenKind::Keyword(Keyword::NOT) => match self.peek_at(1).kind.clone() {\n                    TokenKind::Null => {\n                        self.advance();\n                        let end = self.advance_span();\n                        let span = join_span(lhs.span, end);\n                        Expr {\n                            kind: ExprKind::IsNull {\n                                expr: Box::new(lhs),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::BETWEEN) => {\n                        self.advance();\n                        self.advance();\n                        let (lo, hi) = self.between_tail()?;\n                        let span = join_span(lhs.span, hi.span);\n                        Expr {\n                            kind: ExprKind::Between {\n                                expr: Box::new(lhs),\n                                lo: Box::new(lo),\n                                hi: Box::new(hi),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::IN) => {\n                        self.advance();\n                        self.advance();\n                        self.in_tail(lhs, true)?\n                    }\n                    TokenKind::Keyword(Keyword::LIKE)\n                    | TokenKind::Keyword(Keyword::GLOB)\n                    | TokenKind::Ilike => {\n                        self.advance();\n                        self.like_op(lhs, true)?\n                    }\n                    _ => break,\n                },\n                _ => break,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "parser_row_grammar_equality_expr_c7f86534",
+    "id": "parser_row_grammar_equality_expr_6b4f98ca",
     "file": "src/parser/row/grammar.rs",
-    "line": 2039,
-    "decision": "match self.peek_at(1).kind.clone() {\n                    TokenKind::Null => {\n                        self.advance();\n                        let end = self.advance_span();\n                        let span = join_span(lhs.span, end);\n                        Expr {\n                            kind: ExprKind::IsNull {\n                                expr: Box::new(lhs),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::BETWEEN) => {\n                        self.advance();\n                        self.advance();\n                        let (lo, hi) = self.between_tail()?;\n                        let span = join_span(lhs.span, hi.span);\n                        Expr {\n                            kind: ExprKind::Between {\n                                expr: Box::new(lhs),\n                                lo: Box::new(lo),\n                                hi: Box::new(hi),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::IN) => {\n                        self.advance();\n                        self.advance();\n                        self.in_tail(lhs, true)?\n                    }\n                    TokenKind::Keyword(Keyword::LIKE) | TokenKind::Keyword(Keyword::GLOB) => {\n                        let glob =\n                            matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::GLOB));\n                        self.advance();\n                        self.advance();\n                        self.like_tail(lhs, glob, true)?\n                    }\n                    TokenKind::Ilike => {\n                        self.advance();\n                        self.advance();\n                        self.ilike_tail(lhs, true)?\n                    }\n                    _ => break,\n                }",
+    "line": 2033,
+    "decision": "match self.peek_at(1).kind.clone() {\n                    TokenKind::Null => {\n                        self.advance();\n                        let end = self.advance_span();\n                        let span = join_span(lhs.span, end);\n                        Expr {\n                            kind: ExprKind::IsNull {\n                                expr: Box::new(lhs),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::BETWEEN) => {\n                        self.advance();\n                        self.advance();\n                        let (lo, hi) = self.between_tail()?;\n                        let span = join_span(lhs.span, hi.span);\n                        Expr {\n                            kind: ExprKind::Between {\n                                expr: Box::new(lhs),\n                                lo: Box::new(lo),\n                                hi: Box::new(hi),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::IN) => {\n                        self.advance();\n                        self.advance();\n                        self.in_tail(lhs, true)?\n                    }\n                    TokenKind::Keyword(Keyword::LIKE)\n                    | TokenKind::Keyword(Keyword::GLOB)\n                    | TokenKind::Ilike => {\n                        self.advance();\n                        self.like_op(lhs, true)?\n                    }\n                    _ => break,\n                }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -28082,7 +28082,7 @@
   {
     "id": "parser_row_grammar_exists_tail_5c17547d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2107,
+    "line": 2095,
     "decision": "!self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28092,7 +28092,7 @@
   {
     "id": "parser_row_grammar_exists_tail_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2111,
+    "line": 2099,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::UNION)\n                | TokenKind::Keyword(Keyword::INTERSECT)\n                | TokenKind::Keyword(Keyword::EXCEPT)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -28102,7 +28102,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_48731267",
     "file": "src/parser/row/grammar.rs",
-    "line": 2146,
+    "line": 2134,
     "decision": "match self.tokens.get(idx) {\n                Some(t) => &t.kind,\n                None => return false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28112,7 +28112,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_b688b62b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2150,
+    "line": 2138,
     "decision": "match kind {\n                TokenKind::Eof => return false,\n                TokenKind::LParen => depth = depth.saturating_add(1),\n                TokenKind::RParen => {\n                    if depth == 0 {\n                        let after_in = matches!(\n                            self.tokens.get(idx.saturating_add(1)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::IN))\n                        );\n                        let after_not_in = matches!(\n                            self.tokens.get(idx.saturating_add(1)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::NOT))\n                        ) && matches!(\n                            self.tokens.get(idx.saturating_add(2)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::IN))\n                        );\n                        return saw_top_comma && (after_in || after_not_in);\n                    }\n                    depth = depth.saturating_sub(1);\n                }\n                TokenKind::Comma if depth == 0 => saw_top_comma = true,\n                _ => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28122,7 +28122,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_42bcd25d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2170,
+    "line": 2158,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28132,7 +28132,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_42bcd25d_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2154,
+    "line": 2142,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28142,7 +28142,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_517114c6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2189,
+    "line": 2177,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen) || !self.looks_like_tuple_in()",
     "conditions": 2,
     "vectors_required": 3,
@@ -28152,7 +28152,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_91decef1",
     "file": "src/parser/row/grammar.rs",
-    "line": 2195,
+    "line": 2183,
     "decision": "match self.expr_list() {\n            Ok(list) => list,\n            Err(_) => {\n                self.pos = start_pos;\n                return Ok(None);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28162,7 +28162,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_2e7a8ba6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2202,
+    "line": 2190,
     "decision": "self.expect_punct(TokenKind::RParen, \"')'\").is_err()",
     "conditions": 1,
     "vectors_required": 2,
@@ -28172,7 +28172,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_989c1966",
     "file": "src/parser/row/grammar.rs",
-    "line": 2206,
+    "line": 2194,
     "decision": "self.at_kw(Keyword::IN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28182,7 +28182,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_90cc7e65",
     "file": "src/parser/row/grammar.rs",
-    "line": 2209,
+    "line": 2197,
     "decision": "self.at_kw(Keyword::NOT)\n            && matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::IN))",
     "conditions": 2,
     "vectors_required": 3,
@@ -28192,7 +28192,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_7a03b6fa",
     "file": "src/parser/row/grammar.rs",
-    "line": 2219,
+    "line": 2207,
     "decision": "list.len() < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -28202,7 +28202,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_5c17547d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2224,
+    "line": 2212,
     "decision": "!self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28212,7 +28212,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2229,
+    "line": 2217,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::UNION)\n                | TokenKind::Keyword(Keyword::INTERSECT)\n                | TokenKind::Keyword(Keyword::EXCEPT)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -28222,7 +28222,7 @@
   {
     "id": "parser_row_grammar_in_tail_849b6473",
     "file": "src/parser/row/grammar.rs",
-    "line": 2250,
+    "line": 2238,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28232,7 +28232,7 @@
   {
     "id": "parser_row_grammar_in_tail_2a50be6e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2254,
+    "line": 2242,
     "decision": "self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28242,7 +28242,7 @@
   {
     "id": "parser_row_grammar_in_tail_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2256,
+    "line": 2244,
     "decision": "matches!(\n                self.peek().kind,\n                TokenKind::Keyword(Keyword::UNION)\n                    | TokenKind::Keyword(Keyword::INTERSECT)\n                    | TokenKind::Keyword(Keyword::EXCEPT)\n            )",
     "conditions": 1,
     "vectors_required": 2,
@@ -28252,7 +28252,7 @@
   {
     "id": "parser_row_grammar_in_tail_2629d5b7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2276,
+    "line": 2264,
     "decision": "matches!(self.peek().kind, TokenKind::RParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28260,9 +28260,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "parser_row_grammar_like_op_a1ba6010",
+    "file": "src/parser/row/grammar.rs",
+    "line": 2288,
+    "decision": "match op {\n            TokenKind::Ilike => self.ilike_tail(lhs, negated),\n            _ => self.like_tail(lhs, op == TokenKind::Keyword(Keyword::GLOB), negated),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "parser_row_grammar_ilike_tail_22554140",
     "file": "src/parser/row/grammar.rs",
-    "line": 2298,
+    "line": 2299,
     "decision": "self.at_kw(Keyword::ESCAPE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28272,7 +28282,7 @@
   {
     "id": "parser_row_grammar_ilike_tail_5f337291",
     "file": "src/parser/row/grammar.rs",
-    "line": 2311,
+    "line": 2312,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -28282,7 +28292,7 @@
   {
     "id": "parser_row_grammar_like_tail_fe8c0a5a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2327,
+    "line": 2328,
     "decision": "self.eat_kw(Keyword::ESCAPE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28292,7 +28302,7 @@
   {
     "id": "parser_row_grammar_binary_expr_4bd4b69d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2363,
+    "line": 2364,
     "decision": "let Some((op, prec)) = Self::binary_op(&self.peek().kind)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28302,7 +28312,7 @@
   {
     "id": "parser_row_grammar_binary_expr_41e08d0e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2364,
+    "line": 2365,
     "decision": "prec < min_prec",
     "conditions": 1,
     "vectors_required": 2,
@@ -28312,7 +28322,7 @@
   {
     "id": "parser_row_grammar_binary_op_628a1458",
     "file": "src/parser/row/grammar.rs",
-    "line": 2376,
+    "line": 2377,
     "decision": "match kind {\n            TokenKind::Lt => (BinaryOp::Lt, 1),\n            TokenKind::Le => (BinaryOp::Le, 1),\n            TokenKind::Gt => (BinaryOp::Gt, 1),\n            TokenKind::Ge => (BinaryOp::Ge, 1),\n            TokenKind::BitAnd => (BinaryOp::BitAnd, 2),\n            TokenKind::BitOr => (BinaryOp::BitOr, 2),\n            TokenKind::Shl => (BinaryOp::Shl, 2),\n            TokenKind::Shr => (BinaryOp::Shr, 2),\n            TokenKind::Plus => (BinaryOp::Add, 3),\n            TokenKind::Minus => (BinaryOp::Sub, 3),\n            TokenKind::Star => (BinaryOp::Mul, 4),\n            TokenKind::Slash => (BinaryOp::Div, 4),\n            TokenKind::Percent => (BinaryOp::Mod, 4),\n            TokenKind::Concat => (BinaryOp::Concat, 5),\n            _ => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28322,7 +28332,7 @@
   {
     "id": "parser_row_grammar_arrow_expr_505e4cbe",
     "file": "src/parser/row/grammar.rs",
-    "line": 2400,
+    "line": 2401,
     "decision": "matches!(self.peek().kind, TokenKind::Arrow | TokenKind::ArrowArrow)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28332,7 +28342,7 @@
   {
     "id": "parser_row_grammar_collate_expr_4a6546b9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2409,
+    "line": 2410,
     "decision": "self.eat_kw(Keyword::COLLATE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28342,7 +28352,7 @@
   {
     "id": "parser_row_grammar_unary_expr_284bde8c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2426,
+    "line": 2427,
     "decision": "match this.peek().kind {\n                TokenKind::Plus => Some(UnaryOp::Plus),\n                TokenKind::Minus => Some(UnaryOp::Minus),\n                TokenKind::BitNot => Some(UnaryOp::BitNot),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28352,7 +28362,7 @@
   {
     "id": "parser_row_grammar_unary_expr_00220ef9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2432,
+    "line": 2433,
     "decision": "let Some(op) = op",
     "conditions": 1,
     "vectors_required": 2,
@@ -28362,7 +28372,7 @@
   {
     "id": "parser_row_grammar_unary_expr_97843e2a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2441,
+    "line": 2442,
     "decision": "matches!(op, UnaryOp::Minus)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28372,7 +28382,7 @@
   {
     "id": "parser_row_grammar_unary_expr_6cf76295",
     "file": "src/parser/row/grammar.rs",
-    "line": 2442,
+    "line": 2443,
     "decision": "let ExprKind::Literal(Literal::Float(f)) = inner.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -28382,7 +28392,7 @@
   {
     "id": "parser_row_grammar_unary_expr_77230782",
     "file": "src/parser/row/grammar.rs",
-    "line": 2443,
+    "line": 2444,
     "decision": "f == 9_223_372_036_854_775_808.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -28392,7 +28402,7 @@
   {
     "id": "parser_row_grammar_postfix_expr_2ba03a81",
     "file": "src/parser/row/grammar.rs",
-    "line": 2470,
+    "line": 2471,
     "decision": "matches!(self.peek().kind, TokenKind::LBracket)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28402,7 +28412,7 @@
   {
     "id": "parser_row_grammar_primary_expr_ee4603ca",
     "file": "src/parser/row/grammar.rs",
-    "line": 2502,
+    "line": 2503,
     "decision": "match &self.peek().kind {\n            TokenKind::Integer(v) => {\n                let v = *v;\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Integer(v)),\n                    span,\n                })\n            }\n            TokenKind::Float(v) => {\n                let v = *v;\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Float(v)),\n                    span,\n                })\n            }\n            TokenKind::String(s) => {\n                let s = s.clone();\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Str(s)),\n                    span,\n                })\n            }\n            TokenKind::Blob(b) => {\n                let b = (**b).clone();\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Blob(b)),\n                    span,\n                })\n            }\n            TokenKind::Null => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Null),\n                    span,\n                })\n            }\n            TokenKind::True => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::True),\n                    span,\n                })\n            }\n            TokenKind::False => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::False),\n                    span,\n                })\n            }\n            TokenKind::Param(p) => {\n                let kind = match p.as_ref() {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(*n),\n                    Param::Colon(s) => ParamKind::Colon(s.clone()),\n                    Param::At(s) => ParamKind::At(s.clone()),\n                    Param::Dollar(s) => ParamKind::Dollar(s.clone()),\n                };\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Param(kind),\n                    span,\n                })\n            }\n            TokenKind::Keyword(Keyword::CURRENT_TIME)\n            | TokenKind::Keyword(Keyword::CURRENT_DATE)\n            | TokenKind::Keyword(Keyword::CURRENT_TIMESTAMP) => {\n                self.unsupported(\"CURRENT_TIME/CURRENT_DATE/CURRENT_TIMESTAMP not yet supported\")\n            }\n            TokenKind::Keyword(Keyword::CASE) => self.case_expr(),\n            TokenKind::Keyword(Keyword::CAST) => self.cast_expr(),\n            TokenKind::Keyword(Keyword::EXISTS) => {\n                let start = self.advance_span();\n                self.exists_tail(start, false)\n            }\n            TokenKind::Identifier(name) => {\n                let name = name.clone();\n                let start = self.advance_span();\n                if matches!(self.peek().kind, TokenKind::LParen) {\n                    return self.function_call(name, start);\n                }\n                let mut parts = vec![name];\n                while matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3 {\n                    self.advance();\n                    let (part, _) = self.identifier()?;\n                    parts.push(part);\n                }\n                let end = self\n                    .tokens\n                    .get(self.pos.saturating_sub(1))\n                    .map_or(start, |t| t.span);\n                let span = join_span(start, end);\n                // Exactly one, two or three parts (db-core#232): the old\n                // wildcard arm also matched `a.b.c.d`, silently dropping\n                // the trailing parts, and `unwrap_or_default()` could\n                // mint an empty identifier. Moved out of `parts` by\n                // value (db-core#486: `parts.as_slice()` forced a\n                // `.clone()` of every identifier `String` here -- a\n                // second heap copy on top of the one `self.identifier()`/\n                // the `Identifier(name)` match already produced --\n                // instead of just moving the `String`s `parts` already\n                // owns.\n                let len = parts.len();\n                let mut parts = parts.into_iter();\n                let kind = match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                };\n                Ok(Expr { kind, span })\n            }\n            // SQLite treats most keywords as usable function names when\n            // followed by `(` (e.g. `replace(...)`, `glob(...)`) — only\n            // the handful matched above (CASE/CAST/EXISTS/CURRENT_*)\n            // are true reserved words in expression position.\n            TokenKind::Keyword(kw) if matches!(self.peek_at(1).kind, TokenKind::LParen) => {\n                let kw = *kw;\n                let span = self.advance_span();\n                self.function_call(format!(\"{kw:?}\"), span)\n            }\n            TokenKind::LParen => {\n                let start = self.advance_span();\n                if self.at_kw(Keyword::SELECT) {\n                    let subquery = self.parse_select_stmt()?;\n                    if matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    ) {\n                        return self.unsupported(\n                            \"compound SELECT (UNION/INTERSECT/EXCEPT) not yet supported\",\n                        );\n                    }\n                    let end = self.expect_punct(TokenKind::RParen, \"')' to close subquery\")?;\n                    let span = join_span(start, end);\n                    return Ok(Expr {\n                        kind: ExprKind::Subquery(Box::new(subquery)),\n                        span,\n                    });\n                }\n                let inner = self.expr()?;\n                let end = self.expect_punct(TokenKind::RParen, \"')' to close expression\")?;\n                let span = join_span(start, end);\n                Ok(Expr {\n                    kind: ExprKind::Paren(Box::new(inner)),\n                    span,\n                })\n            }\n            other => Err(ParseFail::Invalid {\n                message: format!(\"expected column or expression, found {other:?}\"),\n                span: self.peek().span,\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28412,7 +28422,7 @@
   {
     "id": "parser_row_grammar_primary_expr_d95902fa",
     "file": "src/parser/row/grammar.rs",
-    "line": 2632,
+    "line": 2633,
     "decision": "matches!(self.peek_at(1).kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28422,7 +28432,7 @@
   {
     "id": "parser_row_grammar_primary_expr_218f77c8",
     "file": "src/parser/row/grammar.rs",
-    "line": 2557,
+    "line": 2558,
     "decision": "match p.as_ref() {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(*n),\n                    Param::Colon(s) => ParamKind::Colon(s.clone()),\n                    Param::At(s) => ParamKind::At(s.clone()),\n                    Param::Dollar(s) => ParamKind::Dollar(s.clone()),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28432,7 +28442,7 @@
   {
     "id": "parser_row_grammar_primary_expr_dbaa03a3",
     "file": "src/parser/row/grammar.rs",
-    "line": 2584,
+    "line": 2585,
     "decision": "matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28442,7 +28452,7 @@
   {
     "id": "parser_row_grammar_primary_expr_c99e92d7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2588,
+    "line": 2589,
     "decision": "matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3",
     "conditions": 2,
     "vectors_required": 3,
@@ -28452,7 +28462,7 @@
   {
     "id": "parser_row_grammar_primary_expr_cca4606b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2610,
+    "line": 2611,
     "decision": "match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28462,7 +28472,7 @@
   {
     "id": "parser_row_grammar_primary_expr_c2cb254b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2612,
+    "line": 2613,
     "decision": "len == 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -28472,7 +28482,7 @@
   {
     "id": "parser_row_grammar_primary_expr_1511b2a6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2613,
+    "line": 2614,
     "decision": "len >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -28482,7 +28492,7 @@
   {
     "id": "parser_row_grammar_primary_expr_2a50be6e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2639,
+    "line": 2640,
     "decision": "self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28492,7 +28502,7 @@
   {
     "id": "parser_row_grammar_primary_expr_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2641,
+    "line": 2642,
     "decision": "matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -28502,7 +28512,7 @@
   {
     "id": "parser_row_grammar_function_call_9105415c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2676,
+    "line": 2677,
     "decision": "self.eat_punct(&TokenKind::Star)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28512,7 +28522,7 @@
   {
     "id": "parser_row_grammar_function_call_2629d5b7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2678,
+    "line": 2679,
     "decision": "matches!(self.peek().kind, TokenKind::RParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28522,7 +28532,7 @@
   {
     "id": "parser_row_grammar_function_tail_3403c85a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2721,
+    "line": 2722,
     "decision": "self.eat_kw(Keyword::RANGE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28532,7 +28542,7 @@
   {
     "id": "parser_row_grammar_function_tail_f75851c6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2726,
+    "line": 2727,
     "decision": "let Some(r) = &range",
     "conditions": 1,
     "vectors_required": 2,
@@ -28542,7 +28552,7 @@
   {
     "id": "parser_row_grammar_function_tail_2258eb7c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2729,
+    "line": 2730,
     "decision": "self.eat_kw(Keyword::FILTER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28552,7 +28562,7 @@
   {
     "id": "parser_row_grammar_function_tail_87133733",
     "file": "src/parser/row/grammar.rs",
-    "line": 2738,
+    "line": 2739,
     "decision": "self.eat_kw(Keyword::OVER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28562,7 +28572,7 @@
   {
     "id": "parser_row_grammar_function_tail_b001c5a8",
     "file": "src/parser/row/grammar.rs",
-    "line": 2745,
+    "line": 2746,
     "decision": "filter.is_none() && over.is_none() && range.is_none()",
     "conditions": 3,
     "vectors_required": 4,
@@ -28572,7 +28582,7 @@
   {
     "id": "parser_row_grammar_window_def_849b6473",
     "file": "src/parser/row/grammar.rs",
-    "line": 2762,
+    "line": 2763,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28582,7 +28592,7 @@
   {
     "id": "parser_row_grammar_window_def_c4d1976d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2770,
+    "line": 2771,
     "decision": "self.eat_kw(Keyword::PARTITION)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28592,7 +28602,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2773,
+    "line": 2774,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28602,7 +28612,7 @@
   {
     "id": "parser_row_grammar_window_def_980f2400",
     "file": "src/parser/row/grammar.rs",
-    "line": 2779,
+    "line": 2780,
     "decision": "self.eat_kw(Keyword::ORDER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28612,7 +28622,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2782,
+    "line": 2783,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28622,7 +28632,7 @@
   {
     "id": "parser_row_grammar_window_def_6907c266",
     "file": "src/parser/row/grammar.rs",
-    "line": 2787,
+    "line": 2788,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::ROWS)\n                | TokenKind::Keyword(Keyword::RANGE)\n                | TokenKind::Keyword(Keyword::GROUPS)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -28632,7 +28642,7 @@
   {
     "id": "parser_row_grammar_case_expr_d359b45c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2808,
+    "line": 2809,
     "decision": "self.at_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28642,7 +28652,7 @@
   {
     "id": "parser_row_grammar_case_expr_47ae9dae",
     "file": "src/parser/row/grammar.rs",
-    "line": 2814,
+    "line": 2815,
     "decision": "self.eat_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28652,7 +28662,7 @@
   {
     "id": "parser_row_grammar_case_expr_2c73542b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2820,
+    "line": 2821,
     "decision": "whens.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -28662,7 +28672,7 @@
   {
     "id": "parser_row_grammar_case_expr_9ca297d5",
     "file": "src/parser/row/grammar.rs",
-    "line": 2823,
+    "line": 2824,
     "decision": "self.eat_kw(Keyword::ELSE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28672,7 +28682,7 @@
   {
     "id": "parser_row_grammar_type_name_ac37c31a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2859,
+    "line": 2860,
     "decision": "let TokenKind::Identifier(_) = self.peek().kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -28682,7 +28692,7 @@
   {
     "id": "parser_row_grammar_type_name_bffb0a0b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2864,
+    "line": 2865,
     "decision": "self.eat_punct(&TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28692,7 +28702,7 @@
   {
     "id": "parser_row_grammar_type_name_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2868,
+    "line": 2869,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28702,7 +28712,7 @@
   {
     "id": "parser_row_grammar_number_literal_84884d30",
     "file": "src/parser/row/grammar.rs",
-    "line": 2880,
+    "line": 2881,
     "decision": "match self.peek().kind.clone() {\n            TokenKind::Integer(v) => {\n                self.advance();\n                Ok(v.to_string())\n            }\n            other => {\n                let span = self.peek().span;\n                Err(ParseFail::Invalid {\n                    message: format!(\"expected number, found {other:?}\"),\n                    span,\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28712,7 +28722,7 @@
   {
     "id": "parser_row_grammar_expr_list_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 2897,
+    "line": 2898,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -28722,7 +28732,7 @@
   {
     "id": "parser_row_grammar_expr_height_8db688f6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2922,
+    "line": 2923,
     "decision": "let Some((e, h)) = stack.pop()",
     "conditions": 1,
     "vectors_required": 2,
@@ -28732,7 +28742,7 @@
   {
     "id": "parser_row_grammar_expr_height_66b87bd9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2925,
+    "line": 2926,
     "decision": "matches!(e.kind, ExprKind::Paren(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -28742,7 +28752,7 @@
   {
     "id": "parser_row_grammar_children_8a8586eb",
     "file": "src/parser/row/grammar.rs",
-    "line": 2937,
+    "line": 2938,
     "decision": "match &e.kind {\n        ExprKind::Unary { expr, .. }\n        | ExprKind::IsNull { expr, .. }\n        | ExprKind::Cast { expr, .. }\n        | ExprKind::Collate { expr, .. }\n        | ExprKind::Paren(expr)\n        | ExprKind::InSubquery { expr, .. } => vec![expr],\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => vec![lhs, rhs],\n        ExprKind::Between { expr, lo, hi, .. } => vec![expr, lo, hi],\n        ExprKind::In { expr, list, .. } => std::iter::once(&**expr).chain(list).collect(),\n        ExprKind::Like {\n            expr,\n            pattern,\n            escape,\n            ..\n        } => [Some(&**expr), Some(&**pattern), escape.as_deref()]\n            .into_iter()\n            .flatten()\n            .collect(),\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => operand\n            .as_deref()\n            .into_iter()\n            .chain(whens.iter().flat_map(|(w, t)| [w, t]))\n            .chain(else_.as_deref())\n            .collect(),\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        }\n        | ExprKind::InSubqueryMulti { exprs: list, .. } => list.iter().collect(),\n        _ => Vec::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28752,7 +28762,7 @@
   {
     "id": "parser_row_grammar_operator_chains_are_capped_at_sqlite3s_expression_height_acbcd3da",
     "file": "src/parser/row/grammar.rs",
-    "line": 3748,
+    "line": 3749,
     "decision": "match parse(&over) {\n                    crate::parser::row::ParseOutcome::Invalid { message, .. } => assert!(\n                        message.contains(\"Expression tree is too large (maximum depth 1000)\"),\n                        \"{message}\"\n                    ),\n                    other => panic!(\"{term}{op} x {n}: {other:?}\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28762,7 +28772,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_e4a5bc85",
     "file": "src/parser/row/grammar.rs",
-    "line": 3803,
+    "line": 3804,
     "decision": "match crate::parser::row::parse_select(sql) {\n            crate::parser::row::ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28772,7 +28782,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_20abd9ee",
     "file": "src/parser/row/grammar.rs",
-    "line": 3807,
+    "line": 3808,
     "decision": "match &select.columns[0] {\n            ResultColumn::Expr { expr, .. } => match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            },\n            other => panic!(\"expected an expression column, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28782,7 +28792,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_0bdb902e",
     "file": "src/parser/row/grammar.rs",
-    "line": 3808,
+    "line": 3809,
     "decision": "match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -28792,7 +28802,7 @@
   {
     "id": "parser_row_grammar_parse_select_stmt_aa58f6cd",
     "file": "src/parser/row/grammar.rs",
-    "line": 3872,
+    "line": 3873,
     "decision": "self.depth > MAX_EXPR_DEPTH",
     "conditions": 1,
     "vectors_required": 2,
@@ -47652,7 +47662,7 @@
   {
     "id": "vm_batch_apply_map_op_0a426848",
     "file": "src/vm/batch.rs",
-    "line": 5676,
+    "line": 5677,
     "decision": "matches!(\n        op,\n        MapOp::Eq | MapOp::Ne | MapOp::Lt | MapOp::Le | MapOp::Gt | MapOp::Ge\n    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -47660,30 +47670,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_batch_apply_map_op_ebe22d5d",
+    "id": "vm_batch_apply_map_op_82edd754",
     "file": "src/vm/batch.rs",
-    "line": 5680,
-    "decision": "match (a, b) {\n            (Value::Str(s), other) if !matches!(other, Value::Str(_)) => {\n                return apply_map_op(op, &convert_str_like(s, other)?, b);\n            }\n            (other, Value::Str(s)) if !matches!(other, Value::Str(_)) => {\n                return apply_map_op(op, a, &convert_str_like(s, other)?);\n            }\n            _ => {}\n        }",
+    "line": 5681,
+    "decision": "match (a, b) {\n            (Value::Str(s), other) if converts_from_str(other) => {\n                return apply_map_op(op, &convert_str_like(s, other)?, b);\n            }\n            (other, Value::Str(s)) if converts_from_str(other) => {\n                return apply_map_op(op, a, &convert_str_like(s, other)?);\n            }\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "vm_batch_apply_map_op_a24e209f",
+    "id": "vm_batch_apply_map_op_1db352ac",
     "file": "src/vm/batch.rs",
-    "line": 5681,
-    "decision": "!matches!(other, Value::Str(_))",
+    "line": 5682,
+    "decision": "converts_from_str(other)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "vm_batch_apply_map_op_a24e209f_2",
+    "id": "vm_batch_apply_map_op_1db352ac_2",
     "file": "src/vm/batch.rs",
-    "line": 5684,
-    "decision": "!matches!(other, Value::Str(_))",
+    "line": 5685,
+    "decision": "converts_from_str(other)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -47692,7 +47702,7 @@
   {
     "id": "vm_batch_apply_map_op_e58f157c",
     "file": "src/vm/batch.rs",
-    "line": 5691,
+    "line": 5692,
     "decision": "match op {\n        MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {\n            let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });\n            return arithmetic(op, a, b).ok_or(if decimal {\n                VmError::DecimalOverflow { opcode: \"Map\" }\n            } else {\n                VmError::IntegerOverflow { opcode: \"Map\" }\n            });\n        }\n        MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),\n        MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),\n        MapOp::Lt => comparison(a, b, |o| o == Some(Less)),\n        MapOp::Le => comparison(a, b, |o| matches!(o, Some(Less | Equal))),\n        MapOp::Gt => comparison(a, b, |o| o == Some(Greater)),\n        MapOp::Ge => comparison(a, b, |o| matches!(o, Some(Greater | Equal))),\n        MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),\n        MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),\n        MapOp::Not => Value::Bool(!as_bool(a)),\n        MapOp::Concat => Value::Str(Cow::Owned(format!(\"{a}{b}\"))),\n        MapOp::Neg => match a {\n            // `-i64::MIN` has no integer representation: an error, as in\n            // DuckDB (#635), not SQLite's promotion to REAL.\n            Value::Int(v) => {\n                return v\n                    .checked_neg()\n                    .map(Value::Int)\n                    .ok_or(VmError::IntegerOverflow { opcode: \"Map\" });\n            }\n            Value::Float(v) => Value::Float(-v),\n            // In range by construction: |unscaled| < 10^38 both ways.\n            Value::Decimal { unscaled, scale } => Value::Decimal {\n                unscaled: unscaled.saturating_neg(),\n                scale: *scale,\n            },\n            _ => Value::Null,\n        },\n        // Already answered by the early returns above (they must see\n        // `Null`); the same semantics here keep this match total without\n        // an `unreachable!` the qualified subset forbids.\n        MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),\n        MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),\n        MapOp::MaskIf => {\n            // MaskIf keeps `a` wherever the predicate register is true.\n            if matches!(b, Value::Bool(true)) {\n                a.clone()\n            } else {\n                Value::Null\n            }\n        }\n        MapOp::Like { negated, nocase } => {\n            let (text, pattern) = (a.to_string(), b.to_string());\n            let matched = if nocase {\n                crate::functions::like_match_exact(&text.to_lowercase(), &pattern.to_lowercase())\n            } else {\n                crate::functions::like_match_exact(&text, &pattern)\n            };\n            Value::Bool(matched != negated)\n        }\n        MapOp::Glob { negated } => {\n            let matched = crate::functions::glob_match(&a.to_string(), &b.to_string());\n            Value::Bool(matched != negated)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47702,7 +47712,7 @@
   {
     "id": "vm_batch_apply_map_op_09567692",
     "file": "src/vm/batch.rs",
-    "line": 5694,
+    "line": 5695,
     "decision": "decimal",
     "conditions": 1,
     "vectors_required": 2,
@@ -47712,7 +47722,7 @@
   {
     "id": "vm_batch_apply_map_op_ce99a4d1",
     "file": "src/vm/batch.rs",
-    "line": 5710,
+    "line": 5711,
     "decision": "match a {\n            // `-i64::MIN` has no integer representation: an error, as in\n            // DuckDB (#635), not SQLite's promotion to REAL.\n            Value::Int(v) => {\n                return v\n                    .checked_neg()\n                    .map(Value::Int)\n                    .ok_or(VmError::IntegerOverflow { opcode: \"Map\" });\n            }\n            Value::Float(v) => Value::Float(-v),\n            // In range by construction: |unscaled| < 10^38 both ways.\n            Value::Decimal { unscaled, scale } => Value::Decimal {\n                unscaled: unscaled.saturating_neg(),\n                scale: *scale,\n            },\n            _ => Value::Null,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47722,7 +47732,7 @@
   {
     "id": "vm_batch_apply_map_op_2ce6a5d0",
     "file": "src/vm/batch.rs",
-    "line": 5734,
+    "line": 5735,
     "decision": "matches!(b, Value::Bool(true))",
     "conditions": 1,
     "vectors_required": 2,
@@ -47732,7 +47742,7 @@
   {
     "id": "vm_batch_apply_map_op_c6f43d9e",
     "file": "src/vm/batch.rs",
-    "line": 5742,
+    "line": 5743,
     "decision": "nocase",
     "conditions": 1,
     "vectors_required": 2,
@@ -47742,7 +47752,7 @@
   {
     "id": "vm_batch_arithmetic_495bc58f",
     "file": "src/vm/batch.rs",
-    "line": 5767,
+    "line": 5768,
     "decision": "op == MapOp::Div",
     "conditions": 1,
     "vectors_required": 2,
@@ -47752,7 +47762,7 @@
   {
     "id": "vm_batch_arithmetic_5f45d1c0",
     "file": "src/vm/batch.rs",
-    "line": 5770,
+    "line": 5771,
     "decision": "let (Value::Int(x), Value::Int(y)) = (a, b)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47762,7 +47772,7 @@
   {
     "id": "vm_batch_arithmetic_62c86514",
     "file": "src/vm/batch.rs",
-    "line": 5773,
+    "line": 5774,
     "decision": "match (decimal_parts(a), decimal_parts(b)) {\n        (Some(l), Some(r)) => decimal_arith_op(op, l, r),\n        _ => Some(Value::Float(arith_op(op, x, y))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47772,7 +47782,7 @@
   {
     "id": "vm_batch_decimal_parts_84d63730",
     "file": "src/vm/batch.rs",
-    "line": 5782,
+    "line": 5783,
     "decision": "match v {\n        Value::Int(i) => Some((i128::from(*i), 0)),\n        Value::Decimal { unscaled, scale } => Some((*unscaled, *scale)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47782,7 +47792,7 @@
   {
     "id": "vm_batch_int_arith_op_e293d9db",
     "file": "src/vm/batch.rs",
-    "line": 5792,
+    "line": 5793,
     "decision": "match op {\n        MapOp::Add => x.checked_add(y),\n        MapOp::Sub => x.checked_sub(y),\n        MapOp::Mul => x.checked_mul(y),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47792,7 +47802,7 @@
   {
     "id": "vm_batch_decimal_arith_op_a5e0764f",
     "file": "src/vm/batch.rs",
-    "line": 5803,
+    "line": 5804,
     "decision": "match op {\n        MapOp::Mul => (u1.checked_mul(u2)?, s1.checked_add(s2)?),\n        MapOp::Add | MapOp::Sub => {\n            let scale = s1.max(s2);\n            let l = u1.checked_mul(pow10(u32::from(scale.saturating_sub(s1)))?)?;\n            let r = u2.checked_mul(pow10(u32::from(scale.saturating_sub(s2)))?)?;\n            let sum = if op == MapOp::Add {\n                l.checked_add(r)?\n            } else {\n                l.checked_sub(r)?\n            };\n            (sum, scale)\n        }\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47802,7 +47812,7 @@
   {
     "id": "vm_batch_decimal_arith_op_4de310f3",
     "file": "src/vm/batch.rs",
-    "line": 5809,
+    "line": 5810,
     "decision": "op == MapOp::Add",
     "conditions": 1,
     "vectors_required": 2,
@@ -47810,10 +47820,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_batch_convert_str_like_11b2685d",
+    "id": "vm_batch_convert_str_like_ed76f939",
     "file": "src/vm/batch.rs",
-    "line": 5840,
-    "decision": "match like {\n        Value::Int(_) => text\n            .parse::<i64>()\n            .map(Value::Int)\n            .map_err(|_| fail(\"INTEGER\")),\n        Value::Float(_) | Value::Decimal { .. } => text\n            .parse::<f64>()\n            .ok()\n            .filter(|f| f.is_finite())\n            .map(Value::Float)\n            .ok_or_else(|| fail(\"DOUBLE\")),\n        Value::Bool(_) => match text.to_ascii_lowercase().as_str() {\n            \"true\" | \"t\" | \"1\" => Ok(Value::Bool(true)),\n            \"false\" | \"f\" | \"0\" => Ok(Value::Bool(false)),\n            _ => Err(fail(\"BOOLEAN\")),\n        },\n        // Strings compare as strings; a map compares as its text.\n        _ => Ok(Value::Str(Cow::Owned(s.to_string()))),\n    }",
+    "line": 5849,
+    "decision": "match like {\n        Value::Int(_) => text\n            .parse::<i64>()\n            .map(Value::Int)\n            .map_err(|_| fail(\"INTEGER\")),\n        Value::Float(_) | Value::Decimal { .. } => text\n            .parse::<f64>()\n            .ok()\n            .filter(|f| f.is_finite())\n            .map(Value::Float)\n            .ok_or_else(|| fail(\"DOUBLE\")),\n        // A boolean: the only other type `converts_from_str` admits.\n        _ => match text.to_ascii_lowercase().as_str() {\n            \"true\" | \"t\" | \"1\" => Ok(Value::Bool(true)),\n            \"false\" | \"f\" | \"0\" => Ok(Value::Bool(false)),\n            _ => Err(fail(\"BOOLEAN\")),\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -47822,7 +47832,7 @@
   {
     "id": "vm_batch_convert_str_like_b52ad226",
     "file": "src/vm/batch.rs",
-    "line": 5851,
+    "line": 5861,
     "decision": "match text.to_ascii_lowercase().as_str() {\n            \"true\" | \"t\" | \"1\" => Ok(Value::Bool(true)),\n            \"false\" | \"f\" | \"0\" => Ok(Value::Bool(false)),\n            _ => Err(fail(\"BOOLEAN\")),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47832,7 +47842,7 @@
   {
     "id": "vm_batch_truth_bc042ab3",
     "file": "src/vm/batch.rs",
-    "line": 5863,
+    "line": 5871,
     "decision": "match v {\n        Value::Null => None,\n        other => Some(as_bool(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47842,7 +47852,7 @@
   {
     "id": "vm_batch_three_valued_decb7cee",
     "file": "src/vm/batch.rs",
-    "line": 5874,
+    "line": 5882,
     "decision": "match (a, b) {\n        (Some(x), _) | (_, Some(x)) if x == decided => Value::Bool(decided),\n        (Some(_), Some(_)) => Value::Bool(!decided),\n        _ => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47852,7 +47862,7 @@
   {
     "id": "vm_batch_three_valued_0fcc177a",
     "file": "src/vm/batch.rs",
-    "line": 5875,
+    "line": 5883,
     "decision": "x == decided",
     "conditions": 1,
     "vectors_required": 2,
@@ -47862,7 +47872,7 @@
   {
     "id": "vm_batch_column_num_at_62923587",
     "file": "src/vm/batch.rs",
-    "line": 5887,
+    "line": 5895,
     "decision": "match column {\n        Column::Int { data, valid } => {\n            if !valid.get(i) {\n                return None;\n            }\n            #[allow(\n                clippy::cast_precision_loss,\n                reason = \"matches Value::as_f64's existing `*v as f64` widening for Int\"\n            )]\n            data.get(i).map(|&x| (x as f64, true))\n        }\n        Column::Float { data, valid } => {\n            if !valid.get(i) {\n                return None;\n            }\n            data.get(i).map(|&x| (x, false))\n        }\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47872,7 +47882,7 @@
   {
     "id": "vm_batch_column_num_at_fa2abd69",
     "file": "src/vm/batch.rs",
-    "line": 5889,
+    "line": 5897,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47882,7 +47892,7 @@
   {
     "id": "vm_batch_column_num_at_fa2abd69_2",
     "file": "src/vm/batch.rs",
-    "line": 5899,
+    "line": 5907,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47892,7 +47902,7 @@
   {
     "id": "vm_batch_arith_op_a3fb3dfe",
     "file": "src/vm/batch.rs",
-    "line": 5914,
+    "line": 5922,
     "decision": "match op {\n        MapOp::Add => x + y,\n        MapOp::Sub => x - y,\n        MapOp::Mul => x * y,\n        MapOp::Div => x / y,\n        _ => 0.0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47902,7 +47912,7 @@
   {
     "id": "vm_batch_compare_values_51eeaee7",
     "file": "src/vm/batch.rs",
-    "line": 5940,
+    "line": 5948,
     "decision": "match (a, b) {\n        (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),\n        (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),\n        // A decimal compares exactly (#632).\n        (Value::Decimal { .. }, _) | (_, Value::Decimal { .. }) => numeric_cmp(a, b),\n        _ => a.as_f64()?.partial_cmp(&b.as_f64()?),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47912,7 +47922,7 @@
   {
     "id": "vm_batch_a_string_compared_with_a_number_is_converted_3ea8fb82",
     "file": "src/vm/batch.rs",
-    "line": 5993,
+    "line": 6001,
     "decision": "match cmp(MapOp::Eq, &a, &b) {\n                Err(VmError::Conversion { to: t, .. }) => assert_eq!(t, to),\n                other => panic!(\"{a:?} = {b:?}: {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47922,7 +47932,7 @@
   {
     "id": "vm_batch_name_to_reg_bc77aadd",
     "file": "src/vm/batch.rs",
-    "line": 8389,
+    "line": 8397,
     "decision": "match name {\n            \"part\" => 0,\n            \"ord\" => 1,\n            \"val\" => 2,\n            other => panic!(\"unexpected test column: {other}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47932,7 +47942,7 @@
   {
     "id": "vm_batch_run_parallel_scans_all_segments_in_order_1887f16c",
     "file": "src/vm/batch.rs",
-    "line": 8871,
+    "line": 8879,
     "decision": "match &r[0] {\n                Value::Int(v) => *v,\n                other => panic!(\"expected Value::Int, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47942,7 +47952,7 @@
   {
     "id": "vm_batch_load_d1418253",
     "file": "src/vm/batch.rs",
-    "line": 8927,
+    "line": 8935,
     "decision": "!self.delay.is_zero()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47952,7 +47962,7 @@
   {
     "id": "vm_batch_subset_0c27f214",
     "file": "src/vm/batch.rs",
-    "line": 8999,
+    "line": 9007,
     "decision": "match positions {\n                    Some(p) => p\n                        .iter()\n                        .map(|&i| batch_cell(&self.batch, name, i as usize))\n                        .collect(),\n                    None => (0..n).map(|i| batch_cell(&self.batch, name, i)).collect(),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47962,7 +47972,7 @@
   {
     "id": "vm_batch_load_columns_6d7ce722",
     "file": "src/vm/batch.rs",
-    "line": 9019,
+    "line": 9027,
     "decision": "!self.subset_loads",
     "conditions": 1,
     "vectors_required": 2,
@@ -47972,7 +47982,7 @@
   {
     "id": "vm_batch_gather_at_7b5f6f17",
     "file": "src/vm/batch.rs",
-    "line": 9027,
+    "line": 9035,
     "decision": "!self.can_gather",
     "conditions": 1,
     "vectors_required": 2,
@@ -47982,7 +47992,7 @@
   {
     "id": "vm_batch_late_fixture_7ba6769d",
     "file": "src/vm/batch.rs",
-    "line": 9044,
+    "line": 9052,
     "decision": "i % 7 == 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -47992,7 +48002,7 @@
   {
     "id": "vm_batch_late_fixture_98a22069",
     "file": "src/vm/batch.rs",
-    "line": 9046,
+    "line": 9054,
     "decision": "i % 11 == 5",
     "conditions": 1,
     "vectors_required": 2,
@@ -48002,7 +48012,7 @@
   {
     "id": "vm_batch_late_fixture_ccd4547d",
     "file": "src/vm/batch.rs",
-    "line": 9055,
+    "line": 9063,
     "decision": "match k {\n                Value::Int(v) => Value::Int(v * 10),\n                _ => Value::Str(\"null-key\".into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48012,7 +48022,7 @@
   {
     "id": "vm_batch_late_program_f8be12f4",
     "file": "src/vm/batch.rs",
-    "line": 9073,
+    "line": 9081,
     "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -48022,7 +48032,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_7ccb2b33",
     "file": "src/vm/batch.rs",
-    "line": 10087,
+    "line": 10095,
     "decision": "num_threads < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -48032,7 +48042,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_acb70138",
     "file": "src/vm/batch.rs",
-    "line": 10101,
+    "line": 10109,
     "decision": "i == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48042,7 +48052,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_4b7f034b",
     "file": "src/vm/batch.rs",
-    "line": 10102,
+    "line": 10110,
     "decision": "done.load(Ordering::SeqCst) < others",
     "conditions": 1,
     "vectors_required": 2,
@@ -48052,7 +48062,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_2eba4a46",
     "file": "src/vm/batch.rs",
-    "line": 10103,
+    "line": 10111,
     "decision": "Instant::now() >= deadline",
     "conditions": 1,
     "vectors_required": 2,
@@ -48062,7 +48072,7 @@
   {
     "id": "vm_batch_group_reduce_typed_int_key_matches_the_value_key_path_5216460c",
     "file": "src/vm/batch.rs",
-    "line": 10315,
+    "line": 10323,
     "decision": "match i % 7 {\n                0 => None,\n                1 => Some(-(i % 13)),\n                2 => Some((i % 11) << 40),\n                _ => Some(i % 17),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48072,7 +48082,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_98a22246",
     "file": "src/vm/batch.rs",
-    "line": 10477,
+    "line": 10485,
     "decision": "i % 11 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48082,7 +48092,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_35425997",
     "file": "src/vm/batch.rs",
-    "line": 10485,
+    "line": 10493,
     "decision": "match i % 5 {\n                0 => Value::Null,\n                r => Value::Str(format!(\"s{r}\").into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48092,7 +48102,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_a209a191",
     "file": "src/vm/batch.rs",
-    "line": 10492,
+    "line": 10500,
     "decision": "i % 13 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48102,7 +48112,7 @@
   {
     "id": "vm_batch_group_reduce_dict_plus_int_composite_key_matches_the_value_key_path_bde636e8",
     "file": "src/vm/batch.rs",
-    "line": 10577,
+    "line": 10585,
     "decision": "ok",
     "conditions": 1,
     "vectors_required": 2,
