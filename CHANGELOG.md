@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [Unreleased]
+
+### Added
+
+- **Queries skip files and row groups on the sort key** (#589). A tiered table's manifest entries record each sort-key column's min/max (integer, timestamp and UTF-8 columns; manifest version 4, written only when a file has ranges, so versions 1-3 read as before), and a `WHERE` clause drops the files whose ranges cannot match before their footers are opened. A row group whose min/max covers an equality literal is still skipped when its dictionary lacks it: the dictionary page is decoded without the data pages, and only when every data page is dictionary-encoded. A range or dictionary that cannot be read means "may match", never a wrong answer.
+
 ## [0.152.0] - 2026-10-21
 
 ### Changed

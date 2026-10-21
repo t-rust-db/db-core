@@ -14,19 +14,23 @@
 //! late materialization. One that needs a NULL or cast column decodes its
 //! columns eagerly and fixes them up; its statistics still prune, but only
 //! for columns whose stored type is the table's.
+//!
+//! Before any footer is read, a `WHERE` clause skips the files whose
+//! manifest key ranges (#589) prove it matches none of their rows.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::{
-    engine, leaf_columns, opcode_sections, parse_select, plan_err, plan_rows, planner,
+    engine, leaf_columns, opcode_sections, parse_select, plan_err, plan_rows, planner, prune,
     query_result, single_statement, table_row_groups, timestamp_literals, type_name, ColumnInfo,
     Engine, EngineError, ErrorKind, FileStats, Leaf, Mode, OpcodeSection, ParquetFile, PlanRow,
     Program, QueryResult, RowGroupSegment, Segment, Select, TableInfo, TableSegment, TableStats,
     Value, VmError,
 };
+use crate::parser::ast::{Expr, Literal};
 use crate::storage::ingest::snapshot::{cast, physical_type};
-use crate::storage::ingest::{PageBody, RowPage, Snapshot};
+use crate::storage::ingest::{FileEntry, KeyBound, KeyRange, PageBody, RowPage, Snapshot};
 use crate::storage::parquet::schema::{ColumnSpec, ColumnType};
 use crate::storage::stream::adapter::stored_column_values;
 use crate::storage::stream::detect::Format;
@@ -257,6 +261,7 @@ pub fn query_snapshot(
     let requests = resolve(&schema, &program.columns_to_load())?;
     let files = snapshot
         .files()
+        .filter(|(entry, _)| may_match(entry, &schema, select.where_clause.as_ref()))
         .map(|(entry, bytes)| {
             ParquetFile::open(bytes).map_err(|e| open_error(format!("{}: {e}", entry.path)))
         })
@@ -272,6 +277,56 @@ pub fn query_snapshot(
     let output =
         engine::run(&segments, &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
     Ok(query_result(&select, output))
+}
+
+/// Whether `where_clause` may match a row of `entry`'s file: false when
+/// its key ranges prove it matches none.
+pub(super) fn may_match(
+    entry: &FileEntry,
+    schema: &[ColumnSpec],
+    where_clause: Option<&Expr>,
+) -> bool {
+    where_clause.is_none_or(|w| !prune::definitely_empty_in(w, &(entry.keys.as_slice(), schema)))
+}
+
+/// A file's manifest key ranges and the table's columns, as pruning
+/// bounds. A range bounds a column only if its kind matches the table's
+/// type for it: a file flushed before the column widened (an integer
+/// column now a string) bounds nothing.
+impl prune::Bounds for (&[KeyRange], &[ColumnSpec]) {
+    fn bounds(
+        &self,
+        column: &str,
+        literal: &Literal,
+    ) -> Option<(
+        Option<prune::StatValue>,
+        Option<prune::StatValue>,
+        prune::StatValue,
+    )> {
+        let (keys, schema) = *self;
+        let range = keys.iter().find(|k| k.column == column)?;
+        let spec = schema.iter().find(|s| s.name == column)?;
+        let integer = matches!(
+            spec.column_type,
+            ColumnType::Int32
+                | ColumnType::Int64
+                | ColumnType::TimestampMicros
+                | ColumnType::TimestampNanos
+                | ColumnType::UInt8
+                | ColumnType::UInt16
+                | ColumnType::UInt32
+                | ColumnType::UInt64
+        );
+        let bound = |b: &KeyBound| match b {
+            KeyBound::Int(i) if integer => Some(prune::StatValue::Int(*i)),
+            KeyBound::Str(s) if spec.column_type == ColumnType::Utf8 => {
+                Some(prune::StatValue::Str(s.clone()))
+            }
+            KeyBound::Int(_) | KeyBound::Str(_) => None,
+        };
+        let literal = prune::literal_stat_value(literal, physical_type(spec.column_type))?;
+        Some((Some(bound(&range.min)?), Some(bound(&range.max)?), literal))
+    }
 }
 
 /// One segment per page of `snapshot`, loading `requests`.

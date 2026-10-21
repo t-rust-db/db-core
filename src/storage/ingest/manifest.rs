@@ -26,6 +26,13 @@
 //! records `dropped_lsn`, written only when it is not 0: a reader that
 //! predates retention then refuses the manifest (its files no longer start
 //! at LSN 1) rather than reading it.
+//!
+//! A tiered table's files carry `keys` (#589): each sort-key column's
+//! smallest and largest value in the file, so a query skips files before
+//! opening them. A manifest with any is written as version 4, whose
+//! `schema` is optional (present for a record table), so a reader that
+//! predates key ranges refuses it. A string bound that would need escaping
+//! is not written: that file is then never skipped on that column.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -44,6 +51,42 @@ const MANIFEST_TMP: &str = "manifest.json.tmp";
 const VERSION: i64 = 2;
 /// The version of a record table's manifest.
 const RECORDS_VERSION: i64 = 3;
+/// The version of a manifest whose files carry key ranges.
+const KEYS_VERSION: i64 = 4;
+
+/// A bound of a [`KeyRange`]. Bounds of one column are one variant, and
+/// order as the column's values do (strings byte-wise).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum KeyBound {
+    /// An integer or timestamp column's value (an unsigned one up to
+    /// `i64::MAX`).
+    Int(i64),
+    /// A UTF-8 column's value.
+    Str(String),
+}
+
+/// One sort-key column's smallest and largest non-null value in a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyRange {
+    /// The column.
+    pub column: String,
+    /// Its smallest value.
+    pub min: KeyBound,
+    /// Its largest value.
+    pub max: KeyBound,
+}
+
+impl KeyRange {
+    /// Whether the JSON text can hold it: a string bound is written
+    /// without escaping.
+    fn writable(&self) -> bool {
+        let plain = |b: &KeyBound| match b {
+            KeyBound::Int(_) => true,
+            KeyBound::Str(s) => !s.chars().any(|c| c == '"' || c == '\\' || c.is_control()),
+        };
+        plain(&self.min) && plain(&self.max)
+    }
+}
 
 /// One Parquet file in the table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +107,8 @@ pub struct FileEntry {
     pub observed_ts: Option<(i64, i64)>,
     /// Smallest and largest `timestamp` (ns), if any row has one.
     pub timestamp: Option<(i64, i64)>,
+    /// Ranges of the sort-key columns that have one (#589).
+    pub keys: Vec<KeyRange>,
 }
 
 /// The table's committed state.
@@ -240,7 +285,10 @@ impl Manifest {
     /// The JSON text.
     pub fn to_json(&self) -> String {
         let mut out = String::new();
-        let version = if self.schema.is_some() {
+        let keys = |f: &FileEntry| f.keys.iter().any(KeyRange::writable);
+        let version = if self.files.iter().any(keys) {
+            KEYS_VERSION
+        } else if self.schema.is_some() {
             RECORDS_VERSION
         } else {
             VERSION
@@ -284,6 +332,7 @@ impl Manifest {
             ));
             write_range(&mut out, "observed_ts", file.observed_ts);
             write_range(&mut out, "timestamp", file.timestamp);
+            write_keys(&mut out, &file.keys);
             out.push('}');
         }
         out.push_str("]}\n");
@@ -298,7 +347,7 @@ impl Manifest {
         }
         let fields = owned(&root)?.into_object()?;
         let version = int(&fields, "version")?;
-        if !(1..=RECORDS_VERSION).contains(&version) {
+        if !(1..=KEYS_VERSION).contains(&version) {
             return Err(malformed("unsupported version"));
         }
         let format = format_from_name(&string(&fields, "format")?)
@@ -310,18 +359,12 @@ impl Manifest {
             LayoutKind::from_name(&string(&fields, "layout")?)
                 .ok_or_else(|| malformed("unknown layout"))?
         };
-        let schema = if version == RECORDS_VERSION {
-            let Json::Array(columns) = field(&fields, "schema")? else {
-                return Err(malformed("schema is not an array"));
-            };
-            Some(
-                columns
-                    .into_iter()
-                    .map(|c| column_spec(&c.into_object()?))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )
-        } else {
-            None
+        // Version 3 always has a schema; version 4 has one for a record
+        // table.
+        let schema = match version {
+            RECORDS_VERSION => Some(schema(&fields)?),
+            KEYS_VERSION if fields.iter().any(|(k, _)| k == "schema") => Some(schema(&fields)?),
+            _ => None,
         };
         let flushed_lsn = unsigned(&fields, "flushed_lsn")?;
         let dropped_lsn = if fields.iter().any(|(k, _)| k == "dropped_lsn") {
@@ -369,6 +412,28 @@ impl Manifest {
         fs::rename(&tmp, table.join(MANIFEST_FILE))?;
         File::open(table)?.sync_all()?;
         Ok(())
+    }
+}
+
+/// `,"keys":[...]` for the writable ranges of `keys`, if any.
+fn write_keys(out: &mut String, keys: &[KeyRange]) {
+    let bound = |b: &KeyBound| match b {
+        KeyBound::Int(i) => i.to_string(),
+        KeyBound::Str(s) => format!("\"{s}\""),
+    };
+    let mut first = true;
+    for key in keys.iter().filter(|k| k.writable()) {
+        out.push_str(if first { ",\"keys\":[" } else { "," });
+        first = false;
+        out.push_str(&format!(
+            "{{\"column\":\"{}\",\"min\":{},\"max\":{}}}",
+            key.column,
+            bound(&key.min),
+            bound(&key.max)
+        ));
+    }
+    if !first {
+        out.push(']');
     }
 }
 
@@ -476,6 +541,42 @@ fn range(fields: &[(String, Json)], name: &str) -> Result<Option<(i64, i64)>, Ma
     }
 }
 
+/// A record table's `schema`.
+fn schema(fields: &[(String, Json)]) -> Result<Vec<ColumnSpec>, ManifestError> {
+    let Json::Array(columns) = field(fields, "schema")? else {
+        return Err(malformed("schema is not an array"));
+    };
+    columns
+        .into_iter()
+        .map(|c| column_spec(&c.into_object()?))
+        .collect()
+}
+
+/// A file's `keys` (version 4; none before, or if absent).
+fn key_ranges(fields: &[(String, Json)], version: i64) -> Result<Vec<KeyRange>, ManifestError> {
+    if version < KEYS_VERSION || !fields.iter().any(|(k, _)| k == "keys") {
+        return Ok(Vec::new());
+    }
+    let Json::Array(keys) = field(fields, "keys")? else {
+        return Err(malformed("keys is not an array"));
+    };
+    keys.into_iter()
+        .map(|k| {
+            let k = k.into_object()?;
+            let column = string(&k, "column")?;
+            let bounds = (field(&k, "min")?, field(&k, "max")?);
+            let (min, max) = match bounds {
+                (Json::Int(lo), Json::Int(hi)) => (KeyBound::Int(lo), KeyBound::Int(hi)),
+                (Json::Str(lo), Json::Str(hi)) if !lo.contains('\\') && !hi.contains('\\') => {
+                    (KeyBound::Str(lo), KeyBound::Str(hi))
+                }
+                _ => return Err(ManifestError::Malformed(format!("key range of {column}"))),
+            };
+            Ok(KeyRange { column, min, max })
+        })
+        .collect()
+}
+
 /// One record-table column.
 fn column_spec(fields: &[(String, Json)]) -> Result<ColumnSpec, ManifestError> {
     let name = string(fields, "name")?;
@@ -504,6 +605,7 @@ fn file_entry(fields: &[(String, Json)], version: i64) -> Result<FileEntry, Mani
         bytes: unsigned(fields, "bytes")?,
         observed_ts: range(fields, "observed_ts")?,
         timestamp: range(fields, "timestamp")?,
+        keys: key_ranges(fields, version)?,
     })
 }
 

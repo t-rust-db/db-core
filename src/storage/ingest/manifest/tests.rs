@@ -11,6 +11,7 @@ fn entry(lo: u64, hi: u64) -> FileEntry {
         bytes: 1234,
         observed_ts: Some((i64::MIN, i64::MAX)),
         timestamp: None,
+        keys: Vec::new(),
     }
 }
 
@@ -294,4 +295,150 @@ fn deeply_nested_arrays_are_malformed_not_a_stack_overflow() {
     let n = 50_000;
     let deep = format!("{}{}", "{\"a\":[".repeat(n), "]}".repeat(n));
     assert!(Manifest::parse(&deep).is_err());
+}
+
+/// `two_files` in a tiered table whose files carry key ranges.
+fn with_keys() -> Manifest {
+    let mut m = two_files();
+    m.layout = LayoutKind::Tiered;
+    for (i, file) in m.files.iter_mut().enumerate() {
+        file.area = Area::Live;
+        file.keys = vec![
+            KeyRange {
+                column: "kind".to_string(),
+                min: KeyBound::Str(format!("a{i}")),
+                max: KeyBound::Str("zé".to_string()),
+            },
+            KeyRange {
+                column: "n".to_string(),
+                min: KeyBound::Int(i64::MIN),
+                max: KeyBound::Int(i64::MAX),
+            },
+        ];
+    }
+    m
+}
+
+#[test]
+fn key_ranges_round_trip_as_version_4() {
+    let m = with_keys();
+    let text = m.to_json();
+    assert!(text.contains("\"version\":4"), "{text}");
+    assert!(!text.contains("schema"), "{text}");
+    assert_eq!(Manifest::parse(&text).unwrap(), m);
+    // A record table's version 4 keeps its schema.
+    let mut records = with_keys();
+    records.schema = Some(vec![ColumnSpec::new(
+        "kind",
+        crate::storage::parquet::schema::ColumnType::Utf8,
+        true,
+    )]);
+    let text = records.to_json();
+    assert!(text.contains("\"version\":4"), "{text}");
+    assert_eq!(Manifest::parse(&text).unwrap(), records);
+    // Without key ranges the versions stay as before.
+    assert!(two_files().to_json().contains("\"version\":2"));
+}
+
+#[test]
+fn a_string_bound_that_needs_escaping_is_left_out() {
+    let mut m = with_keys();
+    m.files[0].keys[0].max = KeyBound::Str("a\"b".to_string());
+    m.files[1].keys[0].min = KeyBound::Str("a\\b".to_string());
+    m.files[1].keys[1].max = KeyBound::Str("tab\there".to_string());
+    let read = Manifest::parse(&m.to_json()).unwrap();
+    let columns = |f: &FileEntry| f.keys.iter().map(|k| k.column.clone()).collect::<Vec<_>>();
+    assert_eq!(columns(&read.files[0]), ["n"]);
+    assert!(read.files[1].keys.is_empty());
+    // A file with no writable range leaves the version as it was.
+    let mut none = two_files();
+    none.files[0].keys = vec![KeyRange {
+        column: "k".to_string(),
+        min: KeyBound::Str("\n".to_string()),
+        max: KeyBound::Str("x".to_string()),
+    }];
+    assert!(none.to_json().contains("\"version\":2"));
+}
+
+#[test]
+fn malformed_key_ranges_are_refused_and_old_versions_ignore_them() {
+    let good = with_keys().to_json();
+    for text in [
+        good.replace("\"min\":\"a0\"", "\"min\":5"),
+        good.replace("\"min\":\"a0\"", "\"min\":null"),
+        good.replace("\"keys\":[", "\"keys\":{\"x\":["),
+        good.replace("\"column\":\"kind\",", ""),
+    ] {
+        assert!(
+            matches!(Manifest::parse(&text), Err(ManifestError::Malformed(_))),
+            "{text}"
+        );
+    }
+    // Version 2 never had key ranges: a `keys` field is not read.
+    let v2 = good.replace("\"version\":4", "\"version\":2");
+    let read = Manifest::parse(&v2).unwrap();
+    assert!(read.files.iter().all(|f| f.keys.is_empty()));
+}
+
+// storage_ingest_manifest_key_ranges_7319c889:
+// `version < KEYS_VERSION || !fields.iter().any(|(k, _)| k == "keys")`
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_manifest_key_ranges_7319c889__v1_an_old_version_reads_no_keys() {
+    let text = with_keys()
+        .to_json()
+        .replace("\"version\":4", "\"version\":2");
+    assert!(Manifest::parse(&text).unwrap().files[0].keys.is_empty());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_manifest_key_ranges_7319c889__v2_a_file_without_keys_has_none() {
+    let mut m = with_keys();
+    m.files[1].keys.clear();
+    assert!(Manifest::parse(&m.to_json()).unwrap().files[1]
+        .keys
+        .is_empty());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_manifest_key_ranges_7319c889__v3_a_version_4_file_reads_its_keys() {
+    let m = with_keys();
+    assert_eq!(
+        Manifest::parse(&m.to_json()).unwrap().files[0].keys.len(),
+        2
+    );
+}
+
+// storage_ingest_manifest_key_ranges_581bc309: `!lo.contains('\\') && !hi.contains('\\')`
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_manifest_key_ranges_581bc309__v1_plain_bounds_read() {
+    let m = with_keys();
+    assert_eq!(Manifest::parse(&m.to_json()).unwrap(), m);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_manifest_key_ranges_581bc309__v2_an_escaped_min_is_refused() {
+    let text = with_keys()
+        .to_json()
+        .replace("\"min\":\"a0\"", "\"min\":\"a\\\\0\"");
+    assert!(matches!(
+        Manifest::parse(&text),
+        Err(ManifestError::Malformed(_))
+    ));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_manifest_key_ranges_581bc309__v3_an_escaped_max_is_refused() {
+    let text = with_keys()
+        .to_json()
+        .replace("\"max\":\"zé\"", "\"max\":\"z\\\\é\"");
+    assert!(matches!(
+        Manifest::parse(&text),
+        Err(ManifestError::Malformed(_))
+    ));
 }

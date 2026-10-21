@@ -18,6 +18,7 @@ use std::io::BufWriter;
 use std::path::Path;
 
 use super::fields::schema;
+use super::manifest::KeyRange;
 use super::page::{Page, PageBody};
 use crate::storage::parquet::writer::{
     ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriteError, WriterOptions,
@@ -33,6 +34,7 @@ pub(crate) struct FlushedFile {
     pub(crate) bytes: u64,
     pub(crate) observed_ts: Option<(i64, i64)>,
     pub(crate) timestamp: Option<(i64, i64)>,
+    pub(crate) keys: Vec<KeyRange>,
 }
 
 /// `values` as `column_type`. Called only with the type [`schema`] chose,
@@ -179,6 +181,7 @@ pub(crate) fn write_file(
         bytes: summary.bytes,
         observed_ts: observed,
         timestamp,
+        keys: Vec::new(),
     })
 }
 

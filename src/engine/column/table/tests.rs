@@ -2,7 +2,7 @@ use super::*;
 use crate::engine::Cell;
 use crate::storage::ingest::layout::{DAY_NS, HOUR_NS};
 use crate::storage::ingest::{Ack, Layout, RecordValue, TableOptions, TableWriter, TierOptions};
-use crate::storage::parquet::writer::{ColumnSpec, ColumnType};
+use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
 use crate::test_rng::Rng;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -253,7 +253,7 @@ fn random_line(rng: &mut Rng, i: u64, switch: (u64, u64)) -> String {
     format!("{{{}}}", fields.join(","))
 }
 
-const INVARIANCE_QUERIES: [&str; 11] = [
+const INVARIANCE_QUERIES: [&str; 14] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(f), MAX(f), COUNT(s), COUNT(b), SUM(g) FROM logs",
     "SELECT raw, i, n, f, s, b, k, g, m, severity, severity_text, message, timestamp \
      FROM logs ORDER BY raw",
@@ -268,6 +268,10 @@ const INVARIANCE_QUERIES: [&str; 11] = [
     // group its copies landed in.
     "SELECT COUNT(DISTINCT n), COUNT(*) FROM logs",
     "SELECT s, COUNT(DISTINCT k), SUM(n) FROM logs GROUP BY s ORDER BY s",
+    // #589: equality on sort keys skips files and row groups.
+    "SELECT raw FROM logs WHERE s = 'v2' ORDER BY raw",
+    "SELECT raw FROM logs WHERE n = 42 ORDER BY raw",
+    "SELECT raw FROM logs WHERE n = 7 OR s = 'v0' OR s = 'v4' ORDER BY raw",
 ];
 
 /// #679: in a record table, a TIMESTAMP column compared with a quoted
@@ -374,7 +378,7 @@ fn random_map(rng: &mut Rng) -> RecordValue {
     RecordValue::Map(entries)
 }
 
-const RECORD_INVARIANCE_QUERIES: [&str; 11] = [
+const RECORD_INVARIANCE_QUERIES: [&str; 13] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(amount), MAX(amount), SUM(u), COUNT(blob), SUM(f) \
      FROM logs",
     "SELECT id, kind, n, amount, u, blob, ts, f FROM logs ORDER BY id",
@@ -388,6 +392,8 @@ const RECORD_INVARIANCE_QUERIES: [&str; 11] = [
     "SELECT h['a'] AS a, count(*) FROM logs GROUP BY a ORDER BY a",
     "SELECT id FROM logs WHERE h['B'] = 'v1' ORDER BY id",
     "SELECT kind, COUNT(DISTINCT amount), COUNT(n) FROM logs GROUP BY kind ORDER BY kind",
+    "SELECT id FROM logs WHERE kind = 'k1' ORDER BY id",
+    "SELECT id FROM logs WHERE u = 3 OR u = 4000000005 OR n = -7 ORDER BY id",
 ];
 
 /// What the flush-timing test appends: a lines table's lines or a record
@@ -937,4 +943,160 @@ fn snapshot_segments_drive_a_join_as_a_caller_runs_one() {
                 .unwrap();
         assert_eq!(output.rows().collect::<Vec<_>>(), expected, "{sql}");
     }
+}
+
+/// A tiered table with `sort_key = ["kind"]`, one closed hour per entry of
+/// `hours`, each hour the kinds listed.
+fn hours_of_kinds(t: &TempTable, hours: &[&[&str]], parquet: WriterOptions) -> TableWriter {
+    NOW.store(20_737 * DAY_NS, Ordering::SeqCst);
+    let mut w = t.writer_with(TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            sort_key: vec!["kind".to_string()],
+            ..TierOptions::default()
+        }),
+        parquet,
+        clock,
+        ..TableOptions::default()
+    });
+    let mut i = 0;
+    for kinds in hours {
+        for kind in *kinds {
+            w.append(
+                format!(r#"{{"i":{i},"kind":"{kind}"}}"#).as_bytes(),
+                Ack::Memory,
+            )
+            .unwrap();
+            i += 1;
+        }
+        advance_clock(HOUR_NS);
+        w.flush().unwrap();
+    }
+    w
+}
+
+/// #589 acceptance: a filter on the sort key opens only the files whose
+/// manifest range can hold a match.
+#[test]
+fn a_sort_key_filter_opens_only_the_files_whose_range_matches() {
+    let _serial = serial();
+    let t = TempTable::new();
+    let hours: &[&[&str]] = &[&["a", "b"], &["c", "d"], &["a"], &["x", "y"]];
+    let w = hours_of_kinds(&t, hours, WriterOptions::default());
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.files().count(), 4);
+    let schema = snapshot.schema().unwrap();
+    let opened = |sql: &str| {
+        let select = crate::parser::parse(sql).unwrap();
+        snapshot
+            .files()
+            .filter(|(entry, _)| may_match(entry, &schema, select.where_clause.as_ref()))
+            .count()
+    };
+    assert_eq!(opened("SELECT i FROM logs WHERE kind = 'c'"), 1);
+    assert_eq!(
+        opened("SELECT i FROM logs WHERE kind = 'a' OR kind = 'x'"),
+        3
+    );
+    assert_eq!(opened("SELECT i FROM logs WHERE kind = 'zz'"), 0);
+    assert_eq!(
+        opened("SELECT i FROM logs WHERE kind > 'c' AND kind < 'x'"),
+        1
+    );
+    assert_eq!(opened("SELECT i FROM logs WHERE kind = 'c' OR i = 1"), 4);
+    assert_eq!(opened("SELECT i FROM logs WHERE kind <> 'a'"), 4);
+    assert_eq!(opened("SELECT i FROM logs"), 4);
+    // ...and every answer is the unpruned one.
+    assert_eq!(
+        rows(
+            &w,
+            "SELECT i FROM logs WHERE kind = 'a' OR kind = 'x' ORDER BY i"
+        ),
+        vec![vec![Cell::Int(0)], vec![Cell::Int(4)], vec![Cell::Int(5)]]
+    );
+    assert_eq!(
+        rows(&w, "SELECT COUNT(*) FROM logs WHERE kind = 'zz'"),
+        vec![vec![Cell::Int(0)]]
+    );
+}
+
+/// #589 acceptance: a row group whose min/max covers a literal is still
+/// skipped when its dictionary lacks it, and only when every data page
+/// is dictionary-encoded.
+#[test]
+fn a_dictionary_skips_a_row_group_its_range_does_not() {
+    let _serial = serial();
+    let skipped = |parquet: WriterOptions, sql: &str| {
+        let t = TempTable::new();
+        let w = hours_of_kinds(&t, &[&["a", "c", "a", "c"]], parquet);
+        let entry = w.manifest().files[0].clone();
+        let bytes = fs::read(t.0.join(&entry.path)).unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let predicate = crate::parser::parse(sql).unwrap().where_clause.unwrap();
+        let leaves = leaf_columns(&file);
+        let by_name = leaves
+            .iter()
+            .map(|(n, i, t)| (n.as_str(), (*i, *t)))
+            .collect();
+        let rg = file.row_group(0).unwrap();
+        super::super::prune::definitely_empty(&predicate, &rg, &by_name)
+    };
+    let dictionary = WriterOptions::default();
+    assert!(skipped(
+        dictionary.clone(),
+        "SELECT i FROM logs WHERE kind = 'b'"
+    ));
+    assert!(skipped(
+        dictionary.clone(),
+        "SELECT i FROM logs WHERE kind = 'b' OR kind = 'bb'"
+    ));
+    assert!(!skipped(
+        dictionary.clone(),
+        "SELECT i FROM logs WHERE kind = 'b' OR kind = 'c'"
+    ));
+    assert!(!skipped(
+        dictionary.clone(),
+        "SELECT i FROM logs WHERE kind = 'a'"
+    ));
+    // A comparison other than = is the range's alone.
+    assert!(!skipped(dictionary, "SELECT i FROM logs WHERE kind <> 'b'"));
+    let plain = WriterOptions {
+        dictionary: false,
+        ..WriterOptions::default()
+    };
+    assert!(!skipped(plain, "SELECT i FROM logs WHERE kind = 'b'"));
+}
+
+/// A file flushed while a column was an integer keeps an integer range;
+/// once the column is a string it bounds nothing, as its statistics.
+#[test]
+fn a_key_range_of_a_widened_column_never_skips_a_file() {
+    let _serial = serial();
+    NOW.store(20_737 * DAY_NS, Ordering::SeqCst);
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            sort_key: vec!["x".to_string()],
+            ..TierOptions::default()
+        }),
+        clock,
+        ..TableOptions::default()
+    });
+    append(&mut w, &[r#"{"x":5}"#, r#"{"x":7}"#]);
+    advance_clock(HOUR_NS);
+    w.flush().unwrap();
+    append(&mut w, &[r#"{"x":"high"}"#]);
+    assert_eq!(
+        w.manifest().files[0].keys[0].min,
+        crate::storage::ingest::KeyBound::Int(5)
+    );
+    // As strings, '5' and '7' are > '10': the integer range 5..=7 must
+    // not skip the file.
+    assert_eq!(
+        rows(&w, "SELECT COUNT(*) FROM logs WHERE x > '10'"),
+        vec![vec![Cell::Int(3)]]
+    );
+    assert_eq!(
+        rows(&w, "SELECT COUNT(*) FROM logs WHERE x = '5'"),
+        vec![vec![Cell::Int(1)]]
+    );
 }
