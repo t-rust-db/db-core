@@ -22,7 +22,8 @@
 //! so a session spans about an hour of events and crosses hour
 //! boundaries; 20 event names, skewed (`page_view` 40%); `amount` only on
 //! `checkout`. Event time drives the table clock, so hours and days are
-//! the events' own.
+//! the events' own. `CODEC` (`snappy`, the default, `zstd` or
+//! `uncompressed`) is the page codec of every file (#622).
 
 #![allow(
     clippy::unwrap_used,
@@ -50,7 +51,7 @@ use db_core::storage::ingest::wal::Ack;
 use db_core::storage::ingest::{
     Layout, RecordValue, Snapshot, TableOptions, TableWriter, TierOptions,
 };
-use db_core::storage::parquet::writer::{ColumnSpec, ColumnType};
+use db_core::storage::parquet::writer::{ColumnSpec, ColumnType, Compression, WriterOptions};
 
 /// 2026-10-11, the first event's day.
 const BASE_NS: i64 = 20_737 * DAY_NS;
@@ -181,8 +182,22 @@ fn options() -> TableOptions {
             sort_key: vec!["session_id".into(), "request_id".into()],
             ..TierOptions::default()
         }),
+        parquet: WriterOptions {
+            compression: codec(),
+            ..WriterOptions::default()
+        },
         clock,
         ..TableOptions::default()
+    }
+}
+
+/// The page codec `CODEC` names; Snappy when unset.
+fn codec() -> Compression {
+    match std::env::var("CODEC").as_deref() {
+        Ok("zstd") => Compression::Zstd,
+        Ok("uncompressed") => Compression::Uncompressed,
+        Ok("snappy") | Err(_) => Compression::Snappy,
+        Ok(other) => panic!("CODEC={other}: expected snappy, zstd or uncompressed"),
     }
 }
 

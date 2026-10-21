@@ -61,6 +61,9 @@ pub enum Compression {
     Uncompressed,
     /// Snappy (raw block).
     Snappy,
+    /// Zstandard, at `ruzstd`'s one implemented level (`Fastest`, about
+    /// zstd level 1) (#622). Smaller than Snappy on text-heavy columns.
+    Zstd,
 }
 
 impl Compression {
@@ -68,6 +71,7 @@ impl Compression {
         match self {
             Compression::Uncompressed => 0,
             Compression::Snappy => 1,
+            Compression::Zstd => 6,
         }
     }
 }
@@ -627,6 +631,10 @@ fn write_page<W: Write>(
     let compressed = match compression {
         Compression::Uncompressed => None,
         Compression::Snappy => Some(snappy::compress(body)),
+        Compression::Zstd => Some(ruzstd::encoding::compress_to_vec(
+            body,
+            ruzstd::encoding::CompressionLevel::Fastest,
+        )),
     };
     let payload = compressed.as_deref().unwrap_or(body);
     let sizes = meta::PageSizes {

@@ -10,7 +10,8 @@
 # differs from DuckDB's fails the run.
 #
 # Usage: tools/bench_events.sh   (EVENTS=10000000 DAYS=7 SEED=42
-# SYNC_EVERY=10000 by default; EVENTS=200000 for a quick run)
+# SYNC_EVERY=10000 CODEC=snappy by default; EVENTS=200000 for a quick
+# run; CODEC=zstd or uncompressed for the page codec, #622)
 set -euo pipefail
 
 export EVENTS="${EVENTS:-10000000}" DAYS="${DAYS:-7}" SEED="${SEED:-42}" SYNC_EVERY="${SYNC_EVERY:-10000}"

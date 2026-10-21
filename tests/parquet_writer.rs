@@ -423,7 +423,11 @@ fn all_types_batch(n: i32) -> Vec<ColumnValues> {
 
 #[test]
 fn every_type_round_trips_under_each_codec_and_encoding() {
-    for compression in [Compression::Uncompressed, Compression::Snappy] {
+    for compression in [
+        Compression::Uncompressed,
+        Compression::Snappy,
+        Compression::Zstd,
+    ] {
         for dictionary in [false, true] {
             let schema = all_types_schema();
             let batch = all_types_batch(500);
@@ -948,7 +952,11 @@ fn case_strategy() -> impl Strategy<Value = (Vec<ColumnSpec>, Vec<Vec<ColumnValu
                 .collect::<Vec<_>>()
         });
     let opts = (
-        prop_oneof![Just(Compression::Uncompressed), Just(Compression::Snappy)],
+        prop_oneof![
+            Just(Compression::Uncompressed),
+            Just(Compression::Snappy),
+            Just(Compression::Zstd)
+        ],
         any::<bool>(),
         1usize..120,
     )
@@ -1429,4 +1437,42 @@ fn a_duckdb_map_reads_back() {
     );
     let err = rg.read_map_utf8_column(&fields[0]).unwrap_err();
     assert_eq!(err.to_string(), "field id is not a MAP<UTF8, UTF8>");
+}
+
+/// #622: zstd pages of an empty batch, an all-NULL column and a
+/// dictionary chunk read back, and the chunk records the ZSTD codec.
+#[test]
+fn zstd_pages_round_trip_empty_all_null_and_dictionary_chunks() {
+    let schema = vec![
+        ColumnSpec::new("s", ColumnType::Utf8, true),
+        ColumnSpec::new("n", ColumnType::Int64, true),
+    ];
+    let cases = [
+        vec![ColumnValues::Utf8(vec![]), ColumnValues::Int64(vec![])],
+        vec![
+            ColumnValues::Utf8(vec![None; 300]),
+            ColumnValues::Int64(vec![None; 300]),
+        ],
+        vec![
+            ColumnValues::Utf8((0..3000).map(|i| Some(format!("kind-{}", i % 7))).collect()),
+            ColumnValues::Int64((0..3000).map(|i| Some(i % 5)).collect()),
+        ],
+    ];
+    for batch in cases {
+        let bytes = write(
+            schema.clone(),
+            options(Compression::Zstd, true, 10_000),
+            vec![batch.clone()],
+        );
+        let file = ParquetFile::open(&bytes).unwrap();
+        for rg in &file.metadata().row_groups {
+            for chunk in &rg.columns {
+                assert_eq!(chunk.meta_data.as_ref().unwrap().codec, Codec::Zstd);
+            }
+        }
+        let back = read_all(&bytes, &schema);
+        for (written, read) in batch.iter().zip(&back) {
+            assert!(same(written, read), "{written:?} != {read:?}");
+        }
+    }
 }

@@ -3305,6 +3305,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::Co
 pub enum db_core::storage::column::parquet::writer::Compression
 pub db_core::storage::column::parquet::writer::Compression::Snappy
 pub db_core::storage::column::parquet::writer::Compression::Uncompressed
+pub db_core::storage::column::parquet::writer::Compression::Zstd
 impl core::clone::Clone for db_core::storage::parquet::writer::Compression
 pub fn db_core::storage::parquet::writer::Compression::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::parquet::writer::Compression
@@ -5284,6 +5285,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::Co
 pub enum db_core::storage::parquet::writer::Compression
 pub db_core::storage::parquet::writer::Compression::Snappy
 pub db_core::storage::parquet::writer::Compression::Uncompressed
+pub db_core::storage::parquet::writer::Compression::Zstd
 impl core::clone::Clone for db_core::storage::parquet::writer::Compression
 pub fn db_core::storage::parquet::writer::Compression::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::parquet::writer::Compression

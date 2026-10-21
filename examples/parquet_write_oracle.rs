@@ -308,6 +308,31 @@ fn cases() -> Vec<Case> {
             batches: (0..3).map(|b| log_batch(b * 1_000, 1_000)).collect(),
             options: options(Compression::Uncompressed, false, 1_000),
         },
+        // #622: zstd pages for every writer type, dictionary and PLAIN.
+        Case {
+            name: "maps_zstd_dictionary",
+            schema: map_schema(),
+            batches: (0..3).map(|_| map_batch()).collect(),
+            options: options(Compression::Zstd, true, 100),
+        },
+        Case {
+            name: "extended_types_zstd_plain",
+            schema: extended_types_schema(),
+            batches: vec![extended_types_batch()],
+            options: options(Compression::Zstd, false, 100),
+        },
+        Case {
+            name: "logs_zstd_dictionary",
+            schema: all_types_schema(),
+            batches: (0..5).map(|b| log_batch(b * 4_000, 4_000)).collect(),
+            options: options(Compression::Zstd, true, 6_000),
+        },
+        Case {
+            name: "logs_zstd_plain",
+            schema: all_types_schema(),
+            batches: (0..3).map(|b| log_batch(b * 1_000, 1_000)).collect(),
+            options: options(Compression::Zstd, false, 1_000),
+        },
         Case {
             name: "edge_values",
             schema: vec![
