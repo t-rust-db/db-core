@@ -139,6 +139,7 @@ fn a_day_merge_refuses_inputs_that_do_not_match_the_manifest() {
         bytes: 0,
         observed_ts: None,
         timestamp: None,
+        keys: Vec::new(),
     };
     let out = temp_dir("day");
     let err = merge_day(
@@ -216,6 +217,7 @@ fn run_entry(dir: &Path, outputs: &[Output]) -> (FileEntry, Vec<u8>) {
         bytes: o.file.bytes,
         observed_ts: o.file.observed_ts,
         timestamp: o.file.timestamp,
+        keys: o.file.keys.clone(),
     };
     (entry, fs::read(dir.join(&o.name)).unwrap())
 }
@@ -396,4 +398,77 @@ fn mcdc__storage_ingest_tier_close_hour_3856a22b__v3_an_exhausted_run_without_mo
     let pages = [page(2, &[r#"{"k":"a"}"#])];
     let k = close_one_run("v3", &[r#"{"k":"b"}"#], 1, &pages);
     assert_eq!(k, ["a", "b"]);
+}
+
+#[test]
+fn a_file_records_the_range_of_each_bounded_sort_key_column() {
+    let dir = temp_dir("keys");
+    let pages = [
+        page(1, &[r#"{"k":"m","n":5,"f":1.5}"#, r#"{"k":"c","n":-2}"#]),
+        page(3, &[r#"{"n":9}"#, r#"{"k":"x","f":0.5}"#]),
+    ];
+    let tier = TierOptions {
+        // `f` is a float, `nope` is no column, `missing` is all NULL: none
+        // gets a range.
+        sort_key: ["k", "n", "f", "nope"].map(String::from).to_vec(),
+        row_group_max_rows: 1,
+        ..TierOptions::default()
+    };
+    let outputs = write_hour(
+        &dir,
+        &pages,
+        Format::Jsonl,
+        &tier,
+        &WriterOptions::default(),
+    )
+    .unwrap();
+    let s = |x: &str| KeyBound::Str(x.to_string());
+    assert_eq!(
+        outputs[0].file.keys,
+        [
+            KeyRange {
+                column: "k".to_string(),
+                min: s("c"),
+                max: s("x"),
+            },
+            KeyRange {
+                column: "n".to_string(),
+                min: KeyBound::Int(-2),
+                max: KeyBound::Int(9),
+            },
+        ]
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn key_bounds_hold_integers_and_strings_only() {
+    use ColumnValues as C;
+    let i = |lo, hi| Some(Some((KeyBound::Int(lo), KeyBound::Int(hi))));
+    assert_eq!(
+        column_bounds(&C::Int32(vec![Some(3), None, Some(-1)])),
+        i(-1, 3)
+    );
+    assert_eq!(column_bounds(&C::UInt8(vec![Some(7)])), i(7, 7));
+    assert_eq!(column_bounds(&C::UInt16(vec![Some(7)])), i(7, 7));
+    assert_eq!(
+        column_bounds(&C::UInt32(vec![Some(u32::MAX)])),
+        i(4_294_967_295, 4_294_967_295)
+    );
+    assert_eq!(column_bounds(&C::UInt64(vec![Some(1), Some(2)])), i(1, 2));
+    assert_eq!(
+        column_bounds(&C::UInt64(vec![Some(1), Some(u64::MAX)])),
+        None
+    );
+    assert_eq!(column_bounds(&C::TimestampNanos(vec![Some(5)])), i(5, 5));
+    assert_eq!(column_bounds(&C::Int64(vec![None])), Some(None));
+    assert_eq!(column_bounds(&C::Utf8(vec![None])), Some(None));
+    assert_eq!(column_bounds(&C::Double(vec![Some(1.0)])), None);
+    // A file's state: NULL-only row groups leave it, an unbounded one ends it.
+    let range = KeyState::Empty
+        .widen(i(1, 2))
+        .widen(Some(None))
+        .widen(i(0, 1));
+    assert_eq!(range, KeyState::Range(KeyBound::Int(0), KeyBound::Int(2)));
+    assert_eq!(range.widen(None).widen(i(5, 5)), KeyState::Unbounded);
 }

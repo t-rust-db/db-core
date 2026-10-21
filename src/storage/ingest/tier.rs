@@ -22,7 +22,7 @@ use super::error::IngestError;
 use super::fields::{add_field, add_page_fields, predefined_specs, schema};
 use super::flush::{bounds, convert, FlushedFile};
 use super::layout::{compare, TierOptions};
-use super::manifest::FileEntry;
+use super::manifest::{FileEntry, KeyBound, KeyRange};
 use super::page::{Page, PageBody};
 use super::record::{compare_across, compare_rows, concat, gather, read_column};
 use super::snapshot::{cast, column_type};
@@ -49,6 +49,66 @@ struct OpenFile {
     path: PathBuf,
     lsn_lo: u64,
     lsn_hi: u64,
+    /// Each sort-key column's range so far, as `Files::keys`.
+    keys: Vec<KeyState>,
+}
+
+/// A sort-key column's range in the file being written (#589).
+#[derive(Debug, Clone, PartialEq)]
+enum KeyState {
+    /// No non-null value yet.
+    Empty,
+    Range(KeyBound, KeyBound),
+    /// A type or value no [`KeyBound`] holds: the file gets no range.
+    Unbounded,
+}
+
+impl KeyState {
+    /// Widened by a row group's [`column_bounds`].
+    fn widen(self, bounds: Option<Option<(KeyBound, KeyBound)>>) -> KeyState {
+        match (self, bounds) {
+            (KeyState::Unbounded, _) | (_, None) => KeyState::Unbounded,
+            (state, Some(None)) => state,
+            (KeyState::Empty, Some(Some((lo, hi)))) => KeyState::Range(lo, hi),
+            (KeyState::Range(a, b), Some(Some((lo, hi)))) => KeyState::Range(a.min(lo), b.max(hi)),
+        }
+    }
+}
+
+/// The smallest and largest non-null value of `values` as key bounds:
+/// `Some(None)` if all are NULL, `None` for a type or value a bound
+/// cannot hold (a float, an unsigned value above `i64::MAX`).
+fn column_bounds(values: &ColumnValues) -> Option<Option<(KeyBound, KeyBound)>> {
+    fn ints<T: Copy>(
+        values: &[Option<T>],
+        int: impl Fn(T) -> Option<i64>,
+    ) -> Option<Option<(KeyBound, KeyBound)>> {
+        let mut range: Option<(i64, i64)> = None;
+        for v in values.iter().flatten() {
+            let v = int(*v)?;
+            range = Some(range.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
+        }
+        Some(range.map(|(lo, hi)| (KeyBound::Int(lo), KeyBound::Int(hi))))
+    }
+    match values {
+        ColumnValues::Int32(v) => ints(v, |x| Some(i64::from(x))),
+        ColumnValues::Int64(v)
+        | ColumnValues::TimestampMicros(v)
+        | ColumnValues::TimestampNanos(v) => ints(v, Some),
+        ColumnValues::UInt8(v) => ints(v, |x| Some(i64::from(x))),
+        ColumnValues::UInt16(v) => ints(v, |x| Some(i64::from(x))),
+        ColumnValues::UInt32(v) => ints(v, |x| Some(i64::from(x))),
+        ColumnValues::UInt64(v) => ints(v, |x| i64::try_from(x).ok()),
+        ColumnValues::Utf8(v) => {
+            let lo = v.iter().flatten().min();
+            let hi = v.iter().flatten().max();
+            Some(
+                lo.zip(hi)
+                    .map(|(lo, hi)| (KeyBound::Str(lo.clone()), KeyBound::Str(hi.clone()))),
+            )
+        }
+        _ => None,
+    }
 }
 
 /// Writes an output directory's files in turn.
@@ -57,6 +117,8 @@ struct Files {
     specs: Vec<ColumnSpec>,
     options: WriterOptions,
     max_file_size: u64,
+    /// The sort key's columns: (position in `specs`, name).
+    keys: Vec<(usize, String)>,
     open: Option<OpenFile>,
     done: Vec<Output>,
 }
@@ -71,8 +133,13 @@ impl Files {
         let mut options = parquet.clone();
         // Row groups are cut here, never by row count in the writer.
         options.row_group_rows = usize::MAX;
+        let keys = key_positions(&specs, tier)
+            .into_iter()
+            .filter_map(|i| Some((i, specs.get(i)?.name.clone())))
+            .collect();
         Files {
             dir: dir.to_path_buf(),
+            keys,
             specs,
             options,
             max_file_size: tier.max_file_size,
@@ -101,10 +168,15 @@ impl Files {
                     path,
                     lsn_lo,
                     lsn_hi,
+                    keys: vec![KeyState::Empty; self.keys.len()],
                 }
             }
         };
         let mut open = open;
+        for (state, (i, _)) in open.keys.iter_mut().zip(&self.keys) {
+            let bounds = columns.get(*i).and_then(column_bounds);
+            *state = std::mem::replace(state, KeyState::Empty).widen(bounds);
+        }
         open.writer.write_columns(columns)?;
         open.writer.flush_row_group()?;
         open.lsn_hi = lsn_hi;
@@ -149,6 +221,19 @@ impl Files {
                 bytes: summary.bytes,
                 observed_ts: None,
                 timestamp: None,
+                keys: open
+                    .keys
+                    .into_iter()
+                    .zip(&self.keys)
+                    .filter_map(|(state, (_, column))| match state {
+                        KeyState::Range(min, max) => Some(KeyRange {
+                            column: column.clone(),
+                            min,
+                            max,
+                        }),
+                        KeyState::Empty | KeyState::Unbounded => None,
+                    })
+                    .collect(),
             },
         });
         Ok(())

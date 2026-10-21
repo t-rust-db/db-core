@@ -45,7 +45,7 @@ pub use handle::{Table, FOLLOW_DIR};
 pub use layout::{Area, Layout, LayoutKind, TierOptions};
 #[cfg(feature = "ingest")]
 pub use lock::{LockError, TableLock, LOCK_FILE};
-pub use manifest::{FileEntry, Manifest, ManifestError, MANIFEST_FILE};
+pub use manifest::{FileEntry, KeyBound, KeyRange, Manifest, ManifestError, MANIFEST_FILE};
 pub use page::{Page, PageBody};
 pub use record::{RecordValue, RowPage};
 pub use snapshot::Snapshot;

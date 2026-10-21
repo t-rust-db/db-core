@@ -903,7 +903,10 @@ mod prune {
         }
     }
 
-    fn literal_stat_value(lit: &Literal, physical_type: PhysicalType) -> Option<StatValue> {
+    pub(super) fn literal_stat_value(
+        lit: &Literal,
+        physical_type: PhysicalType,
+    ) -> Option<StatValue> {
         match (lit, physical_type) {
             (Literal::Integer(i), PhysicalType::Int32 | PhysicalType::Int64) => {
                 Some(StatValue::Int(*i))
@@ -944,97 +947,174 @@ mod prune {
         }
     }
 
-    fn comparison_definitely_empty(
-        op: BinaryOp,
-        lhs: &Expr,
-        rhs: &Expr,
-        rg: &RowGroupReader<'_, '_>,
-        leaves_by_name: &HashMap<&str, (usize, PhysicalType)>,
-    ) -> Option<bool> {
-        let (col_name, lit, flipped) = as_column_and_literal(lhs, rhs)?;
-        let op = if flipped { flip(op) } else { op };
-        let (index, physical_type) = *leaves_by_name.get(col_name)?;
-        let statistics = rg.column_statistics(index).ok()??;
-        let literal = literal_stat_value(lit, physical_type)?;
-        // A MAP's leaves are keys and values: its statistics bound neither.
-        if rg.nested_field_at(index).is_some() {
-            return None;
-        }
-        let annotation = annotation(rg, index);
-        let min = statistics
-            .min
-            .as_deref()
-            .and_then(|b| decode_stat_bytes(b, physical_type, annotation));
-        let max = statistics
-            .max
-            .as_deref()
-            .and_then(|b| decode_stat_bytes(b, physical_type, annotation));
+    /// Where a column's bounds come from: a row group's footer statistics,
+    /// or (#589) a file's manifest key ranges.
+    pub(super) trait Bounds {
+        /// `column`'s smallest and largest value (`None` where unknown), and
+        /// `literal` typed to compare with them; `None` if this source
+        /// cannot bound the column against the literal at all.
+        fn bounds(
+            &self,
+            column: &str,
+            literal: &Literal,
+        ) -> Option<(Option<StatValue>, Option<StatValue>, StatValue)>;
 
-        let empty = match op {
+        /// Every value `column` can hold, if known exactly (a dictionary).
+        fn values(&self, _column: &str) -> Option<Vec<StatValue>> {
+            None
+        }
+    }
+
+    /// A row group's footer statistics and dictionaries.
+    struct RowGroupBounds<'a, 'r, 'f> {
+        rg: &'a RowGroupReader<'r, 'f>,
+        leaves_by_name: &'a HashMap<&'a str, (usize, PhysicalType)>,
+    }
+
+    impl Bounds for RowGroupBounds<'_, '_, '_> {
+        fn bounds(
+            &self,
+            column: &str,
+            literal: &Literal,
+        ) -> Option<(Option<StatValue>, Option<StatValue>, StatValue)> {
+            let (index, physical_type) = *self.leaves_by_name.get(column)?;
+            let literal = literal_stat_value(literal, physical_type)?;
+            // A MAP's leaves are keys and values: its statistics bound neither.
+            if self.rg.nested_field_at(index).is_some() {
+                return None;
+            }
+            let annotation = annotation(self.rg, index);
+            let statistics = self.rg.column_statistics(index).ok().flatten();
+            let decode = |b: &Option<Vec<u8>>| {
+                b.as_deref()
+                    .and_then(|b| decode_stat_bytes(b, physical_type, annotation))
+            };
+            let (min, max) = statistics.map_or((None, None), |s| (decode(&s.min), decode(&s.max)));
+            Some((min, max, literal))
+        }
+
+        /// The chunk's dictionary, for plain strings and integers, if every
+        /// data page is dictionary-encoded; any error reads as unknown.
+        /// Asked only once [`Self::bounds`] bounds the column, which a MAP
+        /// leaf never is.
+        fn values(&self, column: &str) -> Option<Vec<StatValue>> {
+            let (index, physical_type) = *self.leaves_by_name.get(column)?;
+            if annotation(self.rg, index) != Annotation::Plain {
+                return None;
+            }
+            match physical_type {
+                PhysicalType::ByteArray => {
+                    let values = self.rg.read_string_column_dictionary(index).ok()??;
+                    Some(values.into_iter().map(StatValue::Str).collect())
+                }
+                PhysicalType::Int64 => {
+                    let values = self.rg.read_int64_column_dictionary(index).ok()??;
+                    Some(values.into_iter().map(StatValue::Int).collect())
+                }
+                PhysicalType::Int32 => {
+                    let values = self.rg.read_int32_column_dictionary(index).ok()??;
+                    Some(
+                        values
+                            .into_iter()
+                            .map(|v| StatValue::Int(i64::from(v)))
+                            .collect(),
+                    )
+                }
+                _ => None,
+            }
+        }
+    }
+
+    /// Whether no value within `min..=max` satisfies `value op literal`.
+    fn range_definitely_empty(
+        op: BinaryOp,
+        literal: &StatValue,
+        min: Option<&StatValue>,
+        max: Option<&StatValue>,
+    ) -> bool {
+        match op {
             BinaryOp::Eq => {
                 let below_min = min
-                    .as_ref()
-                    .and_then(|m| compare(&literal, m))
+                    .and_then(|m| compare(literal, m))
                     .is_some_and(|o| o == Ordering::Less);
                 let above_max = max
-                    .as_ref()
-                    .and_then(|m| compare(&literal, m))
+                    .and_then(|m| compare(literal, m))
                     .is_some_and(|o| o == Ordering::Greater);
                 below_min || above_max
             }
             BinaryOp::Lt => min
-                .as_ref()
-                .and_then(|m| compare(m, &literal))
+                .and_then(|m| compare(m, literal))
                 .is_some_and(|o| o != Ordering::Less),
             BinaryOp::Le => min
-                .as_ref()
-                .and_then(|m| compare(m, &literal))
+                .and_then(|m| compare(m, literal))
                 .is_some_and(|o| o == Ordering::Greater),
             BinaryOp::Gt => max
-                .as_ref()
-                .and_then(|m| compare(m, &literal))
+                .and_then(|m| compare(m, literal))
                 .is_some_and(|o| o != Ordering::Greater),
             BinaryOp::Ge => max
-                .as_ref()
-                .and_then(|m| compare(m, &literal))
+                .and_then(|m| compare(m, literal))
                 .is_some_and(|o| o == Ordering::Less),
             _ => false,
+        }
+    }
+
+    /// Whether `column = literal` matches no row: the source knows every
+    /// value the column holds, and none equals the literal.
+    fn absent_from_values(source: &impl Bounds, column: &str, literal: &StatValue) -> bool {
+        source.values(column).is_some_and(|values| {
+            !values
+                .iter()
+                .any(|v| compare(v, literal) == Some(Ordering::Equal))
+        })
+    }
+
+    fn comparison_definitely_empty(
+        op: BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        source: &impl Bounds,
+    ) -> bool {
+        let Some((column, lit, flipped)) = as_column_and_literal(lhs, rhs) else {
+            return false;
         };
-        Some(empty)
+        let op = if flipped { flip(op) } else { op };
+        let Some((min, max, literal)) = source.bounds(column, lit) else {
+            return false;
+        };
+        range_definitely_empty(op, &literal, min.as_ref(), max.as_ref())
+            || (op == BinaryOp::Eq && absent_from_values(source, column, &literal))
+    }
+
+    /// Whether `expr` can be proven to match no row `source` bounds.
+    /// Conservative by construction: any expression shape or missing
+    /// bound this function doesn't specifically recognize falls through to
+    /// `false` ("may match"), never `true`.
+    pub(super) fn definitely_empty_in(expr: &Expr, source: &impl Bounds) -> bool {
+        match &expr.kind {
+            ExprKind::Paren(inner) => definitely_empty_in(inner, source),
+            ExprKind::Binary {
+                op: BinaryOp::And,
+                lhs,
+                rhs,
+            } => definitely_empty_in(lhs, source) || definitely_empty_in(rhs, source),
+            ExprKind::Binary {
+                op: BinaryOp::Or,
+                lhs,
+                rhs,
+            } => definitely_empty_in(lhs, source) && definitely_empty_in(rhs, source),
+            ExprKind::Binary { op, lhs, rhs } => comparison_definitely_empty(*op, lhs, rhs, source),
+            _ => false,
+        }
     }
 
     /// Whether `expr` can be proven to match no row in `rg`, using only its
-    /// footer statistics. Conservative by construction: any expression
-    /// shape or missing statistic this function doesn't specifically
-    /// recognize falls through to `false` ("may match"), never `true`.
+    /// footer statistics and, for `=`, its dictionaries.
     pub(super) fn definitely_empty(
         expr: &Expr,
         rg: &RowGroupReader<'_, '_>,
         leaves_by_name: &HashMap<&str, (usize, PhysicalType)>,
     ) -> bool {
-        match &expr.kind {
-            ExprKind::Paren(inner) => definitely_empty(inner, rg, leaves_by_name),
-            ExprKind::Binary {
-                op: BinaryOp::And,
-                lhs,
-                rhs,
-            } => {
-                definitely_empty(lhs, rg, leaves_by_name)
-                    || definitely_empty(rhs, rg, leaves_by_name)
-            }
-            ExprKind::Binary {
-                op: BinaryOp::Or,
-                lhs,
-                rhs,
-            } => {
-                definitely_empty(lhs, rg, leaves_by_name)
-                    && definitely_empty(rhs, rg, leaves_by_name)
-            }
-            ExprKind::Binary { op, lhs, rhs } => {
-                comparison_definitely_empty(*op, lhs, rhs, rg, leaves_by_name).unwrap_or(false)
-            }
-            _ => false,
-        }
+        definitely_empty_in(expr, &RowGroupBounds { rg, leaves_by_name })
     }
 }
 

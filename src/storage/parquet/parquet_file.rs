@@ -1018,6 +1018,73 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         self.read_column_dictionary_indices(column_index, reader::decode_dictionary_string)
     }
 
+    /// A column chunk's dictionary, decoded without reading its data pages,
+    /// when every data page is dictionary-encoded; `None` otherwise. Each
+    /// row's value is then one of the dictionary's: a value missing from it
+    /// is in no row (#589).
+    fn column_dictionary<T>(
+        &self,
+        column_index: usize,
+        decode_dictionary: impl Fn(&[u8], i32) -> reader::Result<Vec<T>>,
+    ) -> Result<Option<Vec<T>>> {
+        let codec = self.column_meta(column_index)?.codec;
+        let chunk_bytes = self.column_chunk_bytes(column_index)?;
+        let mut pos = 0usize;
+        let mut dictionary: Option<Vec<T>> = None;
+        while pos < chunk_bytes.len() {
+            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
+            match header.page_type {
+                PageType::Data(data_page_header) => {
+                    if dictionary.is_none()
+                        || !matches!(
+                            data_page_header.encoding,
+                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary
+                        )
+                    {
+                        return Ok(None);
+                    }
+                }
+                PageType::Dictionary(dictionary_page_header) => {
+                    if dictionary.is_some() {
+                        return Err(FileError::UnexpectedDictionaryPage);
+                    }
+                    let dictionary_body = compression::decompress(
+                        codec,
+                        compressed,
+                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
+                    )?;
+                    dictionary = Some(decode_dictionary(
+                        &dictionary_body,
+                        dictionary_page_header.num_values,
+                    )?);
+                }
+            }
+            pos = page_end;
+        }
+        Ok(dictionary)
+    }
+
+    /// A BYTE_ARRAY (UTF-8 string) column's dictionary, when the chunk is
+    /// dictionary-encoded throughout (see [`Self::column_dictionary`]).
+    pub fn read_string_column_dictionary(
+        &self,
+        column_index: usize,
+    ) -> Result<Option<Vec<String>>> {
+        self.column_dictionary(column_index, reader::decode_dictionary_string)
+    }
+
+    /// An INT64 column's dictionary, when the chunk is dictionary-encoded
+    /// throughout.
+    pub fn read_int64_column_dictionary(&self, column_index: usize) -> Result<Option<Vec<i64>>> {
+        self.column_dictionary(column_index, reader::decode_dictionary_int64)
+    }
+
+    /// An INT32 column's dictionary, when the chunk is dictionary-encoded
+    /// throughout.
+    pub fn read_int32_column_dictionary(&self, column_index: usize) -> Result<Option<Vec<i32>>> {
+        self.column_dictionary(column_index, reader::decode_dictionary_int32)
+    }
+
     /// Every value of an INT64 column, one per row (`None` for null).
     pub fn read_int64_column(&self, column_index: usize) -> Result<Vec<Option<i64>>> {
         self.read_column(
@@ -2102,6 +2169,17 @@ mod tests {
             // PLAIN_DICTIONARY) data page: `dictionary.is_none()` is
             // false, but the encoding check is true, so the `||` must
             // still short-circuit to `None`.
+            let file_bytes = dictionary_then_plain_page_file();
+            let file = ParquetFile::open(&file_bytes).unwrap();
+            let rg = file.row_group(0).unwrap();
+
+            let result = rg.read_int64_column_dictionary_indices(0).unwrap();
+            assert!(result.is_none());
+        }
+
+        /// A one-column INT64 file whose chunk is a dictionary page then a
+        /// PLAIN data page: a dictionary fallback partway through.
+        fn dictionary_then_plain_page_file() -> Vec<u8> {
             let mut dict_body = Vec::new();
             for v in [10i64, 20, 30] {
                 dict_body.extend_from_slice(&v.to_le_bytes());
@@ -2128,12 +2206,42 @@ mod tests {
             meta.i64_field(9, 4);
             let meta_bytes = meta.finish();
 
+            build_file_from_chunk(&page_bytes, meta_bytes, 3)
+        }
+
+        // storage_parquet_parquet_file_column_dictionary_1b5585c0: the same
+        // decision in `column_dictionary` (#589), which skips data bodies.
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_column_dictionary_1b5585c0__v1_both_false_returns_the_dictionary(
+        ) {
+            let (page_bytes, meta_bytes) =
+                build_int64_dictionary_chunk(&[10, 20, 30], &[2, 0, 1], 4);
             let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
             let file = ParquetFile::open(&file_bytes).unwrap();
             let rg = file.row_group(0).unwrap();
+            assert_eq!(
+                rg.read_int64_column_dictionary(0).unwrap(),
+                Some(vec![10, 20, 30])
+            );
+        }
 
-            let result = rg.read_int64_column_dictionary_indices(0).unwrap();
-            assert!(result.is_none());
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_column_dictionary_1b5585c0__v2_no_dictionary_page_returns_none(
+        ) {
+            let (page_bytes, meta_bytes) = build_int64_chunk(&[1, 2, 3], 4);
+            let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
+            let file = ParquetFile::open(&file_bytes).unwrap();
+            let rg = file.row_group(0).unwrap();
+            assert_eq!(rg.read_int64_column_dictionary(0).unwrap(), None);
+        }
+
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_column_dictionary_1b5585c0__v3_dictionary_present_but_plain_data_page_returns_none(
+        ) {
+            let file_bytes = dictionary_then_plain_page_file();
+            let file = ParquetFile::open(&file_bytes).unwrap();
+            let rg = file.row_group(0).unwrap();
+            assert_eq!(rg.read_int64_column_dictionary(0).unwrap(), None);
         }
     }
 

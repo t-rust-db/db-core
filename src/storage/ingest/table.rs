@@ -383,6 +383,7 @@ impl TableWriter {
             bytes: written.bytes,
             observed_ts: written.observed_ts,
             timestamp: written.timestamp,
+            keys: written.keys,
         };
         let next = self.manifest.with_file(entry.clone());
         next.write(&self.dir)?;
@@ -849,6 +850,7 @@ fn entries(dir: &str, area: Area, outputs: Vec<Output>) -> Vec<FileEntry> {
             bytes: o.file.bytes,
             observed_ts: o.file.observed_ts,
             timestamp: o.file.timestamp,
+            keys: o.file.keys,
         })
         .collect()
 }
