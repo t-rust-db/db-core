@@ -36390,10 +36390,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_writer_codec_id_66425b35",
+    "id": "storage_parquet_writer_codec_id_d48f32e4",
     "file": "src/storage/parquet/writer.rs",
-    "line": 68,
-    "decision": "match self {\n            Compression::Uncompressed => 0,\n            Compression::Snappy => 1,\n        }",
+    "line": 71,
+    "decision": "match self {\n            Compression::Uncompressed => 0,\n            Compression::Snappy => 1,\n            Compression::Zstd => 6,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -36402,7 +36402,7 @@
   {
     "id": "storage_parquet_writer_fmt_2af14820",
     "file": "src/storage/parquet/writer.rs",
-    "line": 163,
+    "line": 167,
     "decision": "match self {\n            WriteError::Io(e) => write!(f, \"parquet write: {e}\"),\n            WriteError::Encode(e) => write!(f, \"parquet metadata: {e}\"),\n            WriteError::InvalidSchema(why) => write!(f, \"invalid parquet schema: {why}\"),\n            WriteError::InvalidOptions(why) => write!(f, \"invalid parquet writer options: {why}\"),\n            WriteError::ColumnCount { expected, found } => {\n                write!(f, \"batch has {found} columns, schema has {expected}\")\n            }\n            WriteError::TypeMismatch { column } => {\n                write!(f, \"column '{column}': values do not match the column type\")\n            }\n            WriteError::LengthMismatch {\n                column,\n                expected,\n                found,\n            } => write!(f, \"column '{column}': {found} values, expected {expected}\"),\n            WriteError::NullInRequired { column } => {\n                write!(f, \"column '{column}' is required but got a null\")\n            }\n            WriteError::InvalidValue { column, reason } => {\n                write!(f, \"column '{column}': {reason}\")\n            }\n            WriteError::TooLarge(what) => write!(f, \"too large for parquet: {what}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36412,7 +36412,7 @@
   {
     "id": "storage_parquet_writer_new_c444191f",
     "file": "src/storage/parquet/writer.rs",
-    "line": 269,
+    "line": 273,
     "decision": "options.row_group_rows == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36422,7 +36422,7 @@
   {
     "id": "storage_parquet_writer_write_columns_2c28f1d8",
     "file": "src/storage/parquet/writer.rs",
-    "line": 314,
+    "line": 318,
     "decision": "columns.len() != self.schema.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36432,7 +36432,7 @@
   {
     "id": "storage_parquet_writer_write_columns_c59df23b",
     "file": "src/storage/parquet/writer.rs",
-    "line": 328,
+    "line": 332,
     "decision": "self.buffered_rows >= self.options.row_group_rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -36442,7 +36442,7 @@
   {
     "id": "storage_parquet_writer_flush_row_group_804daad8",
     "file": "src/storage/parquet/writer.rs",
-    "line": 337,
+    "line": 341,
     "decision": "self.buffered_rows == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36452,7 +36452,7 @@
   {
     "id": "storage_parquet_writer_validate_schema_6bb6a459",
     "file": "src/storage/parquet/writer.rs",
-    "line": 405,
+    "line": 409,
     "decision": "schema.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36462,7 +36462,7 @@
   {
     "id": "storage_parquet_writer_validate_schema_007616e2",
     "file": "src/storage/parquet/writer.rs",
-    "line": 410,
+    "line": 414,
     "decision": "spec.name.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36472,7 +36472,7 @@
   {
     "id": "storage_parquet_writer_validate_schema_99c47859",
     "file": "src/storage/parquet/writer.rs",
-    "line": 413,
+    "line": 417,
     "decision": "!seen.insert(spec.name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -36482,7 +36482,7 @@
   {
     "id": "storage_parquet_writer_validate_schema_a3547578",
     "file": "src/storage/parquet/writer.rs",
-    "line": 419,
+    "line": 423,
     "decision": "match spec.column_type {\n            ColumnType::Decimal { precision, scale }\n                if !(1..=38).contains(&precision) || scale > precision =>\n            {\n                return Err(WriteError::InvalidSchema(format!(\n                    \"column '{}': DECIMAL({precision}, {scale}) needs precision 1..=38 and scale at most the precision\",\n                    spec.name\n                )));\n            }\n            ColumnType::FixedLenByteArray(0) => {\n                return Err(WriteError::InvalidSchema(format!(\n                    \"column '{}': FIXED_LEN_BYTE_ARRAY needs a length of at least 1\",\n                    spec.name\n                )));\n            }\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36492,7 +36492,7 @@
   {
     "id": "storage_parquet_writer_validate_schema_0dc3899e",
     "file": "src/storage/parquet/writer.rs",
-    "line": 421,
+    "line": 425,
     "decision": "!(1..=38).contains(&precision) || scale > precision",
     "conditions": 2,
     "vectors_required": 3,
@@ -36502,7 +36502,7 @@
   {
     "id": "storage_parquet_writer_check_column_385dacc6",
     "file": "src/storage/parquet/writer.rs",
-    "line": 441,
+    "line": 445,
     "decision": "!values.is_for(spec.column_type)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36512,7 +36512,7 @@
   {
     "id": "storage_parquet_writer_check_column_82d64209",
     "file": "src/storage/parquet/writer.rs",
-    "line": 446,
+    "line": 450,
     "decision": "values.len() != rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -36522,7 +36522,7 @@
   {
     "id": "storage_parquet_writer_check_column_2b1e74ad",
     "file": "src/storage/parquet/writer.rs",
-    "line": 453,
+    "line": 457,
     "decision": "!spec.nullable && values.validity().contains(&false)",
     "conditions": 2,
     "vectors_required": 3,
@@ -36532,7 +36532,7 @@
   {
     "id": "storage_parquet_writer_check_column_2ec01db9",
     "file": "src/storage/parquet/writer.rs",
-    "line": 462,
+    "line": 466,
     "decision": "match (spec.column_type, values) {\n        (ColumnType::Decimal { precision, .. }, ColumnValues::Decimal(v)) => {\n            let limit = 10i128.pow(u32::from(precision));\n            match v\n                .iter()\n                .flatten()\n                .find(|x| x.unsigned_abs() >= limit.unsigned_abs())\n            {\n                Some(x) => Err(invalid(format!(\n                    \"unscaled value {x} has more than {precision} digits\"\n                ))),\n                None => Ok(()),\n            }\n        }\n        (ColumnType::FixedLenByteArray(len), ColumnValues::FixedLenByteArray(v)) => {\n            match v.iter().flatten().find(|x| x.len() != usize::from(len)) {\n                Some(x) => Err(invalid(format!(\n                    \"{}-byte value in a {len}-byte column\",\n                    x.len()\n                ))),\n                None => Ok(()),\n            }\n        }\n        (ColumnType::MapUtf8, ColumnValues::Map(v)) => {\n            match v.iter().flatten().find_map(|m| duplicate_key(m)) {\n                Some(key) => Err(invalid(format!(\"map key {key:?} repeated in one map\"))),\n                None => Ok(()),\n            }\n        }\n        _ => Ok(()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36542,7 +36542,7 @@
   {
     "id": "storage_parquet_writer_check_column_e30ad9e1",
     "file": "src/storage/parquet/writer.rs",
-    "line": 465,
+    "line": 469,
     "decision": "match v\n                .iter()\n                .flatten()\n                .find(|x| x.unsigned_abs() >= limit.unsigned_abs())\n            {\n                Some(x) => Err(invalid(format!(\n                    \"unscaled value {x} has more than {precision} digits\"\n                ))),\n                None => Ok(()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36552,7 +36552,7 @@
   {
     "id": "storage_parquet_writer_check_column_930dcb3b",
     "file": "src/storage/parquet/writer.rs",
-    "line": 477,
+    "line": 481,
     "decision": "match v.iter().flatten().find(|x| x.len() != usize::from(len)) {\n                Some(x) => Err(invalid(format!(\n                    \"{}-byte value in a {len}-byte column\",\n                    x.len()\n                ))),\n                None => Ok(()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36562,7 +36562,7 @@
   {
     "id": "storage_parquet_writer_check_column_acf2f33b",
     "file": "src/storage/parquet/writer.rs",
-    "line": 486,
+    "line": 490,
     "decision": "match v.iter().flatten().find_map(|m| duplicate_key(m)) {\n                Some(key) => Err(invalid(format!(\"map key {key:?} repeated in one map\"))),\n                None => Ok(()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36572,7 +36572,7 @@
   {
     "id": "storage_parquet_writer_write_chunk_6c66c9cb",
     "file": "src/storage/parquet/writer.rs",
-    "line": 538,
+    "line": 542,
     "decision": "let Some(levels) = &leaf.rep_levels",
     "conditions": 1,
     "vectors_required": 2,
@@ -36582,7 +36582,7 @@
   {
     "id": "storage_parquet_writer_write_chunk_a2b44e14",
     "file": "src/storage/parquet/writer.rs",
-    "line": 541,
+    "line": 545,
     "decision": "let Some(levels) = &leaf.def_levels",
     "conditions": 1,
     "vectors_required": 2,
@@ -36592,7 +36592,7 @@
   {
     "id": "storage_parquet_writer_write_chunk_2ee3f278",
     "file": "src/storage/parquet/writer.rs",
-    "line": 550,
+    "line": 554,
     "decision": "match &encoded.dictionary {\n        Some((dictionary, entries)) => {\n            let offset = sink.position()?;\n            sizes.add(write_page(sink, dictionary, *entries, codec, None)?)?;\n            encodings.push(meta::ENCODING_RLE_DICTIONARY);\n            Some(offset)\n        }\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36600,10 +36600,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_writer_write_page_ae330e16",
+    "id": "storage_parquet_writer_write_page_fd71033d",
     "file": "src/storage/parquet/writer.rs",
-    "line": 627,
-    "decision": "match compression {\n        Compression::Uncompressed => None,\n        Compression::Snappy => Some(snappy::compress(body)),\n    }",
+    "line": 631,
+    "decision": "match compression {\n        Compression::Uncompressed => None,\n        Compression::Snappy => Some(snappy::compress(body)),\n        Compression::Zstd => Some(ruzstd::encoding::compress_to_vec(\n            body,\n            ruzstd::encoding::CompressionLevel::Fastest,\n        )),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -36612,7 +36612,7 @@
   {
     "id": "storage_parquet_writer_write_page_35f4f30f",
     "file": "src/storage/parquet/writer.rs",
-    "line": 637,
+    "line": 645,
     "decision": "match data_encoding {\n        Some(encoding) => meta::data_page_header(&sizes, encoding),\n        None => meta::dictionary_page_header(&sizes),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36622,7 +36622,7 @@
   {
     "id": "storage_parquet_writer_encode_values_500f4a89",
     "file": "src/storage/parquet/writer.rs",
-    "line": 658,
+    "line": 666,
     "decision": "match values {\n        ColumnValues::Boolean(v) => {\n            let present: Vec<bool> = v.iter().flatten().copied().collect();\n            let mut data = Vec::new();\n            encode::plain_bool(&mut data, &present);\n            Ok(plain(data))\n        }\n        ColumnValues::Int32(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::Int64(v)\n        | ColumnValues::TimestampMicros(v)\n        | ColumnValues::TimestampNanos(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::Float(v) => {\n            let mut data = Vec::new();\n            for x in v.iter().flatten() {\n                data.extend_from_slice(&x.to_le_bytes());\n            }\n            Ok(plain(data))\n        }\n        ColumnValues::Double(v) => {\n            let mut data = Vec::new();\n            for x in v.iter().flatten() {\n                data.extend_from_slice(&x.to_le_bytes());\n            }\n            Ok(plain(data))\n        }\n        ColumnValues::Utf8(v) => dictionary_or_plain(v, options, |out, s| {\n            encode::plain_byte_array(out, s.as_bytes()).ok_or_else(|| too_large(\"string value\"))\n        }),\n        ColumnValues::Binary(v) => dictionary_or_plain(v, options, |out, b| {\n            encode::plain_byte_array(out, b).ok_or_else(|| too_large(\"binary value\"))\n        }),\n        ColumnValues::FixedLenByteArray(v) => dictionary_or_plain(v, options, |out, b| {\n            out.extend_from_slice(b);\n            Ok(())\n        }),\n        ColumnValues::UInt8(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&u32::from(*x).to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::UInt16(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&u32::from(*x).to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::UInt32(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::UInt64(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        // A map is written as its leaves (see `leaf`), never as one chunk.\n        ColumnValues::Map(_) => Err(WriteError::InvalidSchema(\n            \"a MAP column is written as its key and value leaves\".to_string(),\n        )),\n        ColumnValues::Decimal(v) => {\n            let storage = match column_type {\n                ColumnType::Decimal { precision, .. } => DecimalStorage::for_precision(precision),\n                _ => DecimalStorage::Fixed16,\n            };\n            dictionary_or_plain(v, options, |out, x| {\n                out.extend_from_slice(&decimal_bytes(*x, storage));\n                Ok(())\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36632,7 +36632,7 @@
   {
     "id": "storage_parquet_writer_encode_values_9d39f3de",
     "file": "src/storage/parquet/writer.rs",
-    "line": 720,
+    "line": 728,
     "decision": "match column_type {\n                ColumnType::Decimal { precision, .. } => DecimalStorage::for_precision(precision),\n                _ => DecimalStorage::Fixed16,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36642,7 +36642,7 @@
   {
     "id": "storage_parquet_writer_decimal_bytes_1f089c7b",
     "file": "src/storage/parquet/writer.rs",
-    "line": 736,
+    "line": 744,
     "decision": "match storage {\n        DecimalStorage::Int32 => i32::try_from(unscaled)\n            .unwrap_or_default()\n            .to_le_bytes()\n            .to_vec(),\n        DecimalStorage::Int64 => i64::try_from(unscaled)\n            .unwrap_or_default()\n            .to_le_bytes()\n            .to_vec(),\n        DecimalStorage::Fixed16 => unscaled.to_be_bytes().to_vec(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36652,7 +36652,7 @@
   {
     "id": "storage_parquet_writer_dictionary_or_plain_9962985f",
     "file": "src/storage/parquet/writer.rs",
-    "line": 763,
+    "line": 771,
     "decision": "options.dictionary",
     "conditions": 1,
     "vectors_required": 2,
@@ -36662,7 +36662,7 @@
   {
     "id": "storage_parquet_writer_dictionary_or_plain_55151dd9",
     "file": "src/storage/parquet/writer.rs",
-    "line": 764,
+    "line": 772,
     "decision": "let Some(encoded) = dictionary(&present, options.dictionary_max_bytes, &encode_plain)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -36672,7 +36672,7 @@
   {
     "id": "storage_parquet_writer_dictionary_f7bc3940",
     "file": "src/storage/parquet/writer.rs",
-    "line": 783,
+    "line": 791,
     "decision": "present.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36682,7 +36682,7 @@
   {
     "id": "storage_parquet_writer_dictionary_d8a022e6",
     "file": "src/storage/parquet/writer.rs",
-    "line": 790,
+    "line": 798,
     "decision": "match ids.get(value) {\n            Some(id) => *id,\n            None => {\n                let Ok(id) = u32::try_from(ids.len()) else {\n                    return Ok(None);\n                };\n                encode_plain(&mut dictionary, value)?;\n                if dictionary.len() > max_bytes {\n                    return Ok(None);\n                }\n                ids.insert(value, id);\n                id\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36692,7 +36692,7 @@
   {
     "id": "storage_parquet_writer_dictionary_9976cdee",
     "file": "src/storage/parquet/writer.rs",
-    "line": 797,
+    "line": 805,
     "decision": "dictionary.len() > max_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -36702,7 +36702,7 @@
   {
     "id": "storage_parquet_writer_dictionary_8a36ce7b",
     "file": "src/storage/parquet/writer.rs",
-    "line": 806,
+    "line": 814,
     "decision": "ids.len().saturating_mul(2) > present.len()",
     "conditions": 1,
     "vectors_required": 2,

@@ -759,3 +759,53 @@ fn a_crash_at_the_retention_commit_recovers_the_kept_days() {
     assert_eq!(files_on_disk(&t), listed(&w), "the dropped day is deleted");
     assert!(!t.0.join("archive/date=2026-10-11").exists());
 }
+
+/// #622: the codec is recorded per file, so a table that changes codec
+/// reads its old files as they are; the day merge writes the new one.
+#[test]
+fn a_table_changes_codec_without_rewriting_old_files() {
+    use crate::storage::parquet::footer::Codec;
+    use crate::storage::parquet::writer::Compression;
+    let _serial = serial();
+    let t = TempTable::new();
+    let with = |compression| {
+        let mut o = options(tier());
+        o.parquet.compression = compression;
+        o
+    };
+    let codecs = |w: &TableWriter| -> Vec<Codec> {
+        w.manifest()
+            .files
+            .iter()
+            .map(|e| {
+                let bytes = fs::read(t.0.join(&e.path)).unwrap();
+                let file = ParquetFile::open(&bytes).unwrap();
+                file.metadata().row_groups[0].columns[0]
+                    .meta_data
+                    .as_ref()
+                    .unwrap()
+                    .codec
+            })
+            .collect()
+    };
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(&t.0, with(Compression::Snappy)).unwrap();
+    let mut lines = append(&mut w, 0..4);
+    set_clock(0, 11, 0);
+    w.flush().unwrap();
+    drop(w);
+    let mut w = TableWriter::open(&t.0, with(Compression::Zstd)).unwrap();
+    lines.extend(append(&mut w, 4..8));
+    set_clock(0, 12, 0);
+    w.flush().unwrap();
+    assert_eq!(codecs(&w), [Codec::Snappy, Codec::Zstd]);
+    assert_eq!(all_rows(&w), sorted(lines.clone()));
+    set_clock(1, 0, 0);
+    w.compact().unwrap();
+    assert_eq!(
+        codecs(&w),
+        [Codec::Zstd],
+        "the day merge writes the current codec"
+    );
+    assert_eq!(all_rows(&w), sorted(lines));
+}

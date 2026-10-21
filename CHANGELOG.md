@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.155.0] - 2026-10-21
+
+### Added
+
+- **zstd page compression in the Parquet writer** (#622): `Compression::Zstd`, at `ruzstd`'s one implemented level (`Fastest`, about zstd level 1), pure Rust. The codec is recorded per column chunk, so a table that changes `TableOptions.parquet.compression` reads its old files as they are, and its day merge writes the new codec. Snappy stays the default. DuckDB and pyarrow read every writer type's zstd pages (`make check-parquet-write-oracle`, 4 new cases). `bench-events` takes `CODEC=snappy|zstd|uncompressed`. On its 10M-event workload, against Snappy: 8.2 vs 10.8 bytes/event (−24%), hour flushes +10%, the day merge +26%, and hot-cache reads 4-13% slower (user CPU +14-16%); uncompressed is 13.4 bytes/event.
+
 ## [0.154.0] - 2026-10-21
 
 ### Fixed
