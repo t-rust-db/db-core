@@ -3661,6 +3661,17 @@ pub struct Vm {
     /// `Eq`/`Ne` against a `Dict` column) read it directly; every other
     /// opcode reads through [`Vm::reg`], which materializes on demand.
     typed_registers: HashMap<usize, Arc<Column>>,
+    /// Constant registers (#681): an [`Opcode::LoadConst`] lives here as
+    /// one value plus the live row count it stands for, instead of a
+    /// `Vec<Value>` with one clone of the literal per row.
+    /// [`Vm::dict_literal_compare`] reads the literal directly; every
+    /// other reader goes through [`Vm::ensure_materialized`], which builds
+    /// the `Vec<Value>` and removes the entry here. Only consulted while
+    /// neither `registers` nor `typed_registers` holds the register (see
+    /// [`Vm::const_value`]), so a later write to the same register wins.
+    /// A `Vec` (register, value, rows), not a map: a program loads a
+    /// handful of constants, and an empty `Vec` costs a `Vm` nothing.
+    const_registers: Vec<(usize, Value, usize)>,
     output: QueryOutput,
     join_tables: JoinTables,
     /// A pending `Filter` result not yet applied to `registers`. See
@@ -3765,6 +3776,7 @@ impl Vm {
     pub fn take_register(&mut self, reg: usize) -> Result<Vec<Value>> {
         self.ensure_materialized(reg);
         self.typed_registers.remove(&reg);
+        self.take_const(reg);
         let values = self
             .registers
             .remove(&reg)
@@ -3820,6 +3832,48 @@ impl Vm {
         if let Some(column) = self.typed_registers.get(&reg) {
             let materialized: Vec<Value> = (0..column.len()).map(|i| column.get(i)).collect();
             self.registers.insert(reg, Arc::new(materialized));
+        } else if !self.const_registers.is_empty() {
+            self.materialize_const(reg);
+        }
+    }
+
+    /// [`Vm::ensure_materialized`]'s constant case (#681), out of line:
+    /// `ensure_materialized` is inlined at every register read, and
+    /// carrying this broadcast there too cost the fused
+    /// `HashProbeGroupReduce` loop its inlining (`vm_opcodes`, +48%).
+    #[cold]
+    #[inline(never)]
+    fn materialize_const(&mut self, reg: usize) {
+        if let Some((value, len)) = self.take_const(reg) {
+            self.registers.insert(reg, Arc::new(vec![value; len]));
+        }
+    }
+
+    /// Removes and returns constant register `reg`'s value and row count
+    /// (#681), if it has one.
+    fn take_const(&mut self, reg: usize) -> Option<(Value, usize)> {
+        let i = self.const_registers.iter().position(|c| c.0 == reg)?;
+        let (_, value, len) = self.const_registers.swap_remove(i);
+        Some((value, len))
+    }
+
+    /// The literal a still-unmaterialized [`Opcode::LoadConst`] register
+    /// holds (#681), or `None` once anything else has written `reg`.
+    fn const_value(&self, reg: usize) -> Option<&Value> {
+        if self.registers.contains_key(&reg) || self.typed_registers.contains_key(&reg) {
+            return None;
+        }
+        self.const_registers
+            .iter()
+            .find(|c| c.0 == reg)
+            .map(|(_, value, _)| value)
+    }
+
+    /// Sets every unmaterialized constant register to `len` rows (#681) --
+    /// what compacting or reshaping it would have done, for free.
+    fn resize_const_registers(&mut self, len: usize) {
+        for (_, _, rows) in &mut self.const_registers {
+            *rows = len;
         }
     }
 
@@ -3916,6 +3970,7 @@ impl Vm {
     /// meaningless against the next program's batch as a leftover register.
     pub fn clear_registers(&mut self) {
         self.registers.clear();
+        self.const_registers.clear();
         self.selection = None;
         self.selected_rows = None;
         self.scalar_registers.clear();
@@ -3932,6 +3987,7 @@ impl Vm {
             return Ok(());
         };
         self.selected_rows = Some(selection.indices.len());
+        self.resize_const_registers(selection.indices.len());
         // #482: materialize every typed-only register before compacting --
         // otherwise a register nothing has read yet (still typed-only,
         // hence absent from `registers`) would be silently skipped by the
@@ -4012,10 +4068,20 @@ impl Vm {
             else {
                 continue;
             };
-            self.ensure_materialized(other_reg);
-            let other = self.reg(other_reg, opcode)?;
-            let Some(literal) = single_str_literal(other) else {
-                continue;
+            // #681: a `LoadConst` literal is read as is, never
+            // broadcast to a column only to be scanned back to one value.
+            let literal = if let Some(value) = self.const_value(other_reg) {
+                match value {
+                    Value::Str(s) => s.as_ref(),
+                    _ => continue,
+                }
+            } else {
+                self.ensure_materialized(other_reg);
+                let other = self.reg(other_reg, opcode)?;
+                let Some(literal) = single_str_literal(other) else {
+                    continue;
+                };
+                literal
             };
             let code = dict.iter().position(|s| s.as_ref() == literal);
             let result = (0..indices.len())
@@ -4215,8 +4281,12 @@ impl Vm {
                     Some(selection) => selection.base_len,
                     None => self.selected_rows.unwrap_or(batch.num_rows),
                 };
-                self.registers
-                    .insert(*reg, Arc::new(vec![value.clone(); len]));
+                // #681: one value, broadcast lazily by
+                // `ensure_materialized` only if something reads it as rows.
+                self.registers.remove(reg);
+                self.typed_registers.remove(reg);
+                self.take_const(*reg);
+                self.const_registers.push((*reg, value.clone(), len));
             }
             Opcode::Map { dst, op, a, b } => {
                 // #265: reads registers elementwise (no row-index
@@ -4565,6 +4635,12 @@ impl Vm {
         let key_views: Vec<KeyView> = if int_group_by.is_some() || dict_group_by.is_some() {
             Vec::new()
         } else {
+            // #681: a constant key has no `KeyView` of its own.
+            for reg in group_by {
+                if self.const_value(*reg).is_some() {
+                    self.ensure_materialized(*reg);
+                }
+            }
             group_by
                 .iter()
                 .map(|reg| self.key_view(*reg, opcode))
@@ -4926,6 +5002,7 @@ impl Vm {
         for r in typed_only {
             self.ensure_materialized(r);
         }
+        self.resize_const_registers(emitted.len());
         for values in self.registers.values_mut() {
             if values.len() != num_rows {
                 return Err(VmError::RegisterLengthMismatch { opcode });
@@ -6474,6 +6551,163 @@ mod tests {
             )
             .unwrap();
         assert_eq!(vm.register(2).unwrap(), str_vm.register(2).unwrap());
+    }
+
+    #[test]
+    fn load_const_compared_with_a_dict_column_is_never_broadcast() {
+        // #681: the literal stays one shared value -- no `Vec<Value>`
+        // with a clone per row is ever built for it.
+        let tag_column = Column::Dict {
+            dict: vec!["kern".into(), "user".into()],
+            indices: vec![0, 1, 0],
+            valid: crate::vm::column::Bitmap::new(3, true),
+        };
+        let batch = Batch::new(3).with_typed_column("tag", tag_column);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "tag".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Str("kern".into()),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Eq,
+                    a: 1,
+                    b: 0,
+                },
+            ],
+        )
+        .unwrap();
+        assert!(!vm.registers.contains_key(&1));
+        assert!(vm.const_value(1).is_some());
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Bool(true), Value::Bool(false), Value::Bool(true)]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_const_value_4e189d97__v1_unwritten_const_is_seen() {
+        let mut vm = Vm::new();
+        vm.execute(
+            &Batch::new(2),
+            &[Opcode::LoadConst {
+                reg: 0,
+                value: Value::Int(7),
+            }],
+        )
+        .unwrap();
+        assert!(matches!(vm.const_value(0), Some(Value::Int(7))));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_const_value_4e189d97__v2_later_map_write_wins() {
+        let mut vm = Vm::new();
+        vm.execute(
+            &Batch::new(1),
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(7),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(1),
+                },
+                Opcode::Map {
+                    dst: 0,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert!(vm.const_value(0).is_none());
+        assert_eq!(vm.register(0).unwrap(), &[Value::Int(8)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_const_value_4e189d97__v3_later_typed_load_wins() {
+        let batch = Batch::new(2).with_typed_column(
+            "tag",
+            Column::Dict {
+                dict: vec!["kern".into()],
+                indices: vec![0, 0],
+                valid: crate::vm::column::Bitmap::new(2, true),
+            },
+        );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadConst {
+                    reg: 0,
+                    value: Value::Int(7),
+                },
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "tag".into(),
+                },
+            ],
+        )
+        .unwrap();
+        assert!(vm.const_value(0).is_none());
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Str("kern".into()), Value::Str("kern".into())]
+        );
+    }
+
+    #[test]
+    fn load_const_before_a_filter_has_the_surviving_row_count() {
+        // #681: a constant loaded while a selection is pending is
+        // materialized at the compacted length once the selection resolves.
+        let batch =
+            Batch::new(3).with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Int(1),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Gt,
+                    a: 0,
+                    b: 1,
+                },
+                Opcode::Filter { predicate: 2 },
+                Opcode::LoadConst {
+                    reg: 3,
+                    value: Value::Int(10),
+                },
+                Opcode::Map {
+                    dst: 4,
+                    op: MapOp::Add,
+                    a: 0,
+                    b: 3,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(4).unwrap(), &[Value::Int(12), Value::Int(13)]);
+        assert_eq!(vm.register(1).unwrap(), &[Value::Int(1), Value::Int(1)]);
     }
 
     #[test]
@@ -8171,6 +8405,61 @@ mod tests {
         assert_eq!(
             vm.register(1).unwrap(),
             &[Value::Str("a".into()), Value::Str("b".into())]
+        );
+    }
+
+    #[test]
+    fn load_const_before_a_fan_out_probe_has_the_joined_row_count() {
+        // #681: an unmaterialized constant is reshaped with every other
+        // register -- one probe row matching two build rows gives two.
+        let right = Batch::new(2)
+            .with_column("rkey", vec![Value::Int(1), Value::Int(1)])
+            .with_column("rval", vec![Value::Str("a".into()), Value::Str("b".into())]);
+        let mut vm = Vm::new();
+        vm.execute(
+            &right,
+            &[
+                Opcode::LoadColumn {
+                    reg: 10,
+                    column: "rkey".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 11,
+                    column: "rval".into(),
+                },
+                Opcode::HashBuild {
+                    key_cols: vec![10].into(),
+                    payload_cols: vec![11].into(),
+                    table: 0,
+                },
+            ],
+        )
+        .unwrap();
+        vm.clear_registers();
+        let left = Batch::new(1).with_column("lkey", vec![Value::Int(1)]);
+        vm.execute(
+            &left,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "lkey".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 2,
+                    value: Value::Str("k".into()),
+                },
+                Opcode::HashProbe {
+                    key_cols: vec![0].into(),
+                    table: 0,
+                    payload_dst: vec![1].into(),
+                    kind: JoinKind::Inner,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Str("k".into()), Value::Str("k".into())]
         );
     }
 
