@@ -2938,6 +2938,10 @@ pub db_core::storage::column::parquet::parquet_file::FileError::MissingTypeLengt
 pub db_core::storage::column::parquet::parquet_file::FileError::Nested(db_core::storage::parquet::nested::NestedError)
 pub db_core::storage::column::parquet::parquet_file::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::column::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::column::parquet::parquet_file::FileError::PageExceedsChunk
+pub db_core::storage::column::parquet::parquet_file::FileError::PageExceedsChunk::declared: u64
+pub db_core::storage::column::parquet::parquet_file::FileError::PageExceedsChunk::field: &'static str
+pub db_core::storage::column::parquet::parquet_file::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::column::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::parquet::parquet_file::FileError::TimestampOutOfRange
@@ -3021,7 +3025,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub type db_core::storage::column::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
-pub type db_core::storage::column::parquet::parquet_file::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
+pub type db_core::storage::column::parquet::parquet_file::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
 pub type db_core::storage::column::parquet::parquet_file::Result<T> = core::result::Result<T, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::column::parquet::reader
 pub enum db_core::storage::column::parquet::reader::LeafScalar
@@ -3030,7 +3034,7 @@ pub db_core::storage::column::parquet::reader::LeafScalar::Double(f64)
 pub db_core::storage::column::parquet::reader::LeafScalar::Float(f32)
 pub db_core::storage::column::parquet::reader::LeafScalar::Int32(i32)
 pub db_core::storage::column::parquet::reader::LeafScalar::Int64(i64)
-pub db_core::storage::column::parquet::reader::LeafScalar::Str(alloc::string::String)
+pub db_core::storage::column::parquet::reader::LeafScalar::Str(alloc::rcs::arc::Arc<str>)
 impl core::clone::Clone for db_core::storage::parquet::reader::LeafScalar
 pub fn db_core::storage::parquet::reader::LeafScalar::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::parquet::reader::LeafScalar
@@ -3170,7 +3174,7 @@ pub fn db_core::storage::parquet::schema::ColumnSpec::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnSpec
 pub fn db_core::storage::parquet::schema::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnSpec
-pub type db_core::storage::column::parquet::schema::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
+pub type db_core::storage::column::parquet::schema::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
 pub mod db_core::storage::column::parquet::schema_tree
 pub struct db_core::storage::column::parquet::schema_tree::SchemaNode
 pub db_core::storage::column::parquet::schema_tree::SchemaNode::children: alloc::vec::Vec<db_core::storage::parquet::schema_tree::SchemaNode>
@@ -3408,7 +3412,7 @@ pub fn db_core::storage::parquet::writer::WriterOptions::default() -> Self
 impl core::fmt::Debug for db_core::storage::parquet::writer::WriterOptions
 pub fn db_core::storage::parquet::writer::WriterOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::WriterOptions
-pub type db_core::storage::column::parquet::writer::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
+pub type db_core::storage::column::parquet::writer::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
 pub enum db_core::storage::column::parquet::FileError
 pub db_core::storage::column::parquet::FileError::ChunkOutOfBounds
 pub db_core::storage::column::parquet::FileError::ColumnIndexOutOfRange(usize)
@@ -3424,6 +3428,10 @@ pub db_core::storage::column::parquet::FileError::MissingTypeLength
 pub db_core::storage::column::parquet::FileError::Nested(db_core::storage::parquet::nested::NestedError)
 pub db_core::storage::column::parquet::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::column::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::column::parquet::FileError::PageExceedsChunk
+pub db_core::storage::column::parquet::FileError::PageExceedsChunk::declared: u64
+pub db_core::storage::column::parquet::FileError::PageExceedsChunk::field: &'static str
+pub db_core::storage::column::parquet::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::column::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::parquet::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::parquet::FileError::TimestampOutOfRange
@@ -3579,6 +3587,10 @@ pub db_core::storage::column::FileError::MissingTypeLength
 pub db_core::storage::column::FileError::Nested(db_core::storage::parquet::nested::NestedError)
 pub db_core::storage::column::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::column::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::column::FileError::PageExceedsChunk
+pub db_core::storage::column::FileError::PageExceedsChunk::declared: u64
+pub db_core::storage::column::FileError::PageExceedsChunk::field: &'static str
+pub db_core::storage::column::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::column::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::column::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::FileError::TimestampOutOfRange
@@ -4905,6 +4917,10 @@ pub db_core::storage::parquet::parquet_file::FileError::MissingTypeLength
 pub db_core::storage::parquet::parquet_file::FileError::Nested(db_core::storage::parquet::nested::NestedError)
 pub db_core::storage::parquet::parquet_file::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::parquet::parquet_file::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::parquet::parquet_file::FileError::PageExceedsChunk
+pub db_core::storage::parquet::parquet_file::FileError::PageExceedsChunk::declared: u64
+pub db_core::storage::parquet::parquet_file::FileError::PageExceedsChunk::field: &'static str
+pub db_core::storage::parquet::parquet_file::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::parquet::parquet_file::FileError::TimestampOutOfRange
@@ -4988,7 +5004,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
 pub type db_core::storage::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
-pub type db_core::storage::parquet::parquet_file::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
+pub type db_core::storage::parquet::parquet_file::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
 pub type db_core::storage::parquet::parquet_file::Result<T> = core::result::Result<T, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::parquet::reader
 pub enum db_core::storage::parquet::reader::LeafScalar
@@ -4997,7 +5013,7 @@ pub db_core::storage::parquet::reader::LeafScalar::Double(f64)
 pub db_core::storage::parquet::reader::LeafScalar::Float(f32)
 pub db_core::storage::parquet::reader::LeafScalar::Int32(i32)
 pub db_core::storage::parquet::reader::LeafScalar::Int64(i64)
-pub db_core::storage::parquet::reader::LeafScalar::Str(alloc::string::String)
+pub db_core::storage::parquet::reader::LeafScalar::Str(alloc::rcs::arc::Arc<str>)
 impl core::clone::Clone for db_core::storage::parquet::reader::LeafScalar
 pub fn db_core::storage::parquet::reader::LeafScalar::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::storage::parquet::reader::LeafScalar
@@ -5137,7 +5153,7 @@ pub fn db_core::storage::parquet::schema::ColumnSpec::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::parquet::schema::ColumnSpec
 pub fn db_core::storage::parquet::schema::ColumnSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::schema::ColumnSpec
-pub type db_core::storage::parquet::schema::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
+pub type db_core::storage::parquet::schema::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
 pub mod db_core::storage::parquet::schema_tree
 pub struct db_core::storage::parquet::schema_tree::SchemaNode
 pub db_core::storage::parquet::schema_tree::SchemaNode::children: alloc::vec::Vec<db_core::storage::parquet::schema_tree::SchemaNode>
@@ -5375,7 +5391,7 @@ pub fn db_core::storage::parquet::writer::WriterOptions::default() -> Self
 impl core::fmt::Debug for db_core::storage::parquet::writer::WriterOptions
 pub fn db_core::storage::parquet::writer::WriterOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::writer::WriterOptions
-pub type db_core::storage::parquet::writer::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
+pub type db_core::storage::parquet::writer::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
 pub enum db_core::storage::parquet::FileError
 pub db_core::storage::parquet::FileError::ChunkOutOfBounds
 pub db_core::storage::parquet::FileError::ColumnIndexOutOfRange(usize)
@@ -5391,6 +5407,10 @@ pub db_core::storage::parquet::FileError::MissingTypeLength
 pub db_core::storage::parquet::FileError::Nested(db_core::storage::parquet::nested::NestedError)
 pub db_core::storage::parquet::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::parquet::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::parquet::FileError::PageExceedsChunk
+pub db_core::storage::parquet::FileError::PageExceedsChunk::declared: u64
+pub db_core::storage::parquet::FileError::PageExceedsChunk::field: &'static str
+pub db_core::storage::parquet::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::parquet::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::parquet::FileError::TimestampOutOfRange
@@ -7527,6 +7547,10 @@ pub db_core::storage::FileError::MissingTypeLength
 pub db_core::storage::FileError::Nested(db_core::storage::parquet::nested::NestedError)
 pub db_core::storage::FileError::NotAStringMap(alloc::string::String)
 pub db_core::storage::FileError::Page(db_core::storage::parquet::page::PageError)
+pub db_core::storage::FileError::PageExceedsChunk
+pub db_core::storage::FileError::PageExceedsChunk::declared: u64
+pub db_core::storage::FileError::PageExceedsChunk::field: &'static str
+pub db_core::storage::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::FileError::Read(db_core::storage::parquet::reader::ReadError)
 pub db_core::storage::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::FileError::TimestampOutOfRange
@@ -8352,7 +8376,7 @@ pub fn db_core::vm::batch::run_parallel<S: db_core::vm::batch::Segment>(&[S], &[
 pub fn db_core::vm::batch::run_parallel_streaming<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], impl core::ops::function::FnMut(db_core::vm::batch::Chunk) -> db_core::vm::batch::Result<()>) -> db_core::vm::batch::Result<()>
 pub fn db_core::vm::batch::run_parallel_top_n<S: db_core::vm::batch::Segment>(&[S], &[db_core::vm::batch::Opcode], &db_core::vm::batch::TopN) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub type db_core::vm::batch::Chunk = alloc::vec::Vec<alloc::rcs::arc::Arc<alloc::vec::Vec<db_core::vm::batch::Value>>>
-pub type db_core::vm::batch::MapEntries = alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>
+pub type db_core::vm::batch::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
 pub type db_core::vm::batch::Result<T> = core::result::Result<T, db_core::vm::batch::VmError>
 pub mod db_core::vm::column
 pub enum db_core::vm::column::Column

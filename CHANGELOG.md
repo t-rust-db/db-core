@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.154.0] - 2026-10-21
+
+### Fixed
+
+- **A small Parquet file can no longer expand past what its metadata states** (#671). Every page of a column chunk is checked before it is decompressed: a data page's `num_values` against what the row group's rows leave (a nested leaf: the chunk's `num_values`), and every page's `uncompressed_page_size` against what the chunk's `total_uncompressed_size` leaves. A page that claims more is `FileError::PageExceedsChunk`. This closes RLE and zero-bit-width runs that expanded to `i32::MAX` values, and ZSTD pages that grew to their header's size (the 64 MiB cap of #657 bounded only the first allocation).
+- **Dictionary strings are decoded once, not per row** (#671, #686). The engine's late-materialization path gathers dictionary codes into a dictionary column instead of decoding the whole chunk, and a writer's `PLAIN` fallback page after a dictionary extends the dictionary rather than dropping to a per-row copy. Nested and `MAP` string leaves share one allocation per dictionary entry.
+
+### Changed
+
+- **Breaking:** `LeafScalar::Str` holds an `Arc<str>`, and `MapEntries` (the Parquet reader's, the writer's `ColumnValues::Map` and the VM's `Value::Map`) is `Vec<(Arc<str>, Option<Arc<str>>)>`. Build them with `.into()` from a `&str` or `String`; `RecordValue::Map` keeps owned strings.
+
 ## [0.153.0] - 2026-10-21
 
 ### Added

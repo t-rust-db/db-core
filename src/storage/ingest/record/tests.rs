@@ -286,7 +286,7 @@ fn a_map_column_takes_only_a_map() {
     page.push(2, vec![RecordValue::Null]);
     assert_eq!(
         page.engine_column("h").unwrap().unwrap(),
-        [Value::Map(Arc::new(entries(&[("a", None)]))), Value::Null]
+        [Value::Map(Arc::new(vec![("a".into(), None)])), Value::Null]
     );
     // Truncated map bytes are not a row.
     let bytes = encode_row(&[RecordValue::Map(entries(&[("k", Some("v"))]))]).unwrap();

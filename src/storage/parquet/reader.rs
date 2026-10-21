@@ -9,6 +9,7 @@
 use crate::storage::parquet::encoding::{self, EncodingError};
 use crate::storage::parquet::page::{DataPageHeader, Encoding};
 use std::fmt;
+use std::sync::Arc;
 
 /// Why a page body could not be decoded.
 #[derive(Debug)]
@@ -133,8 +134,9 @@ pub enum LeafScalar {
     Double(f64),
     /// A `BOOLEAN` value.
     Bool(bool),
-    /// A `BYTE_ARRAY` value, which must be UTF-8.
-    Str(String),
+    /// A `BYTE_ARRAY` value, which must be UTF-8: shared, so a dictionary
+    /// entry is one allocation however many rows hold it (#671).
+    Str(Arc<str>),
 }
 
 /// Read one PLAIN-encoded scalar of `physical_type` from `buf`, advancing
@@ -151,7 +153,7 @@ pub fn read_plain_scalar(
         PhysicalType::Int64 => Ok(LeafScalar::Int64(read_plain_i64(buf)?)),
         PhysicalType::Float => Ok(LeafScalar::Float(read_plain_f32(buf)?)),
         PhysicalType::Double => Ok(LeafScalar::Double(read_plain_f64(buf)?)),
-        PhysicalType::ByteArray => Ok(LeafScalar::Str(read_plain_string(buf)?)),
+        PhysicalType::ByteArray => Ok(LeafScalar::Str(read_plain_string(buf)?.into())),
         PhysicalType::Boolean => {
             let byte = *buf.first().ok_or(ReadError::UnexpectedEof)?;
             let bit = (byte >> (*bit_pos % 8)) & 1;

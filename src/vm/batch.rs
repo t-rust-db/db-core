@@ -115,8 +115,9 @@ pub enum Value {
     },
 }
 
-/// A map value's `(key, value)` entries, in order.
-pub type MapEntries = Vec<(String, Option<String>)>;
+/// A map value's `(key, value)` entries, in order: the Parquet reader's
+/// shared strings (#671).
+pub type MapEntries = Vec<(Arc<str>, Option<Arc<str>>)>;
 
 /// Structural equality, except that two decimals are equal when their
 /// values are (`1.50 == 1.5`, #632): what `GROUP BY` and join keys need.

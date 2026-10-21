@@ -21,6 +21,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use db_core::engine::column::BatchEngine;
@@ -48,14 +49,17 @@ fn headers(rng: &mut Rng, i: u64) -> MapEntries {
     let mut h: MapEntries = vec![
         (
             "Host".into(),
-            Some(format!("api{}.example.com", rng.below(10))),
+            Some(Arc::<str>::from(format!(
+                "api{}.example.com",
+                rng.below(10)
+            ))),
         ),
         (
             "User-Agent".into(),
-            Some(format!(
+            Some(Arc::<str>::from(format!(
                 "Mozilla/5.0 (agent {}) Gecko/20100101",
                 rng.below(50)
-            )),
+            ))),
         ),
         (
             "Accept".into(),
@@ -64,40 +68,52 @@ fn headers(rng: &mut Rng, i: u64) -> MapEntries {
         ("Accept-Encoding".into(), Some("gzip, deflate, br".into())),
         (
             "Accept-Language".into(),
-            Some(format!("en-US,en;q=0.{}", rng.below(9) + 1)),
+            Some(Arc::<str>::from(format!(
+                "en-US,en;q=0.{}",
+                rng.below(9) + 1
+            ))),
         ),
         (
             "X-Request-Id".into(),
-            Some(format!("{:016x}", i.wrapping_mul(0x9E37_79B9_7F4A_7C15))),
+            Some(Arc::<str>::from(format!(
+                "{:016x}",
+                i.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ))),
         ),
     ];
     if rng.below(10) < 7 {
         h.push((
             "Cookie".into(),
-            Some(format!("session={:x}; theme=dark", rng.below(1 << 40))),
+            Some(Arc::<str>::from(format!(
+                "session={:x}; theme=dark",
+                rng.below(1 << 40)
+            ))),
         ));
     }
     if rng.below(10) < 6 {
         h.push((
             "Referer".into(),
-            Some(format!("https://example.com/page/{}", rng.below(100))),
+            Some(Arc::<str>::from(format!(
+                "https://example.com/page/{}",
+                rng.below(100)
+            ))),
         ));
     }
     if rng.below(10) < 5 {
         h.push((
             "X-Forwarded-For".into(),
-            Some(format!(
+            Some(Arc::<str>::from(format!(
                 "10.{}.{}.{}",
                 rng.below(4),
                 rng.below(256),
                 rng.below(256)
-            )),
+            ))),
         ));
     }
     if rng.below(10) < 3 {
         h.push((
             "Authorization".into(),
-            Some(format!("Bearer {:x}", rng.below(1 << 48))),
+            Some(Arc::<str>::from(format!("Bearer {:x}", rng.below(1 << 48)))),
         ));
     }
     if rng.below(10) < 4 {
@@ -169,8 +185,8 @@ fn run() -> Result<(), String> {
     for (i, row) in rows.iter().enumerate() {
         for (k, v) in row {
             ids.push(Some(i as u64));
-            names.push(Some(k.clone()));
-            values.push(v.clone());
+            names.push(Some(k.to_string()));
+            values.push(v.as_ref().map(|v| v.to_string()));
         }
     }
     let flat_bytes = write(

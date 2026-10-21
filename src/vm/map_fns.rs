@@ -54,7 +54,7 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
             Value::Str(text.into())
         }
         ("map_keys", None) => {
-            let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+            let keys: Vec<&str> = entries.iter().map(|(k, _)| &**k).collect();
             Value::Str(format!("[{}]", keys.join(", ")).into())
         }
         ("cardinality", None) => Value::Int(i64::try_from(entries.len()).unwrap_or(i64::MAX)),
@@ -85,9 +85,9 @@ mod tests {
 
     fn m() -> Value {
         Value::Map(Arc::new(vec![
-            ("User-Agent".to_string(), Some("curl/8".to_string())),
-            ("B".to_string(), None),
-            ("ä".to_string(), Some("x".to_string())),
+            ("User-Agent".into(), Some("curl/8".into())),
+            ("B".into(), None),
+            ("ä".into(), Some("x".into())),
         ]))
     }
 

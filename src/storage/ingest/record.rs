@@ -492,7 +492,12 @@ fn push_value(column: &mut ColumnValues, value: RecordValue) {
             _ => None,
         }),
         ColumnValues::Map(c) => c.push(match value {
-            V::Map(entries) => Some(entries),
+            V::Map(entries) => Some(
+                entries
+                    .into_iter()
+                    .map(|(k, v)| (k.into(), v.map(Into::into)))
+                    .collect(),
+            ),
             _ => None,
         }),
     }

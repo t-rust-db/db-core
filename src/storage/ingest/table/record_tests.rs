@@ -154,7 +154,13 @@ fn value_at(values: &ColumnValues, i: usize) -> RecordValue {
             at(v, i).map(RecordValue::Bytes)
         }
         ColumnValues::Decimal(v) => at(v, i).map(RecordValue::Decimal),
-        ColumnValues::Map(v) => at(v, i).map(RecordValue::Map),
+        ColumnValues::Map(v) => at(v, i).map(|m| {
+            RecordValue::Map(
+                m.into_iter()
+                    .map(|(k, v)| (k.to_string(), v.map(|v| v.to_string())))
+                    .collect(),
+            )
+        }),
         other => panic!("not in the test schema: {other:?}"),
     };
     v.unwrap_or(RecordValue::Null)
