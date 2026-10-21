@@ -86,8 +86,8 @@ pub(crate) fn leaves(spec: &ColumnSpec, values: ColumnValues) -> Vec<Leaf> {
                     rep.push(u32::from(j > 0));
                     key_def.push(entry);
                     value_def.push(if value.is_some() { present } else { entry });
-                    keys.push(Some(key));
-                    values.push(value);
+                    keys.push(Some(key.to_string()));
+                    values.push(value.map(|v| v.to_string()));
                 }
             }
         }
@@ -126,12 +126,13 @@ pub(crate) fn leaf_count(t: ColumnType) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::parquet::schema::MapEntries;
 
-    fn map(entries: &[(&str, Option<&str>)]) -> Option<Vec<(String, Option<String>)>> {
+    fn map(entries: &[(&str, Option<&str>)]) -> Option<MapEntries> {
         Some(
             entries
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+                .map(|(k, v)| ((*k).into(), v.map(Into::into)))
                 .collect(),
         )
     }

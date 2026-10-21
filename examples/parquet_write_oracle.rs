@@ -26,7 +26,7 @@ use db_core::storage::ingest::Ack;
 use db_core::storage::ingest::{Layout, RecordValue, TableOptions, TableWriter, TierOptions};
 use db_core::storage::parquet::footer::PhysicalType;
 use db_core::storage::parquet::writer::{
-    ColumnSpec, ColumnType, ColumnValues, Compression, ParquetWriter, WriterOptions,
+    ColumnSpec, ColumnType, ColumnValues, Compression, MapEntries, ParquetWriter, WriterOptions,
 };
 use db_core::storage::parquet::ParquetFile;
 
@@ -228,15 +228,15 @@ fn map_batch() -> Vec<ColumnValues> {
     let entries = |e: &[(&str, Option<&str>)]| {
         Some(
             e.iter()
-                .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
-                .collect::<Vec<_>>(),
+                .map(|(k, v)| ((*k).into(), v.map(Into::into)))
+                .collect::<MapEntries>(),
         )
     };
-    let hundred: Vec<(String, Option<String>)> = (0..100)
+    let hundred: MapEntries = (0..100)
         .map(|i| {
             (
-                format!("key{i:03}"),
-                (i % 7 != 0).then(|| format!("v{}", i % 5)),
+                format!("key{i:03}").into(),
+                (i % 7 != 0).then(|| format!("v{}", i % 5).into()),
             )
         })
         .collect();

@@ -9,6 +9,7 @@ use crate::storage::parquet::reader::{self, ReadError};
 use crate::storage::parquet::schema_tree::{self, SchemaNode};
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::Arc;
 
 /// Why a Parquet file, or one of its column chunks, could not be read.
 #[derive(Debug)]
@@ -67,6 +68,19 @@ pub enum FileError {
     NotAStringMap(String),
     /// Nested values could not be rebuilt from a leaf's levels.
     Nested(NestedError),
+    /// A page declares more than its column chunk has left (#671): more
+    /// values than the row group's rows, or more uncompressed bytes than
+    /// the chunk's `total_uncompressed_size`. Refused before the page is
+    /// decompressed or decoded, so a small file cannot expand past what
+    /// its metadata states.
+    PageExceedsChunk {
+        /// Which page-header field.
+        field: &'static str,
+        /// The page's value.
+        declared: u64,
+        /// What the chunk had left.
+        left: u64,
+    },
 }
 
 impl fmt::Display for FileError {
@@ -124,6 +138,14 @@ impl fmt::Display for FileError {
                 "unsupported encoding for a nested/repeated leaf column: {e:?}"
             ),
             FileError::Nested(e) => write!(f, "{e}"),
+            FileError::PageExceedsChunk {
+                field,
+                declared,
+                left,
+            } => write!(
+                f,
+                "page {field} {declared} is more than its column chunk has left ({left})"
+            ),
         }
     }
 }
@@ -205,6 +227,73 @@ fn next_page(chunk_bytes: &[u8], pos: usize) -> Result<(page::PageHeader, &[u8],
     Ok((header, compressed, page_end))
 }
 
+/// A column chunk's pages in order (#671), each checked before it is
+/// decompressed against what the chunk has left: a data page's
+/// `num_values` against the values budget (the row group's rows for a
+/// flat column, the chunk's `num_values` for a nested leaf), and every
+/// page's `uncompressed_page_size` against the chunk's
+/// `total_uncompressed_size`. Decoding then never expands past what the
+/// metadata states: an RLE run or a zero-width page fills at most the
+/// values left, a ZSTD page at most the bytes left.
+struct Pages<'a> {
+    chunk: &'a [u8],
+    pos: usize,
+    codec: footer::Codec,
+    values_left: u64,
+    bytes_left: u64,
+}
+
+impl<'a> Pages<'a> {
+    /// The next page's header and (still compressed) body.
+    fn next(&mut self) -> Result<Option<(page::PageHeader, &'a [u8])>> {
+        if self.pos >= self.chunk.len() {
+            return Ok(None);
+        }
+        let (header, compressed, end) = next_page(self.chunk, self.pos)?;
+        let bytes = page_size("uncompressed_page_size", header.uncompressed_page_size)?;
+        self.bytes_left = spend(self.bytes_left, bytes as u64, "uncompressed_page_size")?;
+        if let PageType::Data(data_page_header) = &header.page_type {
+            let values = u64::try_from(data_page_header.num_values).map_err(|_| {
+                FileError::InvalidMetadata {
+                    field: "data_page.num_values",
+                    value: i64::from(data_page_header.num_values),
+                }
+            })?;
+            self.values_left = spend(self.values_left, values, "num_values")?;
+        }
+        self.pos = end;
+        Ok(Some((header, compressed)))
+    }
+
+    /// A page body, decompressed to its `uncompressed_page_size`.
+    fn body(
+        &self,
+        compressed: &'a [u8],
+        uncompressed_page_size: i32,
+    ) -> Result<std::borrow::Cow<'a, [u8]>> {
+        Ok(compression::decompress(
+            self.codec,
+            compressed,
+            page_size("uncompressed_page_size", uncompressed_page_size)?,
+        )?)
+    }
+}
+
+/// `left` less a page's `declared` amount, or the page exceeds its chunk.
+fn spend(left: u64, declared: u64, field: &'static str) -> Result<u64> {
+    left.checked_sub(declared)
+        .ok_or(FileError::PageExceedsChunk {
+            field,
+            declared,
+            left,
+        })
+}
+
+/// A footer count as `u64`: negative is invalid metadata.
+fn count(field: &'static str, value: i64) -> Result<u64> {
+    u64::try_from(value).map_err(|_| FileError::InvalidMetadata { field, value })
+}
+
 /// ADR-0026 v1 positional read: gathers `positions` out of an
 /// already-decoded whole column, in the order given. `positions` are row
 /// indices into `full`'s own numbering (0-based within the row group).
@@ -247,8 +336,10 @@ pub struct ParquetFile<'a> {
     leaf_max_def: Vec<u32>,
 }
 
-/// A map's `(key, value)` entries, in order; a value may be NULL.
-pub type MapEntries = Vec<(String, Option<String>)>;
+/// A map's `(key, value)` entries, in order; a value may be NULL. Keys
+/// and values are shared: a dictionary string is one allocation however
+/// many maps hold it (#671).
+pub type MapEntries = Vec<(Arc<str>, Option<Arc<str>>)>;
 
 /// One top-level field of a file: a leaf column, or a group (struct, list,
 /// map) and the leaves (column chunks) it spans.
@@ -521,6 +612,26 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             .ok_or(FileError::ChunkOutOfBounds)
     }
 
+    /// The pages of column chunk `column_index`, budgeted by `values`.
+    fn pages_with(&self, column_index: usize, values: u64) -> Result<Pages<'a>> {
+        let meta = self.column_meta(column_index)?;
+        Ok(Pages {
+            chunk: self.column_chunk_bytes(column_index)?,
+            pos: 0,
+            codec: meta.codec,
+            values_left: values,
+            bytes_left: count(
+                "column_chunk.total_uncompressed_size",
+                meta.total_uncompressed_size,
+            )?,
+        })
+    }
+
+    /// The pages of flat column chunk `column_index`: one value per row.
+    fn pages(&self, column_index: usize) -> Result<Pages<'a>> {
+        self.pages_with(column_index, count("row_group.num_rows", self.num_rows())?)
+    }
+
     /// Decode every page in a column chunk into typed values, concatenating
     /// them in page order. Pages before a dictionary page appears (or when
     /// there is none) go through `decode_plain`; once a `DICTIONARY_PAGE`
@@ -535,24 +646,16 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         decode_dictionary: impl Fn(&[u8], i32) -> reader::Result<Vec<T>>,
         decode_data: impl Fn(&[u8], &page::DataPageHeader, u32, &[T]) -> reader::Result<Vec<Option<T>>>,
     ) -> Result<Vec<Option<T>>> {
-        let codec = self.column_meta(column_index)?.codec;
-        let chunk_bytes = self.column_chunk_bytes(column_index)?;
+        let mut pages = self.pages(column_index)?;
         let max_def_level = self.file.max_definition_level(column_index);
 
-        let mut pos = 0usize;
         let mut dictionary: Option<Vec<T>> = None;
         let mut out: Vec<Option<T>> = Vec::new();
 
-        while pos < chunk_bytes.len() {
-            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
-
+        while let Some((header, compressed)) = pages.next()? {
             match header.page_type {
                 PageType::Data(data_page_header) => {
-                    let page_body = compression::decompress(
-                        codec,
-                        compressed,
-                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-                    )?;
+                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;
                     let is_dictionary_encoded = matches!(
                         data_page_header.encoding,
                         page::Encoding::PlainDictionary | page::Encoding::RleDictionary
@@ -570,18 +673,13 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     if dictionary.is_some() {
                         return Err(FileError::UnexpectedDictionaryPage);
                     }
-                    let dictionary_body = compression::decompress(
-                        codec,
-                        compressed,
-                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-                    )?;
+                    let dictionary_body = pages.body(compressed, header.uncompressed_page_size)?;
                     dictionary = Some(decode_dictionary(
                         &dictionary_body,
                         dictionary_page_header.num_values,
                     )?);
                 }
             }
-            pos = page_end;
         }
         Ok(out)
     }
@@ -601,26 +699,19 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         column_index: usize,
         decode: impl Fn([u8; N]) -> T,
     ) -> Result<Option<(Vec<T>, Vec<bool>)>> {
-        let codec = self.column_meta(column_index)?.codec;
-        let chunk_bytes = self.column_chunk_bytes(column_index)?;
+        let mut pages = self.pages(column_index)?;
         let max_def_level = self.file.max_definition_level(column_index);
 
-        let mut pos = 0usize;
         let mut values = Vec::new();
         let mut present = Vec::new();
-        while pos < chunk_bytes.len() {
-            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
+        while let Some((header, compressed)) = pages.next()? {
             let PageType::Data(data_page_header) = header.page_type else {
                 return Ok(None);
             };
             if data_page_header.encoding != page::Encoding::Plain {
                 return Ok(None);
             }
-            let page_body = compression::decompress(
-                codec,
-                compressed,
-                page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-            )?;
+            let page_body = pages.body(compressed, header.uncompressed_page_size)?;
             reader::read_plain_fixed(
                 &page_body,
                 &data_page_header,
@@ -629,7 +720,6 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                 &mut values,
                 &mut present,
             )?;
-            pos = page_end;
         }
         Ok(Some((values, present)))
     }
@@ -651,8 +741,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         decode: impl Fn([u8; N]) -> T,
         positions: &[u32],
     ) -> Result<Option<(Vec<T>, Vec<bool>)>> {
-        let codec = self.column_meta(column_index)?.codec;
-        let chunk_bytes = self.column_chunk_bytes(column_index)?;
+        let mut pages = self.pages(column_index)?;
         let max_def_level = self.file.max_definition_level(column_index);
 
         let mut wanted: Vec<(u32, usize)> = positions
@@ -664,12 +753,13 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         let mut values = vec![T::default(); positions.len()];
         let mut present = vec![false; positions.len()];
 
-        let mut pos = 0usize;
         let mut row_base = 0u32;
         // The wanted rows not yet read, still sorted by position.
         let mut remaining: &[(u32, usize)] = &wanted;
-        while pos < chunk_bytes.len() && !remaining.is_empty() {
-            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
+        while !remaining.is_empty() {
+            let Some((header, compressed)) = pages.next()? else {
+                break;
+            };
             let PageType::Data(data_page_header) = header.page_type else {
                 return Ok(None);
             };
@@ -702,11 +792,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                 })
                 .collect::<Result<Vec<(u32, usize)>>>()?;
             if !rows.is_empty() {
-                let page_body = compression::decompress(
-                    codec,
-                    compressed,
-                    page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-                )?;
+                let page_body = pages.body(compressed, header.uncompressed_page_size)?;
                 reader::read_plain_fixed_at(
                     &page_body,
                     &data_page_header,
@@ -718,7 +804,6 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                 )?;
             }
             row_base = page_end_row;
-            pos = page_end;
         }
         if let Some(&(position, _)) = remaining.first() {
             return Err(FileError::RowPositionOutOfRange(position));
@@ -736,63 +821,75 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// `String`. Returns `None` when the column isn't dictionary-encoded
     /// (callers should fall back to the plain `read_*_column` in that case).
     /// Like [`Self::read_column`]'s dictionary path, but keeps indices raw.
-    /// Returns `None` (meaning: fall back to `read_*_column`) whenever the
-    /// chunk isn't dictionary-encoded throughout — no dictionary page at
-    /// all, or a dictionary-fallback to a `PLAIN` page partway through,
-    /// which can't be represented as dictionary indices.
+    /// Returns `None` (meaning: fall back to `read_*_column`) when the
+    /// chunk has no dictionary page before its first data page. A `PLAIN`
+    /// page after the dictionary (a writer's dictionary fallback) is
+    /// decoded with `decode_plain`, each value appended to the dictionary
+    /// as a new entry (#671: memory follows the file's bytes, never a
+    /// dictionary entry copied per row); without `decode_plain` it
+    /// returns `None` too.
+    #[allow(clippy::type_complexity)]
     fn read_column_dictionary_indices<T>(
         &self,
         column_index: usize,
         decode_dictionary: impl Fn(&[u8], i32) -> reader::Result<Vec<T>>,
+        decode_plain: Option<
+            &dyn Fn(&[u8], &page::DataPageHeader, u32) -> reader::Result<Vec<Option<T>>>,
+        >,
     ) -> Result<Option<DictionaryIndices<T>>> {
-        let codec = self.column_meta(column_index)?.codec;
-        let chunk_bytes = self.column_chunk_bytes(column_index)?;
+        let mut pages = self.pages(column_index)?;
         let max_def_level = self.file.max_definition_level(column_index);
 
-        let mut pos = 0usize;
         let mut dictionary: Option<Vec<T>> = None;
         let mut indices: Vec<Option<u32>> = Vec::new();
 
-        while pos < chunk_bytes.len() {
-            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
-
+        while let Some((header, compressed)) = pages.next()? {
             match header.page_type {
                 PageType::Data(data_page_header) => {
-                    if dictionary.is_none()
-                        || !matches!(
-                            data_page_header.encoding,
-                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary
-                        )
-                    {
+                    let Some(dict) = dictionary.as_mut() else {
                         return Ok(None);
+                    };
+                    let dictionary_encoded = matches!(
+                        data_page_header.encoding,
+                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary
+                    );
+                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;
+                    if dictionary_encoded {
+                        indices.extend(reader::read_dictionary_index_column(
+                            &page_body,
+                            &data_page_header,
+                            max_def_level,
+                        )?);
+                        continue;
                     }
-                    let page_body = compression::decompress(
-                        codec,
-                        compressed,
-                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-                    )?;
-                    indices.extend(reader::read_dictionary_index_column(
-                        &page_body,
-                        &data_page_header,
-                        max_def_level,
-                    )?);
+                    let Some(decode_plain) = decode_plain else {
+                        return Ok(None);
+                    };
+                    for value in decode_plain(&page_body, &data_page_header, max_def_level)? {
+                        let Some(value) = value else {
+                            indices.push(None);
+                            continue;
+                        };
+                        let index =
+                            u32::try_from(dict.len()).map_err(|_| FileError::InvalidMetadata {
+                                field: "dictionary entries",
+                                value: i64::try_from(dict.len()).unwrap_or(i64::MAX),
+                            })?;
+                        dict.push(value);
+                        indices.push(Some(index));
+                    }
                 }
                 PageType::Dictionary(dictionary_page_header) => {
                     if dictionary.is_some() {
                         return Err(FileError::UnexpectedDictionaryPage);
                     }
-                    let dictionary_body = compression::decompress(
-                        codec,
-                        compressed,
-                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-                    )?;
+                    let dictionary_body = pages.body(compressed, header.uncompressed_page_size)?;
                     dictionary = Some(decode_dictionary(
                         &dictionary_body,
                         dictionary_page_header.num_values,
                     )?);
                 }
             }
-            pos = page_end;
         }
 
         Ok(dictionary.map(|dict| (dict, indices)))
@@ -802,20 +899,21 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// (PLAIN encoding only — dictionary-encoded nested leaves aren't
     /// supported yet, see [`FileError::UnsupportedNestedDictionary`]).
     fn read_leaf_entries(&self, column_index: usize, leaf: &SchemaNode) -> Result<LeafEntries> {
-        let codec = self.column_meta(column_index)?.codec;
-        let chunk_bytes = self.column_chunk_bytes(column_index)?;
+        // A nested leaf has one value per level entry, not per row.
+        let leaf_values = count(
+            "column_chunk.num_values",
+            self.column_meta(column_index)?.num_values,
+        )?;
+        let mut pages = self.pages_with(column_index, leaf_values)?;
         let physical_type = leaf
             .element
             .physical_type
             .ok_or(FileError::MissingColumnMetadata)?;
 
-        let mut pos = 0usize;
         let mut out = LeafEntries::default();
         let mut dictionary: Option<Vec<reader::LeafScalar>> = None;
 
-        while pos < chunk_bytes.len() {
-            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
-
+        while let Some((header, compressed)) = pages.next()? {
             match header.page_type {
                 // #621: DuckDB and pyarrow dictionary-encode nested leaves
                 // (a map's keys) by default.
@@ -823,11 +921,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     if dictionary.is_some() {
                         return Err(FileError::UnexpectedDictionaryPage);
                     }
-                    let body = compression::decompress(
-                        codec,
-                        compressed,
-                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-                    )?;
+                    let body = pages.body(compressed, header.uncompressed_page_size)?;
                     let count =
                         usize::try_from(dictionary_page_header.num_values).map_err(|_| {
                             FileError::InvalidMetadata {
@@ -851,11 +945,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                         Encoding::PlainDictionary | Encoding::RleDictionary => true,
                         other => return Err(FileError::UnsupportedNestedEncoding(other)),
                     };
-                    let page_body = compression::decompress(
-                        codec,
-                        compressed,
-                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-                    )?;
+                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;
                     let (rep_levels, def_levels, mut value_bytes) = reader::split_rep_def_levels(
                         &page_body,
                         &data_page_header,
@@ -921,7 +1011,6 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     }
                 }
             }
-            pos = page_end;
         }
         Ok(out)
     }
@@ -988,7 +1077,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         &self,
         column_index: usize,
     ) -> Result<Option<DictionaryIndices<i64>>> {
-        self.read_column_dictionary_indices(column_index, reader::decode_dictionary_int64)
+        self.read_column_dictionary_indices(column_index, reader::decode_dictionary_int64, None)
     }
 
     /// A dictionary-encoded DOUBLE column's dictionary and per-row indices,
@@ -997,7 +1086,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         &self,
         column_index: usize,
     ) -> Result<Option<DictionaryIndices<f64>>> {
-        self.read_column_dictionary_indices(column_index, reader::decode_dictionary_double)
+        self.read_column_dictionary_indices(column_index, reader::decode_dictionary_double, None)
     }
 
     /// A dictionary-encoded BOOLEAN column's dictionary and per-row indices,
@@ -1006,16 +1095,22 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         &self,
         column_index: usize,
     ) -> Result<Option<DictionaryIndices<bool>>> {
-        self.read_column_dictionary_indices(column_index, reader::decode_dictionary_boolean)
+        self.read_column_dictionary_indices(column_index, reader::decode_dictionary_boolean, None)
     }
 
-    /// A dictionary-encoded BYTE_ARRAY (UTF-8 string) column's dictionary and per-row indices,
-    /// or `None` when the chunk is not dictionary-encoded throughout.
+    /// A BYTE_ARRAY (UTF-8 string) column's dictionary and per-row
+    /// indices, or `None` when the chunk has no dictionary page. Values of
+    /// `PLAIN` pages after the dictionary are appended to it, so each row's
+    /// value is still `dictionary[index]` (#671).
     pub fn read_string_column_dictionary_indices(
         &self,
         column_index: usize,
     ) -> Result<Option<DictionaryIndices<String>>> {
-        self.read_column_dictionary_indices(column_index, reader::decode_dictionary_string)
+        self.read_column_dictionary_indices(
+            column_index,
+            reader::decode_dictionary_string,
+            Some(&reader::read_string_column),
+        )
     }
 
     /// A column chunk's dictionary, decoded without reading its data pages,
@@ -1421,7 +1516,7 @@ mod tests {
         {
             assert_eq!(
                 read("m").unwrap(),
-                [Some(vec![("a".to_string(), Some("1".to_string()))])]
+                [Some(vec![("a".into(), Some("1".into()))])]
             );
         }
     }
@@ -2004,11 +2099,11 @@ mod tests {
         file
     }
 
-    // storage_parquet_parquet_file_read_plain_fixed_column_at_b943ac78: `pos < chunk_bytes.len() && !remaining.is_empty()`
+    // `read_plain_fixed_column_at` stops when its pages or its wanted rows
+    // run out (one condition each since #671).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_b943ac78__v1_pages_and_wanted_rows_remain_reads_across_pages_in_positions_order(
-    ) {
+    fn plain_fixed_at_reads_across_pages_in_positions_order() {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
         let rg = parsed.row_group(0).unwrap();
@@ -2028,8 +2123,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_b943ac78__v2_pages_run_out_with_a_row_still_wanted_is_out_of_range(
-    ) {
+    fn plain_fixed_at_pages_running_out_with_a_row_still_wanted_is_out_of_range() {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
         let rg = parsed.row_group(0).unwrap();
@@ -2044,8 +2138,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__storage_parquet_parquet_file_read_plain_fixed_column_at_b943ac78__v3_wanted_rows_run_out_first_stops_before_the_remaining_pages(
-    ) {
+    fn plain_fixed_at_wanted_rows_running_out_stops_before_the_remaining_pages() {
         let file = three_page_int64_file();
         let parsed = ParquetFile::open(&file).unwrap();
         let rg = parsed.row_group(0).unwrap();
@@ -2122,6 +2215,262 @@ mod tests {
         file
     }
 
+    /// A REQUIRED INT64 dictionary chunk of `[10, 20, 30]` whose one data
+    /// page claims `num_values` and holds `data_body`; its
+    /// `total_uncompressed_size` is its page bytes (#671's crafted files).
+    fn dictionary_chunk_claiming(num_values: i32, data_body: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut dict_body = Vec::new();
+        for v in [10i64, 20, 30] {
+            dict_body.extend_from_slice(&v.to_le_bytes());
+        }
+        let mut page_bytes = build_dictionary_page_header(3, dict_body.len() as i32);
+        page_bytes.extend_from_slice(&dict_body);
+        page_bytes.extend_from_slice(&build_dictionary_encoded_data_page_header(
+            num_values,
+            data_body.len() as i32,
+        ));
+        page_bytes.extend_from_slice(data_body);
+        let mut meta = StructWriter::new();
+        meta.i32_field(1, 2); // INT64
+        meta.field_header(3, 0x09);
+        meta.buf.push((1u8 << 4) | 0x08);
+        meta.write_varint(1);
+        meta.buf.push(b'v');
+        meta.i64_field(5, 3);
+        meta.i64_field(6, page_bytes.len() as i64);
+        meta.i64_field(7, page_bytes.len() as i64);
+        meta.i64_field(9, 4);
+        (page_bytes, meta.finish())
+    }
+
+    /// The error reading leaf 0 of a 3-row file built from `chunk`.
+    fn three_row_error((page_bytes, meta_bytes): (Vec<u8>, Vec<u8>)) -> FileError {
+        let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        rg.read_int64_column(0).unwrap_err()
+    }
+
+    #[test]
+    fn an_rle_run_claiming_more_values_than_rows_is_refused_before_decoding() {
+        // Bit width 2, then one RLE run of i32::MAX copies of index 1: a
+        // 7-byte body that used to expand to ~8 GiB of indices.
+        let mut body = vec![2u8];
+        let mut run = (i32::MAX as u64) << 1;
+        while run >= 0x80 {
+            body.push((run as u8) | 0x80);
+            run >>= 7;
+        }
+        body.push(run as u8);
+        body.push(1);
+        let err = three_row_error(dictionary_chunk_claiming(i32::MAX, &body));
+        assert!(
+            matches!(
+                err,
+                FileError::PageExceedsChunk {
+                    field: "num_values",
+                    declared: 2_147_483_647,
+                    left: 3,
+                }
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            "page num_values 2147483647 is more than its column chunk has left (3)"
+        );
+    }
+
+    #[test]
+    fn a_zero_bit_width_page_claiming_more_values_than_rows_is_refused() {
+        // Bit width 0 needs no data at all: one byte claims every value.
+        let err = three_row_error(dictionary_chunk_claiming(1 << 30, &[0u8]));
+        assert!(
+            matches!(
+                err,
+                FileError::PageExceedsChunk {
+                    field: "num_values",
+                    left: 3,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn pages_together_claiming_more_values_than_rows_are_refused() {
+        // Two pages of two values each in a 3-row group: the second is
+        // refused with one value left.
+        let (page_bytes, meta_bytes) = build_int64_chunk_multi_page(&[&[1, 2], &[3, 4]], 4);
+        let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let err = file.row_group(0).unwrap().read_int64_column(0).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FileError::PageExceedsChunk {
+                    field: "num_values",
+                    declared: 2,
+                    left: 1,
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_zstd_page_larger_than_its_chunk_is_refused_before_decompressing() {
+        // A data page declaring 1 GiB uncompressed in a chunk whose
+        // metadata says it holds a few dozen bytes.
+        let body = [0x28u8, 0xb5, 0x2f, 0xfd, 0, 0, 0, 0];
+        let mut dph = StructWriter::new();
+        dph.i32_field(1, 3);
+        dph.i32_field(2, 0);
+        dph.i32_field(3, 3);
+        dph.i32_field(4, 3);
+        let mut header = StructWriter::new();
+        header.i32_field(1, 0); // DATA_PAGE
+        header.i32_field(2, 1 << 30); // uncompressed_page_size
+        header.i32_field(3, body.len() as i32); // compressed_page_size
+        header.struct_field(5, dph.finish());
+        let mut page_bytes = header.finish();
+        page_bytes.extend_from_slice(&body);
+        let mut meta = StructWriter::new();
+        meta.i32_field(1, 2); // INT64
+        meta.field_header(3, 0x09);
+        meta.buf.push((1u8 << 4) | 0x08);
+        meta.write_varint(1);
+        meta.buf.push(b'v');
+        meta.i32_field(4, 6); // codec = ZSTD
+        meta.i64_field(5, 3);
+        meta.i64_field(6, page_bytes.len() as i64);
+        meta.i64_field(7, page_bytes.len() as i64);
+        meta.i64_field(9, 4);
+        let err = three_row_error((page_bytes, meta.finish()));
+        assert!(
+            matches!(
+                err,
+                FileError::PageExceedsChunk {
+                    field: "uncompressed_page_size",
+                    declared: 1_073_741_824,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn negative_chunk_budgets_are_invalid_metadata() {
+        let (page_bytes, meta_bytes) = build_int64_chunk(&[1, 2, 3], 4);
+        let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, -1);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let err = file.row_group(0).unwrap().read_int64_column(0).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FileError::InvalidMetadata {
+                    field: "row_group.num_rows",
+                    value: -1,
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn plain_pages_after_a_string_dictionary_extend_it_rather_than_fall_back() {
+        // A dictionary of ["east", "west"], a dictionary page of indices
+        // [1, 0], then a writer's PLAIN fallback page ["north", "east"].
+        let plain = |values: &[&str]| {
+            let mut body = Vec::new();
+            for v in values {
+                body.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                body.extend_from_slice(v.as_bytes());
+            }
+            body
+        };
+        let dict_body = plain(&["east", "west"]);
+        let mut page_bytes = build_dictionary_page_header(2, dict_body.len() as i32);
+        page_bytes.extend_from_slice(&dict_body);
+        let indices = encode_dictionary_indices(&[1, 0], 1);
+        page_bytes.extend_from_slice(&build_dictionary_encoded_data_page_header(
+            2,
+            indices.len() as i32,
+        ));
+        page_bytes.extend_from_slice(&indices);
+        let fallback = plain(&["north", "east"]);
+        page_bytes.extend_from_slice(&build_page_header(2, fallback.len() as i32));
+        page_bytes.extend_from_slice(&fallback);
+        let mut meta = StructWriter::new();
+        meta.i32_field(1, 6); // BYTE_ARRAY
+        meta.field_header(3, 0x09);
+        meta.buf.push((1u8 << 4) | 0x08);
+        meta.write_varint(1);
+        meta.buf.push(b'v');
+        meta.i64_field(5, 4);
+        meta.i64_field(6, page_bytes.len() as i64);
+        meta.i64_field(7, page_bytes.len() as i64);
+        meta.i64_field(9, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta.finish(), 4, 6, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let (dict, codes) = rg
+            .read_string_column_dictionary_indices(0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(dict, ["east", "west", "north", "east"]);
+        assert_eq!(codes, [Some(1), Some(0), Some(2), Some(3)]);
+        let resolved: Vec<Option<String>> = codes
+            .iter()
+            .map(|c| c.map(|i| dict[i as usize].clone()))
+            .collect();
+        assert_eq!(resolved, rg.read_string_column(0).unwrap());
+        // Other types keep falling back: their callers have no plain path.
+        assert_eq!(
+            rg.read_int64_column_dictionary_indices(0).ok().flatten(),
+            None
+        );
+    }
+
+    #[test]
+    fn map_strings_from_a_dictionary_are_shared_across_rows() {
+        // #671: one long header value in every row's map is one allocation,
+        // not a copy per row.
+        use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+        use crate::storage::parquet::writer::{ParquetWriter, WriterOptions};
+        let long: Arc<str> = "v".repeat(10_000).into();
+        let rows: Vec<Option<MapEntries>> = (0..200)
+            .map(|i| {
+                Some(vec![
+                    ("k".into(), Some(Arc::clone(&long))),
+                    (format!("n{}", i % 2).into(), None),
+                ])
+            })
+            .collect();
+        let mut w = ParquetWriter::new(
+            Vec::new(),
+            vec![ColumnSpec::new("h", ColumnType::MapUtf8, true)],
+            WriterOptions::default(),
+        )
+        .unwrap();
+        w.write_columns(vec![ColumnValues::Map(rows.clone())])
+            .unwrap();
+        let (bytes, _) = w.finish().unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let field = file.fields().into_iter().find(|f| f.name == "h").unwrap();
+        let read = file
+            .row_group(0)
+            .unwrap()
+            .read_map_utf8_column(&field)
+            .unwrap();
+        assert_eq!(read, rows);
+        let value = |row: &Option<MapEntries>| row.as_ref().unwrap()[0].1.clone().unwrap();
+        let first = value(&read[0]);
+        assert!(read.iter().all(|row| Arc::ptr_eq(&value(row), &first)));
+    }
+
     #[allow(non_snake_case)]
     mod mcdc_vectors {
         //! Tagged MC/DC vectors for this file's multi-leaf decisions
@@ -2131,10 +2480,10 @@ mod tests {
 
         use super::*;
 
-        // storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0: `dictionary.is_none() || !matches!(data_page_header.encoding, PlainDictionary | RleDictionary)`
+        // `read_column_dictionary_indices` (no longer a multi-leaf decision
+        // since #671; kept as behaviour tests).
         #[test]
-        fn mcdc__storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v1_both_false_returns_the_dictionary(
-        ) {
+        fn dictionary_indices_of_a_dictionary_chunk_return_the_dictionary() {
             let (page_bytes, meta_bytes) =
                 build_int64_dictionary_chunk(&[10, 20, 30], &[2, 0, 1], 4);
             let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, 3);
@@ -2148,8 +2497,7 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v2_no_dictionary_page_returns_none(
-        ) {
+        fn dictionary_indices_of_a_plain_chunk_are_none() {
             // A plain (non-dictionary) chunk: the first Data page arrives
             // with `dictionary` still `None`, so the `||`'s first leaf
             // alone must short-circuit to `None` regardless of encoding.
@@ -2163,8 +2511,7 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__storage_parquet_parquet_file_read_column_dictionary_indices_1b5585c0__v3_dictionary_present_but_plain_data_page_returns_none(
-        ) {
+        fn dictionary_indices_after_a_plain_fallback_without_a_plain_decoder_are_none() {
             // A dictionary page followed by a *PLAIN* (not
             // PLAIN_DICTIONARY) data page: `dictionary.is_none()` is
             // false, but the encoding check is true, so the `||` must

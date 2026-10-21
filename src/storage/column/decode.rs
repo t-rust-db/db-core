@@ -195,10 +195,9 @@ pub fn decode_column_full(
 /// helpers as [`decode_column_full`] (#461, #472): the positional readers
 /// already return the identical `Vec<Option<T>>` shape those helpers
 /// expect, so no separate positional `Value`-rebuild path is needed.
-/// Dictionary string columns deliberately fall through to the plain
-/// positional string reader here rather than a positional
-/// dictionary-codes reader (#457's dict fast path stays eager-decode-only
-/// for v1; see ADR-0026's consequences).
+/// A string chunk with a dictionary gathers its codes at `positions` into
+/// a [`Column::Dict`] (#671): each dictionary string is decoded once,
+/// never cloned per wanted row. Others use the positional string reader.
 pub fn decode_column_at(
     rg: &RowGroupReader<'_, '_>,
     index: usize,
@@ -265,9 +264,23 @@ pub fn decode_column_at(
         PhysicalType::Boolean => rg
             .read_boolean_column_at(index, positions)
             .map(|col| Decoded::Column(bool_column(col))),
-        _ => rg
-            .read_string_column_at(index, positions)
-            .map(|col| Decoded::Column(str_column(col))),
+        _ => match rg.read_string_column_dictionary_indices(index)? {
+            Some((dict, codes)) => {
+                let picked = positions
+                    .iter()
+                    .map(|&p| {
+                        usize::try_from(p)
+                            .ok()
+                            .and_then(|i| codes.get(i).copied())
+                            .ok_or(FileError::RowPositionOutOfRange(p))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Decoded::Column(dict_column(dict, picked)))
+            }
+            None => rg
+                .read_string_column_at(index, positions)
+                .map(|col| Decoded::Column(str_column(col))),
+        },
     }
 }
 
@@ -340,10 +353,11 @@ fn bool_column(values: Vec<Option<bool>>) -> Column {
 /// Converts a Parquet plain-encoded (non-dictionary) string column's
 /// `Vec<Option<String>>` into [`Column::Str`]'s offsets+data layout, one
 /// [`Bitmap`] bit per row rather than an `Option` wrapper per row (#461).
-fn str_column(values: Vec<Option<String>>) -> Column {
+fn str_column(mut values: Vec<Option<String>>) -> Column {
     let valid = Bitmap::from_bools(values.iter().map(Option::is_some));
+    // Each string moves into the column's buffer once, never cloned.
     let (offsets, data) = build_str_column(values.len(), |i| {
-        values.get(i).and_then(Option::clone).unwrap_or_default()
+        values.get_mut(i).and_then(Option::take).unwrap_or_default()
     });
     Column::Str {
         offsets,
@@ -360,6 +374,48 @@ mod tests {
     fn hex_is_lowercase_two_digits_per_byte() {
         assert_eq!(hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
         assert_eq!(hex(&[]), "");
+    }
+
+    #[test]
+    fn a_positional_dictionary_string_read_shares_its_dictionary() {
+        // #671: a long string in every row decodes once, as one dictionary
+        // entry, whichever and however many rows are wanted.
+        use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+        use crate::storage::parquet::writer::{ParquetWriter, WriterOptions};
+        let long = "x".repeat(10_000);
+        let rows: Vec<Option<String>> = (0..1_000)
+            .map(|i| {
+                Some(if i % 2 == 0 {
+                    long.clone()
+                } else {
+                    "y".to_string()
+                })
+            })
+            .collect();
+        let mut w = ParquetWriter::new(
+            Vec::new(),
+            vec![ColumnSpec::new("s", ColumnType::Utf8, true)],
+            WriterOptions::default(),
+        )
+        .unwrap();
+        w.write_columns(vec![ColumnValues::Utf8(rows)]).unwrap();
+        let (bytes, _) = w.finish().unwrap();
+        let file = crate::storage::ParquetFile::open(&bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let positions: Vec<u32> = (0..1_000).rev().collect();
+        let Decoded::Column(column) =
+            decode_column_at(&rg, 0, PhysicalType::ByteArray, &positions).unwrap();
+        let Column::Dict { dict, indices, .. } = &column else {
+            panic!("expected Column::Dict, got {column:?}");
+        };
+        assert_eq!(dict.len(), 2, "two distinct strings, decoded once each");
+        assert_eq!(indices.len(), 1_000);
+        assert_eq!(column.get(0), Value::Str("y".into()));
+        assert_eq!(column.get(999), Value::Str(long.into()));
+        assert!(matches!(
+            decode_column_at(&rg, 0, PhysicalType::ByteArray, &[1_000]),
+            Err(FileError::RowPositionOutOfRange(1_000))
+        ));
     }
 
     #[test]

@@ -495,10 +495,7 @@ fn check_column(spec: &ColumnSpec, values: &ColumnValues, rows: usize) -> Result
 /// The first key that occurs twice in `entries`.
 fn duplicate_key(entries: &MapEntries) -> Option<&str> {
     let mut seen = HashSet::new();
-    entries
-        .iter()
-        .map(|(k, _)| k.as_str())
-        .find(|k| !seen.insert(*k))
+    entries.iter().map(|(k, _)| &**k).find(|k| !seen.insert(*k))
 }
 
 /// A written column chunk: its `ColumnChunk` metadata and on-disk sizes

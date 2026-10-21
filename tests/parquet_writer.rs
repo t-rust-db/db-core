@@ -218,8 +218,8 @@ fn check_field_stats(file: &ParquetFile, group: usize, field: usize, values: &Co
             }
             Some(entries) => {
                 for (k, v) in entries {
-                    keys.push(Some(k.clone()));
-                    vals.push(v.clone());
+                    keys.push(Some(k.to_string()));
+                    vals.push(v.as_ref().map(|v| v.to_string()));
                 }
             }
         }
@@ -913,8 +913,12 @@ fn values_strategy(t: ColumnType, nullable: bool, n: usize) -> BoxedStrategy<Col
         // Unique keys (a writer requirement), any values, empty maps.
         ColumnType::MapUtf8 => col(
             proptest::collection::btree_map("[a-zé]{0,4}", proptest::option::of(".{0,5}"), 0..4)
-                .prop_map(|m| m.into_iter().collect::<Vec<_>>()),
-            Just(vec![("k".to_string(), None)]),
+                .prop_map(|m| {
+                    m.into_iter()
+                        .map(|(k, v)| (k.into(), v.map(Into::into)))
+                        .collect::<MapEntries>()
+                }),
+            Just(vec![("k".into(), None)]),
             nullable,
             n,
         )
@@ -1296,7 +1300,7 @@ fn map(entries: &[(&str, Option<&str>)]) -> Option<MapEntries> {
     Some(
         entries
             .iter()
-            .map(|(k, v)| (k.to_string(), v.map(str::to_string)))
+            .map(|(k, v)| ((*k).into(), v.map(Into::into)))
             .collect(),
     )
 }
@@ -1315,8 +1319,8 @@ fn map_columns_round_trip_between_flat_columns() {
     let hundred: MapEntries = (0..100)
         .map(|i| {
             (
-                format!("key{i:03}"),
-                (i % 7 != 0).then(|| format!("v{}", i % 5)),
+                format!("key{i:03}").into(),
+                (i % 7 != 0).then(|| format!("v{}", i % 5).into()),
             )
         })
         .collect();
