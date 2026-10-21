@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.152.0] - 2026-10-21
+
+### Changed
+
+- **`LoadConst` no longer copies its literal into every row** (#681). A constant register holds one value and the row count it stands for. Comparing a dictionary column with a string literal (`name = 'search'`) reads that value directly; any other opcode that reads the register row by row gets the broadcast column when it first needs it. Filters and joins change only the stored row count. `cross` (10M events): 211 -> 164 ms in-process, user CPU 991 -> 491 ms, same output as before. `vm_opcodes` A/B against v0.151.0 shows no regression beyond noise.
+
 ## [0.151.0] - 2026-10-20
 
 ### Fixed
