@@ -4,7 +4,7 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [Unreleased]
+## [0.153.0] - 2026-10-21
 
 ### Added
 
