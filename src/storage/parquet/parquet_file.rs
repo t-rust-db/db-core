@@ -1122,12 +1122,9 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         column_index: usize,
         decode_dictionary: impl Fn(&[u8], i32) -> reader::Result<Vec<T>>,
     ) -> Result<Option<Vec<T>>> {
-        let codec = self.column_meta(column_index)?.codec;
-        let chunk_bytes = self.column_chunk_bytes(column_index)?;
-        let mut pos = 0usize;
+        let mut pages = self.pages(column_index)?;
         let mut dictionary: Option<Vec<T>> = None;
-        while pos < chunk_bytes.len() {
-            let (header, compressed, page_end) = next_page(chunk_bytes, pos)?;
+        while let Some((header, compressed)) = pages.next()? {
             match header.page_type {
                 PageType::Data(data_page_header) => {
                     if dictionary.is_none()
@@ -1143,18 +1140,13 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     if dictionary.is_some() {
                         return Err(FileError::UnexpectedDictionaryPage);
                     }
-                    let dictionary_body = compression::decompress(
-                        codec,
-                        compressed,
-                        page_size("uncompressed_page_size", header.uncompressed_page_size)?,
-                    )?;
+                    let dictionary_body = pages.body(compressed, header.uncompressed_page_size)?;
                     dictionary = Some(decode_dictionary(
                         &dictionary_body,
                         dictionary_page_header.num_values,
                     )?);
                 }
             }
-            pos = page_end;
         }
         Ok(dictionary)
     }
