@@ -4,9 +4,10 @@
 //! Both write a directory of files the caller publishes with one rename,
 //! each file a contiguous LSN range for the manifest. A closed hour is one
 //! file: its rows sorted by `sort_key`, then cut into row groups, so each
-//! row group holds a range of the sort key. A day merge copies those row
-//! groups as they are (a row group never spans an hour), and starts a new
-//! file at an input file boundary once a file reaches `max_file_size`.
+//! row group holds a range of the sort key. A day merge (#646) k-way merges
+//! its hours by `sort_key` the same way, one file per batch of consecutive
+//! hours of at most `max_file_size` (at least one hour), so each day file
+//! is sorted as a whole and its row groups hold disjoint key ranges.
 //!
 //! A record table's (#594) hour and day keep its declared schema: its rows
 //! are sorted and written as the typed columns they are, and a day merge
@@ -56,18 +57,12 @@ struct Files {
     dir: PathBuf,
     specs: Vec<ColumnSpec>,
     options: WriterOptions,
-    max_file_size: u64,
     open: Option<OpenFile>,
     done: Vec<Output>,
 }
 
 impl Files {
-    fn new(
-        dir: &Path,
-        specs: Vec<ColumnSpec>,
-        parquet: &WriterOptions,
-        tier: &TierOptions,
-    ) -> Self {
+    fn new(dir: &Path, specs: Vec<ColumnSpec>, parquet: &WriterOptions) -> Self {
         let mut options = parquet.clone();
         // Row groups are cut here, never by row count in the writer.
         options.row_group_rows = usize::MAX;
@@ -75,7 +70,6 @@ impl Files {
             dir: dir.to_path_buf(),
             specs,
             options,
-            max_file_size: tier.max_file_size,
             open: None,
             done: Vec::new(),
         }
@@ -109,18 +103,6 @@ impl Files {
         open.writer.flush_row_group()?;
         open.lsn_hi = lsn_hi;
         self.open = Some(open);
-        Ok(())
-    }
-
-    /// Closes the open file if it has reached the size limit.
-    fn maybe_cut(&mut self) -> Result<(), IngestError> {
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|o| o.writer.bytes_written() >= self.max_file_size)
-        {
-            self.cut()?;
-        }
         Ok(())
     }
 
@@ -321,7 +303,7 @@ fn write_sorted(
     parquet: &WriterOptions,
 ) -> Result<Vec<Output>, IngestError> {
     let chunk = tier.row_group_max_rows.max(1);
-    let mut files = Files::new(dir, specs, parquet, tier);
+    let mut files = Files::new(dir, specs, parquet);
     if sorted.rows <= chunk {
         files.row_group(sorted.columns, lsn_lo, lsn_hi)?;
     } else {
@@ -473,8 +455,10 @@ fn widened_specs(files: &[&ParquetFile<'_>], pages: &[Page]) -> Vec<ColumnSpec> 
 }
 
 /// Merges one closed day's hour files (`inputs`, contiguous, oldest first)
-/// into `dir`, which must exist and be empty: their row groups, in order,
-/// under the day's widened schema, or a record table's `schema`.
+/// into `dir`, which must exist and be empty, under the day's widened
+/// schema, or a record table's `schema`: consecutive hours, up to
+/// `max_file_size` of input (at least one), k-way merged by `sort_key`
+/// into one file each, so a file is sorted across its hours (#646).
 pub(crate) fn merge_day(
     dir: &Path,
     inputs: &[(&FileEntry, &[u8])],
@@ -494,42 +478,42 @@ pub(crate) fn merge_day(
         Some(schema) => schema.to_vec(),
         None => widened_specs(&opened.iter().map(|o| &o.1).collect::<Vec<_>>(), &[]),
     };
-    let mut files = Files::new(dir, specs.clone(), parquet, tier);
+    let mut files = Files::new(dir, specs.clone(), parquet);
     let mut bounds_by_file = Vec::new();
-    let mut current: (Bounds, Bounds) = (None, None);
-    for (entry, file, fields) in &opened {
-        let mut next = entry.lsn_lo;
-        let mut index = 0usize;
-        while let Some((columns, rows)) =
-            row_group(file, fields, &entry.path, index, &specs, schema.is_some())?
-        {
-            let hi = next.saturating_add(rows).saturating_sub(1);
-            files.row_group(columns, next, hi)?;
-            next = hi.saturating_add(1);
-            index = index.saturating_add(1);
+    let mut start = 0usize;
+    while start < opened.len() {
+        let mut end = start;
+        let mut bytes = 0u64;
+        while let Some((entry, _, _)) = opened.get(end) {
+            end = end.saturating_add(1);
+            bytes = bytes.saturating_add(entry.bytes);
+            if bytes >= tier.max_file_size {
+                break;
+            }
         }
-        if next.saturating_sub(1) != entry.lsn_hi {
-            return Err(corrupt(
-                &entry.path,
-                format!(
-                    "holds LSNs up to {}, the manifest says {}",
-                    next.saturating_sub(1),
-                    entry.lsn_hi
-                ),
-            ));
-        }
-        current = (
-            widen_bounds(current.0, entry.observed_ts),
-            widen_bounds(current.1, entry.timestamp),
-        );
+        let batch = opened.get(start..end).unwrap_or_default();
+        start = end;
+        let (Some(first), Some(last)) = (batch.first(), batch.last()) else {
+            break;
+        };
+        let lsns = (first.0.lsn_lo, last.0.lsn_hi);
+        let runs = (0..batch.len()).map(Run::file).collect();
+        merge_runs(
+            &mut files,
+            runs,
+            batch,
+            &specs,
+            schema.is_some(),
+            tier,
+            lsns,
+        )?;
         let before = files.done.len();
-        files.maybe_cut()?;
+        files.cut()?;
         if files.done.len() > before {
-            bounds_by_file.push(std::mem::take(&mut current));
+            bounds_by_file.push(batch.iter().fold((None, None), |(o, t), (e, _, _)| {
+                (widen_bounds(o, e.observed_ts), widen_bounds(t, e.timestamp))
+            }));
         }
-    }
-    if files.open.is_some() {
-        bounds_by_file.push(current);
     }
     let mut outputs = files.finish()?;
     for (output, (observed, timestamp)) in outputs.iter_mut().zip(bounds_by_file) {
@@ -539,7 +523,7 @@ pub(crate) fn merge_day(
     Ok(outputs)
 }
 
-/// One sorted run of a [`close_hour`] merge: its current chunk of rows,
+/// One sorted run of a [`merge_runs`] merge: its current chunk of rows,
 /// and the file the next chunks come from (none for the pages' run).
 struct Run {
     chunk: Rc<Vec<ColumnValues>>,
@@ -550,6 +534,23 @@ struct Run {
     /// Its file's index in the merge's inputs.
     input: Option<usize>,
     next_row_group: usize,
+    /// The rows read from its file so far.
+    read: u64,
+}
+
+impl Run {
+    /// The run of `inputs[input]`, before its first row group is loaded.
+    fn file(input: usize) -> Run {
+        Run {
+            chunk: Rc::new(Vec::new()),
+            held: 0,
+            pos: 0,
+            len: 0,
+            input: Some(input),
+            next_row_group: 0,
+            read: 0,
+        }
+    }
 }
 
 /// Closes an hour that spilled to `staging/` (ADR 0028): its staging runs
@@ -586,24 +587,13 @@ pub(crate) fn close_hour(
         Some(schema) => schema.to_vec(),
         None => widened_specs(&inputs.iter().map(|o| &o.1).collect::<Vec<_>>(), pages),
     };
-    let typed = schema.is_some();
-    let keys = key_positions(&specs, tier);
-
     let mut observed = None;
     let mut timestamp = None;
-    let mut held: Vec<Rc<Vec<ColumnValues>>> = Vec::new();
     let mut runs: Vec<Run> = Vec::new();
     for (i, (entry, _, _)) in inputs.iter().enumerate() {
         observed = widen_bounds(observed, entry.observed_ts);
         timestamp = widen_bounds(timestamp, entry.timestamp);
-        runs.push(Run {
-            chunk: Rc::new(Vec::new()),
-            held: 0,
-            pos: 0,
-            len: 0,
-            input: Some(i),
-            next_row_group: 0,
-        });
+        runs.push(Run::file(i));
     }
     if !pages.is_empty() {
         let sorted = sort_pages(pages, format, &specs, tier);
@@ -616,18 +606,52 @@ pub(crate) fn close_hour(
             len: sorted.rows,
             input: None,
             next_row_group: 0,
+            read: 0,
         });
     }
+    let mut files = Files::new(dir, specs.clone(), parquet);
+    merge_runs(
+        &mut files,
+        runs,
+        &inputs,
+        &specs,
+        schema.is_some(),
+        tier,
+        (lsn_lo, lsn_hi),
+    )?;
+    let mut outputs = files.finish()?;
+    for output in &mut outputs {
+        output.file.observed_ts = observed;
+        output.file.timestamp = timestamp;
+    }
+    Ok(outputs)
+}
+
+/// Merges `runs` (each sorted by `sort_key`; a file's run reads
+/// `inputs`) into `files` as row groups of at most `row_group_max_rows`
+/// holding LSNs `lsn_lo..=lsn_hi`. It holds one row group of each run, not
+/// the inputs; ties keep run order. Each file's run must read as many rows
+/// as its entry's LSN range.
+fn merge_runs(
+    files: &mut Files,
+    mut runs: Vec<Run>,
+    inputs: &[(&FileEntry, ParquetFile<'_>, Vec<Field>)],
+    specs: &[ColumnSpec],
+    typed: bool,
+    tier: &TierOptions,
+    (lsn_lo, lsn_hi): (u64, u64),
+) -> Result<(), IngestError> {
+    let keys = key_positions(specs, tier);
+    let mut held: Vec<Rc<Vec<ColumnValues>>> = Vec::new();
     for run in &mut runs {
         if run.pos == run.len {
-            load(run, &inputs, &specs, typed)?;
+            load(run, inputs, specs, typed)?;
         }
         run.held = held.len();
         held.push(Rc::clone(&run.chunk));
     }
 
     let chunk = tier.row_group_max_rows.max(1);
-    let mut files = Files::new(dir, specs.clone(), parquet, tier);
     // (index in `held`, row) of each row of the row group being built.
     let mut picks: Vec<(usize, usize)> = Vec::with_capacity(chunk.min(1 << 16));
     loop {
@@ -654,12 +678,12 @@ pub(crate) fn close_hour(
         };
         picks.push((run.held, run.pos));
         run.pos = run.pos.saturating_add(1);
-        if run.pos == run.len && load(run, &inputs, &specs, typed)? {
+        if run.pos == run.len && load(run, inputs, specs, typed)? {
             run.held = held.len();
             held.push(Rc::clone(&run.chunk));
         }
         if picks.len() >= chunk {
-            files.row_group(take_rows(&held, &picks, &specs), lsn_lo, lsn_hi)?;
+            files.row_group(take_rows(&held, &picks, specs), lsn_lo, lsn_hi)?;
             picks.clear();
             held.clear();
             for run in &mut runs {
@@ -669,14 +693,24 @@ pub(crate) fn close_hour(
         }
     }
     if !picks.is_empty() {
-        files.row_group(take_rows(&held, &picks, &specs), lsn_lo, lsn_hi)?;
+        files.row_group(take_rows(&held, &picks, specs), lsn_lo, lsn_hi)?;
     }
-    let mut outputs = files.finish()?;
-    for output in &mut outputs {
-        output.file.observed_ts = observed;
-        output.file.timestamp = timestamp;
+    for run in &runs {
+        let Some((entry, _, _)) = run.input.and_then(|i| inputs.get(i)) else {
+            continue;
+        };
+        let last = entry.lsn_lo.saturating_add(run.read).saturating_sub(1);
+        if last != entry.lsn_hi {
+            return Err(corrupt(
+                &entry.path,
+                format!(
+                    "holds LSNs up to {last}, the manifest says {}",
+                    entry.lsn_hi
+                ),
+            ));
+        }
     }
-    Ok(outputs)
+    Ok(())
 }
 
 /// Moves `run` to its file's next non-empty row group; returns whether it
@@ -694,6 +728,7 @@ fn load(
         row_group(file, fields, &entry.path, run.next_row_group, specs, typed)?
     {
         run.next_row_group = run.next_row_group.saturating_add(1);
+        run.read = run.read.saturating_add(rows);
         if rows > 0 {
             run.chunk = Rc::new(columns);
             run.pos = 0;

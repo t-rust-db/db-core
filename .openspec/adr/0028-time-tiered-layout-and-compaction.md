@@ -282,7 +282,8 @@ order. In consequence:
 - A closed hour is always **one file** (its LSN range is the hour's).
   `max_file_size` applies at the day merge, which starts a new file at an
   hour boundary once a file reaches it. A very busy hour can exceed the
-  size.
+  size. (Since #646 the limit groups the day's hours into batches by
+  input size; see the amendment below.)
 - Row groups are no longer contiguous LSN runs. The day merge checks only
   that each input holds as many rows as its LSN range.
 - Building the hour holds its rows as values in memory, besides the
@@ -306,6 +307,23 @@ at once, without the grace period.
 **The day merge decodes and re-encodes** one row group at a time,
 widening to the day's schema. The byte-for-byte chunk copy is a later
 optimisation.
+
+**Amendment (#646): the day merge sorts across hours.** Copying each
+hour's row groups left a day sorted only within each hour, so a key that
+spans hours (a session) sat in several row groups and statistics could
+not skip them. The day merge is now the hour close's k-way merge of
+sorted runs, one run per hour file: it holds one row group per hour, and
+ties keep LSN order. A file must still be one contiguous LSN range, so a
+file cannot be cut mid-merge. Instead, consecutive hours are grouped
+into batches by input size, the batch closing once it reaches
+`max_file_size` (at least one hour), and each batch is merged into one
+file. With the default 1 GiB a day is one file, sorted as a whole, with
+row groups holding disjoint key ranges. Row groups are re-cut at
+`row_group_max_rows`, so they now span hours: with a sort key, a day
+file's row groups prune on the key, and on time only through the file's
+`observed_ts` range. This is the trade the sort key asks for. Without a
+sort key the merge keeps LSN order, so row groups still follow time. The
+byte-for-byte chunk copy is no longer possible.
 
 **Recovery** removes unlisted files in `data/`, `live/` and `archive/` (and
 `staging/`, part b)

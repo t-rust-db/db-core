@@ -224,11 +224,19 @@ fn hours_close_into_live_and_days_merge_into_archive() {
     assert_eq!(all_rows(&w), sorted(lines.clone()));
     let archived = fs::read(t.0.join(&merged[0].path)).unwrap();
     let file = ParquetFile::open(&archived).unwrap();
-    assert_eq!(
-        file.num_row_groups(),
-        4,
-        "row groups copied, never spanning an hour"
-    );
+    // Both hours merged by kind (#646): 9 rows in row groups of 3, the
+    // day sorted as a whole.
+    assert_eq!(file.num_row_groups(), 3, "row groups span the hours");
+    let kind = file.metadata().schema[1..]
+        .iter()
+        .position(|e| e.name == "kind")
+        .unwrap();
+    let kinds: Vec<String> = file
+        .row_groups()
+        .flat_map(|rg| rg.read_string_column(kind).unwrap())
+        .flatten()
+        .collect();
+    assert!(kinds.is_sorted(), "{kinds:?}");
 
     // The replaced hours wait out the grace period.
     assert_eq!(w.pending_deletes().count(), 2);

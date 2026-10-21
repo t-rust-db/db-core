@@ -397,3 +397,71 @@ fn mcdc__storage_ingest_tier_close_hour_3856a22b__v3_an_exhausted_run_without_mo
     let k = close_one_run("v3", &[r#"{"k":"b"}"#], 1, &pages);
     assert_eq!(k, ["a", "b"]);
 }
+
+#[test]
+fn a_day_merges_its_hours_by_the_key_one_file_per_size_batch() {
+    let dir = temp_dir("day-sorted");
+    let tier = TierOptions {
+        sort_key: vec!["k".to_string()],
+        row_group_max_rows: 2,
+        ..TierOptions::default()
+    };
+    let parquet = WriterOptions::default();
+    let hours: Vec<(FileEntry, Vec<u8>)> = [
+        page(1, &[r#"{"k":"c"}"#, r#"{"k":"a"}"#]),
+        page(3, &[r#"{"k":"d"}"#, r#"{"k":"b"}"#]),
+        page(5, &[r#"{"k":"b"}"#, r#"{"k":"a"}"#]),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, p)| {
+        let hour_dir = dir.join(format!("h{i}"));
+        fs::create_dir_all(&hour_dir).unwrap();
+        let outputs = write_hour(&hour_dir, &[p], Format::Jsonl, &tier, &parquet).unwrap();
+        run_entry(&hour_dir, &outputs)
+    })
+    .collect();
+    let inputs: Vec<(&FileEntry, &[u8])> = hours.iter().map(|(e, b)| (e, &b[..])).collect();
+    let merge = |name: &str, max_file_size: u64| {
+        let out = dir.join(name);
+        fs::create_dir_all(&out).unwrap();
+        let tier = TierOptions {
+            max_file_size,
+            ..tier.clone()
+        };
+        merge_day(&out, &inputs, None, &tier, &parquet)
+            .unwrap()
+            .iter()
+            .map(|o| {
+                let bytes = fs::read(out.join(&o.name)).unwrap();
+                let file = ParquetFile::open(&bytes).unwrap();
+                let groups: Vec<Vec<String>> = string_groups(&file, "k")
+                    .into_iter()
+                    .map(|g| g.into_iter().flatten().collect())
+                    .collect();
+                ((o.lsn_lo, o.lsn_hi, o.file.rows), groups)
+            })
+            .collect::<Vec<_>>()
+    };
+    let groups = |g: &[&[&str]]| -> Vec<Vec<String>> {
+        g.iter()
+            .map(|r| r.iter().map(ToString::to_string).collect())
+            .collect()
+    };
+    // The whole day in one file, sorted across the hours.
+    assert_eq!(
+        merge("one", u64::MAX),
+        [((1, 6, 6), groups(&[&["a", "a"], &["b", "b"], &["c", "d"]]))]
+    );
+    // A limit the first two hours reach: they merge into one file, the
+    // third hour is the next.
+    let limit = hours[0].0.bytes + hours[1].0.bytes;
+    assert_eq!(
+        merge("two", limit),
+        [
+            ((1, 4, 4), groups(&[&["a", "b"], &["c", "d"]])),
+            ((5, 6, 2), groups(&[&["a", "b"]])),
+        ]
+    );
+    fs::remove_dir_all(&dir).unwrap();
+}

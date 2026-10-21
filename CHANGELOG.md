@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [Unreleased]
+
+### Changed
+
+- **A day merge sorts across its hours** (#646). A tiered table's day merge used to copy each hour's row groups as they were, so a day file was sorted only within each hour and a key spanning hours (a session) sat in several row groups. It is now the hour close's k-way merge of the day's sorted hour files: a day file is sorted by `sort_key` as a whole and its row groups hold disjoint key ranges. A file must stay one contiguous LSN range, so `max_file_size` now groups consecutive hours into batches by input size, one file per batch. ADR 0028 amended.
+
 ## [0.152.0] - 2026-10-21
 
 ### Changed

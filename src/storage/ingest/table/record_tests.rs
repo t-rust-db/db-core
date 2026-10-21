@@ -364,6 +364,43 @@ fn a_tiered_hour_is_sorted_by_the_key_and_carries_arrival_times() {
 }
 
 #[test]
+fn a_tiered_day_is_sorted_by_the_key_across_its_hours() {
+    let _serial = serial();
+    let t = TempTable::new();
+    set_clock(0, 10);
+    let mut w = TableWriter::open(&t.0, tiered()).unwrap();
+    // Every hour holds every kind, so the hours' key ranges overlap.
+    let mut rows = append(&mut w, 0..5);
+    set_clock(0, 11);
+    rows.extend(append(&mut w, 5..10));
+    set_clock(0, 12);
+    rows.extend(append(&mut w, 10..14));
+    set_clock(1, 0);
+    w.flush().unwrap();
+    let merged = w.compact().unwrap();
+    assert_eq!(merged.len(), 1, "one file for the day");
+    assert_eq!((merged[0].lsn_lo, merged[0].lsn_hi), (1, 14));
+    let bytes = fs::read(t.0.join(&merged[0].path)).unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    assert_eq!(file.num_row_groups(), 5, "14 rows in row groups of 3");
+    let keys: Vec<(String, u64)> = file
+        .row_groups()
+        .flat_map(|rg| {
+            let kinds = rg.read_string_column(3).unwrap();
+            let sessions = rg.read_int64_column(0).unwrap();
+            kinds
+                .into_iter()
+                .zip(sessions)
+                .map(|(k, s)| (k.unwrap(), s.unwrap().cast_unsigned()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(keys.is_sorted(), "{keys:?}");
+    assert_eq!(all_rows(&w), sorted(rows));
+    assert_files_have_the_schema(&w);
+}
+
+#[test]
 fn rows_that_do_not_match_the_schema_are_refused() {
     let _serial = serial();
     let t = TempTable::new();
