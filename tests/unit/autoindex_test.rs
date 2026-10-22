@@ -115,7 +115,6 @@ fn create_table_writes_a_file_sqlite3_accepts() {
         "CREATE TABLE a (x TEXT PRIMARY KEY, y INT)",
         "CREATE TABLE a (x TEXT UNIQUE, y INT)",
         "CREATE TABLE a (x TEXT, y INT, PRIMARY KEY (x, y))",
-        "CREATE TABLE a (x TEXT PRIMARY KEY, y INT) WITHOUT ROWID",
         "CREATE TABLE a (x INTEGER PRIMARY KEY, y INT)",
         "CREATE TABLE a (x INTEGER PRIMARY KEY DESC, y INT)",
         "CREATE TABLE a (x TEXT PRIMARY KEY, y INT UNIQUE, z UNIQUE)",
@@ -130,11 +129,7 @@ fn create_table_writes_a_file_sqlite3_accepts() {
 #[test]
 fn create_table_lays_out_the_schema_as_sqlite3_does() {
     let (db, mut e) = fresh("layout");
-    run(
-        &mut e,
-        "CREATE TABLE a (x TEXT PRIMARY KEY, y INT UNIQUE); \
-         CREATE TABLE w (k TEXT PRIMARY KEY, u UNIQUE) WITHOUT ROWID",
-    );
+    run(&mut e, "CREATE TABLE a (x TEXT PRIMARY KEY, y INT UNIQUE)");
     drop(e);
     let layout = |path: &Path| {
         sqlite3(
@@ -147,15 +142,11 @@ fn create_table_lays_out_the_schema_as_sqlite3_does() {
     let Some(ours) = layout(db.path()) else {
         return;
     };
-    // The PRIMARY KEY of a WITHOUT ROWID table is the table: it takes
-    // `_1` but has no row, so only the UNIQUE column's `_2` is written.
     assert_eq!(
         ours,
         "table|a|a|0\n\
          index|sqlite_autoindex_a_1|a|1\n\
-         index|sqlite_autoindex_a_2|a|1\n\
-         table|w|w|0\n\
-         index|sqlite_autoindex_w_2|w|1"
+         index|sqlite_autoindex_a_2|a|1"
     );
 }
 

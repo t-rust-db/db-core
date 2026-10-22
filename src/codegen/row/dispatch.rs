@@ -1062,10 +1062,17 @@ mod already_exists_tests {
             "CREATE TABLE x(a INTEGER PRIMARY KEY AUTOINCREMENT, b TEXT, UNIQUE(b), CHECK (length(b) > 0))",
             "CREATE TABLE x(a, CHECK (rowid > 0))",
             "CREATE TABLE x(a int, b ANY) STRICT",
-            "CREATE TABLE x(a PRIMARY KEY) WITHOUT ROWID",
         ] {
             assert!(compile_statement(sql, &schemas(), &views()).is_ok(), "{sql}");
         }
+        // Valid for sqlite3, but not writable here yet (#696).
+        let err = compile_statement(
+            "CREATE TABLE x(a PRIMARY KEY) WITHOUT ROWID",
+            &schemas(),
+            &views(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("WITHOUT ROWID"), "{err}");
     }
 
     #[test]

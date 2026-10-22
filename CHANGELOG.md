@@ -4,15 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [0.164.0] - 2026-10-22
+## [0.165.0] - 2026-10-22
 
 ### Added
 
 - **`IN (list)` and `NOT IN (list)` in the column and stream engines** (#716, first of milestone 2 of #678). The parser lowers `x IN (a, b, c)` to `x = a OR x = b OR x = c` and `x NOT IN (a, b, c)` to `x <> a AND x <> b AND x <> c` before it validates the query, so the planner and the VM are unchanged. It applies in WHERE, HAVING, the select list, an aggregate's argument and a function's argument. The list items may be expressions (`id IN (3, 1 + 1)`), and a quoted number against a number column converts as DuckDB does (#679). The three-valued `OR` and `AND` of #679 give DuckDB's NULL behaviour: `x IN (1, NULL)` is TRUE or NULL, `x NOT IN (1, NULL)` is never TRUE, and a NULL `x` is NULL. An empty list is refused, as DuckDB does, and `IN (SELECT ...)` is unchanged. The cost is a comparison per item per row; a hash-set opcode waits for a benchmark that needs it. A new sqllogictest file (`tests/sqllogictest/column/in_list_716.test`) and six `check_column_oracle.sh` cases agree with DuckDB.
 
-### Fixed
+## [0.164.0] - 2026-10-22
 
-- **`tests/unit/upsert_test.rs` no longer fails under load.** Its temporary database was named from the clock's nanoseconds, so two parallel tests could share and delete one file.
+### Changed
+
+- **`CREATE TABLE ... WITHOUT ROWID` is refused** (#696). The statement was accepted but no `INSERT`, `UPDATE` or `DELETE` could write the table, so it could only be created and never filled. It now fails with `unsupported: WITHOUT ROWID tables are not supported yet`, after sqlite3's own definition errors (`PRIMARY KEY missing`, `AUTOINCREMENT not allowed`) so those messages are unchanged. A `WITHOUT ROWID` table in a file sqlite3 wrote still opens and reads; writes to it keep failing at compile time. Writing to such tables is tracked separately.
+
 
 ## [0.163.0] - 2026-10-22
 

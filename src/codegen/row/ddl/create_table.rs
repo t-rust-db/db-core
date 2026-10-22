@@ -135,6 +135,12 @@ fn validate_create_table(create: &CreateTable) -> Result<(), CodegenError> {
         if autoincrement {
             return reject("AUTOINCREMENT not allowed on WITHOUT ROWID tables".into());
         }
+        // The table is an index b-tree keyed by the PRIMARY KEY, which
+        // INSERT, UPDATE and DELETE cannot write yet (#696): refuse it
+        // rather than create a table no statement can modify.
+        return Err(CodegenError::Unsupported {
+            reason: "WITHOUT ROWID tables are not supported yet".to_string(),
+        });
     }
     if create.strict {
         for column in &create.columns {
@@ -408,12 +414,6 @@ mod tests {
                 "CREATE TABLE t6 (x, y, PRIMARY KEY(x), UNIQUE(x COLLATE NOCASE))",
                 2,
             ),
-            // The PRIMARY KEY of a WITHOUT ROWID table is the table: it
-            // takes `_1` but gets no row, so only `y` is created.
-            (
-                "CREATE TABLE t7 (x TEXT PRIMARY KEY, y UNIQUE) WITHOUT ROWID",
-                1,
-            ),
             ("CREATE TABLE t8 (x INT PRIMARY KEY)", 1),
             ("CREATE TABLE t9 (x INTEGER PRIMARY KEY DESC)", 1),
             ("CREATE TABLE t10 (x, PRIMARY KEY(x DESC))", 1),
@@ -443,12 +443,6 @@ mod tests {
                 "{sql}: {names:?}"
             );
         }
-        // Numbers come from the declaration order, a WITHOUT ROWID
-        // key's slot included.
-        assert_eq!(
-            autoindex_names("CREATE TABLE t7 (x TEXT PRIMARY KEY, y UNIQUE) WITHOUT ROWID"),
-            vec!["sqlite_autoindex_t7_2"]
-        );
         assert_eq!(
             autoindex_names("CREATE TABLE t1 (x TEXT PRIMARY KEY, y INT UNIQUE, z)"),
             vec!["sqlite_autoindex_t1_1", "sqlite_autoindex_t1_2"]
