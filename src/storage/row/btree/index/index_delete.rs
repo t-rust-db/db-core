@@ -197,10 +197,12 @@ fn delete_interior_entry(
         // An empty leaf on the way down: the tree predates the repair.
         return delete_via_predecessor_swap(
             pager,
-            usable_size,
+            header,
+            root_page,
+            encoding,
+            &ancestors,
             interior_page,
             entry_child,
-            encoding,
         );
     };
 
@@ -505,11 +507,14 @@ fn write_interior(
 /// algorithm this falls back to.
 fn delete_via_predecessor_swap(
     pager: &mut Pager,
-    usable_size: u32,
+    header: &DatabaseHeader,
+    root_page: u32,
+    encoding: TextEncoding,
+    ancestors: &[u32],
     interior_page: u32,
     entry_child: u32,
-    encoding: TextEncoding,
 ) -> Result<(), BtreeError> {
+    let usable_size = header.usable_page_size();
     match extract_max_entry(pager, usable_size, entry_child, encoding, 0)? {
         Some(predecessor_bytes) => {
             let header_start = page1_header_start(interior_page);
@@ -534,16 +539,19 @@ fn delete_via_predecessor_swap(
                 .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))
                 .collect();
             let buf = pager.get_page_mut(interior_page)?;
-            write_index_interior_page(buf, header_start, interior_page, &cell_bytes, rightmost)
+            write_index_interior_page(buf, header_start, interior_page, &cell_bytes, rightmost)?;
         }
         None => {
             // `entry_child`'s entire subtree is drained (nothing left to
             // swap in) — the matched entry is deleted outright, since
             // there is nothing left to preserve.
             pager.deallocate_page(entry_child)?;
-            remove_entry_by_child(pager, usable_size, interior_page, entry_child, encoding)
+            remove_entry_by_child(pager, usable_size, interior_page, entry_child, encoding)?;
         }
     }
+    // Dropping the separator may have left the interior page with no
+    // entries: repair it as any emptied page is.
+    repair_if_empty(pager, header, root_page, encoding, ancestors, interior_page)
 }
 
 /// Recursively finds and physically removes the maximum entry within the
@@ -849,6 +857,12 @@ mod tests {
         key(&format!("key{n:06}"), i64::from(n))
     }
 
+    fn insert_all_into(pager: &mut Pager, header: &DatabaseHeader, root: u32, count: u32) {
+        for n in 0..count {
+            insert_entry(pager, header, root, &fixed_key(n), TextEncoding::Utf8).unwrap();
+        }
+    }
+
     fn insert_all(pager: &mut Pager, header: &DatabaseHeader, count: u32) {
         for n in 0..count {
             insert_entry(pager, header, 1, &fixed_key(n), TextEncoding::Utf8).unwrap();
@@ -939,6 +953,78 @@ mod tests {
         }
         // Everything but the root is free again.
         assert_eq!(freelist_page_count(&mut pager), pages_in_use - 1);
+    }
+
+    /// Empties page `page` (a leaf) in place, as an older release left it.
+    fn empty_leaf(pager: &mut Pager, page: u32) {
+        let buf = pager.get_page_mut(page).unwrap();
+        write_index_leaf_page(buf, page1_header_start(page), page, &[]).unwrap();
+    }
+
+    /// The root's last separator entry: its key and the child to its left.
+    fn last_separator(pager: &mut Pager, usable: u32, root: u32) -> (Vec<Value>, u32) {
+        let buf = pager.get_page_mut(root).unwrap().clone();
+        let (entries, _) = collect_index_interior_entries(
+            pager,
+            &buf,
+            page1_header_start(root),
+            root,
+            usable,
+            TextEncoding::Utf8,
+        )
+        .unwrap();
+        let (child, key, _) = entries.last().cloned().unwrap();
+        (key, child)
+    }
+
+    /// The rightmost child of interior page `page`.
+    fn rightmost_child(pager: &mut Pager, page: u32) -> u32 {
+        let buf = pager.get_page_mut(page).unwrap().clone();
+        read_u32(&buf, page1_header_start(page).saturating_add(8), page).unwrap()
+    }
+
+    /// A tree already holding an empty leaf below a separator: the delete
+    /// of that separator's key falls back to the predecessor swap and
+    /// drops the emptied subtree outright.
+    #[test]
+    fn deleting_a_separator_over_an_emptied_leaf_drops_the_leaf() {
+        let (vfs, header) = tree_of_many();
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        let root = crate::storage::row::btree::create_empty_index_root(&mut pager).unwrap();
+        insert_all_into(&mut pager, &header, root, 40);
+        let usable = header.usable_page_size();
+        let (key, child) = last_separator(&mut pager, usable, root);
+        empty_leaf(&mut pager, child);
+        delete_entry(&mut pager, &header, root, &key, TextEncoding::Utf8).unwrap();
+        // `keys_of` checks the tree is well formed: no empty leaf is left.
+        let keys = keys_of(&mut pager, &header, root);
+        assert!(!keys.contains(&key));
+    }
+
+    /// A three-level tree whose rightmost leaf under a separator has been
+    /// emptied: the predecessor swap descends into an interior subtree and
+    /// promotes the last entry of its own interior page.
+    #[test]
+    fn deleting_a_separator_over_an_interior_subtree_with_an_emptied_leaf() {
+        let (vfs, header) = tree_of_many();
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        let root = crate::storage::row::btree::create_empty_index_root(&mut pager).unwrap();
+        insert_all_into(&mut pager, &header, root, MANY);
+        let usable = header.usable_page_size();
+        let (key, child) = last_separator(&mut pager, usable, root);
+        // Walk down the child's rightmost path to its leaf.
+        let mut page = child;
+        loop {
+            let buf = pager.get_page_mut(page).unwrap().clone();
+            if read_page_type(&buf, page1_header_start(page), page).unwrap() == LEAF_INDEX {
+                break;
+            }
+            page = rightmost_child(&mut pager, page);
+        }
+        empty_leaf(&mut pager, page);
+        delete_entry(&mut pager, &header, root, &key, TextEncoding::Utf8).unwrap();
+        let keys = keys_of(&mut pager, &header, root);
+        assert!(!keys.contains(&key));
     }
 
     /// A small xorshift, so the random test is the same every run.
