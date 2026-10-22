@@ -44,6 +44,14 @@ QUERIES=(
   "SELECT count(*) FROM __TABLE__ WHERE region LIKE 'north'|SELECT count(*) FROM __TABLE__ WHERE region LIKE 'north'"
   "SELECT count(*) FROM __TABLE__ WHERE region ILIKE 'NORTH'|SELECT count(*) FROM __TABLE__ WHERE region ILIKE 'NORTH'"
   "SELECT count(*) FROM __TABLE__ WHERE regexp_extract(region, '(n)', 1) = ''|SELECT count(*) FROM __TABLE__ WHERE regexp_extract(region, '(n)', 1) = ''"
+  # #716: IN (list) / NOT IN (list) in WHERE, HAVING and the select list,
+  # with items that are expressions and a quoted number against a number.
+  "SELECT count(*) FROM __TABLE__ WHERE region IN ('north', 'south')|SELECT count(*) FROM __TABLE__ WHERE region IN ('north', 'south')"
+  "SELECT count(*) FROM __TABLE__ WHERE region NOT IN ('north', 'south')|SELECT count(*) FROM __TABLE__ WHERE region NOT IN ('north', 'south')"
+  "SELECT id FROM __TABLE__ WHERE id IN (3, 1 + 1, 5000 - 1) ORDER BY id|SELECT id FROM __TABLE__ WHERE id IN (3, 1 + 1, 5000 - 1) ORDER BY id"
+  "SELECT count(*) FROM __TABLE__ WHERE id IN ('5', '6', 7)|SELECT count(*) FROM __TABLE__ WHERE id IN ('5', '6', 7)"
+  "SELECT count(*) FROM __TABLE__ WHERE region NOT IN ('north', NULL)|SELECT count(*) FROM __TABLE__ WHERE region NOT IN ('north', NULL)"
+  "SELECT region, count(*) FROM __TABLE__ GROUP BY region HAVING region IN ('east', 'west') ORDER BY region|SELECT region, count(*) FROM __TABLE__ GROUP BY region HAVING region IN ('east', 'west') ORDER BY region"
   # #645: ORDER BY with several terms, mixed directions, a key the
   # SELECT list does not show, an aggregate key, and LIMIT after them.
   "SELECT region, id FROM __TABLE__ WHERE id > 4980 ORDER BY region DESC, id|SELECT region, id FROM __TABLE__ WHERE id > 4980 ORDER BY region DESC, id"
