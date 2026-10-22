@@ -251,19 +251,98 @@ const OF_DEFAULT: [i16; 29] = [
 
 /// Literals-length code -> (baseline, extra bits).
 const LL_CODES: [(u32, u32); 36] = [
-    (0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0),
-    (11, 0), (12, 0), (13, 0), (14, 0), (15, 0), (16, 1), (18, 1), (20, 1), (22, 1), (24, 2),
-    (28, 2), (32, 3), (40, 3), (48, 4), (64, 6), (128, 7), (256, 8), (512, 9), (1024, 10),
-    (2048, 11), (4096, 12), (8192, 13), (16384, 14), (32768, 15), (65536, 16),
+    (0, 0),
+    (1, 0),
+    (2, 0),
+    (3, 0),
+    (4, 0),
+    (5, 0),
+    (6, 0),
+    (7, 0),
+    (8, 0),
+    (9, 0),
+    (10, 0),
+    (11, 0),
+    (12, 0),
+    (13, 0),
+    (14, 0),
+    (15, 0),
+    (16, 1),
+    (18, 1),
+    (20, 1),
+    (22, 1),
+    (24, 2),
+    (28, 2),
+    (32, 3),
+    (40, 3),
+    (48, 4),
+    (64, 6),
+    (128, 7),
+    (256, 8),
+    (512, 9),
+    (1024, 10),
+    (2048, 11),
+    (4096, 12),
+    (8192, 13),
+    (16384, 14),
+    (32768, 15),
+    (65536, 16),
 ];
 /// Match-length code -> (baseline, extra bits).
 const ML_CODES: [(u32, u32); 53] = [
-    (3, 0), (4, 0), (5, 0), (6, 0), (7, 0), (8, 0), (9, 0), (10, 0), (11, 0), (12, 0), (13, 0),
-    (14, 0), (15, 0), (16, 0), (17, 0), (18, 0), (19, 0), (20, 0), (21, 0), (22, 0), (23, 0),
-    (24, 0), (25, 0), (26, 0), (27, 0), (28, 0), (29, 0), (30, 0), (31, 0), (32, 0), (33, 0),
-    (34, 0), (35, 1), (37, 1), (39, 1), (41, 1), (43, 2), (47, 2), (51, 3), (59, 3), (67, 4),
-    (83, 4), (99, 5), (131, 7), (259, 8), (515, 9), (1027, 10), (2051, 11), (4099, 12),
-    (8195, 13), (16387, 14), (32771, 15), (65539, 16),
+    (3, 0),
+    (4, 0),
+    (5, 0),
+    (6, 0),
+    (7, 0),
+    (8, 0),
+    (9, 0),
+    (10, 0),
+    (11, 0),
+    (12, 0),
+    (13, 0),
+    (14, 0),
+    (15, 0),
+    (16, 0),
+    (17, 0),
+    (18, 0),
+    (19, 0),
+    (20, 0),
+    (21, 0),
+    (22, 0),
+    (23, 0),
+    (24, 0),
+    (25, 0),
+    (26, 0),
+    (27, 0),
+    (28, 0),
+    (29, 0),
+    (30, 0),
+    (31, 0),
+    (32, 0),
+    (33, 0),
+    (34, 0),
+    (35, 1),
+    (37, 1),
+    (39, 1),
+    (41, 1),
+    (43, 2),
+    (47, 2),
+    (51, 3),
+    (59, 3),
+    (67, 4),
+    (83, 4),
+    (99, 5),
+    (131, 7),
+    (259, 8),
+    (515, 9),
+    (1027, 10),
+    (2051, 11),
+    (4099, 12),
+    (8195, 13),
+    (16387, 14),
+    (32771, 15),
+    (65539, 16),
 ];
 
 // --- Huffman ---------------------------------------------------------------
@@ -431,7 +510,9 @@ impl Out {
         if offset >= 16 {
             let mut i = 0;
             while i < n {
-                let chunk: [u8; 16] = self.buf[src + i..src + i + 16].try_into().unwrap_or([0; 16]);
+                let chunk: [u8; 16] = self.buf[src + i..src + i + 16]
+                    .try_into()
+                    .unwrap_or([0; 16]);
                 self.buf[self.op + i..self.op + i + 16].copy_from_slice(&chunk);
                 i += 16;
             }
@@ -535,18 +616,24 @@ fn literals_section(block: &[u8], state: &mut State) -> Result<usize> {
     let b0 = *block.first().ok_or("empty block")?;
     let kind = b0 & 3;
     let size_format = (b0 >> 2) & 3;
-    let byte = |i: usize| -> Result<u32> { Ok(u32::from(*block.get(i).ok_or("short literals header")?)) };
+    let byte =
+        |i: usize| -> Result<u32> { Ok(u32::from(*block.get(i).ok_or("short literals header")?)) };
     if kind < 2 {
         let (header, regenerated) = match size_format {
             0 | 2 => (1, (b0 >> 3) as usize),
             1 => (2, ((b0 >> 4) as u32 | byte(1)? << 4) as usize),
-            _ => (3, ((b0 >> 4) as u32 | byte(1)? << 4 | byte(2)? << 12) as usize),
+            _ => (
+                3,
+                ((b0 >> 4) as u32 | byte(1)? << 4 | byte(2)? << 12) as usize,
+            ),
         };
         state.literals.clear();
         if kind == 0 {
-            state
-                .literals
-                .extend_from_slice(block.get(header..header + regenerated).ok_or("short raw literals")?);
+            state.literals.extend_from_slice(
+                block
+                    .get(header..header + regenerated)
+                    .ok_or("short raw literals")?,
+            );
             return Ok(header + regenerated);
         }
         let b = *block.get(header).ok_or("short RLE literals")?;
@@ -566,13 +653,18 @@ fn literals_section(block: &[u8], state: &mut State) -> Result<usize> {
     let mask = (1u64 << bits) - 1;
     let regenerated = ((h >> 4) & mask) as usize;
     let compressed = ((h >> (4 + bits)) & mask) as usize;
-    let mut body = block.get(header..header + compressed).ok_or("short compressed literals")?;
+    let mut body = block
+        .get(header..header + compressed)
+        .ok_or("short compressed literals")?;
     if kind == 2 {
         let (huffman, used) = Huffman::read(body)?;
         state.huffman = Some(huffman);
         body = &body[used..];
     }
-    let huffman = state.huffman.as_ref().ok_or("treeless literals without a tree")?;
+    let huffman = state
+        .huffman
+        .as_ref()
+        .ok_or("treeless literals without a tree")?;
     state.literals.clear();
     state.literals.resize(regenerated, 0);
     if streams == 1 {
@@ -632,7 +724,9 @@ fn table(
 
 fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()> {
     let b0 = *data.first().ok_or("missing sequences header")?;
-    let byte = |i: usize| -> Result<usize> { Ok(usize::from(*data.get(i).ok_or("short sequences header")?)) };
+    let byte = |i: usize| -> Result<usize> {
+        Ok(usize::from(*data.get(i).ok_or("short sequences header")?))
+    };
     let (count, mut pos) = match b0 {
         0 => {
             out.room(state.lit_len)?;
@@ -646,8 +740,22 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
     let modes = *data.get(pos).ok_or("missing compression modes")?;
     pos += 1;
     pos += table(modes >> 6, &data[pos..], &mut state.ll, &LL_DEFAULT, 6, 9)?;
-    pos += table((modes >> 4) & 3, &data[pos..], &mut state.of, &OF_DEFAULT, 5, 8)?;
-    pos += table((modes >> 2) & 3, &data[pos..], &mut state.ml, &ML_DEFAULT, 6, 9)?;
+    pos += table(
+        (modes >> 4) & 3,
+        &data[pos..],
+        &mut state.of,
+        &OF_DEFAULT,
+        5,
+        8,
+    )?;
+    pos += table(
+        (modes >> 2) & 3,
+        &data[pos..],
+        &mut state.ml,
+        &ML_DEFAULT,
+        6,
+        9,
+    )?;
     let (Some(ll), Some(of), Some(ml)) = (&state.ll, &state.of, &state.ml) else {
         return err("missing sequence tables");
     };
@@ -676,7 +784,11 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
             reps[0] = o;
             o
         } else {
-            let index = if lit_len == 0 { offset_value } else { offset_value - 1 };
+            let index = if lit_len == 0 {
+                offset_value
+            } else {
+                offset_value - 1
+            };
             let o = match index {
                 0 => reps[0],
                 1 => reps[1],

@@ -29,7 +29,9 @@ const PAGE: usize = 64 * 1024;
 fn corpus(len: usize, seed: u64) -> Vec<u8> {
     let mut state = seed;
     let mut next = move || {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (state >> 33) as usize
     };
     let mut out = Vec::with_capacity(len);
@@ -68,7 +70,10 @@ fn cli(data: &[u8], level: &str) -> Vec<u8> {
 
 fn ruzstd_decode(frame: &[u8], size: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(size);
-    ruzstd::decoding::StreamingDecoder::new(frame).unwrap().read_to_end(&mut out).unwrap();
+    ruzstd::decoding::StreamingDecoder::new(frame)
+        .unwrap()
+        .read_to_end(&mut out)
+        .unwrap();
     out
 }
 
@@ -109,5 +114,9 @@ fn decode_speed() {
     let ruzstd = best(&ruzstd_decode);
     let spike = best(&|frame, size| prototype::decompress(frame, size).unwrap());
     println!("ruzstd: {:.0} MB/s", bytes as f64 / ruzstd / 1e6);
-    println!("spike:  {:.0} MB/s ({:.2}x)", bytes as f64 / spike / 1e6, ruzstd / spike);
+    println!(
+        "spike:  {:.0} MB/s ({:.2}x)",
+        bytes as f64 / spike / 1e6,
+        ruzstd / spike
+    );
 }
