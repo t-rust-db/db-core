@@ -4,11 +4,27 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [0.157.1] - 2026-10-22
+## [0.159.1] - 2026-10-22
 
 ### Fixed
 
 - **A REAL becomes text the way sqlite3 3.53 does** (#652): `%!.17g` through `sqlite3FpDecode`, whose double-double arithmetic approximates past about 16 digits, where db-core followed 3.51's `%!.15g`. `CAST(1e15 AS TEXT)` is `1000000000000000.0` (was `1.0e+15`), `1.0/3` is `0.33333333333333332`, `123456789012345678.0` is `1.2345678901234568e+17`, `printf('%!.17g', 0.000123456)` is `0.000123456`, an infinity is `Inf` and negative zero `0.0`. This covers `CAST`, `||`, the text functions, result display and the shell modes. `printf`'s `%f`, `%e` and `%g` use the same decoder, including its rounding of exact ties (`printf('%.0e', 450.0)` is `4e+02`) and `!` past 18 digits (up to 26), and `#` drops the sign of a negative value that shows as zero. `tools/check_row_functions_oracle.py` gains a REAL-to-text section and `--random N [SEED]`, a randomized byte-for-byte comparison of REAL-to-text and `printf`, run by `make check-row-functions-oracle`.
+
+## [0.159.0] - 2026-10-22
+
+### Changed
+
+- **A filtered projection skips a row group's projection-only columns when no row survives** (#704). ADR-0026's phase 2b used to decode those columns at the surviving positions even when there were none, reading and decompressing every page for a row group the filter had emptied. Now each one is added as an empty column without opening its pages. In t-rust-db/examples `parquet-codecs` (2M rows, matches in 3 of 14 row groups), through column-rs: `SELECT id, user_name … WHERE note LIKE '%request 1999%'` runs 0.3–1.8 ms faster and uses 4–9 ms less CPU.
+
+## [0.158.0] - 2026-10-22
+
+### Added
+
+- **`engine::column::file_segments`** (#699): a Parquet file's row groups as late-materializing `FileSegment`s, for callers that run the batch engine themselves over a file, as column-rs does (t-rust-db/tools#62). It works like `snapshot_segments` does for table directories. A filtered query decodes its other columns only at the matching rows (ADR-0026), and a top-N fetches only its winning rows (#513). `t.col` names the column `col`, and batches are keyed by the name as given.
+
+### Changed
+
+- **A late-materialized dictionary string column decodes only the entries it returns** (#699). `decode_column_at` used to decode a row group's whole dictionary into `String`s, copy each into an `Arc<str>`, and only then gather the codes it needed. `RowGroupReader::read_string_column_dictionary_at` gathers the codes first and decodes only the entries they use, skipping the rest by their length prefix. In t-rust-db/examples `parquet-codecs` (2M rows), through column-rs with tools#62: `SELECT id, user_name … WHERE note LIKE '%request 1999%'` used to cost 10–33 ms more than `SELECT id`, and now costs 1.6–2.5 ms more (46.0 -> 31.7 ms on DuckDB's zstd file).
 
 ## [0.157.0] - 2026-10-22
 

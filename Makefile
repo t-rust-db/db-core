@@ -179,11 +179,12 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # `parser-row` this way.
 FEATURES := storage-row storage-column storage-column-write ingest-read ingest storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
-check-features: ## Each Cargo feature builds standalone (cargo check --no-default-features --features X)
+check-features: ## Each Cargo feature builds standalone, without warnings (cargo check --no-default-features --features X)
 	@for f in $(FEATURES); do \
 		printf '  %-22s' "$$f"; \
-		if out=$$(cargo check -q --no-default-features --features $$f 2>&1); then echo ok; \
-		else echo FAIL; echo "$$out" | grep -E '^error' | head -5; exit 1; fi; \
+		if out=$$(cargo check -q --no-default-features --features $$f 2>&1) \
+			&& ! echo "$$out" | grep -qE '^warning'; then echo ok; \
+		else echo FAIL; echo "$$out" | grep -E -A3 '^(error|warning)' | head -20; exit 1; fi; \
 	done
 
 # ADR 0000 §Invariants (a)-(c): first-party-only closure, the named

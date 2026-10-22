@@ -761,6 +761,7 @@ pub fn trigram_key(t: [u8; 3]) -> i64 {
 /// to JSON text is unscoped work with no caller today ([`JsonValue::Array`]
 /// keeps its raw text, so extracting an array leaf does work). The row
 /// engine's `json_extract` is sqlite3's ([`json`], #651).
+#[cfg(feature = "vm-batch")]
 pub(crate) fn late_json_extract(args: &[Value]) -> Result<Value, FunctionError> {
     if args.iter().any(|v| matches!(v, Value::Null)) {
         return Ok(Value::Null);
@@ -1373,6 +1374,7 @@ pub fn call_at(name: &str, args: &[Value], now_ns: i64) -> Result<Value, Functio
 /// `json` carry sqlite3's JSON subtype, which the row codegen decides
 /// (#651): `json_array(json('[1]'))` nests the array where
 /// `json_array('[1]')` quotes the text.
+#[cfg(feature = "vm-row")]
 pub(crate) fn call_marked(
     name: &str,
     args: &[Value],

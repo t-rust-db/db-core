@@ -73,6 +73,7 @@ pub(super) fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
 /// `name(args)` for a JSON function whose arguments at the positions in
 /// `json` carry sqlite3's JSON subtype (see the module docs), or `None`
 /// if `name` takes no JSON-valued arguments.
+#[cfg(feature = "vm-row")]
 pub(super) fn call_marked(
     name: &str,
     args: &[Value],

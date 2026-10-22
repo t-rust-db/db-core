@@ -334,6 +334,7 @@ fn closing_quote(s: &str) -> Option<usize> {
 /// byte it names. nginx writes each byte of a non-ASCII character as its
 /// own `\xHH`, so the bytes are decoded first and then read as UTF-8, with
 /// U+FFFD for any that are not. Other escapes stay as written.
+#[cfg(feature = "ingest")]
 pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
     if !s.contains('\\') {
         return std::borrow::Cow::Borrowed(s);
@@ -354,6 +355,7 @@ pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// The byte an escape at the start of `tail` stands for, and its length.
+#[cfg(feature = "ingest")]
 fn decode_escape(tail: &[u8]) -> Option<(u8, usize)> {
     let simple = match tail.get(1)? {
         b'"' => b'"',

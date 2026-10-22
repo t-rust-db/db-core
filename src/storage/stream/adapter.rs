@@ -26,7 +26,9 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::detect::{DetectedParser, Format};
+use super::detect::DetectedParser;
+#[cfg(feature = "ingest")]
+use super::detect::Format;
 use super::file::{LogFile, Refresh};
 use super::segment::{MixedValue, OwnedColumn, Segment};
 use super::Source;
@@ -202,6 +204,7 @@ pub(crate) fn column_values(segment: &Segment, name: &str) -> Option<Vec<Value>>
 ///   ([`super::clf::unescape`]).
 ///
 /// Other formats are unchanged.
+#[cfg(feature = "ingest")]
 pub(crate) fn stored_column_values(
     segment: &Segment,
     name: &str,
@@ -229,6 +232,7 @@ pub(crate) fn stored_column_values(
 }
 
 /// Row `i`'s JSON Lines value `text` of column `name`, decoded.
+#[cfg(feature = "ingest")]
 fn decode_json<'t>(
     segment: &Segment,
     i: usize,
@@ -242,6 +246,7 @@ fn decode_json<'t>(
 }
 
 /// Row `i`'s logfmt value `text`, decoded if the line wrote it in quotes.
+#[cfg(feature = "ingest")]
 fn decode_logfmt<'t>(segment: &Segment, i: usize, text: &'t str) -> std::borrow::Cow<'t, str> {
     if !text.contains('\\') {
         return std::borrow::Cow::Borrowed(text);
@@ -256,6 +261,7 @@ fn decode_logfmt<'t>(segment: &Segment, i: usize, text: &'t str) -> std::borrow:
 }
 
 /// Whether `message` is row `i`'s entire line (line terminator aside).
+#[cfg(feature = "ingest")]
 fn is_whole_line(segment: &Segment, i: usize, message: &str) -> bool {
     let line = segment.raw_line(i);
     // Trimmed as the JSON Lines parser trims a line before storing it.
