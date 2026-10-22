@@ -266,16 +266,174 @@ fn a_target_that_matches_no_constraint_is_refused_as_sqlite3_refuses_it() {
 }
 
 #[test]
-fn do_update_is_not_compiled_yet() {
-    let (_db, mut e) = engine("do-update");
+fn do_update_accumulates_into_the_existing_row() {
+    check(
+        "CREATE TABLE c(k TEXT PRIMARY KEY, n INT); \
+         INSERT INTO c VALUES ('a', 1) ON CONFLICT (k) DO UPDATE SET n = n + excluded.n; \
+         INSERT INTO c VALUES ('a', 10), ('b', 2), ('a', 100), ('b', 20) \
+             ON CONFLICT (k) DO UPDATE SET n = n + excluded.n",
+        "SELECT k, n FROM c ORDER BY k",
+        &["a|111", "b|22"],
+    );
+}
+
+#[test]
+fn do_update_on_the_rowid() {
+    check(
+        "CREATE TABLE r(id INTEGER PRIMARY KEY, v TEXT, n INT); \
+         INSERT INTO r VALUES (1, 'a', 1); \
+         INSERT INTO r VALUES (1, 'b', 2), (2, 'c', 3), (1, 'd', 4) \
+             ON CONFLICT (id) DO UPDATE SET v = excluded.v, n = n + excluded.n",
+        "SELECT id, v, n FROM r ORDER BY id",
+        &["1|d|7", "2|c|3"],
+    );
+    // The rowid keyword names the same constraint, and the key itself may
+    // be what the update sets.
+    check(
+        "CREATE TABLE r(id INTEGER PRIMARY KEY, v TEXT); \
+         INSERT INTO r VALUES (1, 'a'); \
+         INSERT INTO r VALUES (1, 'x') ON CONFLICT (rowid) DO UPDATE SET id = excluded.id + 100, v = 'moved'",
+        "SELECT id, v FROM r ORDER BY id",
+        &["101|moved"],
+    );
+}
+
+#[test]
+fn excluded_carries_the_column_affinity_and_the_where_gates_the_update() {
+    check(
+        "CREATE TABLE a(k INT PRIMARY KEY, n INTEGER, s TEXT); \
+         INSERT INTO a VALUES (1, 5, 'old'); \
+         INSERT INTO a VALUES (1, '7', 'new') ON CONFLICT (k) DO UPDATE SET n = excluded.n, s = excluded.s",
+        "SELECT k, n, typeof(n), s FROM a",
+        &["1|7|integer|new"],
+    );
+    check(
+        "CREATE TABLE g(k TEXT PRIMARY KEY, n INT); \
+         INSERT INTO g VALUES ('a', 10); \
+         INSERT INTO g VALUES ('a', 3), ('a', 30), ('a', 20) \
+             ON CONFLICT (k) DO UPDATE SET n = excluded.n WHERE excluded.n > n",
+        "SELECT k, n FROM g",
+        &["a|30"],
+    );
+}
+
+#[test]
+fn clauses_chain_by_target_and_a_clause_without_one_answers_the_rest() {
+    check(
+        "CREATE TABLE m(a INT, b INT, c INT, PRIMARY KEY (a, b), UNIQUE (c)); \
+         INSERT INTO m VALUES (1, 1, 10); \
+         INSERT INTO m VALUES (1, 1, 20) ON CONFLICT (a, b) DO UPDATE SET c = excluded.c \
+             ON CONFLICT (c) DO NOTHING; \
+         INSERT INTO m VALUES (2, 2, 20) ON CONFLICT (a, b) DO UPDATE SET c = 99 \
+             ON CONFLICT (c) DO NOTHING; \
+         INSERT INTO m VALUES (3, 3, 30)",
+        "SELECT a, b, c FROM m ORDER BY a",
+        &["1|1|20", "3|3|30"],
+    );
+    check(
+        "CREATE TABLE d(k TEXT UNIQUE, j INT UNIQUE, n INT); \
+         INSERT INTO d VALUES ('a', 1, 0), ('b', 2, 0); \
+         INSERT INTO d VALUES ('a', 9, 5) ON CONFLICT DO UPDATE SET n = n + 1; \
+         INSERT INTO d VALUES ('z', 2, 5) ON CONFLICT DO UPDATE SET n = n + 10",
+        "SELECT k, j, n FROM d ORDER BY k",
+        &["a|1|1", "b|2|10"],
+    );
+}
+
+#[test]
+fn do_update_reads_a_select_source_row_by_row() {
+    check(
+        "CREATE TABLE t(k INT PRIMARY KEY, n INT); \
+         CREATE TABLE s(k INT, n INT); \
+         INSERT INTO t VALUES (1, 100); \
+         INSERT INTO s VALUES (1, 1), (2, 2), (2, 3), (3, 4); \
+         INSERT INTO t SELECT k, n FROM s WHERE true \
+             ON CONFLICT (k) DO UPDATE SET n = n + excluded.n",
+        "SELECT k, n FROM t ORDER BY k",
+        &["1|101", "2|5", "3|4"],
+    );
+}
+
+#[test]
+fn a_bare_column_is_the_existing_row_and_the_table_name_qualifies_it() {
+    check(
+        "CREATE TABLE q(k TEXT PRIMARY KEY, n INT, m INT); \
+         INSERT INTO q VALUES ('a', 1, 2); \
+         INSERT INTO q VALUES ('a', 10, 20) ON CONFLICT (k) DO UPDATE SET n = q.n + excluded.n, m = m * excluded.m",
+        "SELECT k, n, m FROM q",
+        &["a|11|40"],
+    );
+}
+
+#[test]
+fn the_updated_row_meets_the_same_constraints_as_an_update() {
+    let setup =
+        "CREATE TABLE u(k TEXT PRIMARY KEY, j INT UNIQUE, n INT NOT NULL, c INT CHECK (c < 10)); \
+                 INSERT INTO u VALUES ('a', 1, 1, 1), ('b', 2, 2, 2)";
+    let (_db, mut e) = engine("update-constraints");
+    e.run_query(setup).unwrap();
+    for (sql, expect, oracle_text) in [
+        (
+            "INSERT INTO u VALUES ('a', 0, 0, 0) ON CONFLICT (k) DO UPDATE SET j = 2",
+            "UNIQUE constraint failed: u.j",
+            "UNIQUE constraint failed: u.j",
+        ),
+        (
+            "INSERT INTO u VALUES ('a', 0, 0, 0) ON CONFLICT (k) DO UPDATE SET n = NULL",
+            "NOT NULL constraint failed: u.n",
+            "NOT NULL constraint failed: u.n",
+        ),
+        (
+            "INSERT INTO u VALUES ('a', 0, 0, 0) ON CONFLICT (k) DO UPDATE SET c = 50",
+            "CHECK constraint failed",
+            "CHECK constraint failed",
+        ),
+    ] {
+        let (kind, message) = err_of(&mut e, sql);
+        assert_eq!(kind, ErrorKind::Execute, "{sql}");
+        assert!(message.contains(expect), "{sql}: {message}");
+        if let Some(theirs) = oracle_error(&format!("{setup}; {sql}")) {
+            assert!(theirs.contains(oracle_text), "{sql}: {theirs}");
+        }
+    }
+    // Setting the key to what it already is is not a conflict with itself.
+    check(
+        "CREATE TABLE u(k TEXT PRIMARY KEY, j INT UNIQUE, n INT); \
+         INSERT INTO u VALUES ('a', 1, 1); \
+         INSERT INTO u VALUES ('a', 1, 9) ON CONFLICT (k) DO UPDATE SET j = excluded.j, n = excluded.n",
+        "SELECT k, j, n FROM u",
+        &["a|1|9"],
+    );
+}
+
+#[test]
+fn a_new_rows_own_not_null_violation_still_aborts_before_it_conflicts() {
+    let (_db, mut e) = engine("new-row-not-null");
+    e.run_query(
+        "CREATE TABLE n(k TEXT PRIMARY KEY, v INT NOT NULL); INSERT INTO n VALUES ('a', 1)",
+    )
+    .unwrap();
+    let (_, message) = err_of(
+        &mut e,
+        "INSERT INTO n VALUES ('a', NULL) ON CONFLICT (k) DO UPDATE SET v = 5",
+    );
+    assert!(
+        message.contains("NOT NULL constraint failed: n.v"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_set_naming_an_unknown_column_is_refused() {
+    let (_db, mut e) = engine("unknown-set-column");
     e.run_query("CREATE TABLE t(k TEXT PRIMARY KEY, n INT)")
         .unwrap();
     let (kind, message) = err_of(
         &mut e,
-        "INSERT INTO t VALUES ('a', 1) ON CONFLICT (k) DO UPDATE SET n = excluded.n",
+        "INSERT INTO t VALUES ('a', 1) ON CONFLICT (k) DO UPDATE SET nope = 1",
     );
     assert_eq!(kind, ErrorKind::Compile);
-    assert!(message.contains("DO UPDATE"), "{message}");
+    assert!(message.contains("nope"), "{message}");
 }
 
 #[test]
@@ -284,9 +442,20 @@ fn the_file_stays_valid_for_sqlite3() {
     e.run_query(
         "CREATE TABLE t(k TEXT PRIMARY KEY, n INT, UNIQUE(n)); \
          INSERT INTO t VALUES ('a', 1), ('b', 2); \
-         INSERT INTO t VALUES ('a', 9), ('c', 2), ('d', 4) ON CONFLICT DO NOTHING",
+         INSERT INTO t VALUES ('a', 9), ('c', 2), ('d', 4) ON CONFLICT DO NOTHING; \
+         INSERT INTO t VALUES ('a', 0), ('e', 5) ON CONFLICT (k) DO UPDATE SET n = n + 100; \
+         INSERT INTO t VALUES ('f', 4) ON CONFLICT (n) DO UPDATE SET k = excluded.k",
     )
     .unwrap();
+    assert_eq!(
+        e.run_query("SELECT k, n FROM t ORDER BY k")
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| row.iter().map(cell).collect::<Vec<_>>().join("|"))
+            .collect::<Vec<_>>(),
+        ["a|101", "b|2", "e|5", "f|4"]
+    );
     drop(e);
     if let Ok(out) = Command::new("sqlite3")
         .arg(db.path())

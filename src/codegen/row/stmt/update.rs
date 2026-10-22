@@ -126,17 +126,7 @@ pub fn compile_update_with_catalog(
     // as touched — same reasoning `range_seek_touches_scanned_index`
     // below already applies to the single index a range-seek scans.
     let rowid_reassigned = rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten());
-    let index_touched: Vec<bool> = schema
-        .indexes
-        .iter()
-        .map(|index| {
-            rowid_reassigned.is_some()
-                || index.columns.iter().any(|c| {
-                    column_index(schema, &c.name)
-                        .is_none_or(|idx| assigned.get(idx).is_some_and(Option::is_some))
-                })
-        })
-        .collect();
+    let index_touched = index_touched_flags(schema, &assigned);
 
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
@@ -450,6 +440,29 @@ pub fn compile_update_with_catalog(
     Ok(em.finish())
 }
 
+/// For each of `schema.indexes`, whether a `SET` that assigns the columns
+/// `assigned` (one slot per table column) changes that index's key (#524).
+/// A reassigned rowid changes every index's key (the rowid is its last
+/// component); an expression index cannot be proven untouched. Shared with
+/// `INSERT ... ON CONFLICT DO UPDATE` (#696).
+pub(crate) fn index_touched_flags(schema: &TableSchema, assigned: &[Option<&Expr>]) -> Vec<bool> {
+    let rowid_reassigned = schema
+        .rowid_alias
+        .and_then(|idx| assigned.get(idx).copied().flatten())
+        .is_some();
+    schema
+        .indexes
+        .iter()
+        .map(|index| {
+            rowid_reassigned
+                || index.columns.iter().any(|c| {
+                    column_index(schema, &c.name)
+                        .is_none_or(|idx| assigned.get(idx).is_some_and(Option::is_some))
+                })
+        })
+        .collect()
+}
+
 /// Shared per-matched-row body for [`compile_update_with_catalog`]'s
 /// three positioning strategies (`SeekRowid` #336 fast path, #666's
 /// range-seek fast path, and the ordinary `Rewind`/`Next` scan): reads
@@ -461,7 +474,7 @@ pub fn compile_update_with_catalog(
 /// whatever "next row" mechanism (or none, for the single-row seek
 /// cases) follows.
 #[allow(clippy::too_many_arguments)]
-fn emit_update_row_body(
+pub(crate) fn emit_update_row_body(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     schema: &TableSchema,

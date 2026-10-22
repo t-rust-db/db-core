@@ -7,6 +7,7 @@
 //! totality/differential runners (db-core#545+).
 
 pub mod ebnf;
+pub mod sync;
 pub mod walker;
 
 pub use ebnf::{Grammar, GrammarError, Section};
