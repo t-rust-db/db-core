@@ -1,15 +1,15 @@
 ---
-
-> Moved from t-rust-db/tools `sqlite-rs/.openspec/specs/007-pager/spec.md` (#575). Paths are db-core's; `sqlite-rs:` paths are in t-rust-db/tools' `sqlite-rs/`.
 domain: storage
 version: 0.1.0
 status: draft
 date: 2026-08-14
 ---
 
-# 007 — Pager
+# 003 — Pager
 
-The page-access layer between the VFS and the b-tree cursor: resolves page numbers to bytes, refuses to serve a database with a hot rollback journal, and (Requirement 2) merges in committed WAL frames for databases with an uncheckpointed `-wal` file. Backs V1 step 2 (#35) and step 6 (#36), part of epic #5 phase 3. Depends on spec 001 (VFS, header) and spec 002 (the `PageSource` trait `TableCursor`/`IndexCursor` already consume generically — this spec's `Pager` implements it directly, so neither cursor changes). Refs: 001/Req-4.
+> Moved from t-rust-db/tools `sqlite-rs/.openspec/specs/007-pager/spec.md` (#575). Paths are db-core's; `sqlite-rs:` paths are in t-rust-db/tools' `sqlite-rs/`.
+
+The page-access layer between the VFS and the b-tree cursor: resolves page numbers to bytes, refuses to serve a database with a hot rollback journal, and (Requirement 2) merges in committed WAL frames for databases with an uncheckpointed `-wal` file. Backs V1 step 2 (#35) and step 6 (#36), part of epic #5 phase 3. Depends on spec 001 (VFS, header) and spec 002 (the `PageSource` trait `TableCursor`/`IndexCursor` already consume generically — this spec's `Pager` implements it directly, so neither cursor changes). Refs: sqlite-rs 001/Req-4.
 
 Everything in this spec is **Tier 0 READ CORE** — never droppable.
 
@@ -173,7 +173,7 @@ Writing to the underlying file requires a read-write file handle. Rather than op
 
 Tier 2 WRITE CORE (V3 phase 1, epic #161, #167), built on top of Requirement 4's dirty-page-tracking/flush primitives. `Pager::allocate_page` MUST return a free page number: popping one off the freelist (a leaf page number from the current trunk page's leaf array, or the trunk page itself once its leaf array is empty, promoting the trunk's own next-trunk pointer) when the freelist is non-empty, or extending the database by one page (incrementing the header's page-count field) when it is empty. `Pager::deallocate_page` MUST return a page to the freelist: appended to the current trunk page's leaf array if it has room (`(page_size - 8) / 4` entries), or made the new trunk page itself (pointing at the old trunk) once the current trunk is full. Both operations MUST update the header's freelist-trunk-page and freelist-page-count fields (bytes 32-35 and 36-39) on page 1 in the same call, via `Pager::get_page_mut`, so the bookkeeping is flushed atomically with the allocation/deallocation on the next `Pager::flush`.
 
-Refs: 003/Req-2, 007/Req-4.
+Refs: 001/Req-2, 003/Req-4.
 
 **Implementation:** `src/storage/row/pager.rs::Pager::allocate_page`, `src/storage/row/pager.rs::Pager::deallocate_page`, `src/storage/row/pager/freelist.rs::TrunkPage`
 
@@ -217,7 +217,7 @@ Refs: 003/Req-2, 007/Req-4.
 
 Tier 2 WRITE CORE (V3 phase 1, epic #161, #172; the RESERVED-probe/single-fd locking added in V5 #359 is ADR-0035), built on top of Requirement 4's dirty-page-tracking/flush primitives and Requirement 1's hot-journal detection. `Pager::flush` MUST, before overwriting any page that existed prior to the current transaction (page number `<=` the page count recorded on disk at the start of `flush`), write that page's pre-transaction content as a checksummed record into a `-journal` companion file (DELETE mode only — TRUNCATE/PERSIST/MEMORY are out of scope), `fsync` the journal, then write and `fsync` the dirty pages to the main file, then delete the journal. Pages beyond the pre-transaction page count (freshly allocated by `Pager::allocate_page` within the same transaction) are never journaled: a crash before commit leaves them referenced by nothing, and recovery's truncate-to-pre-transaction-page-count step drops them. `Pager::open` MUST, on detecting a hot journal (Requirement 1), replay every checksum-valid record from it into the main file, truncate the main file back to the journal's recorded pre-transaction page count, `fsync`, and delete the journal, before proceeding with the rest of `open`. The on-disk journal header and per-page checksum algorithm MUST match stock SQLite's `pager.c` byte-for-byte (28-byte header, `pager_cksum`'s every-200-bytes sampling) so a journal either implementation writes is recoverable by the other.
 
-Refs: 001/Req-4, 007/Req-1, 007/Req-4.
+Refs: sqlite-rs 001/Req-4, 003/Req-1, 003/Req-4.
 
 **Implementation:** `src/storage/row/pager.rs::Pager::flush`, `src/storage/row/pager.rs::recover_hot_journal`, `src/storage/row/pager/journal.rs`
 

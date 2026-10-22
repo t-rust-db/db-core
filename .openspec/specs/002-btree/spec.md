@@ -1,13 +1,13 @@
 ---
-
-> Moved from t-rust-db/tools `sqlite-rs/.openspec/specs/006-btree/spec.md` (#575). Paths are db-core's; `sqlite-rs:` paths are in t-rust-db/tools' `sqlite-rs/`.
 domain: storage
 version: 0.1.0
 status: draft
 date: 2026-08-14
 ---
 
-# 006 — B-Tree
+# 002 — B-Tree
+
+> Moved from t-rust-db/tools `sqlite-rs/.openspec/specs/006-btree/spec.md` (#575). Paths are db-core's; `sqlite-rs:` paths are in t-rust-db/tools' `sqlite-rs/`.
 
 The table and index b-tree cursors and write path: page header/cell-pointer-array layout, cell decode, key comparison, overflow-chain reassembly, and cell insert/delete with split and collapse. Backs V1 step 4 (#32) and step 5 (#33), part of epic #5 phase 2. Depends on spec 001 (header, VFS, record decode). Validated in part by spike 005 (#12), which exercised interior-node traversal and overflow reassembly against real multi-page/overflow fixtures before this spec was written.
 

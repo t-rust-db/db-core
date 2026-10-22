@@ -1,13 +1,13 @@
 ---
-
-> Moved from t-rust-db/tools `sqlite-rs/.openspec/specs/003-file-format/spec.md` (#575). Paths are db-core's; `sqlite-rs:` paths are in t-rust-db/tools' `sqlite-rs/`.
 domain: storage
 version: 0.1.0
 status: draft
 date: 2026-08-13
 ---
 
-# 003 — File Format
+# 001 — File Format
+
+> Moved from t-rust-db/tools `sqlite-rs/.openspec/specs/003-file-format/spec.md` (#575). Paths are db-core's; `sqlite-rs:` paths are in t-rust-db/tools' `sqlite-rs/`.
 
 The static half of the compatibility contract: what the bytes of a `.sqlite` file mean. Covers the database header, the record/serial-type format, and the read-only VFS that feeds them. This spec backs V1 steps 1 (#11) and 3 (#9); its scenarios were partially validated by spike 002 (#4/#6).
 
