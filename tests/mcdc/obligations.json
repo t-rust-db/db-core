@@ -19870,19 +19870,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_fp_format_real17_9302166b",
+    "id": "functions_fp_format_real17_01c21754",
     "file": "src/functions/fp.rs",
-    "line": 379,
-    "decision": "e2 < -1 && precision > 0",
-    "conditions": 2,
-    "vectors_required": 3,
+    "line": 380,
+    "decision": "e2 < -1",
+    "conditions": 1,
+    "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "functions_fp_format_real17_d5bfa90b",
     "file": "src/functions/fp.rs",
-    "line": 384,
+    "line": 385,
     "decision": "precision > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -19892,7 +19892,7 @@
   {
     "id": "functions_fp_format_real17_cb1724d1",
     "file": "src/functions/fp.rs",
-    "line": 386,
+    "line": 387,
     "decision": "nn > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -19902,7 +19902,7 @@
   {
     "id": "functions_fp_format_real17_74a6b28f",
     "file": "src/functions/fp.rs",
-    "line": 395,
+    "line": 396,
     "decision": "out.last() == Some(&b'0')",
     "conditions": 1,
     "vectors_required": 2,
@@ -19912,7 +19912,7 @@
   {
     "id": "functions_fp_format_real17_2a584b0d",
     "file": "src/functions/fp.rs",
-    "line": 398,
+    "line": 399,
     "decision": "out.last() == Some(&b'.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -19922,7 +19922,7 @@
   {
     "id": "functions_fp_format_real17_e05cc6d5_3",
     "file": "src/functions/fp.rs",
-    "line": 401,
+    "line": 402,
     "decision": "exp_form",
     "conditions": 1,
     "vectors_required": 2,
@@ -19932,7 +19932,7 @@
   {
     "id": "functions_fp_format_real17_2f83fb89",
     "file": "src/functions/fp.rs",
-    "line": 403,
+    "line": 404,
     "decision": "exp < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -19942,11 +19942,21 @@
   {
     "id": "functions_fp_format_real17_b0e4e152",
     "file": "src/functions/fp.rs",
-    "line": 405,
+    "line": 406,
     "decision": "e >= 100",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_fp_dec_5e2d02a4",
+    "file": "src/functions/fp.rs",
+    "line": 420,
+    "decision": "match fp_decode(r, i_round, mx_round) {\n            Decoded::Finite { digits, idp } => {\n                format!(\"{}@{idp}\", String::from_utf8_lossy(&digits))\n            }\n            Decoded::Special(s) => format!(\"special{s}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {

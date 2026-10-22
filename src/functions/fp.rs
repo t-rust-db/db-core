@@ -376,7 +376,8 @@ pub(crate) fn format_real17(r: f64, zeropad: bool) -> Vec<u8> {
         }
     }
     out.push(b'.');
-    if e2 < -1 && precision > 0 {
+    // `precision` is at least 18 here: `e2 < -1` means `exp <= -2`.
+    if e2 < -1 {
         let nn = (-1i32).wrapping_sub(e2).min(precision);
         out.resize(add(out.len(), usize::try_from(nn).unwrap_or(0)), b'0');
         precision = precision.wrapping_sub(nn);
@@ -408,4 +409,206 @@ pub(crate) fn format_real17(r: f64, zeropad: bool) -> Vec<u8> {
         out.extend_from_slice(format!("{:02}", e % 100).as_bytes());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `fp_decode`'s digits and `iDP` as `digits@idp`.
+    fn dec(r: f64, i_round: i32, mx_round: usize) -> String {
+        match fp_decode(r, i_round, mx_round) {
+            Decoded::Finite { digits, idp } => {
+                format!("{}@{idp}", String::from_utf8_lossy(&digits))
+            }
+            Decoded::Special(s) => format!("special{s}"),
+        }
+    }
+
+    /// `sqlite3FpDecode(r, 17, 20)`: how `%!.17g` and `%!.16e` decode.
+    fn dec17(r: f64) -> String {
+        dec(r, 17, 20)
+    }
+
+    /// MC/DC vector (obligation `functions_fp_fp_decode_59dfe2e8`,
+    /// `i_round == 0 && z[0] >= '5'`): leaf A false -- a positive `iRound`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_59dfe2e8__v1_positive_i_round() {
+        assert_eq!(dec(1.5, 2, 16), "15@1");
+    }
+
+    /// Leaf A true, leaf B false: 0.04 to 0 places has `iRound` 0 and a
+    /// first digit below 5, so it stays as it is.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_59dfe2e8__v2_first_digit_below_five() {
+        assert_eq!(dec(0.04, -1, 16), "400000000000000008@-1");
+    }
+
+    /// Both leaves true: 0.06 rounds up to 0.1 at 0 places.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_59dfe2e8__v3_first_digit_five_or_more_rounds_up() {
+        assert_eq!(dec(0.06, -1, 16), "1@0");
+    }
+
+    /// MC/DC vector (obligation `functions_fp_fp_decode_cd74203d`,
+    /// `i_round > 0 && (i_round < n || n > mx_round)`): leaf A false --
+    /// 0.04 at 0 places has no digits to keep, so all 18 stay.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_cd74203d__v1_no_digits_to_keep() {
+        assert_eq!(dec(0.04, -1, 16), "400000000000000008@-1");
+    }
+
+    /// Leaf A true, leaf B true: fewer digits asked for than there are.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_cd74203d__v2_fewer_digits_than_available() {
+        assert_eq!(dec(1.5, 1, 16), "2@1");
+    }
+
+    /// Leaves A true, B false, C false: more digits asked for than there
+    /// are, and within `mx_round` -- all of them are kept.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_cd74203d__v3_all_digits_within_the_limit() {
+        assert_eq!(dec(0.1, 25, 26), "1000000000000000056@0");
+    }
+
+    /// Leaves A true, B false, C true: more digits than `mx_round` allows.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_cd74203d__v4_past_the_limit() {
+        assert_eq!(dec(0.1, 25, 10), "1@0");
+    }
+
+    /// MC/DC vector (obligation `functions_fp_fp_decode_c71d0f56`,
+    /// `z[15] == '9' && z[14] == '9'`, at 17 digits): leaf A false.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_c71d0f56__v1_sixteenth_digit_not_nine() {
+        assert_eq!(dec17(2.3638456961415412e-61), "23638456961415412@-60");
+    }
+
+    /// Leaf A true, leaf B false.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_c71d0f56__v2_fifteenth_digit_not_nine() {
+        assert_eq!(dec17(7.62280082457942e-09), "76228008245794196@-8");
+    }
+
+    /// Both leaves true: a run of nines that a shorter number round-trips.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_c71d0f56__v3_nines_round_trip_shorter() {
+        assert_eq!(dec17(0.01000000000007), "1000000000007@-1");
+    }
+
+    /// MC/DC vector (obligation `functions_fp_fp_decode_520ff602`,
+    /// `jj > 0 && z[jj - 1] == '9'`): leaf A false -- the nines run to
+    /// the first digit, so `jj` reaches 0.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_520ff602__v1_nines_to_the_first_digit() {
+        assert_eq!(dec17(1e24), "1@25");
+    }
+
+    /// Leaf A true, leaf B false: the digit before the nines is not a 9.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_520ff602__v2_digit_before_is_not_nine() {
+        assert_eq!(dec17(9.9999999999999e-06), "99999999999999@-5");
+    }
+
+    /// Leaves A true, B true: the run of nines goes on past `z[13]`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_520ff602__v3_run_of_nines_continues() {
+        assert_eq!(dec17(0.01000000000007), "1000000000007@-1");
+    }
+
+    /// MC/DC vector (obligation `functions_fp_fp_decode_84b71333`,
+    /// `idp >= n0 || (z[15] == '0' && z[14] == '0' && z[13] == '0')`):
+    /// leaf A true -- a whole number.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_84b71333__v1_whole_number() {
+        assert_eq!(dec17(1.5e17), "15@18");
+    }
+
+    /// Leaf A false, leaf B false: `z[15]` is not a 0.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_84b71333__v2_sixteenth_digit_not_zero() {
+        assert_eq!(dec17(2.3638456961415412e-61), "23638456961415412@-60");
+    }
+
+    /// Leaves A false, B true, C false: `z[14]` is not a 0.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_84b71333__v3_fifteenth_digit_not_zero() {
+        assert_eq!(dec17(8933.17042557635), "89331704255763507@4");
+    }
+
+    /// Leaves A false, B true, C true, D false: `z[13]` is not a 0.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_84b71333__v4_fourteenth_digit_not_zero() {
+        assert_eq!(dec17(9.5367431640625e-7), "95367431640625@-6");
+    }
+
+    /// All four leaves true except A: three zeros end the 17 digits.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_84b71333__v5_three_trailing_zeros() {
+        assert_eq!(dec17(9.9999999997e-10), "99999999997@-9");
+    }
+
+    /// MC/DC vector (obligation `functions_fp_fp_decode_7dc0a28c`,
+    /// `jj > 1 && z[jj - 1] == '0'`): leaf A false -- zeros run down to
+    /// the second digit.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_7dc0a28c__v1_zeros_to_the_second_digit() {
+        assert_eq!(dec17(1e17), "1@18");
+    }
+
+    /// Leaf A true, leaf B false: `z[12]` is not a 0.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_7dc0a28c__v2_thirteenth_digit_not_zero() {
+        assert_eq!(dec17(1.2345678901234568e18), "12345678901234568@19");
+    }
+
+    /// Leaves A true, B true: `z[12]` is a 0 and the scan goes on.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_7dc0a28c__v3_zeros_continue() {
+        assert_eq!(dec17(1.5e17), "15@18");
+    }
+
+    /// MC/DC vector (obligation `functions_fp_fp_decode_57363437`,
+    /// `z.len() > 1 && z.last() == '0'`): leaf A false -- a single digit
+    /// is kept even if it is 0-like.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_57363437__v1_single_digit() {
+        assert_eq!(dec(1.0, 1, 16), "1@1");
+    }
+
+    /// Leaf A true, leaf B false: the last digit is not a 0.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_57363437__v2_last_digit_not_zero() {
+        assert_eq!(dec17(1.0 / 3.0), "33333333333333332@0");
+    }
+
+    /// Leaves A true, B true: trailing zeros are dropped.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_fp_fp_decode_57363437__v3_trailing_zeros_dropped() {
+        assert_eq!(dec17(0.5), "5@0");
+    }
 }

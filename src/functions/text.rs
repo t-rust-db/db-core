@@ -938,6 +938,29 @@ mod tests {
         call("printf", args).unwrap()
     }
 
+    /// MC/DC vector (obligation `functions_text_real_d63cc931`, `#` with
+    /// every digit zero drops the sign): leaf A false -- without `#`
+    /// a negative value that rounds to zero keeps its sign.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_real_d63cc931__v1_no_alt_keeps_the_sign() {
+        assert_eq!(p(&[t("%.2f"), Value::Real(-0.001)]), t("-0.00"));
+    }
+
+    /// Leaf A true, leaf B false: `#` with a non-zero digit keeps it.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_real_d63cc931__v2_alt_with_digits_keeps_the_sign() {
+        assert_eq!(p(&[t("%#.2f"), Value::Real(-1.5)]), t("-1.50"));
+    }
+
+    /// Both leaves true: `#` and nothing but zeros drops the sign.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_real_d63cc931__v3_alt_all_zero_drops_the_sign() {
+        assert_eq!(p(&[t("%#.2f"), Value::Real(-0.001)]), t("0.00"));
+    }
+
     /// #651: past `MAX_LENGTH` is "string or blob too big", decided
     /// before the output is built; widths and precisions wrap to 31 bits.
     #[test]
