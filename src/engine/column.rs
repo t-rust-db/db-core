@@ -191,7 +191,7 @@ fn timestamp_columns(file: &ParquetFile<'_>) -> Vec<(String, i64)> {
         .filter_map(|f| match f.element.converted_type {
             Some(ConvertedType::TimestampMillis) => Some((f.name, 1_000)),
             Some(ConvertedType::TimestampMicros) => Some((f.name, 1_000_000)),
-            _ => None,
+            _ => f.element.timestamp_units.map(|units| (f.name, units)),
         })
         .collect()
 }
@@ -1827,6 +1827,31 @@ mod tests {
             mapped.run_query(sql).unwrap().rows
         );
         assert!(BatchEngine::from_bytes("x", vec![0u8; 16]).is_err());
+    }
+
+    /// A nanosecond TIMESTAMP has no `ConvertedType`, only a `LogicalType`
+    /// unit; a quoted time compares with it all the same (#679).
+    #[cfg(feature = "storage-column-write")]
+    #[test]
+    fn a_nanosecond_timestamp_compares_with_a_quoted_time() {
+        use crate::storage::parquet::writer::{
+            ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+        };
+        let schema = vec![ColumnSpec::new("ts", ColumnType::TimestampNanos, false)];
+        let mut w = ParquetWriter::new(Vec::new(), schema, WriterOptions::default()).unwrap();
+        // 2026-10-22 00:00, 01:00 and 02:00 UTC.
+        let hour = 3_600_000_000_000_i64;
+        let day = 1_792_627_200_000_000_000_i64;
+        w.write_columns(vec![ColumnValues::TimestampNanos(
+            (0..3).map(|i| Some(day + i * hour)).collect(),
+        )])
+        .unwrap();
+        let mut engine = BatchEngine::from_bytes("t", w.finish().unwrap().0).unwrap();
+        let rows = engine
+            .run_query("SELECT count(*) FROM t WHERE ts >= '2026-10-22T01:00:00Z'")
+            .unwrap()
+            .rows;
+        assert_eq!(rows, vec![vec![crate::engine::Cell::Int(2)]]);
     }
 
     /// End to end over the 3-row-group fixture whose `id`/`amount` are
