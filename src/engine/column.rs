@@ -528,6 +528,12 @@ impl Segment for RowGroupSegment<'_, '_> {
             .filter(|(name, ..)| !predicate_names.iter().any(|n| n == name))
             .collect();
         for (name, index, physical_type) in &projection_leaves {
+            // #704: no row survived, so the column is empty: its pages
+            // are never read. It stays in the batch for `LoadColumn`.
+            if indices.is_empty() {
+                batch = batch.with_column(name.clone(), Vec::new());
+                continue;
+            }
             let decoded = load_leaf_at(&rg, *index, *physical_type, &indices)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             batch = apply_loaded(batch, name, decoded);
@@ -1703,6 +1709,33 @@ mod tests {
             None,
             "malformed statistics: unknown"
         );
+    }
+
+    #[test]
+    fn a_projection_only_column_is_not_read_when_no_row_survives() {
+        // #704: `ghost` names a column chunk the file does not have, so
+        // reading it fails -- which only happens when a row survives.
+        let file_bytes = build_file(&[(&[1.0, 2.0], None)]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let leaves: Vec<Leaf> = vec![
+            ("amount".to_string(), 0, PhysicalType::Double),
+            ("ghost".to_string(), 99, PhysicalType::Int64),
+        ];
+        let load = |sql: &str| {
+            let select = crate::parser::parse(sql).expect("valid SQL");
+            let program: Program = planner::compile(&select).unwrap();
+            let segment = RowGroupSegment {
+                file: &file,
+                row_group_index: 0,
+                columns: leaves.clone(),
+                program: &program,
+                order_leaf: None,
+            };
+            segment.load().map(|batch| batch.num_rows)
+        };
+        assert_eq!(load("SELECT ghost FROM t WHERE amount > 100").unwrap(), 0);
+        let err = load("SELECT ghost FROM t WHERE amount > 1").unwrap_err();
+        assert!(err.to_string().contains("column `ghost`"), "{err}");
     }
 
     #[test]

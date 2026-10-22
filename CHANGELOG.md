@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.159.0] - 2026-10-22
+
+### Changed
+
+- **A filtered projection skips a row group's projection-only columns when no row survives** (#704). ADR-0026's phase 2b used to decode those columns at the surviving positions even when there were none, reading and decompressing every page for a row group the filter had emptied. Now each one is added as an empty column without opening its pages. In t-rust-db/examples `parquet-codecs` (2M rows, matches in 3 of 14 row groups), through column-rs: `SELECT id, user_name … WHERE note LIKE '%request 1999%'` runs 0.3–1.8 ms faster and uses 4–9 ms less CPU.
+
 ## [0.158.0] - 2026-10-22
 
 ### Added
