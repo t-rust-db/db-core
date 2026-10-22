@@ -447,8 +447,41 @@ impl StorageFactory {
     }
 }
 
+impl StorageFactory {
+    /// Where each declared column of the table rooted at `root` is stored,
+    /// when that table is `WITHOUT ROWID` (#722): its root is an index
+    /// b-tree page, and `sqlite_master` has the `CREATE TABLE` that says
+    /// which columns are the key. `None` for an ordinary table.
+    fn without_rowid_layout(&self, root: u32) -> Option<Vec<usize>> {
+        // Page 1 holds `sqlite_master`, a table whatever its header says.
+        if root <= 1 {
+            return None;
+        }
+        let page = self.source.read_page(root).ok()?;
+        // 0x02 interior index, 0x0a leaf index.
+        if !matches!(page.first(), Some(0x02 | 0x0a)) {
+            return None;
+        }
+        let sql = btree::table_sql_by_root(&self.source, &self.header, root).ok()??;
+        crate::schema::without_rowid_layout(&sql)
+    }
+}
+
 impl CursorFactory for StorageFactory {
     fn open_read(&mut self, root: u32) -> Result<Box<dyn Cursor>, CursorFactoryError> {
+        if let Some(stored_at) = self.without_rowid_layout(root) {
+            let inner = IndexCursorAdapter::new(
+                Rc::clone(&self.source),
+                self.writer.clone(),
+                self.header,
+                root,
+            );
+            return Ok(Box::new(WithoutRowidCursorAdapter::new(
+                inner,
+                stored_at,
+                Rc::clone(&self.source),
+            )));
+        }
         Ok(Box::new(TableCursorAdapter::new(
             Rc::clone(&self.source),
             self.writer.clone(),
@@ -477,6 +510,72 @@ impl CursorFactory for StorageFactory {
             self.header,
             root,
         )))
+    }
+}
+
+// ------------------------------------------------------ WITHOUT ROWID
+
+/// A `WITHOUT ROWID` table's b-tree (#722). The table *is* an index
+/// b-tree: each entry holds a whole row, with the `PRIMARY KEY` columns
+/// first (in key order) and the other columns after them in declared
+/// order. This cursor reads it as a table: `column` takes the *declared*
+/// column index, so codegen reads such a table exactly like any other.
+/// There is no rowid.
+pub(crate) struct WithoutRowidCursorAdapter {
+    inner: IndexCursorAdapter,
+    /// For each declared column, its position in the stored record.
+    stored_at: Vec<usize>,
+    source: Rc<dyn PageSource>,
+}
+
+impl WithoutRowidCursorAdapter {
+    fn new(inner: IndexCursorAdapter, stored_at: Vec<usize>, source: Rc<dyn PageSource>) -> Self {
+        WithoutRowidCursorAdapter {
+            inner,
+            stored_at,
+            source,
+        }
+    }
+}
+
+impl Cursor for WithoutRowidCursorAdapter {
+    fn rewind(&mut self) -> bool {
+        self.inner.rewind()
+    }
+
+    fn next(&mut self) -> bool {
+        self.inner.next()
+    }
+
+    fn last(&mut self) -> bool {
+        self.inner.last()
+    }
+
+    fn prev(&mut self) -> bool {
+        self.inner.prev()
+    }
+
+    fn column(&self, col: usize) -> Option<Value> {
+        self.inner.column(*self.stored_at.get(col)?)
+    }
+
+    fn rowid(&self) -> Option<i64> {
+        None
+    }
+
+    fn count(&self) -> Option<i64> {
+        let mut cursor = IndexCursor::new(
+            Rc::clone(&self.source),
+            self.inner.header.usable_page_size(),
+            self.inner.root_page,
+        );
+        let mut rows: i64 = 0;
+        let mut entry = cursor.first().ok()?;
+        while entry.is_some() {
+            rows = rows.saturating_add(1);
+            entry = cursor.next().ok()?;
+        }
+        Some(rows)
     }
 }
 

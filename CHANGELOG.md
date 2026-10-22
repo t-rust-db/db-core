@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.167.1] - 2026-10-22
+
+### Fixed
+
+- **A SQL query on a `WITHOUT ROWID` table found no rows** (#722). `SELECT count(*)` answered `0` and every other query came back empty, on a file sqlite3 had written with 500 rows in it. The table's b-tree is an index b-tree whose entries are whole rows (the `PRIMARY KEY` columns first, in key order, then the others), and every table scan read it as a table b-tree and silently saw nothing. The cursor factory now recognises such a root (an index page, with a `WITHOUT ROWID` `CREATE TABLE` in `sqlite_master`) and hands back a cursor that reads it as a table: `Column` takes the declared column index, whatever the key is, and there is no rowid. Verified against sqlite3 over a 3000-row table keyed on its last two columns, a table whose every column is in the key, joins, subqueries, aggregates and `ORDER BY`/`LIMIT`.
+- **A secondary index on a `WITHOUT ROWID` table is not used to fetch rows.** Its entries end in the key columns, not a rowid, so the index walks, which fetch the row by rowid afterwards, answered `WHERE n = 40` with no row. Such tables enter a `SELECT`'s catalog without their secondary indexes and are scanned; `DROP TABLE` and the other DDL still see them.
+- **`PRAGMA integrity_check` and `quick_check` reported a valid `WITHOUT ROWID` file as corrupt** (`unexpected b-tree page type`, and a `rowid not present` line per secondary-index entry). They now walk such a table as an index b-tree, checking that its primary keys strictly increase, and check a secondary index's ordering and entry count.
+- **`ANALYZE` failed on any database holding a `WITHOUT ROWID` table.** Such tables are skipped, so the rest are still analyzed.
+
+Writing to `WITHOUT ROWID` tables is still refused; that follows in the next releases (#722).
+
 ## [0.167.0] - 2026-10-22
 
 ### Added

@@ -2732,7 +2732,7 @@
   {
     "id": "codegen_row_analyze_compiles_to_init_analyze_halt_66f334c1",
     "file": "src/codegen/row/analyze.rs",
-    "line": 91,
+    "line": 96,
     "decision": "match &program.instructions[1].p4 {\n            P4::Analyze { targets } => {\n                assert_eq!(targets.len(), 1);\n                assert_eq!(targets[0].table_name, \"t\");\n                assert_eq!(targets[0].table_root_page, 2);\n            }\n            other => panic!(\"expected P4::Analyze, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2742,7 +2742,7 @@
   {
     "id": "codegen_row_analyze_bakes_every_index_on_the_target_table_6b142c68",
     "file": "src/codegen/row/analyze.rs",
-    "line": 112,
+    "line": 117,
     "decision": "match &program.instructions[1].p4 {\n            P4::Analyze { targets } => {\n                assert_eq!(targets[0].indexes.len(), 1);\n                assert_eq!(targets[0].indexes[0].index_name, \"idx_a\");\n                assert_eq!(targets[0].indexes[0].root_page, 3);\n            }\n            other => panic!(\"expected P4::Analyze, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3460,10 +3460,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_3c5c73bc",
+    "id": "codegen_row_dispatch_compile_statement_e76ca3f4",
     "file": "src/codegen/row/dispatch.rs",
     "line": 413,
-    "decision": "match head {\n        \"BEGIN\" => match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        },\n        \"COMMIT\" | \"END\" => match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        },\n        \"ROLLBACK\" => match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        },\n        \"PRAGMA\" => match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        },\n        \"ANALYZE\" => match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        // db-core addition (#219): sqlite-rs dispatches SELECT from its\n        // CLI binary (`src/bin/sqlite-rs/query.rs::compile_select_program`),\n        // which db-core has no counterpart for -- so that function's pure\n        // half lives here as [`compile_select_statement`] /\n        // [`explain_select_statement`], and `compile_statement` covers the\n        // whole statement vocabulary as a library entry point. `WITH` is a\n        // `SELECT`'s CTE prefix (only `Select` carries a `with_clause`).\n        \"SELECT\" | \"WITH\" => match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        },\n        \"EXPLAIN\" => match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        },\n        \"INSERT\" => match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"UPDATE\" => match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(&update, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"DELETE\" => match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"CREATE\" if second == \"TABLE\" => dispatch_create_table(sql, schemas, views),\n        \"CREATE\" if second == \"VIEW\" => dispatch_create_view(sql, schemas, views),\n        \"CREATE\" if is_create_index => dispatch_create_index(sql, schemas, views),\n        \"DROP\" if second == \"TABLE\" => dispatch_drop_table(sql, schemas, views),\n        \"DROP\" if second == \"INDEX\" => dispatch_drop_index(sql, schemas),\n        \"DROP\" if second == \"VIEW\" => dispatch_drop_view(sql, schemas, views),\n        // Reports the statement's actual leading word (uppercased, as\n        // before), not `canonical`'s `\"\"` sentinel — this is a cold\n        // path, so the one allocation is free.\n        _ => Err(DispatchError::Unrecognized(first_word.to_ascii_uppercase())),\n    }",
+    "decision": "match head {\n        \"BEGIN\" => match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        },\n        \"COMMIT\" | \"END\" => match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        },\n        \"ROLLBACK\" => match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        },\n        \"PRAGMA\" => match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        },\n        \"ANALYZE\" => match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        // db-core addition (#219): sqlite-rs dispatches SELECT from its\n        // CLI binary (`src/bin/sqlite-rs/query.rs::compile_select_program`),\n        // which db-core has no counterpart for -- so that function's pure\n        // half lives here as [`compile_select_statement`] /\n        // [`explain_select_statement`], and `compile_statement` covers the\n        // whole statement vocabulary as a library entry point. `WITH` is a\n        // `SELECT`'s CTE prefix (only `Select` carries a `with_clause`).\n        \"SELECT\" | \"WITH\" => match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        },\n        \"EXPLAIN\" => match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        },\n        \"INSERT\" => match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"UPDATE\" => match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(\n                    &update,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"DELETE\" => match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(\n                    &delete,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"CREATE\" if second == \"TABLE\" => dispatch_create_table(sql, schemas, views),\n        \"CREATE\" if second == \"VIEW\" => dispatch_create_view(sql, schemas, views),\n        \"CREATE\" if is_create_index => dispatch_create_index(sql, schemas, views),\n        \"DROP\" if second == \"TABLE\" => dispatch_drop_table(sql, schemas, views),\n        \"DROP\" if second == \"INDEX\" => dispatch_drop_index(sql, schemas),\n        \"DROP\" if second == \"VIEW\" => dispatch_drop_view(sql, schemas, views),\n        // Reports the statement's actual leading word (uppercased, as\n        // before), not `canonical`'s `\"\"` sentinel — this is a cold\n        // path, so the one allocation is free.\n        _ => Err(DispatchError::Unrecognized(first_word.to_ascii_uppercase())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -3472,7 +3472,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4ca02b2c",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 575,
+    "line": 584,
     "decision": "second == \"TABLE\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -3482,7 +3482,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_fc01ca5d",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 576,
+    "line": 585,
     "decision": "second == \"VIEW\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -3492,7 +3492,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_cbbea3d0",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 577,
+    "line": 586,
     "decision": "is_create_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -3502,7 +3502,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4ca02b2c_2",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 578,
+    "line": 587,
     "decision": "second == \"TABLE\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -3512,7 +3512,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_65522442",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 579,
+    "line": 588,
     "decision": "second == \"INDEX\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -3522,7 +3522,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_fc01ca5d_2",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 580,
+    "line": 589,
     "decision": "second == \"VIEW\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -3650,20 +3650,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_128e6b37",
+    "id": "codegen_row_dispatch_compile_statement_4b682ec3",
     "file": "src/codegen/row/dispatch.rs",
     "line": 507,
-    "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        }",
+    "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_99895de6",
+    "id": "codegen_row_dispatch_compile_statement_e4146d0a",
     "file": "src/codegen/row/dispatch.rs",
     "line": 510,
-    "decision": "match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, schemas)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                }",
+    "decision": "match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select);\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -3680,29 +3680,49 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_df111e5c",
+    "id": "codegen_row_dispatch_compile_statement_8dc764f9",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 561,
-    "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(&update, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        }",
+    "line": 562,
+    "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(\n                    &update,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_32a68754",
+    "id": "codegen_row_dispatch_compile_statement_5cf32762",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 568,
-    "decision": "match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)\n            }\n            other => Err(parse_error(other)),\n        }",
+    "line": 573,
+    "decision": "match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(\n                    &delete,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_dispatch_readable_catalog_7aa9946e",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 620,
+    "decision": "!schemas\n        .iter()\n        .any(|s| s.without_rowid && !s.indexes.is_empty())",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_dispatch_readable_catalog_92d76ebb",
+    "file": "src/codegen/row/dispatch.rs",
+    "line": 630,
+    "decision": "s.without_rowid",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "codegen_row_dispatch_compile_select_statement_13fa7590",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 624,
+    "line": 663,
     "decision": "!select.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -3712,7 +3732,7 @@
   {
     "id": "codegen_row_dispatch_compile_select_statement_8a16b420",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 633,
+    "line": 672,
     "decision": "from.joins.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16740,10 +16760,50 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_row_adapter_without_rowid_layout_639765db",
+    "file": "src/engine/row/adapter.rs",
+    "line": 457,
+    "decision": "root <= 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_adapter_without_rowid_layout_e163c8d7",
+    "file": "src/engine/row/adapter.rs",
+    "line": 462,
+    "decision": "!matches!(page.first(), Some(0x02 | 0x0a))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_adapter_open_read_f2248ea4",
+    "file": "src/engine/row/adapter.rs",
+    "line": 472,
+    "decision": "let Some(stored_at) = self.without_rowid_layout(root)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_row_adapter_open_write_cb2a8617",
     "file": "src/engine/row/adapter.rs",
-    "line": 461,
+    "line": 494,
     "decision": "self.writer.is_none()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_adapter_count_4a9b54d0",
+    "file": "src/engine/row/adapter.rs",
+    "line": 574,
+    "decision": "entry.is_some()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -16752,7 +16812,7 @@
   {
     "id": "engine_row_adapter_begin_745e4425",
     "file": "src/engine/row/adapter.rs",
-    "line": 527,
+    "line": 626,
     "decision": "match mode {\n            crate::vm::row::TRANSACTION_MODE_IMMEDIATE => pager.begin_immediate(),\n            crate::vm::row::TRANSACTION_MODE_EXCLUSIVE => pager.begin_exclusive(),\n            _ => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16762,7 +16822,7 @@
   {
     "id": "engine_row_adapter_commit_2254f3df",
     "file": "src/engine/row/adapter.rs",
-    "line": 536,
+    "line": 635,
     "decision": "match self.writer.as_ref() {\n            Some(writer) => writer\n                .borrow_mut()\n                .flush()\n                .map_err(|e| TransactionError(storage_err(e))),\n            None => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16772,7 +16832,7 @@
   {
     "id": "engine_row_adapter_rollback_fa5777ea",
     "file": "src/engine/row/adapter.rs",
-    "line": 546,
+    "line": 645,
     "decision": "match self.writer.as_ref() {\n            Some(writer) => writer\n                .borrow_mut()\n                .rollback()\n                .map_err(|e| TransactionError(storage_err(e))),\n            None => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16782,7 +16842,7 @@
   {
     "id": "engine_row_adapter_set_journal_mode_931d7438",
     "file": "src/engine/row/adapter.rs",
-    "line": 559,
+    "line": 658,
     "decision": "mode == JOURNAL_MODE_WAL",
     "conditions": 1,
     "vectors_required": 2,
@@ -16792,7 +16852,7 @@
   {
     "id": "engine_row_adapter_set_synchronous_205dc366",
     "file": "src/engine/row/adapter.rs",
-    "line": 576,
+    "line": 675,
     "decision": "let Some(writer) = self.writer.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16802,7 +16862,7 @@
   {
     "id": "engine_row_adapter_set_synchronous_d6b2ee70",
     "file": "src/engine/row/adapter.rs",
-    "line": 577,
+    "line": 676,
     "decision": "match level {\n                SYNCHRONOUS_OFF => SynchronousMode::Off,\n                SYNCHRONOUS_NORMAL => SynchronousMode::Normal,\n                _ => SynchronousMode::Full,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16812,7 +16872,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 628,
+    "line": 727,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -16822,7 +16882,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_f76da1f3",
     "file": "src/engine/row/adapter.rs",
-    "line": 631,
+    "line": 730,
     "decision": "prev_leading.as_ref() != leading.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16832,7 +16892,7 @@
   {
     "id": "engine_row_adapter_delete_master_row_8e51437e",
     "file": "src/engine/row/adapter.rs",
-    "line": 715,
+    "line": 814,
     "decision": "match e {\n                // The error carries no name (#658); this caller has it.\n                btree::BtreeError::MasterEntryNotFound => {\n                    SchemaStorageError(format!(\"no sqlite_master {kind} named {name}\"))\n                }\n                other => schema_err(other),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16842,7 +16902,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 778,
+    "line": 877,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -16852,7 +16912,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_15a637f2",
     "file": "src/engine/row/adapter.rs",
-    "line": 780,
+    "line": 879,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) =\n                    (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16862,7 +16922,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_892d9090",
     "file": "src/engine/row/adapter.rs",
-    "line": 783,
+    "line": 882,
     "decision": "&**n == table",
     "conditions": 1,
     "vectors_required": 2,
@@ -32030,6 +32090,26 @@
     "wildcard_risk": true
   },
   {
+    "id": "schema_without_rowid_layout_6ddf6a6f",
+    "file": "src/schema.rs",
+    "line": 316,
+    "decision": "!create.without_rowid",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "schema_without_rowid_layout_0020c529",
+    "file": "src/schema.rs",
+    "line": 328,
+    "decision": "!stored.contains(&declared)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_column_decode_annotation_11872427",
     "file": "src/storage/column/decode.rs",
     "line": 52,
@@ -39252,7 +39332,7 @@
   {
     "id": "storage_row_btree_deref_32b85bf4",
     "file": "src/storage/row/btree.rs",
-    "line": 83,
+    "line": 85,
     "decision": "match self {\n            #[allow(\n                clippy::indexing_slicing,\n                reason = \"start/len are computed from a validated in-bounds slice at construction (reassemble_payload)\"\n            )]\n            Payload::Local { page, start, len } => &page[*start..start.saturating_add(*len)],\n            Payload::Owned(bytes) => bytes,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39262,7 +39342,7 @@
   {
     "id": "storage_row_btree_prev_6a466888",
     "file": "src/storage/row/btree.rs",
-    "line": 240,
+    "line": 242,
     "decision": "!self.positioned_reverse",
     "conditions": 1,
     "vectors_required": 2,
@@ -39272,7 +39352,7 @@
   {
     "id": "storage_row_btree_seek_b88484d8",
     "file": "src/storage/row/btree.rs",
-    "line": 300,
+    "line": 302,
     "decision": "visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -39282,7 +39362,7 @@
   {
     "id": "storage_row_btree_seek_32233a2c",
     "file": "src/storage/row/btree.rs",
-    "line": 313,
+    "line": 315,
     "decision": "match page_type {\n                LEAF_TABLE => {\n                    let cell_ptr_base = header_start.saturating_add(8);\n                    // Leaf cells are stored in rowid-ascending order by\n                    // pointer-array index (see the module's ordering\n                    // invariant), so a binary search over `i` decodes only\n                    // O(log n) cells instead of scanning every cell on the\n                    // page — this matters a lot for repeated seeks (e.g. a\n                    // join probing the same small table per outer row).\n                    let mut lo = 0usize;\n                    let mut hi = num_cells;\n                    while lo < hi {\n                        let mid = lo.saturating_add(hi.saturating_sub(lo) / 2);\n                        let cell_start = read_cell_pointer(\n                            &page,\n                            cell_ptr_offset(cell_ptr_base, mid),\n                            page_num,\n                            mid,\n                        )?;\n                        let (rowid, payload_len, tail_start) =\n                            decode_cell_head(&page, cell_start, page_num)?;\n                        match rowid.cmp(&target_rowid) {\n                            std::cmp::Ordering::Equal => {\n                                self.current = Some(CurrentCell {\n                                    page: Rc::clone(&page),\n                                    page_num,\n                                    tail_start,\n                                    payload_len,\n                                });\n                                return Ok(Some(rowid));\n                            }\n                            std::cmp::Ordering::Less => lo = mid.saturating_add(1),\n                            std::cmp::Ordering::Greater => hi = mid,\n                        }\n                    }\n                    return Ok(None);\n                }\n                INTERIOR_TABLE => {\n                    require_interior_header(&page, header_start, page_num)?;\n                    let cell_ptr_base = header_start.saturating_add(12);\n                    let rightmost = read_u32(&page, header_start.saturating_add(8), page_num)?;\n                    // Interior separator keys are ascending by pointer-array\n                    // index too; binary search for the leftmost `i` with\n                    // `target_rowid <= key(i)` (the child to descend into),\n                    // falling back to `rightmost` when none qualifies —\n                    // same semantics as the old early-break linear scan.\n                    let mut lo = 0usize;\n                    let mut hi = num_cells;\n                    let mut next_page = rightmost;\n                    while lo < hi {\n                        let mid = lo.saturating_add(hi.saturating_sub(lo) / 2);\n                        let cell_start = read_cell_pointer(\n                            &page,\n                            cell_ptr_offset(cell_ptr_base, mid),\n                            page_num,\n                            mid,\n                        )?;\n                        let key_bytes = page.get(cell_start.saturating_add(4)..).ok_or({\n                            BtreeError::InvalidCellPointer {\n                                page_num,\n                                index: mid,\n                            }\n                        })?;\n                        let (key, _) = decode_varint(key_bytes)\n                            .map_err(|source| BtreeError::InvalidCellVarint { page_num, source })?;\n                        if target_rowid <= rowid_from_varint(key) {\n                            let child = read_u32(&page, cell_start, page_num)?;\n                            next_page = child;\n                            hi = mid;\n                        } else {\n                            lo = mid.saturating_add(1);\n                        }\n                    }\n                    page_num = next_page;\n                }\n                other => {\n                    return Err(BtreeError::UnexpectedPageType {\n                        page_num,\n                        page_type: other,\n                    })\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39292,7 +39372,7 @@
   {
     "id": "storage_row_btree_seek_3d6017f2",
     "file": "src/storage/row/btree.rs",
-    "line": 324,
+    "line": 326,
     "decision": "lo < hi",
     "conditions": 1,
     "vectors_required": 2,
@@ -39302,7 +39382,7 @@
   {
     "id": "storage_row_btree_seek_4353196a",
     "file": "src/storage/row/btree.rs",
-    "line": 334,
+    "line": 336,
     "decision": "match rowid.cmp(&target_rowid) {\n                            std::cmp::Ordering::Equal => {\n                                self.current = Some(CurrentCell {\n                                    page: Rc::clone(&page),\n                                    page_num,\n                                    tail_start,\n                                    payload_len,\n                                });\n                                return Ok(Some(rowid));\n                            }\n                            std::cmp::Ordering::Less => lo = mid.saturating_add(1),\n                            std::cmp::Ordering::Greater => hi = mid,\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39312,7 +39392,7 @@
   {
     "id": "storage_row_btree_seek_3d6017f2_2",
     "file": "src/storage/row/btree.rs",
-    "line": 362,
+    "line": 364,
     "decision": "lo < hi",
     "conditions": 1,
     "vectors_required": 2,
@@ -39322,7 +39402,7 @@
   {
     "id": "storage_row_btree_seek_5757c39d",
     "file": "src/storage/row/btree.rs",
-    "line": 378,
+    "line": 380,
     "decision": "target_rowid <= rowid_from_varint(key)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39332,7 +39412,7 @@
   {
     "id": "storage_row_btree_read_page_d01b0d15",
     "file": "src/storage/row/btree.rs",
-    "line": 410,
+    "line": 412,
     "decision": "self.pages_visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -39342,7 +39422,7 @@
   {
     "id": "storage_row_btree_push_page_abf4041c",
     "file": "src/storage/row/btree.rs",
-    "line": 430,
+    "line": 432,
     "decision": "match page_type {\n            LEAF_TABLE => false,\n            INTERIOR_TABLE => true,\n            other => {\n                return Err(BtreeError::UnexpectedPageType {\n                    page_num,\n                    page_type: other,\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39352,7 +39432,7 @@
   {
     "id": "storage_row_btree_push_page_7d8613b7",
     "file": "src/storage/row/btree.rs",
-    "line": 440,
+    "line": 442,
     "decision": "is_interior",
     "conditions": 1,
     "vectors_required": 2,
@@ -39362,7 +39442,7 @@
   {
     "id": "storage_row_btree_push_page_7d8613b7_2",
     "file": "src/storage/row/btree.rs",
-    "line": 444,
+    "line": 446,
     "decision": "is_interior",
     "conditions": 1,
     "vectors_required": 2,
@@ -39372,7 +39452,7 @@
   {
     "id": "storage_row_btree_push_page_fb38977a",
     "file": "src/storage/row/btree.rs",
-    "line": 457,
+    "line": 459,
     "decision": "reverse",
     "conditions": 1,
     "vectors_required": 2,
@@ -39382,7 +39462,7 @@
   {
     "id": "storage_row_btree_advance_5f10a4b0",
     "file": "src/storage/row/btree.rs",
-    "line": 471,
+    "line": 473,
     "decision": "match self.stack.len() {\n                0 => {\n                    self.current = None;\n                    return Ok(None);\n                }\n                n => n.saturating_sub(1),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39392,7 +39472,7 @@
   {
     "id": "storage_row_btree_advance_f05caacc",
     "file": "src/storage/row/btree.rs",
-    "line": 489,
+    "line": 491,
     "decision": "!is_interior",
     "conditions": 1,
     "vectors_required": 2,
@@ -39402,7 +39482,7 @@
   {
     "id": "storage_row_btree_advance_1f53ae14",
     "file": "src/storage/row/btree.rs",
-    "line": 490,
+    "line": 492,
     "decision": "next_cell >= num_cells",
     "conditions": 1,
     "vectors_required": 2,
@@ -39412,7 +39492,7 @@
   {
     "id": "storage_row_btree_advance_c7a8b5b5",
     "file": "src/storage/row/btree.rs",
-    "line": 498,
+    "line": 500,
     "decision": "next_cell < num_cells",
     "conditions": 1,
     "vectors_required": 2,
@@ -39422,7 +39502,7 @@
   {
     "id": "storage_row_btree_advance_ac3d3aaf",
     "file": "src/storage/row/btree.rs",
-    "line": 502,
+    "line": 504,
     "decision": "!rightmost_done",
     "conditions": 1,
     "vectors_required": 2,
@@ -39432,7 +39512,7 @@
   {
     "id": "storage_row_btree_advance_rev_5f10a4b0",
     "file": "src/storage/row/btree.rs",
-    "line": 529,
+    "line": 531,
     "decision": "match self.stack.len() {\n                0 => {\n                    self.current = None;\n                    return Ok(None);\n                }\n                n => n.saturating_sub(1),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39442,7 +39522,7 @@
   {
     "id": "storage_row_btree_advance_rev_f05caacc",
     "file": "src/storage/row/btree.rs",
-    "line": 541,
+    "line": 543,
     "decision": "!is_interior",
     "conditions": 1,
     "vectors_required": 2,
@@ -39452,7 +39532,7 @@
   {
     "id": "storage_row_btree_advance_rev_21fb2e6a",
     "file": "src/storage/row/btree.rs",
-    "line": 542,
+    "line": 544,
     "decision": "next_cell == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39462,7 +39542,7 @@
   {
     "id": "storage_row_btree_advance_rev_ac3d3aaf",
     "file": "src/storage/row/btree.rs",
-    "line": 551,
+    "line": 553,
     "decision": "!rightmost_done",
     "conditions": 1,
     "vectors_required": 2,
@@ -39472,7 +39552,7 @@
   {
     "id": "storage_row_btree_advance_rev_f467dfc9",
     "file": "src/storage/row/btree.rs",
-    "line": 554,
+    "line": 556,
     "decision": "next_cell > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39482,7 +39562,7 @@
   {
     "id": "storage_row_btree_local_payload_size_u64_53403e33",
     "file": "src/storage/row/btree.rs",
-    "line": 653,
+    "line": 655,
     "decision": "is_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -39492,7 +39572,7 @@
   {
     "id": "storage_row_btree_local_payload_size_u64_df8a15f9",
     "file": "src/storage/row/btree.rs",
-    "line": 658,
+    "line": 660,
     "decision": "payload_len <= max_local",
     "conditions": 1,
     "vectors_required": 2,
@@ -39502,7 +39582,7 @@
   {
     "id": "storage_row_btree_local_payload_size_u64_93c702c8",
     "file": "src/storage/row/btree.rs",
-    "line": 669,
+    "line": 671,
     "decision": "k <= max_local",
     "conditions": 1,
     "vectors_required": 2,
@@ -39512,7 +39592,7 @@
   {
     "id": "storage_row_btree_first_overflow_page_19a1ec7a",
     "file": "src/storage/row/btree.rs",
-    "line": 690,
+    "line": 692,
     "decision": "(local_size as u64) < payload_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -39522,7 +39602,7 @@
   {
     "id": "storage_row_btree_free_overflow_chain_1ac5105e",
     "file": "src/storage/row/btree.rs",
-    "line": 714,
+    "line": 716,
     "decision": "overflow_page != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39532,7 +39612,7 @@
   {
     "id": "storage_row_btree_free_overflow_chain_77e19db4",
     "file": "src/storage/row/btree.rs",
-    "line": 716,
+    "line": 718,
     "decision": "*visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -39542,7 +39622,7 @@
   {
     "id": "storage_row_btree_free_overflow_chain_88267fcc",
     "file": "src/storage/row/btree.rs",
-    "line": 721,
+    "line": 723,
     "decision": "!seen.insert(overflow_page)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39552,7 +39632,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_b3a61eaa",
     "file": "src/storage/row/btree.rs",
-    "line": 749,
+    "line": 751,
     "decision": "payload_len > MAX_PAYLOAD_LEN",
     "conditions": 1,
     "vectors_required": 2,
@@ -39562,7 +39642,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_5562a55e",
     "file": "src/storage/row/btree.rs",
-    "line": 762,
+    "line": 764,
     "decision": "local_size as u64 == payload_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -39572,7 +39652,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_36eb150b",
     "file": "src/storage/row/btree.rs",
-    "line": 798,
+    "line": 800,
     "decision": "remaining > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39582,7 +39662,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_60fc8c45",
     "file": "src/storage/row/btree.rs",
-    "line": 799,
+    "line": 801,
     "decision": "overflow_page == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39592,7 +39672,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_4d58f08c",
     "file": "src/storage/row/btree.rs",
-    "line": 802,
+    "line": 804,
     "decision": "!visited_overflow_pages.insert(overflow_page)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39602,7 +39682,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_736e2d4a",
     "file": "src/storage/row/btree.rs",
-    "line": 809,
+    "line": 811,
     "decision": "hops > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -39612,7 +39692,7 @@
   {
     "id": "storage_row_btree_find_leaf_page_b88484d8",
     "file": "src/storage/row/btree.rs",
-    "line": 851,
+    "line": 853,
     "decision": "visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -39622,7 +39702,7 @@
   {
     "id": "storage_row_btree_find_leaf_page_f4615865",
     "file": "src/storage/row/btree.rs",
-    "line": 861,
+    "line": 863,
     "decision": "page_type == LEAF_TABLE",
     "conditions": 1,
     "vectors_required": 2,
@@ -39632,7 +39712,7 @@
   {
     "id": "storage_row_btree_find_leaf_page_f94b61a9",
     "file": "src/storage/row/btree.rs",
-    "line": 863,
+    "line": 865,
     "decision": "page_type == INTERIOR_TABLE",
     "conditions": 1,
     "vectors_required": 2,
@@ -39642,7 +39722,7 @@
   {
     "id": "storage_row_btree_find_leaf_page_960c45d3",
     "file": "src/storage/row/btree.rs",
-    "line": 868,
+    "line": 870,
     "decision": "rowid <= *key",
     "conditions": 1,
     "vectors_required": 2,
@@ -39652,7 +39732,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_77e19db4",
     "file": "src/storage/row/btree.rs",
-    "line": 915,
+    "line": 917,
     "decision": "*visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -39662,7 +39742,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_4cefadd3",
     "file": "src/storage/row/btree.rs",
-    "line": 925,
+    "line": 927,
     "decision": "match page_type {\n        LEAF_TABLE => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(8);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let (_, payload_len, tail_start) = decode_cell_head(&buf, cell_start, page_num)?;\n                if let Some(overflow_page) = first_overflow_page(\n                    &buf,\n                    tail_start,\n                    payload_len,\n                    usable_size,\n                    page_num,\n                    false,\n                )? {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) = collect_interior_entries(&buf, header_start, page_num)?;\n            for (child, _) in &entries {\n                free_btree_pages_inner(pager, *child, usable_size, encoding, visited)?;\n            }\n            free_btree_pages_inner(pager, rightmost, usable_size, encoding, visited)?;\n        }\n        t if t == index::LEAF_INDEX => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(8);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let (payload_len, tail_start) =\n                    index::decode_payload_len(&buf, cell_start, page_num)?;\n                if let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?\n                {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n        }\n        t if t == index::INTERIOR_INDEX => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(12);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let value_start = cell_start.saturating_add(4);\n                let (payload_len, tail_start) =\n                    index::decode_payload_len(&buf, value_start, page_num)?;\n                if let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?\n                {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n            let (entries, rightmost) = index::collect_index_interior_entries(\n                &*pager,\n                &buf,\n                header_start,\n                page_num,\n                usable_size,\n                encoding,\n            )?;\n            for (child, _, _) in &entries {\n                free_btree_pages_inner(pager, *child, usable_size, encoding, visited)?;\n            }\n            free_btree_pages_inner(pager, rightmost, usable_size, encoding, visited)?;\n        }\n        _ => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num,\n                page_type,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39672,7 +39752,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_ff42831d",
     "file": "src/storage/row/btree.rs",
-    "line": 952,
+    "line": 954,
     "decision": "t == index::LEAF_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -39682,7 +39762,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_a108a089",
     "file": "src/storage/row/btree.rs",
-    "line": 967,
+    "line": 969,
     "decision": "t == index::INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -39692,7 +39772,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_adcff356",
     "file": "src/storage/row/btree.rs",
-    "line": 933,
+    "line": 935,
     "decision": "let Some(overflow_page) = first_overflow_page(\n                    &buf,\n                    tail_start,\n                    payload_len,\n                    usable_size,\n                    page_num,\n                    false,\n                )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39702,7 +39782,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_86369887",
     "file": "src/storage/row/btree.rs",
-    "line": 960,
+    "line": 962,
     "decision": "let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39712,7 +39792,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_86369887_2",
     "file": "src/storage/row/btree.rs",
-    "line": 976,
+    "line": 978,
     "decision": "let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39722,7 +39802,7 @@
   {
     "id": "storage_row_btree_count_table_rows_inner_77e19db4",
     "file": "src/storage/row/btree.rs",
-    "line": 1029,
+    "line": 1031,
     "decision": "*visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -39732,7 +39812,7 @@
   {
     "id": "storage_row_btree_count_table_rows_inner_c26b139f",
     "file": "src/storage/row/btree.rs",
-    "line": 1039,
+    "line": 1041,
     "decision": "match page_type {\n        LEAF_TABLE => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            #[allow(\n                clippy::cast_possible_wrap,\n                reason = \"num_cells is a page's cell count, always <= u16::MAX by file-format construction\"\n            )]\n            let num_cells = num_cells as i64;\n            *total = total.saturating_add(num_cells);\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) = collect_interior_entries(&buf, header_start, page_num)?;\n            for (child, _) in &entries {\n                count_table_rows_inner(source, *child, visited, total)?;\n            }\n            count_table_rows_inner(source, rightmost, visited, total)?;\n        }\n        _ => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num,\n                page_type,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39742,7 +39822,7 @@
   {
     "id": "storage_row_btree_collect_leaf_cells_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1088,
+    "line": 1090,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -39752,7 +39832,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_ae549b74",
     "file": "src/storage/row/btree.rs",
-    "line": 1119,
+    "line": 1121,
     "decision": "cell_rowid == rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -39762,7 +39842,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_56d3df42",
     "file": "src/storage/row/btree.rs",
-    "line": 1122,
+    "line": 1124,
     "decision": "cell_rowid > rowid && insert_pos == num_cells",
     "conditions": 2,
     "vectors_required": 3,
@@ -39772,7 +39852,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1129,
+    "line": 1131,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -39782,7 +39862,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_c3fa768c",
     "file": "src/storage/row/btree.rs",
-    "line": 1130,
+    "line": 1132,
     "decision": "cell_end > buf.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39792,7 +39872,7 @@
   {
     "id": "storage_row_btree_find_leaf_cell_f5b401b0",
     "file": "src/storage/row/btree.rs",
-    "line": 1156,
+    "line": 1158,
     "decision": "cell_rowid != rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -39802,7 +39882,7 @@
   {
     "id": "storage_row_btree_find_leaf_cell_19a1ec7a",
     "file": "src/storage/row/btree.rs",
-    "line": 1160,
+    "line": 1162,
     "decision": "(local_size as u64) < payload_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -39812,7 +39892,7 @@
   {
     "id": "storage_row_btree_write_page_common_8ec7e8b9",
     "file": "src/storage/row/btree.rs",
-    "line": 1294,
+    "line": 1296,
     "decision": "needed > buf.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39822,7 +39902,7 @@
   {
     "id": "storage_row_btree_write_page_common_3b40d643",
     "file": "src/storage/row/btree.rs",
-    "line": 1323,
+    "line": 1325,
     "decision": "*off >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -39832,7 +39912,7 @@
   {
     "id": "storage_row_btree_write_page_common_0794c5c8",
     "file": "src/storage/row/btree.rs",
-    "line": 1342,
+    "line": 1344,
     "decision": "content_end >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -39842,7 +39922,7 @@
   {
     "id": "storage_row_btree_read_content_start_a5b1bbc4",
     "file": "src/storage/row/btree.rs",
-    "line": 1399,
+    "line": 1401,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39852,7 +39932,7 @@
   {
     "id": "storage_row_btree_write_content_start_4730eeed",
     "file": "src/storage/row/btree.rs",
-    "line": 1408,
+    "line": 1410,
     "decision": "value >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -39862,7 +39942,7 @@
   {
     "id": "storage_row_btree_walk_freeblocks_1108b805",
     "file": "src/storage/row/btree.rs",
-    "line": 1455,
+    "line": 1457,
     "decision": "off != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39872,7 +39952,7 @@
   {
     "id": "storage_row_btree_walk_freeblocks_907647a7",
     "file": "src/storage/row/btree.rs",
-    "line": 1457,
+    "line": 1459,
     "decision": "n > MAX_FREEBLOCKS",
     "conditions": 1,
     "vectors_required": 2,
@@ -39882,7 +39962,7 @@
   {
     "id": "storage_row_btree_add_freeblock_d839bf34",
     "file": "src/storage/row/btree.rs",
-    "line": 1501,
+    "line": 1503,
     "decision": "insert_pos > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39892,7 +39972,7 @@
   {
     "id": "storage_row_btree_add_freeblock_7486b092",
     "file": "src/storage/row/btree.rs",
-    "line": 1502,
+    "line": 1504,
     "decision": "let Some(&(prev_off, prev_size)) = blocks.get(insert_pos.saturating_sub(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -39902,7 +39982,7 @@
   {
     "id": "storage_row_btree_add_freeblock_fb958b9e",
     "file": "src/storage/row/btree.rs",
-    "line": 1503,
+    "line": 1505,
     "decision": "prev_off.saturating_add(prev_size) == new_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -39912,7 +39992,7 @@
   {
     "id": "storage_row_btree_add_freeblock_dec9e257",
     "file": "src/storage/row/btree.rs",
-    "line": 1511,
+    "line": 1513,
     "decision": "let Some(&(next_off, next_size)) = blocks.get(insert_pos)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39922,7 +40002,7 @@
   {
     "id": "storage_row_btree_add_freeblock_fa929836",
     "file": "src/storage/row/btree.rs",
-    "line": 1512,
+    "line": 1514,
     "decision": "new_start.saturating_add(new_size) == next_off",
     "conditions": 1,
     "vectors_required": 2,
@@ -39932,7 +40012,7 @@
   {
     "id": "storage_row_btree_splice_insert_cell_76dceda3",
     "file": "src/storage/row/btree.rs",
-    "line": 1543,
+    "line": 1545,
     "decision": "content_start < ptr_end || content_start.saturating_sub(ptr_end) < needed",
     "conditions": 2,
     "vectors_required": 3,
@@ -39942,7 +40022,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_2567997a",
     "file": "src/storage/row/btree.rs",
-    "line": 1587,
+    "line": 1589,
     "decision": "index >= num_cells",
     "conditions": 1,
     "vectors_required": 2,
@@ -39952,7 +40032,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_93677d86",
     "file": "src/storage/row/btree.rs",
-    "line": 1595,
+    "line": 1597,
     "decision": "has_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -39962,7 +40042,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1605,
+    "line": 1607,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -39972,7 +40052,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_5498646f",
     "file": "src/storage/row/btree.rs",
-    "line": 1617,
+    "line": 1619,
     "decision": "let Some(slice) = buf.get_mut(cell_start..cell_end)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39982,7 +40062,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_b992bc34",
     "file": "src/storage/row/btree.rs",
-    "line": 1622,
+    "line": 1624,
     "decision": "cell_start == content_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -39992,7 +40072,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_a3c31294",
     "file": "src/storage/row/btree.rs",
-    "line": 1625,
+    "line": 1627,
     "decision": "let Some(pos) = blocks.iter().position(|&(o, _)| o == new_content_start)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40002,7 +40082,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_7975dbd9",
     "file": "src/storage/row/btree.rs",
-    "line": 1631,
+    "line": 1633,
     "decision": "cell_len < MIN_FREEBLOCK_SIZE",
     "conditions": 1,
     "vectors_required": 2,
@@ -40012,7 +40092,7 @@
   {
     "id": "storage_row_btree_page1_header_start_dec9c314",
     "file": "src/storage/row/btree.rs",
-    "line": 1648,
+    "line": 1650,
     "decision": "page_num == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -40022,7 +40102,7 @@
   {
     "id": "storage_row_btree_require_interior_header_2fd27b70",
     "file": "src/storage/row/btree.rs",
-    "line": 1686,
+    "line": 1688,
     "decision": "page.len() < header_start.saturating_add(12)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40032,7 +40112,7 @@
   {
     "id": "storage_row_btree_text_cf9777d8",
     "file": "src/storage/row/btree.rs",
-    "line": 1832,
+    "line": 1834,
     "decision": "match v {\n            Value::Text(s) => s,\n            other => panic!(\"expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40042,7 +40122,7 @@
   {
     "id": "storage_row_btree_int_50ac411a",
     "file": "src/storage/row/btree.rs",
-    "line": 1839,
+    "line": 1841,
     "decision": "match v {\n            Value::Integer(i) => *i,\n            other => panic!(\"expected integer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40052,7 +40132,7 @@
   {
     "id": "storage_row_btree_blob_0fd307c4",
     "file": "src/storage/row/btree.rs",
-    "line": 1846,
+    "line": 1848,
     "decision": "match v {\n            Value::Blob(b) => b,\n            other => panic!(\"expected blob, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40062,7 +40142,7 @@
   {
     "id": "storage_row_btree_table_multipage_full_scan_matches_oracle_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 1886,
+    "line": 1888,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40072,7 +40152,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_and_prev_walk_descending_rowid_order_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 1932,
+    "line": 1934,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40082,7 +40162,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_matches_full_scans_final_row_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 1961,
+    "line": 1963,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40092,7 +40172,7 @@
   {
     "id": "storage_row_btree_table_single_page_seek_binary_search_on_small_leaf_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2045,
+    "line": 2047,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40102,7 +40182,7 @@
   {
     "id": "storage_row_btree_sha256_of_8adec907",
     "file": "src/storage/row/btree.rs",
-    "line": 2192,
+    "line": 2194,
     "decision": "msg.len() % 64 != 56",
     "conditions": 1,
     "vectors_required": 2,
@@ -40112,7 +40192,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_885fe06a",
     "file": "src/storage/row/btree.rs",
-    "line": 2399,
+    "line": 2401,
     "decision": "value < 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -40122,7 +40202,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_c6634d1d",
     "file": "src/storage/row/btree.rs",
-    "line": 2407,
+    "line": 2409,
     "decision": "value == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40132,7 +40212,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_832a894a",
     "file": "src/storage/row/btree.rs",
-    "line": 2413,
+    "line": 2415,
     "decision": "i + 1 == chunks.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40142,7 +40222,7 @@
   {
     "id": "storage_row_btree_local_payload_borrows_from_the_page_instead_of_copying_a3f083e9",
     "file": "src/storage/row/btree.rs",
-    "line": 2505,
+    "line": 2507,
     "decision": "match &row.payload {\n            Payload::Local { page, .. } => {\n                assert!(\n                    Rc::strong_count(page) >= 2,\n                    \"expected the row to share the page's Rc, not hold the only reference\"\n                );\n            }\n            Payload::Owned(_) => panic!(\"expected a borrowed Local payload, got an Owned copy\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40940,9 +41020,39 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_btree_master_table_sql_by_root_c6c2d2df",
+    "file": "src/storage/row/btree/master.rs",
+    "line": 257,
+    "decision": "let Some(r) = row",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_master_table_sql_by_root_0fa45016",
+    "file": "src/storage/row/btree/master.rs",
+    "line": 259,
+    "decision": "let (Some(Value::Text(kind)), Some(Value::Integer(rootpage)), Some(Value::Text(sql))) =\n            (values.first(), values.get(3), values.get(4))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_master_table_sql_by_root_04accee7",
+    "file": "src/storage/row/btree/master.rs",
+    "line": 262,
+    "decision": "let (\"table\", true) = (kind.as_ref(), *rootpage == i64::from(root))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_btree_master_update_sequence_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 263,
+    "line": 289,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40952,7 +41062,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_15a637f2",
     "file": "src/storage/row/btree/master.rs",
-    "line": 265,
+    "line": 291,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) = (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -40962,7 +41072,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_22c6e73d",
     "file": "src/storage/row/btree/master.rs",
-    "line": 266,
+    "line": 292,
     "decision": "n.as_ref() == table_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -40972,7 +41082,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_9298f737",
     "file": "src/storage/row/btree/master.rs",
-    "line": 274,
+    "line": 300,
     "decision": "match existing {\n        None => {\n            let next_rowid = max_rowid(pager, header, seq_root)?\n                .unwrap_or(0)\n                .saturating_add(1);\n            let values = [Value::Text(table_name.into()), Value::Integer(rowid)];\n            let payload = encode_record(&values, header.text_encoding);\n            super::insert_row(pager, header, seq_root, next_rowid, &payload)?;\n        }\n        Some((row_rowid, current_seq)) if rowid > current_seq => {\n            super::delete_row(pager, header, seq_root, row_rowid)?;\n            let values = [Value::Text(table_name.into()), Value::Integer(rowid)];\n            let payload = encode_record(&values, header.text_encoding);\n            super::insert_row(pager, header, seq_root, row_rowid, &payload)?;\n        }\n        Some(_) => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40982,7 +41092,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_6a26faef",
     "file": "src/storage/row/btree/master.rs",
-    "line": 283,
+    "line": 309,
     "decision": "rowid > current_seq",
     "conditions": 1,
     "vectors_required": 2,
@@ -40992,7 +41102,7 @@
   {
     "id": "storage_row_btree_master_ensure_sqlite_stat1_table_0357ec9d",
     "file": "src/storage/row/btree/master.rs",
-    "line": 309,
+    "line": 335,
     "decision": "let Some(existing) = find_master_rootpage(pager, header, \"sqlite_stat1\")?",
     "conditions": 1,
     "vectors_required": 2,
@@ -41002,7 +41112,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 347,
+    "line": 373,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -41012,7 +41122,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_1c9da291",
     "file": "src/storage/row/btree/master.rs",
-    "line": 349,
+    "line": 375,
     "decision": "let Some(Value::Text(tbl)) = values.first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41022,7 +41132,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_148523ba",
     "file": "src/storage/row/btree/master.rs",
-    "line": 350,
+    "line": 376,
     "decision": "tbl.as_ref() == table_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -41032,7 +41142,7 @@
   {
     "id": "storage_row_btree_master_insert_stat1_row_a968717c",
     "file": "src/storage/row/btree/master.rs",
-    "line": 375,
+    "line": 401,
     "decision": "match idx {\n        Some(name) => Value::Text(name.into()),\n        None => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41630,9 +41740,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_integrity_run_integrity_check_25d90169",
+    "file": "src/storage/row/integrity.rs",
+    "line": 63,
+    "decision": "table.without_rowid",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_integrity_run_integrity_check_f27d0b61",
     "file": "src/storage/row/integrity.rs",
-    "line": 64,
+    "line": 65,
+    "decision": "!quick",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_run_integrity_check_f27d0b61_2",
+    "file": "src/storage/row/integrity.rs",
+    "line": 73,
     "decision": "!quick",
     "conditions": 1,
     "vectors_required": 2,
@@ -41642,7 +41772,7 @@
   {
     "id": "storage_row_integrity_run_integrity_check_fbe43bd4",
     "file": "src/storage/row/integrity.rs",
-    "line": 73,
+    "line": 82,
     "decision": "problems.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41652,7 +41782,7 @@
   {
     "id": "storage_row_integrity_check_table_fda6230d",
     "file": "src/storage/row/integrity.rs",
-    "line": 92,
+    "line": 101,
     "decision": "match cursor.first() {\n        Ok(r) => r,\n        Err(e) => {\n            problems.push(format!(\n                \"*** in database main *** table {:?}: {e}\",\n                table.name\n            ));\n            return rowids;\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41662,7 +41792,7 @@
   {
     "id": "storage_row_integrity_check_table_baae970a",
     "file": "src/storage/row/integrity.rs",
-    "line": 102,
+    "line": 111,
     "decision": "let Some(rowid) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -41672,7 +41802,7 @@
   {
     "id": "storage_row_integrity_check_table_bbe3711b",
     "file": "src/storage/row/integrity.rs",
-    "line": 103,
+    "line": 112,
     "decision": "let Some(p) = prev",
     "conditions": 1,
     "vectors_required": 2,
@@ -41682,7 +41812,7 @@
   {
     "id": "storage_row_integrity_check_table_f5aca2e1",
     "file": "src/storage/row/integrity.rs",
-    "line": 104,
+    "line": 113,
     "decision": "rowid <= p",
     "conditions": 1,
     "vectors_required": 2,
@@ -41692,7 +41822,7 @@
   {
     "id": "storage_row_integrity_check_table_ba169b0d",
     "file": "src/storage/row/integrity.rs",
-    "line": 111,
+    "line": 120,
     "decision": "!rowids.insert(rowid)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41702,7 +41832,7 @@
   {
     "id": "storage_row_integrity_check_table_238f1069",
     "file": "src/storage/row/integrity.rs",
-    "line": 118,
+    "line": 127,
     "decision": "match cursor.next() {\n            Ok(r) => r,\n            Err(e) => {\n                problems.push(format!(\n                    \"*** in database main *** table {:?}: {e}\",\n                    table.name\n                ));\n                None\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41710,9 +41840,129 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_integrity_check_without_rowid_table_9c60e7c4",
+    "file": "src/storage/row/integrity.rs",
+    "line": 159,
+    "decision": "match cursor.first() {\n        Ok(r) => r,\n        Err(e) => {\n            problems.push(format!(\n                \"*** in database main *** table {:?}: {e}\",\n                table.name\n            ));\n            return rows;\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_table_214f9682",
+    "file": "src/storage/row/integrity.rs",
+    "line": 169,
+    "decision": "let Some(current) = entry",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_table_56e3cd73",
+    "file": "src/storage/row/integrity.rs",
+    "line": 170,
+    "decision": "match decode_record(&current.payload, header.text_encoding) {\n            Ok(decoded) => {\n                let key = decoded.get(..key_len).unwrap_or(&decoded).to_vec();\n                if let Some(prev) = &prev_key {\n                    match compare_index_keys(prev, &key) {\n                        std::cmp::Ordering::Less => {}\n                        std::cmp::Ordering::Equal => problems.push(format!(\n                            \"*** in database main *** table {:?}: duplicate primary key\",\n                            table.name\n                        )),\n                        std::cmp::Ordering::Greater => problems.push(format!(\n                            \"*** in database main *** table {:?}: primary keys out of order\",\n                            table.name\n                        )),\n                    }\n                }\n                prev_key = Some(key);\n            }\n            Err(e) => problems.push(format!(\n                \"*** in database main *** table {:?}: malformed row: {e}\",\n                table.name\n            )),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_table_6ec4a6f9",
+    "file": "src/storage/row/integrity.rs",
+    "line": 173,
+    "decision": "let Some(prev) = &prev_key",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_table_81e3a2c5",
+    "file": "src/storage/row/integrity.rs",
+    "line": 174,
+    "decision": "match compare_index_keys(prev, &key) {\n                        std::cmp::Ordering::Less => {}\n                        std::cmp::Ordering::Equal => problems.push(format!(\n                            \"*** in database main *** table {:?}: duplicate primary key\",\n                            table.name\n                        )),\n                        std::cmp::Ordering::Greater => problems.push(format!(\n                            \"*** in database main *** table {:?}: primary keys out of order\",\n                            table.name\n                        )),\n                    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_table_238f1069",
+    "file": "src/storage/row/integrity.rs",
+    "line": 194,
+    "decision": "match cursor.next() {\n            Ok(r) => r,\n            Err(e) => {\n                problems.push(format!(\n                    \"*** in database main *** table {:?}: {e}\",\n                    table.name\n                ));\n                None\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_index_2104d7cc",
+    "file": "src/storage/row/integrity.rs",
+    "line": 221,
+    "decision": "match cursor.first() {\n        Ok(r) => r,\n        Err(e) => {\n            problems.push(format!(\n                \"*** in database main *** index {:?}: {e}\",\n                index.name\n            ));\n            return;\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_index_5f3d94b0",
+    "file": "src/storage/row/integrity.rs",
+    "line": 231,
+    "decision": "let Some(entry) = row",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_index_2c2b6ef8",
+    "file": "src/storage/row/integrity.rs",
+    "line": 232,
+    "decision": "match decode_record(&entry.payload, header.text_encoding) {\n            Ok(decoded) => {\n                if let Some(p) = &prev {\n                    if compare_index_keys(p, &decoded) == std::cmp::Ordering::Greater {\n                        problems.push(format!(\n                            \"*** in database main *** index {:?}: keys out of order\",\n                            index.name\n                        ));\n                    }\n                }\n                prev = Some(decoded);\n            }\n            Err(e) => problems.push(format!(\n                \"*** in database main *** index {:?}: malformed entry: {e}\",\n                index.name\n            )),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_index_4a446137",
+    "file": "src/storage/row/integrity.rs",
+    "line": 234,
+    "decision": "let Some(p) = &prev",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_index_e4df4d74",
+    "file": "src/storage/row/integrity.rs",
+    "line": 235,
+    "decision": "compare_index_keys(p, &decoded) == std::cmp::Ordering::Greater",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_integrity_check_without_rowid_index_59d6b839",
+    "file": "src/storage/row/integrity.rs",
+    "line": 252,
+    "decision": "seen != table_rows",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_integrity_check_index_2104d7cc",
     "file": "src/storage/row/integrity.rs",
-    "line": 147,
+    "line": 275,
     "decision": "match cursor.first() {\n        Ok(r) => r,\n        Err(e) => {\n            problems.push(format!(\n                \"*** in database main *** index {:?}: {e}\",\n                index.name\n            ));\n            return;\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41722,7 +41972,7 @@
   {
     "id": "storage_row_integrity_check_index_5f3d94b0",
     "file": "src/storage/row/integrity.rs",
-    "line": 157,
+    "line": 285,
     "decision": "let Some(entry) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -41732,7 +41982,7 @@
   {
     "id": "storage_row_integrity_check_index_96c1a6ac",
     "file": "src/storage/row/integrity.rs",
-    "line": 158,
+    "line": 286,
     "decision": "match decode_record(&entry.payload, header.text_encoding) {\n            Ok(v) => v,\n            Err(e) => {\n                problems.push(format!(\n                    \"*** in database main *** index {:?}: malformed entry: {e}\",\n                    index.name\n                ));\n                row = advance(&mut cursor, index, problems);\n                continue;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41742,7 +41992,7 @@
   {
     "id": "storage_row_integrity_check_index_5935cf2c",
     "file": "src/storage/row/integrity.rs",
-    "line": 177,
+    "line": 305,
     "decision": "!table_rowids.contains(rowid)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41752,7 +42002,7 @@
   {
     "id": "storage_row_integrity_check_index_86cb1a84",
     "file": "src/storage/row/integrity.rs",
-    "line": 186,
+    "line": 314,
     "decision": "let Some(p) = &prev_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -41762,7 +42012,7 @@
   {
     "id": "storage_row_integrity_check_index_5f9ce9af",
     "file": "src/storage/row/integrity.rs",
-    "line": 187,
+    "line": 315,
     "decision": "compare_index_keys(p.as_slice(), key) == std::cmp::Ordering::Greater",
     "conditions": 1,
     "vectors_required": 2,
@@ -41772,7 +42022,7 @@
   {
     "id": "storage_row_integrity_check_index_d4718b4c",
     "file": "src/storage/row/integrity.rs",
-    "line": 198,
+    "line": 326,
     "decision": "seen != table_rowids.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41782,7 +42032,7 @@
   {
     "id": "storage_row_integrity_advance_7849221c",
     "file": "src/storage/row/integrity.rs",
-    "line": 212,
+    "line": 340,
     "decision": "match cursor.next() {\n        Ok(r) => r,\n        Err(e) => {\n            problems.push(format!(\n                \"*** in database main *** index {:?}: {e}\",\n                index.name\n            ));\n            None\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41792,7 +42042,7 @@
   {
     "id": "storage_row_integrity_compare_index_keys_df08e84f",
     "file": "src/storage/row/integrity.rs",
-    "line": 231,
+    "line": 359,
     "decision": "c != std::cmp::Ordering::Equal",
     "conditions": 1,
     "vectors_required": 2,
@@ -41802,7 +42052,7 @@
   {
     "id": "storage_row_integrity_compare_values_772df2bb",
     "file": "src/storage/row/integrity.rs",
-    "line": 240,
+    "line": 368,
     "decision": "match (a, b) {\n        (Value::Null, Value::Null) => Ordering::Equal,\n        (Value::Null, _) => Ordering::Less,\n        (_, Value::Null) => Ordering::Greater,\n        (Value::Integer(x), Value::Integer(y)) => x.cmp(y),\n        (Value::Real(x), Value::Real(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),\n        (Value::Integer(x), Value::Real(y)) => {\n            (*x as f64).partial_cmp(y).unwrap_or(Ordering::Equal)\n        }\n        (Value::Real(x), Value::Integer(y)) => {\n            x.partial_cmp(&(*y as f64)).unwrap_or(Ordering::Equal)\n        }\n        (Value::Text(x), Value::Text(y)) => x.as_bytes().cmp(y.as_bytes()),\n        (Value::Blob(x), Value::Blob(y)) => x.cmp(y),\n        _ => Ordering::Equal,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41812,7 +42062,7 @@
   {
     "id": "storage_row_integrity_check_freelist_8a72fd54",
     "file": "src/storage/row/integrity.rs",
-    "line": 263,
+    "line": 391,
     "decision": "header.freelist_trunk_page == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41822,7 +42072,7 @@
   {
     "id": "storage_row_integrity_check_freelist_cc470706",
     "file": "src/storage/row/integrity.rs",
-    "line": 264,
+    "line": 392,
     "decision": "header.freelist_page_count != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41832,7 +42082,7 @@
   {
     "id": "storage_row_integrity_check_freelist_ccf8b9e2",
     "file": "src/storage/row/integrity.rs",
-    "line": 277,
+    "line": 405,
     "decision": "trunk != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41842,7 +42092,7 @@
   {
     "id": "storage_row_integrity_check_freelist_3225abc2",
     "file": "src/storage/row/integrity.rs",
-    "line": 279,
+    "line": 407,
     "decision": "hops > max_hops",
     "conditions": 1,
     "vectors_required": 2,
@@ -41852,7 +42102,7 @@
   {
     "id": "storage_row_integrity_check_freelist_d8800eb6",
     "file": "src/storage/row/integrity.rs",
-    "line": 285,
+    "line": 413,
     "decision": "trunk > header.page_count || !seen_trunks.insert(trunk)",
     "conditions": 2,
     "vectors_required": 3,
@@ -41862,7 +42112,7 @@
   {
     "id": "storage_row_integrity_check_freelist_8670807e",
     "file": "src/storage/row/integrity.rs",
-    "line": 291,
+    "line": 419,
     "decision": "match source.read_page(trunk) {\n            Ok(b) => b,\n            Err(e) => {\n                problems.push(format!(\"reading freelist trunk page {trunk}: {e}\"));\n                break;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41872,7 +42122,7 @@
   {
     "id": "storage_row_integrity_check_freelist_4f9f3329",
     "file": "src/storage/row/integrity.rs",
-    "line": 298,
+    "line": 426,
     "decision": "match TrunkPage::parse(&buf) {\n            Ok(p) => p,\n            Err(e) => {\n                problems.push(format!(\"parsing freelist trunk page {trunk}: {e}\"));\n                break;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41882,7 +42132,7 @@
   {
     "id": "storage_row_integrity_check_freelist_97560fcb",
     "file": "src/storage/row/integrity.rs",
-    "line": 306,
+    "line": 434,
     "decision": "*leaf == 0 || *leaf > header.page_count",
     "conditions": 2,
     "vectors_required": 3,
@@ -41892,7 +42142,7 @@
   {
     "id": "storage_row_integrity_check_freelist_22f322aa",
     "file": "src/storage/row/integrity.rs",
-    "line": 315,
+    "line": 443,
     "decision": "total != header.freelist_page_count",
     "conditions": 1,
     "vectors_required": 2,

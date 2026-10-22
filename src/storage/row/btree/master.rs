@@ -242,6 +242,32 @@ fn find_master_rootpage(
     Ok(None)
 }
 
+/// The `CREATE TABLE` text of the table whose b-tree is rooted at `root`,
+/// read straight from `sqlite_master` (#722). A cursor factory uses it to
+/// learn the layout of a `WITHOUT ROWID` table from its root page alone.
+#[cfg(feature = "engine-row")]
+pub(crate) fn table_sql_by_root<P: crate::storage::row::vfs::PageSource>(
+    source: P,
+    header: &DatabaseHeader,
+    root: u32,
+) -> Result<Option<String>, BtreeError> {
+    let mut cursor =
+        crate::storage::row::btree::TableCursor::new(source, header, SQLITE_MASTER_ROOT_PAGE);
+    let mut row = cursor.first_row()?;
+    while let Some(r) = row {
+        let values = decode_record(&r.payload, header.text_encoding)?;
+        if let (Some(Value::Text(kind)), Some(Value::Integer(rootpage)), Some(Value::Text(sql))) =
+            (values.first(), values.get(3), values.get(4))
+        {
+            if let ("table", true) = (kind.as_ref(), *rootpage == i64::from(root)) {
+                return Ok(Some(sql.to_string()));
+            }
+        }
+        row = cursor.next_row()?;
+    }
+    Ok(None)
+}
+
 /// Updates `sqlite_sequence` for `table_name` after an INSERT assigns it
 /// `rowid`: creates the sequence table if needed (only ever necessary for
 /// an AUTOINCREMENT table), inserts a new `(table_name, rowid)` row if

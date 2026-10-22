@@ -60,6 +60,15 @@ pub fn run_integrity_check<P: PageSource + Clone>(
         if table.is_virtual {
             continue;
         }
+        if table.without_rowid {
+            let rows = check_without_rowid_table(&source, header, table, &mut problems);
+            if !quick {
+                for index in &table.indexes {
+                    check_without_rowid_index(&source, header, index, rows, &mut problems);
+                }
+            }
+            continue;
+        }
         let table_rowids = check_table(&source, header, table, &mut problems);
         if !quick {
             for index in &table.indexes {
@@ -127,6 +136,125 @@ fn check_table<P: PageSource + Clone>(
         };
     }
     rowids
+}
+
+/// Walks a `WITHOUT ROWID` table (#722): its b-tree is an index b-tree
+/// whose entries are whole rows, so it is read with [`IndexCursor`] and
+/// the invariant is that the leading `PRIMARY KEY` columns are strictly
+/// increasing. Returns the number of rows, for the secondary-index entry
+/// count.
+fn check_without_rowid_table<P: PageSource + Clone>(
+    source: &P,
+    header: &DatabaseHeader,
+    table: &TableSchema,
+    problems: &mut Vec<String>,
+) -> usize {
+    let key_len = crate::schema::autoindexes_from_sql(&table.sql)
+        .into_iter()
+        .find(|index| index.is_table)
+        .map_or(0, |index| index.columns.len());
+    let mut cursor = IndexCursor::new(source.clone(), header.usable_page_size(), table.root_page);
+    let mut prev_key: Option<Vec<Value>> = None;
+    let mut rows = 0usize;
+    let mut entry = match cursor.first() {
+        Ok(r) => r,
+        Err(e) => {
+            problems.push(format!(
+                "*** in database main *** table {:?}: {e}",
+                table.name
+            ));
+            return rows;
+        }
+    };
+    while let Some(current) = entry {
+        match decode_record(&current.payload, header.text_encoding) {
+            Ok(decoded) => {
+                let key = decoded.get(..key_len).unwrap_or(&decoded).to_vec();
+                if let Some(prev) = &prev_key {
+                    match compare_index_keys(prev, &key) {
+                        std::cmp::Ordering::Less => {}
+                        std::cmp::Ordering::Equal => problems.push(format!(
+                            "*** in database main *** table {:?}: duplicate primary key",
+                            table.name
+                        )),
+                        std::cmp::Ordering::Greater => problems.push(format!(
+                            "*** in database main *** table {:?}: primary keys out of order",
+                            table.name
+                        )),
+                    }
+                }
+                prev_key = Some(key);
+            }
+            Err(e) => problems.push(format!(
+                "*** in database main *** table {:?}: malformed row: {e}",
+                table.name
+            )),
+        }
+        rows = rows.saturating_add(1);
+        entry = match cursor.next() {
+            Ok(r) => r,
+            Err(e) => {
+                problems.push(format!(
+                    "*** in database main *** table {:?}: {e}",
+                    table.name
+                ));
+                None
+            }
+        };
+    }
+    rows
+}
+
+/// A secondary index of a `WITHOUT ROWID` table: its entries end in the
+/// table's key columns, not a rowid, so only the ordering and the entry
+/// count (one per row) are checked.
+fn check_without_rowid_index<P: PageSource + Clone>(
+    source: &P,
+    header: &DatabaseHeader,
+    index: &IndexSchema,
+    table_rows: usize,
+    problems: &mut Vec<String>,
+) {
+    let mut cursor = IndexCursor::new(source.clone(), header.usable_page_size(), index.root_page);
+    let mut prev: Option<Vec<Value>> = None;
+    let mut seen = 0usize;
+    let mut row = match cursor.first() {
+        Ok(r) => r,
+        Err(e) => {
+            problems.push(format!(
+                "*** in database main *** index {:?}: {e}",
+                index.name
+            ));
+            return;
+        }
+    };
+    while let Some(entry) = row {
+        match decode_record(&entry.payload, header.text_encoding) {
+            Ok(decoded) => {
+                if let Some(p) = &prev {
+                    if compare_index_keys(p, &decoded) == std::cmp::Ordering::Greater {
+                        problems.push(format!(
+                            "*** in database main *** index {:?}: keys out of order",
+                            index.name
+                        ));
+                    }
+                }
+                prev = Some(decoded);
+            }
+            Err(e) => problems.push(format!(
+                "*** in database main *** index {:?}: malformed entry: {e}",
+                index.name
+            )),
+        }
+        seen = seen.saturating_add(1);
+        row = advance(&mut cursor, index, problems);
+    }
+    if seen != table_rows {
+        problems.push(format!(
+            "*** in database main *** wrong # of entries in index {:?}: expected {table_rows}, found {seen}",
+            index.name
+        ));
+    }
 }
 
 /// Walks `index`'s b-tree via [`IndexCursor`], checking key ordering and
@@ -609,6 +737,107 @@ mod tests {
         );
 
         assert!(problems.iter().any(|p| p.contains("keys out of order")));
+    }
+
+    fn without_rowid_table(root_page: u32) -> TableSchema {
+        TableSchema {
+            without_rowid: true,
+            sql: "CREATE TABLE w (a, b, PRIMARY KEY (a)) WITHOUT ROWID".to_string(),
+            ..table_schema("w", root_page, vec![])
+        }
+    }
+
+    fn walk_without_rowid(entries: &[Vec<u8>]) -> (usize, Vec<String>) {
+        let mut pages = HashMap::new();
+        pages.insert(7u32, leaf_index_page(entries));
+        let source = FakePageSource { pages };
+        let mut problems = Vec::new();
+        let rows = check_without_rowid_table(
+            &source,
+            &fake_header(10),
+            &without_rowid_table(7),
+            &mut problems,
+        );
+        (rows, problems)
+    }
+
+    #[test]
+    fn check_without_rowid_table_accepts_ascending_primary_keys() {
+        // Only the leading column (the key) has to increase.
+        let (rows, problems) =
+            walk_without_rowid(&[encode_record_ints(&[1, 9]), encode_record_ints(&[2, 1])]);
+        assert_eq!(rows, 2);
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    #[test]
+    fn check_without_rowid_table_reports_out_of_order_and_duplicate_keys() {
+        let (_, problems) =
+            walk_without_rowid(&[encode_record_ints(&[5, 1]), encode_record_ints(&[3, 2])]);
+        assert!(
+            problems.iter().any(|p| p.contains("out of order")),
+            "{problems:?}"
+        );
+        // The same key with a different payload is a second row for it.
+        let (rows, problems) =
+            walk_without_rowid(&[encode_record_ints(&[3, 1]), encode_record_ints(&[3, 2])]);
+        assert_eq!(rows, 2);
+        assert!(
+            problems.iter().any(|p| p.contains("duplicate primary key")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn check_without_rowid_table_reports_a_page_that_is_not_an_index_page() {
+        // A table-b-tree leaf (0x0d) where the index b-tree should be.
+        let mut page = leaf_index_page(&[encode_record_ints(&[1, 1])]);
+        page[0] = 0x0d;
+        let mut pages = HashMap::new();
+        pages.insert(7u32, page);
+        let source = FakePageSource { pages };
+        let mut problems = Vec::new();
+        check_without_rowid_table(
+            &source,
+            &fake_header(10),
+            &without_rowid_table(7),
+            &mut problems,
+        );
+        assert!(!problems.is_empty());
+    }
+
+    #[test]
+    fn check_without_rowid_index_reports_order_and_entry_count() {
+        let entries = vec![encode_record_ints(&[5, 1]), encode_record_ints(&[3, 2])];
+        let mut pages = HashMap::new();
+        pages.insert(8u32, leaf_index_page(&entries));
+        let source = FakePageSource { pages };
+        let mut problems = Vec::new();
+        check_without_rowid_index(
+            &source,
+            &fake_header(10),
+            &index_schema("w_a", 8),
+            3,
+            &mut problems,
+        );
+        assert!(problems.iter().any(|p| p.contains("keys out of order")));
+        assert!(problems.iter().any(|p| p.contains("wrong # of entries")));
+        // In order, one entry per row: nothing to report.
+        let mut pages = HashMap::new();
+        pages.insert(
+            8u32,
+            leaf_index_page(&[encode_record_ints(&[1, 1]), encode_record_ints(&[2, 2])]),
+        );
+        let source = FakePageSource { pages };
+        let mut problems = Vec::new();
+        check_without_rowid_index(
+            &source,
+            &fake_header(10),
+            &index_schema("w_a", 8),
+            2,
+            &mut problems,
+        );
+        assert!(problems.is_empty(), "{problems:?}");
     }
 
     #[test]
