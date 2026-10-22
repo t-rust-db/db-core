@@ -15042,7 +15042,7 @@
   {
     "id": "engine_column_parse_select_c86b1298",
     "file": "src/engine/column.rs",
-    "line": 113,
+    "line": 147,
     "decision": "!from.eq_ignore_ascii_case(table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15052,7 +15052,7 @@
   {
     "id": "engine_column_parse_select_7fbb1501",
     "file": "src/engine/column.rs",
-    "line": 119,
+    "line": 153,
     "decision": "let Some(join) = select.from.as_ref().and_then(|f| f.joins.first())",
     "conditions": 1,
     "vectors_required": 2,
@@ -15062,7 +15062,7 @@
   {
     "id": "engine_column_parse_select_1093819d",
     "file": "src/engine/column.rs",
-    "line": 128,
+    "line": 162,
     "decision": "planner::has_subquery_condition(&select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15072,7 +15072,7 @@
   {
     "id": "engine_column_parse_select_006bb6a6",
     "file": "src/engine/column.rs",
-    "line": 134,
+    "line": 168,
     "decision": "select.columns.iter().any(is_window_column)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15082,7 +15082,7 @@
   {
     "id": "engine_column_leaf_columns_c237a023",
     "file": "src/engine/column.rs",
-    "line": 173,
+    "line": 207,
     "decision": "match f.element.physical_type {\n                Some(pt) => pt,\n                None if is_map(&f) => PhysicalType::ByteArray,\n                None => return None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15092,7 +15092,7 @@
   {
     "id": "engine_column_leaf_columns_ed34cf5b",
     "file": "src/engine/column.rs",
-    "line": 175,
+    "line": 209,
     "decision": "is_map(&f)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15102,7 +15102,7 @@
   {
     "id": "engine_column_timestamp_columns_a59f9539",
     "file": "src/engine/column.rs",
-    "line": 191,
+    "line": 225,
     "decision": "match f.element.converted_type {\n            Some(ConvertedType::TimestampMillis) => Some((f.name, 1_000)),\n            Some(ConvertedType::TimestampMicros) => Some((f.name, 1_000_000)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15112,7 +15112,7 @@
   {
     "id": "engine_column_timestamp_literals_0b614eb5",
     "file": "src/engine/column.rs",
-    "line": 208,
+    "line": 242,
     "decision": "timestamps.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15122,7 +15122,7 @@
   {
     "id": "engine_column_timestamp_literals_22d9aa23",
     "file": "src/engine/column.rs",
-    "line": 211,
+    "line": 245,
     "decision": "let Some(e) = select.where_clause.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15132,7 +15132,7 @@
   {
     "id": "engine_column_timestamp_literals_a0797668",
     "file": "src/engine/column.rs",
-    "line": 214,
+    "line": 248,
     "decision": "let Some(e) = select.having.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15142,7 +15142,7 @@
   {
     "id": "engine_column_rewrite_timestamp_literals_f9b1d819",
     "file": "src/engine/column.rs",
-    "line": 224,
+    "line": 258,
     "decision": "match &e.kind {\n        ExprKind::Column { name, .. } => timestamps\n            .iter()\n            .find(|(c, _)| c.eq_ignore_ascii_case(name))\n            .map(|(_, per_second)| *per_second),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15152,7 +15152,7 @@
   {
     "id": "engine_column_rewrite_timestamp_literals_7c10cd75",
     "file": "src/engine/column.rs",
-    "line": 231,
+    "line": 265,
     "decision": "match &mut expr.kind {\n        ExprKind::Binary {\n            op:\n                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,\n            lhs,\n            rhs,\n        } => {\n            let (lhs_units, rhs_units) = (units(lhs), units(rhs));\n            for (per_second, literal) in [(lhs_units, &mut **rhs), (rhs_units, &mut **lhs)] {\n                if let (Some(per_second), ExprKind::Literal(Literal::Str(text))) =\n                    (per_second, &literal.kind)\n                {\n                    let value = timestamp_units(text, per_second).ok_or_else(|| {\n                        EngineError::new(\n                            ErrorKind::Compile,\n                            format!(\"conversion error: '{text}' is not a timestamp\"),\n                        )\n                    })?;\n                    literal.kind = ExprKind::Literal(Literal::Integer(value));\n                    break;\n                }\n            }\n            Ok(())\n        }\n        ExprKind::Binary { lhs, rhs, .. } => {\n            rewrite_timestamp_literals(lhs, timestamps)?;\n            rewrite_timestamp_literals(rhs, timestamps)\n        }\n        ExprKind::Unary { expr: inner, .. } | ExprKind::Paren(inner) => {\n            rewrite_timestamp_literals(inner, timestamps)\n        }\n        _ => Ok(()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15162,7 +15162,7 @@
   {
     "id": "engine_column_rewrite_timestamp_literals_085f83b7",
     "file": "src/engine/column.rs",
-    "line": 240,
+    "line": 274,
     "decision": "let (Some(per_second), ExprKind::Literal(Literal::Str(text))) =\n                    (per_second, &literal.kind)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15172,7 +15172,7 @@
   {
     "id": "engine_column_timestamp_units_93791c8e",
     "file": "src/engine/column.rs",
-    "line": 270,
+    "line": 304,
     "decision": "match text.split_once('.') {\n        Some((whole, fraction)) => (whole, fraction),\n        None => (text, \"\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15182,7 +15182,7 @@
   {
     "id": "engine_column_timestamp_units_3ab6b21e",
     "file": "src/engine/column.rs",
-    "line": 274,
+    "line": 308,
     "decision": "!fraction.chars().all(|c| c.is_ascii_digit())",
     "conditions": 1,
     "vectors_required": 2,
@@ -15192,7 +15192,7 @@
   {
     "id": "engine_column_timestamp_units_52b37fce",
     "file": "src/engine/column.rs",
-    "line": 277,
+    "line": 311,
     "decision": "match crate::functions::call(\n        \"unixepoch\",\n        &[crate::value::Value::Text(whole.to_string().into())],\n    ) {\n        Ok(crate::value::Value::Integer(s)) => s,\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15202,7 +15202,7 @@
   {
     "id": "engine_column_timestamp_units_3e00d129",
     "file": "src/engine/column.rs",
-    "line": 287,
+    "line": 321,
     "decision": "sub.len() < digits",
     "conditions": 1,
     "vectors_required": 2,
@@ -15212,7 +15212,7 @@
   {
     "id": "engine_column_timestamp_units_6f400264",
     "file": "src/engine/column.rs",
-    "line": 290,
+    "line": 324,
     "decision": "sub.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15222,7 +15222,7 @@
   {
     "id": "engine_column_leaves_named_47db8089",
     "file": "src/engine/column.rs",
-    "line": 393,
+    "line": 427,
     "decision": "!self.columns.iter().any(|(leaf, _, _)| leaf == name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15232,7 +15232,7 @@
   {
     "id": "engine_column_order_key_bound_96ce0bd6",
     "file": "src/engine/column.rs",
-    "line": 431,
+    "line": 465,
     "decision": "descending",
     "conditions": 1,
     "vectors_required": 2,
@@ -15242,7 +15242,7 @@
   {
     "id": "engine_column_order_key_bound_54d004cc",
     "file": "src/engine/column.rs",
-    "line": 436,
+    "line": 470,
     "decision": "rg.nested_field_at(index).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15252,7 +15252,7 @@
   {
     "id": "engine_column_load_c2239b69",
     "file": "src/engine/column.rs",
-    "line": 510,
+    "line": 544,
     "decision": "let Some(values) = predicate_batch.columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -15262,7 +15262,7 @@
   {
     "id": "engine_column_load_eae013f0",
     "file": "src/engine/column.rs",
-    "line": 516,
+    "line": 550,
     "decision": "let Some(column) = predicate_batch.typed_columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -15272,7 +15272,7 @@
   {
     "id": "engine_column_load_6f1789ab",
     "file": "src/engine/column.rs",
-    "line": 533,
+    "line": 567,
     "decision": "indices.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15282,7 +15282,7 @@
   {
     "id": "engine_column_load_leaf_dab52ba8",
     "file": "src/engine/column.rs",
-    "line": 591,
+    "line": 625,
     "decision": "match rg.nested_field_at(index) {\n        Some(field) => map_values(rg, &field).map(Loaded::Values),\n        None if annotation(rg, index) == Annotation::Decimal => {\n            decimal_values(rg, index).map(Loaded::Values)\n        }\n        None => decode_column_full(rg, index, physical_type).map(Loaded::Typed),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15292,7 +15292,7 @@
   {
     "id": "engine_column_load_leaf_9240b714",
     "file": "src/engine/column.rs",
-    "line": 593,
+    "line": 627,
     "decision": "annotation(rg, index) == Annotation::Decimal",
     "conditions": 1,
     "vectors_required": 2,
@@ -15302,7 +15302,7 @@
   {
     "id": "engine_column_load_leaf_at_6f918c9d",
     "file": "src/engine/column.rs",
-    "line": 607,
+    "line": 641,
     "decision": "match rg.nested_field_at(index) {\n        Some(field) => Some(map_values(rg, &field)?),\n        None if annotation(rg, index) == Annotation::Decimal => Some(decimal_values(rg, index)?),\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15312,7 +15312,7 @@
   {
     "id": "engine_column_load_leaf_at_9240b714",
     "file": "src/engine/column.rs",
-    "line": 609,
+    "line": 643,
     "decision": "annotation(rg, index) == Annotation::Decimal",
     "conditions": 1,
     "vectors_required": 2,
@@ -15322,7 +15322,7 @@
   {
     "id": "engine_column_load_leaf_at_27af8ffb",
     "file": "src/engine/column.rs",
-    "line": 612,
+    "line": 646,
     "decision": "match all {\n        Some(all) => positions\n            .iter()\n            .map(|&p| {\n                usize::try_from(p)\n                    .ok()\n                    .and_then(|i| all.get(i).cloned())\n                    .ok_or(FileError::RowPositionOutOfRange(p))\n            })\n            .collect::<Result<Vec<_>, _>>()\n            .map(Loaded::Values),\n        None => decode_column_at(rg, index, physical_type, positions).map(Loaded::Typed),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15332,7 +15332,7 @@
   {
     "id": "engine_column_apply_loaded_c16b3239",
     "file": "src/engine/column.rs",
-    "line": 638,
+    "line": 672,
     "decision": "match loaded {\n        Loaded::Typed(Decoded::Column(column)) => batch.with_typed_column(name.to_string(), column),\n        Loaded::Values(values) => batch.with_column(name.to_string(), values),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15342,7 +15342,7 @@
   {
     "id": "engine_column_row_group_segments_b8f6287e",
     "file": "src/engine/column.rs",
-    "line": 664,
+    "line": 698,
     "decision": "match (where_clause, file.row_group(i)) {\n            (Some(expr), Some(rg)) => !prune::definitely_empty(expr, &rg, &leaves_by_name),\n            _ => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15352,7 +15352,7 @@
   {
     "id": "engine_column_into_value_64b9c9ef",
     "file": "src/engine/column.rs",
-    "line": 889,
+    "line": 923,
     "decision": "match stat {\n            StatValue::Int(i) => Value::Int(i),\n            StatValue::Float(f) => Value::Float(f),\n            StatValue::Str(s) => Value::Str(s.into()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15362,7 +15362,7 @@
   {
     "id": "engine_column_compare_eb9e37d0",
     "file": "src/engine/column.rs",
-    "line": 897,
+    "line": 931,
     "decision": "match (a, b) {\n            (StatValue::Int(x), StatValue::Int(y)) => Some(x.cmp(y)),\n            (StatValue::Float(x), StatValue::Float(y)) => x.partial_cmp(y),\n            (StatValue::Int(x), StatValue::Float(y)) => (*x as f64).partial_cmp(y),\n            (StatValue::Float(x), StatValue::Int(y)) => x.partial_cmp(&(*y as f64)),\n            (StatValue::Str(x), StatValue::Str(y)) => Some(x.cmp(y)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15372,7 +15372,7 @@
   {
     "id": "engine_column_decode_stat_bytes_63fb2b31",
     "file": "src/engine/column.rs",
-    "line": 918,
+    "line": 952,
     "decision": "match annotation {\n            Annotation::Plain => {}\n            Annotation::UInt32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                return Some(StatValue::Int(i64::from(u32::from_le_bytes(arr))));\n            }\n            Annotation::UInt64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                return i64::try_from(u64::from_le_bytes(arr))\n                    .ok()\n                    .map(StatValue::Int);\n            }\n            Annotation::Decimal | Annotation::Bytes => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15382,7 +15382,7 @@
   {
     "id": "engine_column_decode_stat_bytes_94ae8332",
     "file": "src/engine/column.rs",
-    "line": 932,
+    "line": 966,
     "decision": "match physical_type {\n            PhysicalType::Int32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from(i32::from_le_bytes(arr))))\n            }\n            PhysicalType::Int64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from_le_bytes(arr)))\n            }\n            PhysicalType::Float => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from(f32::from_le_bytes(arr))))\n            }\n            PhysicalType::Double => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from_le_bytes(arr)))\n            }\n            PhysicalType::ByteArray => std::str::from_utf8(bytes)\n                .ok()\n                .map(str::to_string)\n                .map(StatValue::Str),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15392,7 +15392,7 @@
   {
     "id": "engine_column_literal_stat_value_46d4637c",
     "file": "src/engine/column.rs",
-    "line": 961,
+    "line": 995,
     "decision": "match (lit, physical_type) {\n            (Literal::Integer(i), PhysicalType::Int32 | PhysicalType::Int64) => {\n                Some(StatValue::Int(*i))\n            }\n            (Literal::Integer(i), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*i as f64))\n            }\n            (Literal::Float(f), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*f))\n            }\n            (Literal::Str(s), PhysicalType::ByteArray) => Some(StatValue::Str(s.clone())),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15402,7 +15402,7 @@
   {
     "id": "engine_column_as_column_and_literal_34999e3c",
     "file": "src/engine/column.rs",
-    "line": 984,
+    "line": 1018,
     "decision": "match (&lhs.kind, &rhs.kind) {\n            (ExprKind::Column { name, .. }, ExprKind::Literal(lit)) => Some((name, lit, false)),\n            (ExprKind::Literal(lit), ExprKind::Column { name, .. }) => Some((name, lit, true)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15412,7 +15412,7 @@
   {
     "id": "engine_column_flip_3667ef35",
     "file": "src/engine/column.rs",
-    "line": 992,
+    "line": 1026,
     "decision": "match op {\n            BinaryOp::Lt => BinaryOp::Gt,\n            BinaryOp::Le => BinaryOp::Ge,\n            BinaryOp::Gt => BinaryOp::Lt,\n            BinaryOp::Ge => BinaryOp::Le,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15422,7 +15422,7 @@
   {
     "id": "engine_column_bounds_ce810416",
     "file": "src/engine/column.rs",
-    "line": 1034,
+    "line": 1068,
     "decision": "self.rg.nested_field_at(index).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15432,7 +15432,7 @@
   {
     "id": "engine_column_values_0bc4d41a",
     "file": "src/engine/column.rs",
-    "line": 1053,
+    "line": 1087,
     "decision": "annotation(self.rg, index) != Annotation::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -15442,7 +15442,7 @@
   {
     "id": "engine_column_values_2a0809e3",
     "file": "src/engine/column.rs",
-    "line": 1056,
+    "line": 1090,
     "decision": "match physical_type {\n                PhysicalType::ByteArray => {\n                    let values = self.rg.read_string_column_dictionary(index).ok()??;\n                    Some(values.into_iter().map(StatValue::Str).collect())\n                }\n                PhysicalType::Int64 => {\n                    let values = self.rg.read_int64_column_dictionary(index).ok()??;\n                    Some(values.into_iter().map(StatValue::Int).collect())\n                }\n                PhysicalType::Int32 => {\n                    let values = self.rg.read_int32_column_dictionary(index).ok()??;\n                    Some(\n                        values\n                            .into_iter()\n                            .map(|v| StatValue::Int(i64::from(v)))\n                            .collect(),\n                    )\n                }\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15452,7 +15452,7 @@
   {
     "id": "engine_column_range_definitely_empty_fed29e0a",
     "file": "src/engine/column.rs",
-    "line": 1086,
+    "line": 1120,
     "decision": "match op {\n            BinaryOp::Eq => {\n                let below_min = min\n                    .and_then(|m| compare(literal, m))\n                    .is_some_and(|o| o == Ordering::Less);\n                let above_max = max\n                    .and_then(|m| compare(literal, m))\n                    .is_some_and(|o| o == Ordering::Greater);\n                below_min || above_max\n            }\n            BinaryOp::Lt => min\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o != Ordering::Less),\n            BinaryOp::Le => min\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o == Ordering::Greater),\n            BinaryOp::Gt => max\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o != Ordering::Greater),\n            BinaryOp::Ge => max\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o == Ordering::Less),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15462,7 +15462,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_a3ff3693",
     "file": "src/engine/column.rs",
-    "line": 1131,
+    "line": 1165,
     "decision": "flipped",
     "conditions": 1,
     "vectors_required": 2,
@@ -15472,7 +15472,7 @@
   {
     "id": "engine_column_definitely_empty_in_3e405a69",
     "file": "src/engine/column.rs",
-    "line": 1144,
+    "line": 1178,
     "decision": "match &expr.kind {\n            ExprKind::Paren(inner) => definitely_empty_in(inner, source),\n            ExprKind::Binary {\n                op: BinaryOp::And,\n                lhs,\n                rhs,\n            } => definitely_empty_in(lhs, source) || definitely_empty_in(rhs, source),\n            ExprKind::Binary {\n                op: BinaryOp::Or,\n                lhs,\n                rhs,\n            } => definitely_empty_in(lhs, source) && definitely_empty_in(rhs, source),\n            ExprKind::Binary { op, lhs, rhs } => comparison_definitely_empty(*op, lhs, rhs, source),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15482,7 +15482,7 @@
   {
     "id": "engine_column_is_window_column_21d3bda9",
     "file": "src/engine/column.rs",
-    "line": 1187,
+    "line": 1221,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15492,7 +15492,7 @@
   {
     "id": "engine_column_plan_err_bbf17c28",
     "file": "src/engine/column.rs",
-    "line": 1203,
+    "line": 1237,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15502,7 +15502,7 @@
   {
     "id": "engine_column_type_name_16b2089b",
     "file": "src/engine/column.rs",
-    "line": 1216,
+    "line": 1250,
     "decision": "match pt {\n        PhysicalType::Boolean => \"BOOLEAN\",\n        PhysicalType::Int32 => \"INT32\",\n        PhysicalType::Int64 => \"INT64\",\n        PhysicalType::Int96 => \"INT96\",\n        PhysicalType::Float => \"FLOAT\",\n        PhysicalType::Double => \"DOUBLE\",\n        PhysicalType::ByteArray => \"BYTE_ARRAY\",\n        PhysicalType::FixedLenByteArray => \"FIXED_LEN_BYTE_ARRAY\",\n        PhysicalType::Unknown(_) => \"\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15512,7 +15512,7 @@
   {
     "id": "engine_column_write_varint_2427714d",
     "file": "src/engine/column.rs",
-    "line": 1482,
+    "line": 1498,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15522,7 +15522,7 @@
   {
     "id": "engine_column_write_varint_a5b1bbc4",
     "file": "src/engine/column.rs",
-    "line": 1486,
+    "line": 1502,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15532,7 +15532,7 @@
   {
     "id": "engine_column_list_of_structs_field_b09c4ad2",
     "file": "src/engine/column.rs",
-    "line": 1525,
+    "line": 1541,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -15542,7 +15542,7 @@
   {
     "id": "engine_column_build_double_row_group_4ca87ac2",
     "file": "src/engine/column.rs",
-    "line": 1585,
+    "line": 1601,
     "decision": "let Some(stats) = stats_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -15552,7 +15552,7 @@
   {
     "id": "engine_column_a_string_literal_prunes_a_byte_array_column_3ad0fe2b",
     "file": "src/engine/column.rs",
-    "line": 2315,
+    "line": 2348,
     "decision": "let Some(s) = stats",
     "conditions": 1,
     "vectors_required": 2,

@@ -641,6 +641,7 @@ pub fn db_core::engine::column::table::query_snapshot(&db_core::storage::ingest:
 pub fn db_core::engine::column::table::read_snapshot(&db_core::storage::ingest::snapshot::Snapshot, &[alloc::string::String]) -> core::result::Result<db_core::vm::batch::Batch, db_core::engine::EngineError>
 pub struct db_core::engine::column::BatchEngine
 impl db_core::engine::column::BatchEngine
+pub fn db_core::engine::column::BatchEngine::from_bytes(&str, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::path(&self) -> &std::path::Path
 pub fn db_core::engine::column::BatchEngine::table_name(&self) -> &str
 impl core::fmt::Debug for db_core::engine::column::BatchEngine
