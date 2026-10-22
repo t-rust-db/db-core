@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bench-events check-row-functions-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help bench-events test-full check-row-functions-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -33,6 +33,13 @@ NON_SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/nu
 
 test: ## Run db-core's test suite with all features (spikes excluded; see make test-spike)
 	cargo test -p db-core --all-features --lib $(NON_SPIKE_TESTS)
+
+# #726: the default run samples the Parquet corruption test (25% of its
+# truncations, flips and page-header bytes, see tests/unit/
+# parquet_file_corruption_test.rs); this runs everything at full size. CI
+# runs it weekly (assurance.yml).
+test-full: ## Run db-core's test suite with the corruption test at full size (about 17 s more than make test)
+	DB_CORE_CORRUPTION_PERCENT=100 $(MAKE) test
 
 test-lib: ## Just db-core's library unit tests (fastest inner loop)
 	cargo test -p db-core --all-features --lib

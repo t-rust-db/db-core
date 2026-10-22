@@ -4,28 +4,17 @@
 use super::*;
 use crate::storage::ingest::layout::{TierOptions, DAY_NS, HOUR_NS};
 use crate::storage::parquet::ParquetFile;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The tests' clock: shared, so tests that use it hold [`serial`].
-static NOW: AtomicI64 = AtomicI64::new(0);
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn serial() -> MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
+/// The tests' clock: one per test (see `test_clock`).
 fn clock() -> i64 {
-    NOW.load(Ordering::SeqCst)
+    crate::test_clock::now(0)
 }
 
 /// Sets the clock to `day` days and `hour` hours past 2026-10-11, plus
 /// `ns`.
 fn set_clock(day: i64, hour: i64, ns: i64) {
-    NOW.store(
-        (20_737 + day) * DAY_NS + hour * HOUR_NS + ns,
-        Ordering::SeqCst,
-    );
+    crate::test_clock::set((20_737 + day) * DAY_NS + hour * HOUR_NS + ns);
 }
 
 struct TempTable(PathBuf);
@@ -146,7 +135,6 @@ fn listed(w: &TableWriter) -> Vec<String> {
 
 #[test]
 fn hours_close_into_live_and_days_merge_into_archive() {
-    let _serial = serial();
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let mut w = open(&t);
@@ -251,7 +239,6 @@ fn hours_close_into_live_and_days_merge_into_archive() {
 
 #[test]
 fn an_idle_hour_closes_when_the_clock_moves_on() {
-    let _serial = serial();
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let mut w = open(&t);
@@ -265,7 +252,6 @@ fn an_idle_hour_closes_when_the_clock_moves_on() {
 
 #[test]
 fn reopening_seals_replayed_records_at_hour_boundaries() {
-    let _serial = serial();
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let mut w = open(&t);
@@ -295,7 +281,6 @@ fn reopening_seals_replayed_records_at_hour_boundaries() {
 
 #[test]
 fn files_split_at_the_size_limit() {
-    let _serial = serial();
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let options = options(TierOptions {
@@ -324,7 +309,6 @@ fn files_split_at_the_size_limit() {
 
 #[test]
 fn a_crash_at_every_flush_and_compaction_step_recovers_every_record_once() {
-    let _serial = serial();
     for step in [1u8, 2, 3, 5, 11, 12, 13] {
         let t = TempTable::new();
         set_clock(0, 10, 0);
@@ -367,7 +351,6 @@ fn a_crash_at_every_flush_and_compaction_step_recovers_every_record_once() {
 
 #[test]
 fn layout_rules() {
-    let _serial = serial();
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let mut w = open(&t);
@@ -391,7 +374,6 @@ fn layout_rules() {
 
 #[test]
 fn recovery_removes_strays_in_every_area() {
-    let _serial = serial();
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let mut w = open(&t);
@@ -441,21 +423,18 @@ fn sealed_after_two_records(layout: Layout, second_hour: i64) -> usize {
 #[test]
 #[allow(non_snake_case)]
 fn mcdc__storage_ingest_table_push_bc95699f__v1_tiered_head_of_an_earlier_hour_is_sealed() {
-    let _serial = serial();
     assert_eq!(sealed_after_two_records(Layout::Tiered(tier()), 11), 1);
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn mcdc__storage_ingest_table_push_bc95699f__v2_tiered_same_hour_is_not_sealed() {
-    let _serial = serial();
     assert_eq!(sealed_after_two_records(Layout::Tiered(tier()), 10), 0);
 }
 
 #[test]
 #[allow(non_snake_case)]
 fn mcdc__storage_ingest_table_push_bc95699f__v3_flat_ignores_hours() {
-    let _serial = serial();
     assert_eq!(sealed_after_two_records(Layout::Flat, 11), 0);
 }
 
@@ -528,7 +507,6 @@ fn kinds(w: &TableWriter, entry: &FileEntry) -> Vec<String> {
 
 #[test]
 fn an_open_hour_over_its_budget_spills_and_its_close_merges_the_runs() {
-    let _serial = serial();
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let mut w = TableWriter::open(&t.0, spilling(2)).unwrap();
@@ -582,7 +560,6 @@ fn an_open_hour_over_its_budget_spills_and_its_close_merges_the_runs() {
 
 #[test]
 fn an_hour_that_only_spilled_closes_from_its_runs() {
-    let _serial = serial();
     let t = TempTable::new();
     set_clock(0, 10, 0);
     let mut w = open(&t);
@@ -603,7 +580,6 @@ fn an_hour_that_only_spilled_closes_from_its_runs() {
 
 #[test]
 fn a_crash_at_every_spill_and_close_step_recovers_every_record_once() {
-    let _serial = serial();
     for (step, closing) in [
         (21u8, false),
         (22, false),
@@ -674,7 +650,6 @@ fn hourly(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<(i64, Strin
 
 #[test]
 fn retention_drops_the_oldest_days_whole() {
-    let _serial = serial();
     let t = TempTable::new();
     let mut w = TableWriter::open(&t.0, retaining(2)).unwrap();
     // Four days and an hour, a record an hour.
@@ -727,7 +702,6 @@ fn retention_drops_the_oldest_days_whole() {
 
 #[test]
 fn without_retention_every_day_is_kept() {
-    let _serial = serial();
     let t = TempTable::new();
     let mut w = open(&t);
     let records = hourly(&mut w, 0..73);
@@ -739,7 +713,6 @@ fn without_retention_every_day_is_kept() {
 
 #[test]
 fn a_crash_at_the_retention_commit_recovers_the_kept_days() {
-    let _serial = serial();
     let t = TempTable::new();
     let mut w = TableWriter::open(&t.0, retaining(1)).unwrap();
     let records = hourly(&mut w, 0..49);
@@ -766,7 +739,6 @@ fn a_crash_at_the_retention_commit_recovers_the_kept_days() {
 fn a_table_changes_codec_without_rewriting_old_files() {
     use crate::storage::parquet::footer::Codec;
     use crate::storage::parquet::writer::Compression;
-    let _serial = serial();
     let t = TempTable::new();
     let with = |compression| {
         let mut o = options(tier());
