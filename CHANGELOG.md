@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.160.0] - 2026-10-22
+
+### Changed
+
+- **`AND` conjunctions and BLOB comparisons use an index** (#695). A `WHERE` of several `AND`-ed terms plans as one index `SEARCH` when equality terms cover a prefix of an index's columns, optionally followed by a range (`<`, `<=`, `>`, `>=` or `BETWEEN`) on the next column: `a = ? AND b = ?`, `a = ? AND b = ? AND n >= ? AND n < ?`, `n >= ? AND n < ?`. The terms the walk does not enforce run as a per-row filter (a residual term may not carry a bind parameter, otherwise the query keeps its scan). Without an equality prefix only a range with both bounds seeks. `UPDATE` and aggregate scans take the same walk when it enforces the whole `WHERE`. BLOB literals are indexable for `=`, `<`, `>` and `BETWEEN`. `EXPLAIN QUERY PLAN` words it as sqlite3 does, e.g. `(a=? AND b>?)`.
+
 ## [0.159.1] - 2026-10-22
 
 ### Fixed
