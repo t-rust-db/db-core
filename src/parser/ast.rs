@@ -669,8 +669,48 @@ pub struct Insert {
     pub columns: Option<Vec<String>>,
     /// The row source: `VALUES`, a `SELECT`, or `DEFAULT VALUES`.
     pub source: InsertSource,
+    /// The `ON CONFLICT` upsert clauses (#696), in source order; empty
+    /// when there is none. Only a `VALUES`/`SELECT` source takes them.
+    pub upsert: Vec<UpsertClause>,
     /// The source span covering the whole statement.
     pub span: Span,
+}
+
+/// One `ON CONFLICT [(target) [WHERE expr]] DO NOTHING | DO UPDATE SET
+/// ...` clause of an [`Insert`] (#696). A clause with a target may be
+/// followed by more clauses; one without ends the chain.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpsertClause {
+    /// The conflict target, `None` for a clause that answers any
+    /// uniqueness conflict.
+    pub target: Option<UpsertTarget>,
+    /// What to do on a conflict.
+    pub action: UpsertAction,
+}
+
+/// The `(column, ...) [WHERE expr]` of an [`UpsertClause`]: the
+/// `PRIMARY KEY` or `UNIQUE` constraint (or partial index) it answers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpsertTarget {
+    /// The constraint's columns.
+    pub columns: Vec<IndexedColumn>,
+    /// The `WHERE` that selects a partial index.
+    pub where_clause: Option<Expr>,
+}
+
+/// What an [`UpsertClause`] does with the row that conflicts.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpsertAction {
+    /// `DO NOTHING`: skip the new row.
+    DoNothing,
+    /// `DO UPDATE SET ... [WHERE expr]`: update the existing row; the new
+    /// row's values are `excluded.<column>`.
+    DoUpdate {
+        /// The `SET` list.
+        assignments: Vec<Assignment>,
+        /// The `WHERE` that gates the update.
+        where_clause: Option<Expr>,
+    },
 }
 
 /// `INSERT OR <action>` / `ON CONFLICT` resolution strategy.
