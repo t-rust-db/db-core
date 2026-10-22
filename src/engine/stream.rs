@@ -287,6 +287,11 @@ impl StreamEngine {
     /// `Bytes` have no fixed nanosecond edge, so every held segment is
     /// returned unfiltered, same as an unbounded query.
     #[must_use]
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
     pub(crate) fn segments_in_range(
         &self,
         columns: &[ColumnRequest],

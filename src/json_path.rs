@@ -153,6 +153,7 @@ fn parse_string(s: &str) -> Option<(&str, &str)> {
 /// any other malformed escape (`\x`, a short `\u12`, a trailing `\`) is
 /// kept as written. Borrows when there is no backslash. The parser above
 /// stays zero-copy; callers that store or hand out a value decode it.
+#[cfg(feature = "ingest")]
 pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
     if !s.contains('\\') {
         return std::borrow::Cow::Borrowed(s);
@@ -173,6 +174,7 @@ pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
 /// The character the escape at the start of `tail` (which begins with a
 /// backslash) stands for, and how many bytes it spans; `None` if it is
 /// malformed.
+#[cfg(feature = "ingest")]
 fn decode_escape(tail: &str) -> Option<(char, usize)> {
     let simple = match tail.as_bytes().get(1)? {
         b'"' => '"',
@@ -190,6 +192,7 @@ fn decode_escape(tail: &str) -> Option<(char, usize)> {
 }
 
 /// `\uXXXX`, or a `\uD8xx\uDCxx` surrogate pair (12 bytes).
+#[cfg(feature = "ingest")]
 fn decode_unicode_escape(tail: &str) -> Option<(char, usize)> {
     let unit = hex4(tail.get(2..6)?)?;
     if !(0xD800..=0xDFFF).contains(&unit) {
@@ -213,6 +216,7 @@ fn decode_unicode_escape(tail: &str) -> Option<(char, usize)> {
 
 /// The four hex digits of a `\u` escape as a number; callers pass exactly
 /// four bytes. Checked digit by digit: `from_str_radix` would accept `+`.
+#[cfg(feature = "ingest")]
 fn hex4(digits: &str) -> Option<u32> {
     if !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
