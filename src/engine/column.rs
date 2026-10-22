@@ -669,6 +669,51 @@ fn row_group_segments<'f>(
         .collect()
 }
 
+/// A row group of a Parquet file, for callers that run the batch engine
+/// themselves over a file, as column-rs does (#699): `load()` runs
+/// `program`'s late materialization (ADR-0026) where it has a `WHERE`,
+/// and `gather_at` serves the late-materializing top-N (#513). See
+/// [`file_segments`].
+pub struct FileSegment<'a, 'm>(RowGroupSegment<'a, 'm>);
+
+impl Segment for FileSegment<'_, '_> {
+    fn load(&self) -> Result<Arc<Batch>, VmError> {
+        self.0.load()
+    }
+
+    fn order_key_bound(&self, descending: bool) -> Option<Value> {
+        self.0.order_key_bound(descending)
+    }
+
+    fn load_columns(&self, columns: &[String]) -> Result<Arc<Batch>, VmError> {
+        self.0.load_columns(columns)
+    }
+
+    fn gather_at(&self, columns: &[String], positions: &[u32]) -> Option<Result<Batch, VmError>> {
+        self.0.gather_at(columns, positions)
+    }
+}
+
+/// `file`'s segments loading `columns`, one per row group. A name `t.col`
+/// is the file's column `col` and keys the batches as given; a name the
+/// file has no column for is an error. `program` drives late
+/// materialization where it has a `WHERE` (ADR-0026); an empty program
+/// loads every column eagerly. No row group is pruned.
+pub fn file_segments<'f>(
+    file: &'f ParquetFile<'f>,
+    columns: &[String],
+    program: &'f Program,
+) -> Result<Vec<FileSegment<'f, 'f>>, EngineError> {
+    let all_leaves = leaf_columns(file);
+    let leaves = resolve_columns(&all_leaves, columns)?;
+    Ok(
+        row_group_segments(file, &leaves, &all_leaves, None, program)
+            .into_iter()
+            .map(FileSegment)
+            .collect(),
+    )
+}
+
 /// A segment of an ingested table (`table.rs`): a flushed row group or a
 /// page. Here, with [`table_row_groups`], because it holds a
 /// [`RowGroupSegment`] and its lifetimes.
@@ -1329,6 +1374,7 @@ mod tests {
         BatchEngine, Engine as _, ErrorKind, Leaf, ParquetFile, Path, PhysicalType, PlanError,
         Program, RowGroupSegment, Value,
     };
+    use super::{file_segments, planner_parse, query_result};
     use super::{timestamp_literals, timestamp_units};
     use crate::parser::ast::Select;
 
@@ -1695,6 +1741,36 @@ mod tests {
         let err = seg.load_columns(&["nosuch".to_string()]).unwrap_err();
         assert!(
             err.to_string().contains("not loaded by this segment"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn file_segments_run_a_filtered_query_like_the_engine() {
+        // #699: column-rs's file segments, keyed by the names as given
+        // (`p.id` is the column `id`), answer as `run_query` does.
+        let path = Path::new("tests/fixtures/parquet/production.parquet");
+        let mut engine = BatchEngine::open(path).unwrap();
+        let sql = "SELECT id, region FROM production WHERE amount > 900 ORDER BY id";
+        let expected = engine.run_query(sql).unwrap().rows;
+        assert!(!expected.is_empty());
+
+        let file = engine.file().unwrap();
+        let select = planner_parse(
+            "SELECT p.id, p.region FROM production p WHERE p.amount > 900 ORDER BY p.id",
+        )
+        .unwrap();
+        let program: Program = planner::compile(&select).unwrap();
+        let segments = file_segments(&file, &program.columns_to_load(), &program).unwrap();
+        assert_eq!(segments.len(), file.num_row_groups());
+        let output = engine::run(&segments, &program).unwrap();
+        assert_eq!(query_result(&select, output).rows, expected);
+
+        let err = file_segments(&file, &["p.nosuch".to_string()], &program)
+            .err()
+            .expect("an unknown column is an error");
+        assert!(
+            err.to_string().contains("unknown column: p.nosuch"),
             "{err}"
         );
     }

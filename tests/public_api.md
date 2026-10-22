@@ -654,12 +654,19 @@ pub fn db_core::engine::column::BatchEngine::open(&std::path::Path) -> core::res
 pub fn db_core::engine::column::BatchEngine::run_query(&mut self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub fn db_core::engine::column::BatchEngine::stats(&self) -> db_core::engine::FileStats
 pub fn db_core::engine::column::BatchEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
+pub struct db_core::engine::column::FileSegment<'a, 'm>(_)
+impl db_core::vm::batch::Segment for db_core::engine::column::FileSegment<'_, '_>
+pub fn db_core::engine::column::FileSegment<'_, '_>::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<core::result::Result<db_core::vm::batch::Batch, db_core::vm::batch::VmError>>
+pub fn db_core::engine::column::FileSegment<'_, '_>::load(&self) -> core::result::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::engine::column::FileSegment<'_, '_>::load_columns(&self, &[alloc::string::String]) -> core::result::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::engine::column::FileSegment<'_, '_>::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub struct db_core::engine::column::SnapshotSegment<'a, 'm>(_)
 impl db_core::vm::batch::Segment for db_core::engine::column::SnapshotSegment<'_, '_>
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<core::result::Result<db_core::vm::batch::Batch, db_core::vm::batch::VmError>>
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::load(&self) -> core::result::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::load_columns(&self, &[alloc::string::String]) -> core::result::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
+pub fn db_core::engine::column::file_segments<'f>(&'f db_core::storage::parquet::parquet_file::ParquetFile<'f>, &[alloc::string::String], &'f db_core::vm::batch::Program) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::FileSegment<'f, 'f>>, db_core::engine::EngineError>
 pub fn db_core::engine::column::snapshot_files(&db_core::storage::ingest::snapshot::Snapshot) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::parquet_file::ParquetFile<'_>>, db_core::engine::EngineError>
 pub fn db_core::engine::column::snapshot_segments<'f>(&'f db_core::storage::ingest::snapshot::Snapshot, &'f [db_core::storage::parquet::parquet_file::ParquetFile<'f>], &[alloc::string::String], &'f db_core::vm::batch::Program) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::SnapshotSegment<'f, 'f>>, db_core::engine::EngineError>
 pub mod db_core::engine::cross_mode
@@ -8353,6 +8360,11 @@ pub fn db_core::vm::batch::Segment::gather_at(&self, &[alloc::string::String], &
 pub fn db_core::vm::batch::Segment::load(&self) -> db_core::vm::batch::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::vm::batch::Segment::load_columns(&self, &[alloc::string::String]) -> db_core::vm::batch::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>>
 pub fn db_core::vm::batch::Segment::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
+impl db_core::vm::batch::Segment for db_core::engine::column::FileSegment<'_, '_>
+pub fn db_core::engine::column::FileSegment<'_, '_>::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<core::result::Result<db_core::vm::batch::Batch, db_core::vm::batch::VmError>>
+pub fn db_core::engine::column::FileSegment<'_, '_>::load(&self) -> core::result::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::engine::column::FileSegment<'_, '_>::load_columns(&self, &[alloc::string::String]) -> core::result::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
+pub fn db_core::engine::column::FileSegment<'_, '_>::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 impl db_core::vm::batch::Segment for db_core::engine::column::SnapshotSegment<'_, '_>
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::gather_at(&self, &[alloc::string::String], &[u32]) -> core::option::Option<core::result::Result<db_core::vm::batch::Batch, db_core::vm::batch::VmError>>
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::load(&self) -> core::result::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
