@@ -88,8 +88,9 @@ pub(super) fn where_col(expr: &Expr) -> Option<&str> {
 pub(super) fn is_supported_operand(expr: &Expr) -> bool {
     matches!(
         &expr.kind,
-        ExprKind::Literal(Literal::Integer(_) | Literal::Float(_) | Literal::Str(_))
-            | ExprKind::Param(ParamKind::Anonymous | ParamKind::Numbered(_))
+        ExprKind::Literal(
+            Literal::Integer(_) | Literal::Float(_) | Literal::Str(_) | Literal::Blob(_)
+        ) | ExprKind::Param(ParamKind::Anonymous | ParamKind::Numbered(_))
     )
 }
 
@@ -135,6 +136,11 @@ pub(super) fn operand_matches_column_affinity(expr: &Expr, column_affinity: Affi
             Affinity::Integer | Affinity::Real | Affinity::Numeric
         ),
         ExprKind::Literal(Literal::Str(_)) => matches!(column_affinity, Affinity::Text),
+        // #695: no affinity ever converts a BLOB operand, on either side
+        // of the comparison, so its raw bytes already compare correctly
+        // (memcmp, after every other storage class) against whatever the
+        // index holds.
+        ExprKind::Literal(Literal::Blob(_)) => true,
         // #280: a bind parameter's storage class is genuinely unknowable
         // here, so it's passed through uncheckable, same accepted risk
         // as `Param` above. A subquery/arithmetic-composed constant
@@ -302,6 +308,7 @@ fn emit_matched_row<F>(
     row_skip: Label,
     end_label: Label,
     catalog: &[TableSchema],
+    residual: &[&Expr],
     sink: &mut F,
 ) -> Result<(), CodegenError>
 where
@@ -321,6 +328,20 @@ where
         rowid_reg,
     ));
     em.patch_p2(table_seek_addr, row_skip);
+
+    // #695: terms of a conjunction the index walk did not enforce.
+    if !residual.is_empty() {
+        let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
+        for term in residual {
+            compile_cond(
+                em,
+                reg,
+                &scope,
+                term,
+                CondTargets::null_is_false(Target::Fallthrough, Target::Jump(row_skip)),
+            )?;
+        }
+    }
 
     if let Some(limit) = limit {
         emit_offset_guard(em, limit, row_skip);
@@ -451,6 +472,7 @@ where
                 row_skip,
                 end_label,
                 catalog,
+                &[],
                 sink,
             )
         },
@@ -484,7 +506,10 @@ pub(super) fn range_row_seek_index_position(
     stats: &Stats,
     covering: bool,
 ) -> Option<usize> {
-    let recognized = as_bounds(where_expr).is_some() || as_forward_comparison(where_expr).is_some();
+    let scope = Scope::single(schema, 0).with_catalog(catalog);
+    let recognized = as_bounds(where_expr).is_some()
+        || as_forward_comparison(where_expr).is_some()
+        || plan_exact_conjunct_seek(where_expr, schema, &scope, stats, covering).is_some();
     if recognized {
         range_seek_index_position_with(where_expr, schema, catalog, stats, covering)
     } else {
@@ -521,6 +546,17 @@ pub(crate) fn try_compile_range_row_seek<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, Label) -> Result<(), CodegenError>,
 {
+    if let Some(plan) = plan_exact_conjunct_seek(where_expr, schema, scope, stats, covering) {
+        let Some(index) = schema.indexes.get(plan.index_position) else {
+            return Ok(false);
+        };
+        open_index_cursor(em, index, index_cursor)?;
+        let keys = compile_conjunct_keys(em, reg, scope, where_expr, &plan, end_label)?;
+        emit_conjunct_index_walk(em, &plan, &keys, index_cursor, end_label, |em, row_skip| {
+            sink(em, reg, index_cursor, row_skip)
+        })?;
+        return Ok(true);
+    }
     if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
         let Some(col_name) = where_col(col) else {
             return Ok(false);
@@ -825,6 +861,7 @@ where
         row_skip,
         end_label,
         catalog,
+        &[],
         sink,
     )?;
 
@@ -951,6 +988,7 @@ where
                     row_skip,
                     end_label,
                     catalog,
+                    &[],
                     sink,
                 )
             },
@@ -1164,6 +1202,7 @@ where
                     row_skip,
                     end_label,
                     catalog,
+                    &[],
                     sink,
                 )
             },
@@ -1221,6 +1260,7 @@ where
         row_skip,
         end_label,
         catalog,
+        &[],
         sink,
     )?;
     em.place(row_skip);
@@ -1262,6 +1302,9 @@ fn range_seek_index_position_with(
     // `Subquery` operand's own `FROM` against `catalog` -- so `0` here
     // is a placeholder, never an actual cursor this function opens.
     let scope = Scope::single(schema, 0).with_catalog(catalog);
+    if let Some(plan) = plan_exact_conjunct_seek(where_expr, schema, &scope, stats, covering) {
+        return Some(plan.index_position);
+    }
     if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
         let col_name = where_col(col)?;
         if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
@@ -1374,6 +1417,11 @@ pub(super) fn find_range_seek_detail(
     // is a placeholder cursor id, never opened.
     let scope = Scope::single(schema, 0).with_catalog(catalog);
     let where_expr = select.where_clause.as_ref()?;
+    if !matches!(select.distinct, Some(Distinctness::Distinct)) {
+        if let Some(plan) = plan_conjunct_seek(where_expr, schema, &scope, stats, covering) {
+            return conjunct_seek_detail(&plan, schema, table_display);
+        }
+    }
     if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
         let col_name = where_col(col)?;
         if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
@@ -1528,6 +1576,458 @@ fn as_bounds(where_expr: &Expr) -> Option<(&Expr, &Expr, &Expr, bool)> {
         }
         _ => None,
     }
+}
+
+/// One indexable comparison of a column against a constant operand,
+/// pulled out of a top-level `AND` chain (#695).
+#[derive(Clone, Copy, PartialEq)]
+enum Term {
+    Eq,
+    /// The operand bounds the column from below; the flag is inclusivity.
+    Lower(bool),
+    /// The operand bounds the column from above; the flag is inclusivity.
+    Upper(bool),
+}
+
+/// An index access path for a `WHERE` that is an `AND` of several terms
+/// (#695, sqlite3's `whereLoopAddBtreeIndex`): equality on a prefix of
+/// the index's columns, then optionally a range on the next column.
+/// `eq`/`lower`/`upper` index into [`conjunct_terms`]; `residual` lists
+/// the [`conjuncts`] the seek does not enforce, to be evaluated as a
+/// per-row filter.
+struct ConjunctSeek {
+    index_position: usize,
+    eq: Vec<usize>,
+    lower: Option<(usize, bool)>,
+    upper: Option<(usize, bool)>,
+    residual: Vec<usize>,
+}
+
+/// The operands of a top-level `AND` chain, left to right.
+fn conjuncts(expr: &Expr) -> Vec<&Expr> {
+    match &expr.kind {
+        ExprKind::Binary {
+            op: BinaryOp::And,
+            lhs,
+            rhs,
+        } => {
+            let mut all = conjuncts(lhs);
+            all.extend(conjuncts(rhs));
+            all
+        }
+        _ => vec![expr],
+    }
+}
+
+/// Every `column <op> operand` term in `where_expr`'s [`conjuncts`], as
+/// `(conjunct position, column, operand, term)`, in source order (which
+/// is also bind-parameter order). A `BETWEEN` yields two terms.
+fn conjunct_terms(where_expr: &Expr) -> Vec<(usize, &str, &Expr, Term)> {
+    let mut terms = Vec::new();
+    for (i, conjunct) in conjuncts(where_expr).into_iter().enumerate() {
+        if let ExprKind::Between {
+            expr,
+            lo,
+            hi,
+            negated: false,
+        } = &conjunct.kind
+        {
+            if let Some(col) = where_col(expr) {
+                terms.push((i, col, lo.as_ref(), Term::Lower(true)));
+                terms.push((i, col, hi.as_ref(), Term::Upper(true)));
+            }
+        } else if let Some((col, operand, _, true)) = as_bounds(conjunct) {
+            terms.push((i, where_col(col).unwrap_or_default(), operand, Term::Eq));
+        } else if let Some((col, operand, inclusive, is_lower)) = as_forward_comparison(conjunct) {
+            let term = if is_lower {
+                Term::Lower(inclusive)
+            } else {
+                Term::Upper(inclusive)
+            };
+            terms.push((i, col, operand, term));
+        }
+    }
+    terms
+}
+
+/// Picks the index (if any) that serves the most of `where_expr`'s
+/// `AND`-ed terms (#695). Only `BINARY`-collated columns qualify, as in
+/// [`find_leading_index`]. The seek only has to return a superset of the
+/// matching rows: every term it does not consume is listed in
+/// [`ConjunctSeek::residual`] and re-checked per row.
+///
+/// A residual term may not contain a bind parameter: an anonymous `?` is
+/// numbered at the moment it is compiled, so evaluating it after the
+/// seek's own operands would renumber it.
+fn plan_conjunct_seek(
+    where_expr: &Expr,
+    schema: &TableSchema,
+    scope: &Scope,
+    stats: &Stats,
+    covering: bool,
+) -> Option<ConjunctSeek> {
+    let all = conjuncts(where_expr);
+    if all.len() < 2 {
+        return None;
+    }
+    let terms = conjunct_terms(where_expr);
+    let mut best: Option<(usize, bool, ConjunctSeek)> = None;
+    for (index_position, index) in schema.indexes.iter().enumerate() {
+        let mut eq = Vec::new();
+        let mut lower = None;
+        let mut upper = None;
+        for col in &index.columns {
+            if col.collation != Collation::Binary {
+                break;
+            }
+            let affinity = column_affinity(schema, &col.name);
+            let find = |want: fn(Term) -> bool| {
+                terms.iter().position(|(_, name, operand, term)| {
+                    name.eq_ignore_ascii_case(&col.name)
+                        && want(*term)
+                        && is_constant_operand(operand, scope)
+                        && operand_matches_column_affinity(operand, affinity)
+                })
+            };
+            if let Some(i) = find(|t| t == Term::Eq) {
+                eq.push(i);
+                continue;
+            }
+            lower = find(|t| matches!(t, Term::Lower(_))).map(|i| (i, bound_inclusive(&terms, i)));
+            upper = find(|t| matches!(t, Term::Upper(_))).map(|i| (i, bound_inclusive(&terms, i)));
+            break;
+        }
+        let used = eq
+            .len()
+            .saturating_add(usize::from(lower.is_some() || upper.is_some()));
+        if used == 0 {
+            continue;
+        }
+        let used_terms: Vec<usize> = eq
+            .iter()
+            .copied()
+            .chain(lower.map(|(i, _)| i))
+            .chain(upper.map(|(i, _)| i))
+            .collect();
+        let residual: Vec<usize> = (0..all.len())
+            .filter(|c| {
+                let mut own = terms
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.0 == *c)
+                    .peekable();
+                own.peek().is_none() || own.any(|(i, _)| !used_terms.contains(&i))
+            })
+            .collect();
+        if residual
+            .iter()
+            .any(|c| all.get(*c).is_some_and(|e| e.to_string().contains('?')))
+        {
+            continue;
+        }
+        if eq.is_empty() {
+            let bound = |side: Option<(usize, bool)>| {
+                side.and_then(|(i, inclusive)| terms.get(i).map(|t| (t.2, inclusive)))
+            };
+            if !range_seek_wins(
+                schema,
+                index_position,
+                bound(lower),
+                bound(upper),
+                covering,
+                stats,
+            ) {
+                continue;
+            }
+        }
+        let better = best
+            .as_ref()
+            .is_none_or(|(n, unique, _)| (used, index.unique) > (*n, *unique));
+        if better {
+            best = Some((
+                used,
+                index.unique,
+                ConjunctSeek {
+                    index_position,
+                    eq,
+                    lower,
+                    upper,
+                    residual,
+                },
+            ));
+        }
+    }
+    best.map(|(_, _, plan)| plan)
+}
+
+fn bound_inclusive(terms: &[(usize, &str, &Expr, Term)], i: usize) -> bool {
+    match terms.get(i) {
+        Some((_, _, _, Term::Lower(inclusive) | Term::Upper(inclusive))) => *inclusive,
+        _ => true,
+    }
+}
+
+/// `plan_conjunct_seek` restricted to plans that enforce the whole
+/// `WHERE` themselves, for the `UPDATE`/aggregate row walks, which have
+/// no per-row filter slot.
+fn plan_exact_conjunct_seek(
+    where_expr: &Expr,
+    schema: &TableSchema,
+    scope: &Scope,
+    stats: &Stats,
+    covering: bool,
+) -> Option<ConjunctSeek> {
+    plan_conjunct_seek(where_expr, schema, scope, stats, covering)
+        .filter(|plan| plan.residual.is_empty())
+}
+
+/// sqlite3's `EXPLAIN QUERY PLAN` wording for `plan`:
+/// `(a=? AND b=? AND n>? AND n<?)`.
+fn conjunct_seek_detail(
+    plan: &ConjunctSeek,
+    schema: &TableSchema,
+    table_display: &str,
+) -> Option<String> {
+    let index = schema.indexes.get(plan.index_position)?;
+    let mut parts: Vec<String> = Vec::new();
+    for col in index.columns.iter().take(plan.eq.len()) {
+        parts.push(format!("{}=?", col.name));
+    }
+    let range_col = index.columns.get(plan.eq.len());
+    if let (Some(col), Some(_)) = (range_col, plan.lower) {
+        parts.push(format!("{}>?", col.name));
+    }
+    if let (Some(col), Some(_)) = (range_col, plan.upper) {
+        parts.push(format!("{}<?", col.name));
+    }
+    Some(format!(
+        "SEARCH {table_display} USING INDEX {} ({})",
+        index.name,
+        parts.join(" AND ")
+    ))
+}
+
+/// Registers holding the `SeekIndexGE` key (`lo_*`) and the stop key
+/// (`hi_*`) of a [`ConjunctSeek`] walk, plus a scratch register.
+struct ConjunctKeys {
+    lo_first: i32,
+    lo_len: usize,
+    hi_first: i32,
+    hi_len: usize,
+    scratch: i32,
+}
+
+/// Evaluates `plan`'s operands once (in source order, so anonymous bind
+/// parameters keep their numbering) and lays them out as the two
+/// contiguous key runs the walk compares against. A `NULL` operand
+/// matches nothing: jump to `exit`.
+fn compile_conjunct_keys(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    where_expr: &Expr,
+    plan: &ConjunctSeek,
+    exit: Label,
+) -> Result<ConjunctKeys, CodegenError> {
+    let terms = conjunct_terms(where_expr);
+    let mut needed: Vec<usize> = plan
+        .eq
+        .iter()
+        .copied()
+        .chain(plan.lower.map(|(i, _)| i))
+        .chain(plan.upper.map(|(i, _)| i))
+        .collect();
+    needed.sort_unstable();
+    let mut value_regs: Vec<(usize, i32)> = Vec::new();
+    for i in needed {
+        let operand = terms
+            .get(i)
+            .map(|t| t.2)
+            .ok_or_else(|| CodegenError::Unsupported {
+                reason: "conjunct seek term out of range".to_string(),
+            })?;
+        let r = compile_value(em, reg, scope, operand)?;
+        let null_addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));
+        em.patch_p2(null_addr, exit);
+        value_regs.push((i, r));
+    }
+    let reg_of = |i: usize| {
+        value_regs
+            .iter()
+            .find(|(t, _)| *t == i)
+            .map_or(0, |(_, r)| *r)
+    };
+    let mut run = |em: &mut Emitter, extra: Option<usize>| {
+        let mut first = 0;
+        let mut len: usize = 0;
+        for src in plan.eq.iter().copied().chain(extra).map(reg_of) {
+            let r = reg.alloc();
+            if len == 0 {
+                first = r;
+            }
+            em.emit(Instruction::new(Opcode::Copy, src, r, 0));
+            len = len.saturating_add(1);
+        }
+        (first, len)
+    };
+    let (lo_first, lo_len) = run(em, plan.lower.map(|(i, _)| i));
+    let (hi_first, hi_len) = run(em, plan.upper.map(|(i, _)| i));
+    Ok(ConjunctKeys {
+        lo_first,
+        lo_len,
+        hi_first,
+        hi_len,
+        scratch: reg.alloc(),
+    })
+}
+
+/// The walk over `plan`'s index entries: `SeekIndexGE` to the lower key
+/// (`IdxRewind` when there is none), skip entries equal to an exclusive
+/// lower bound, then loop `IdxCompareGT`/`IdxCompareGE` against the
+/// stop key, `body`, `IdxNext`. Without a lower bound the range column's
+/// `NULL` entries sort first and are skipped, as `NULL < x` is never true.
+fn emit_conjunct_index_walk<B>(
+    em: &mut Emitter,
+    plan: &ConjunctSeek,
+    keys: &ConjunctKeys,
+    index_cursor: i32,
+    exit: Label,
+    body: B,
+) -> Result<(), CodegenError>
+where
+    B: FnOnce(&mut Emitter, Label) -> Result<(), CodegenError>,
+{
+    let lo_key = || P4::SeekKey(vec![Collation::Binary; keys.lo_len]);
+    let hi_key = || P4::SeekKey(vec![Collation::Binary; keys.hi_len]);
+    if keys.lo_len == 0 {
+        let rewind_addr = em.emit(Instruction::new(Opcode::IdxRewind, index_cursor, 0, 0));
+        em.patch_p2(rewind_addr, exit);
+    } else {
+        let seek_addr = em.emit(Instruction::with_p4(
+            Opcode::SeekIndexGE,
+            index_cursor,
+            0,
+            keys.lo_first,
+            lo_key(),
+        ));
+        em.patch_p2(seek_addr, exit);
+    }
+    if plan.lower.is_some_and(|(_, inclusive)| !inclusive) {
+        let skip_start = em.new_label();
+        em.place(skip_start);
+        let past_bound = em.new_label();
+        let gt_addr = em.emit(Instruction::with_p4(
+            Opcode::IdxCompareGT,
+            index_cursor,
+            0,
+            keys.lo_first,
+            lo_key(),
+        ));
+        em.patch_p2(gt_addr, past_bound);
+        let skip_next_addr = em.emit(Instruction::new(Opcode::IdxNext, index_cursor, 0, 0));
+        em.patch_p2(skip_next_addr, skip_start);
+        let exhausted_addr = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
+        em.patch_p2(exhausted_addr, exit);
+        em.place(past_bound);
+    }
+    let loop_start = em.new_label();
+    em.place(loop_start);
+    let row_skip = em.new_label();
+    if keys.hi_len > 0 {
+        let stop_opcode = if plan.upper.is_some_and(|(_, inclusive)| !inclusive) {
+            Opcode::IdxCompareGE
+        } else {
+            Opcode::IdxCompareGT
+        };
+        let stop_addr = em.emit(Instruction::with_p4(
+            stop_opcode,
+            index_cursor,
+            0,
+            keys.hi_first,
+            hi_key(),
+        ));
+        em.patch_p2(stop_addr, exit);
+    }
+    if let (Some(_), None) = (plan.upper, plan.lower) {
+        let range_col = i32::try_from(plan.eq.len()).unwrap_or(0);
+        em.emit(Instruction::new(
+            Opcode::Column,
+            index_cursor,
+            range_col,
+            keys.scratch,
+        ));
+        let null_addr = em.emit(Instruction::new(Opcode::IsNull, keys.scratch, 0, 0));
+        em.patch_p2(null_addr, row_skip);
+    }
+    body(em, row_skip)?;
+    em.place(row_skip);
+    let next_addr = em.emit(Instruction::new(Opcode::IdxNext, index_cursor, 0, 0));
+    em.patch_p2(next_addr, loop_start);
+    Ok(())
+}
+
+/// #695: `WHERE a = ? AND b = ? [AND n >= ? AND n < ?] [AND other ...]`
+/// as one composite index walk ([`plan_conjunct_seek`]); the terms the
+/// walk does not enforce run as a per-row filter. Returns `Ok(false)` --
+/// `em`/`reg` untouched -- when no index serves the `WHERE`, or for
+/// `DISTINCT`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn try_compile_conjunct_seek<F>(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    select: &Select,
+    schema: &Rc<TableSchema>,
+    cursors: ScanCursors,
+    end_label: Label,
+    catalog: &[TableSchema],
+    stats: &Stats,
+    sink: &mut F,
+) -> Result<bool, CodegenError>
+where
+    F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
+{
+    if matches!(select.distinct, Some(Distinctness::Distinct)) {
+        return Ok(false);
+    }
+    let Some(where_expr) = &select.where_clause else {
+        return Ok(false);
+    };
+    let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
+    let Some(plan) = plan_conjunct_seek(where_expr, schema, &scope, stats, false) else {
+        return Ok(false);
+    };
+    let Some(index) = schema.indexes.get(plan.index_position) else {
+        return Ok(false);
+    };
+    let leading_name = index.columns.first().map_or("", |c| c.name.as_str());
+    let index_cursor = cursors.sort;
+    open_index_cursor(em, index, index_cursor)?;
+    let keys = compile_conjunct_keys(em, reg, &scope, where_expr, &plan, end_label)?;
+    let limit = compile_limit_setup(em, reg, &scope, select)?;
+    let all = conjuncts(where_expr);
+    let residual: Vec<&Expr> = plan
+        .residual
+        .iter()
+        .filter_map(|c| all.get(*c).copied())
+        .collect();
+    emit_conjunct_index_walk(em, &plan, &keys, index_cursor, end_label, |em, row_skip| {
+        emit_matched_row(
+            em,
+            reg,
+            select,
+            schema,
+            cursors,
+            index_cursor,
+            leading_name,
+            &limit,
+            row_skip,
+            end_label,
+            catalog,
+            &residual,
+            sink,
+        )
+    })?;
+    Ok(true)
 }
 
 /// The one correct "every index entry with `lo <= key <= hi`" walk, shared
