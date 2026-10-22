@@ -1640,6 +1640,18 @@ impl core::fmt::Debug for db_core::parser::ast::UnaryOp
 pub fn db_core::parser::ast::UnaryOp::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::parser::ast::UnaryOp
 impl core::marker::StructuralPartialEq for db_core::parser::ast::UnaryOp
+pub enum db_core::parser::ast::UpsertAction
+pub db_core::parser::ast::UpsertAction::DoNothing
+pub db_core::parser::ast::UpsertAction::DoUpdate
+pub db_core::parser::ast::UpsertAction::DoUpdate::assignments: alloc::vec::Vec<db_core::parser::ast::Assignment>
+pub db_core::parser::ast::UpsertAction::DoUpdate::where_clause: core::option::Option<db_core::parser::ast::Expr>
+impl core::clone::Clone for db_core::parser::ast::UpsertAction
+pub fn db_core::parser::ast::UpsertAction::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::parser::ast::UpsertAction
+pub fn db_core::parser::ast::UpsertAction::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::parser::ast::UpsertAction
+pub fn db_core::parser::ast::UpsertAction::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::parser::ast::UpsertAction
 pub struct db_core::parser::ast::Analyze
 pub db_core::parser::ast::Analyze::span: db_core::parser::Span
 pub db_core::parser::ast::Analyze::target: core::option::Option<alloc::string::String>
@@ -1892,6 +1904,7 @@ pub db_core::parser::ast::Insert::or_action: core::option::Option<db_core::parse
 pub db_core::parser::ast::Insert::source: db_core::parser::ast::InsertSource
 pub db_core::parser::ast::Insert::span: db_core::parser::Span
 pub db_core::parser::ast::Insert::table: alloc::string::String
+pub db_core::parser::ast::Insert::upsert: alloc::vec::Vec<db_core::parser::ast::UpsertClause>
 impl core::clone::Clone for db_core::parser::ast::Insert
 pub fn db_core::parser::ast::Insert::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::Insert
@@ -2022,6 +2035,26 @@ pub fn db_core::parser::ast::Update::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Update
 pub fn db_core::parser::ast::Update::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Update
+pub struct db_core::parser::ast::UpsertClause
+pub db_core::parser::ast::UpsertClause::action: db_core::parser::ast::UpsertAction
+pub db_core::parser::ast::UpsertClause::target: core::option::Option<db_core::parser::ast::UpsertTarget>
+impl core::clone::Clone for db_core::parser::ast::UpsertClause
+pub fn db_core::parser::ast::UpsertClause::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::parser::ast::UpsertClause
+pub fn db_core::parser::ast::UpsertClause::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::parser::ast::UpsertClause
+pub fn db_core::parser::ast::UpsertClause::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::parser::ast::UpsertClause
+pub struct db_core::parser::ast::UpsertTarget
+pub db_core::parser::ast::UpsertTarget::columns: alloc::vec::Vec<db_core::parser::ast::IndexedColumn>
+pub db_core::parser::ast::UpsertTarget::where_clause: core::option::Option<db_core::parser::ast::Expr>
+impl core::clone::Clone for db_core::parser::ast::UpsertTarget
+pub fn db_core::parser::ast::UpsertTarget::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::parser::ast::UpsertTarget
+pub fn db_core::parser::ast::UpsertTarget::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::parser::ast::UpsertTarget
+pub fn db_core::parser::ast::UpsertTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::parser::ast::UpsertTarget
 pub struct db_core::parser::ast::WindowDef
 pub db_core::parser::ast::WindowDef::order_by: alloc::vec::Vec<db_core::parser::ast::OrderingTerm>
 pub db_core::parser::ast::WindowDef::partition_by: alloc::vec::Vec<db_core::parser::ast::Expr>
