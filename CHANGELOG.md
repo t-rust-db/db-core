@@ -4,13 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.165.0] - 2026-10-22
+
+### Added
+
+- **`INSERT ... ON CONFLICT ... DO UPDATE`** (#696, second of three steps). A row that conflicts on the constraint a clause names, or on any constraint a target-less last clause answers, updates the existing row instead of being inserted: `DO UPDATE SET column = expr, ... [WHERE expr]`. A bare column in the `SET` or `WHERE` is the existing row's; `excluded.<column>` is the row that would have been inserted, with the column's affinity applied and its real rowid in an `INTEGER PRIMARY KEY` column. A `WHERE` that is false leaves the row alone and inserts nothing. The update goes through `UPDATE`'s own row body, so the new values meet the same `NOT NULL`, `CHECK` and `UNIQUE` checks (a key set to a value another row holds fails with `UNIQUE constraint failed`, setting a key to what it already is does not) and every index stays in step; a `SET` that reassigns the rowid moves the row. Clauses chain by target as in sqlite3, the first one that matches a constraint answering it, and a new row's own `NOT NULL`/`CHECK` violation still aborts before any conflict is looked at. Works over `VALUES` and `INSERT ... SELECT`, a row at a time. `WITHOUT ROWID` writes are still refused (the next step).
+
 ## [0.164.0] - 2026-10-22
 
 ### Changed
 
 - **`CREATE TABLE ... WITHOUT ROWID` is refused** (#696). The statement was accepted but no `INSERT`, `UPDATE` or `DELETE` could write the table, so it could only be created and never filled. It now fails with `unsupported: WITHOUT ROWID tables are not supported yet`, after sqlite3's own definition errors (`PRIMARY KEY missing`, `AUTOINCREMENT not allowed`) so those messages are unchanged. A `WITHOUT ROWID` table in a file sqlite3 wrote still opens and reads; writes to it keep failing at compile time. Writing to such tables is tracked separately.
-
-||||||| d74ad294
 
 ## [0.163.0] - 2026-10-22
 

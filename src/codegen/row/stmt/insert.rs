@@ -410,7 +410,8 @@ pub fn compile_insert(
     }
 
     let action = insert.or_action.unwrap_or(ConflictAction::Abort);
-    let skipped = skipped_conflicts(insert, schema)?;
+    let handlers = conflict_handlers(insert, schema)?;
+    let updates = upsert_updates(insert, schema)?;
 
     // Column references inside `CHECK` expressions resolve against
     // this shadow schema instead of `schema` itself: same columns, but
@@ -456,7 +457,8 @@ pub fn compile_insert(
                     |pos| values.get(pos).cloned().map(ColumnSource::Expr),
                     rowid_alias,
                     action,
-                    &skipped,
+                    &handlers,
+                    &updates,
                     is_autoincrement,
                 )?;
             }
@@ -473,7 +475,8 @@ pub fn compile_insert(
                 |_pos| None,
                 rowid_alias,
                 action,
-                &skipped,
+                &handlers,
+                &updates,
                 is_autoincrement,
             )?;
         }
@@ -514,7 +517,8 @@ pub fn compile_insert(
                     },
                     rowid_alias,
                     action,
-                    &skipped,
+                    &handlers,
+                    &updates,
                     is_autoincrement,
                 )
             };
@@ -652,7 +656,8 @@ fn compile_row(
     mut column_at: impl FnMut(usize) -> Option<ColumnSource>,
     rowid_alias: Option<usize>,
     action: ConflictAction,
-    skipped: &SkippedConflicts,
+    handlers: &ConflictHandlers,
+    updates: &[Option<UpsertUpdate>],
     is_autoincrement: bool,
 ) -> Result<(), CodegenError> {
     let mut value_sources: Vec<Option<ColumnSource>> = vec![None; schema.columns.len()];
@@ -666,6 +671,8 @@ fn compile_row(
 
     let row_skip = em.new_label();
 
+    let mut rowid_probe_deferred = false;
+
     // Pass 1: resolve the rowid before touching any column's register,
     // so its register(s) never fall inside the contiguous run `col_regs`
     // needs for `MakeRecord` below.
@@ -676,17 +683,23 @@ fn compile_row(
             match explicit {
                 Some(source) => {
                     let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;
-                    let no_conflict = em.new_label();
-                    let seek_addr =
-                        em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));
-                    em.patch_p2(seek_addr, no_conflict);
-                    let pk_action = if skipped.rowid {
-                        ConflictAction::Ignore
+                    // `DO UPDATE` needs the new row's other values (for
+                    // `excluded`), so its probe waits until they exist.
+                    if let Some(Handler::Update(_)) = handlers.rowid {
+                        rowid_probe_deferred = true;
                     } else {
-                        action
-                    };
-                    emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;
-                    em.place(no_conflict);
+                        let no_conflict = em.new_label();
+                        let seek_addr =
+                            em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));
+                        em.patch_p2(seek_addr, no_conflict);
+                        let pk_action = if let Some(Handler::Skip) = handlers.rowid {
+                            ConflictAction::Ignore
+                        } else {
+                            action
+                        };
+                        emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;
+                        em.place(no_conflict);
+                    }
                     r
                 }
                 None => {
@@ -834,22 +847,81 @@ fn compile_row(
         }
     }
 
-    for (index_cursor, index) in &unique_indexes {
-        let index_action = if skipped.indexes.contains(&index.name) {
-            ConflictAction::Ignore
-        } else {
-            action
-        };
-        emit_unique_check(
+    // The rowid conflict of a `DO UPDATE`, probed now that the new row's
+    // values are staged (after its NOT NULL and CHECK checks, as sqlite3
+    // orders them).
+    if let (true, Some(Handler::Update(clause))) = (rowid_probe_deferred, handlers.rowid) {
+        let no_conflict = em.new_label();
+        let seek_addr = em.emit(Instruction::new(
+            Opcode::SeekRowid,
+            TABLE_CURSOR,
+            0,
+            rowid_reg,
+        ));
+        em.patch_p2(seek_addr, no_conflict);
+        let update = upsert_update_at(updates, clause)?;
+        emit_upsert_update(
             em,
             reg,
             schema,
             check_schema,
-            *index_cursor,
-            index,
-            index_action,
+            plans,
+            table_checks,
+            update,
+            &col_regs,
+            rowid_reg,
             row_skip,
         )?;
+        em.place(no_conflict);
+    }
+
+    for (index_cursor, index) in &unique_indexes {
+        match handlers.index(&index.name) {
+            Some(Handler::Update(clause)) => {
+                let (conflict_rowid_reg, no_conflict) =
+                    emit_unique_probe(em, reg, schema, check_schema, *index_cursor, index)?;
+                // The existing row, to update; gone already means no
+                // conflict to answer.
+                let seek_addr = em.emit(Instruction::new(
+                    Opcode::SeekRowid,
+                    TABLE_CURSOR,
+                    0,
+                    conflict_rowid_reg,
+                ));
+                em.patch_p2(seek_addr, no_conflict);
+                let update = upsert_update_at(updates, clause)?;
+                emit_upsert_update(
+                    em,
+                    reg,
+                    schema,
+                    check_schema,
+                    plans,
+                    table_checks,
+                    update,
+                    &col_regs,
+                    rowid_reg,
+                    row_skip,
+                )?;
+                em.place(no_conflict);
+            }
+            other => {
+                let index_action = if let Some(Handler::Skip) = other {
+                    ConflictAction::Ignore
+                } else {
+                    action
+                };
+                emit_unique_check(
+                    em,
+                    reg,
+                    schema,
+                    check_schema,
+                    *index_cursor,
+                    index,
+                    index_action,
+                    row_skip,
+                )?;
+            }
+        }
     }
 
     let base_reg = first_reg(&col_regs)?;
@@ -979,48 +1051,71 @@ fn emit_pk_conflict(
     Ok(())
 }
 
-/// The uniqueness conflicts an `INSERT`'s `ON CONFLICT ... DO NOTHING`
-/// clauses answer by skipping the row (#696): the rowid, and the unique
-/// indexes (by name). Any other conflict, and every NOT NULL or CHECK
-/// violation, still follows the statement's own `OR` action -- unlike
-/// `OR IGNORE`, `DO NOTHING` only covers uniqueness.
+/// What an `INSERT`'s `ON CONFLICT` clause does when the new row
+/// conflicts on one uniqueness constraint (#696).
+#[derive(Clone, Copy)]
+enum Handler {
+    /// `DO NOTHING`: skip the row.
+    Skip,
+    /// `DO UPDATE`: update the existing row with the clause at this
+    /// position of `Insert::upsert` (see [`UpsertUpdate`]).
+    Update(usize),
+}
+
+/// Which `ON CONFLICT` clause answers which uniqueness constraint: the
+/// rowid, and the unique indexes by name. A constraint with no entry (and
+/// every NOT NULL or CHECK violation) still follows the statement's own
+/// `OR` action -- unlike `OR IGNORE`, an upsert clause only covers
+/// uniqueness.
 #[derive(Default)]
-struct SkippedConflicts {
-    rowid: bool,
-    indexes: Vec<String>,
+struct ConflictHandlers {
+    rowid: Option<Handler>,
+    indexes: Vec<(String, Handler)>,
+}
+
+impl ConflictHandlers {
+    fn index(&self, name: &str) -> Option<Handler> {
+        self.indexes
+            .iter()
+            .find(|(index, _)| index == name)
+            .map(|(_, handler)| *handler)
+    }
+
+    /// Records `handler` for `name` unless an earlier clause already
+    /// answers that constraint (the first matching clause wins).
+    fn add_index(&mut self, name: &str, handler: Handler) {
+        if self.index(name).is_none() {
+            self.indexes.push((name.to_string(), handler));
+        }
+    }
 }
 
 /// Resolves `insert`'s upsert clauses against `schema`. A clause without
-/// a target answers every uniqueness conflict. A target names the
-/// constraint it answers -- the rowid (`INTEGER PRIMARY KEY`, or `rowid`)
-/// or a unique index over the same columns -- and sqlite3 refuses one
-/// that matches none (partial indexes do not exist here, so a target
-/// `WHERE` matches none either). `DO UPDATE` is not compiled yet.
-fn skipped_conflicts(
+/// a target answers every uniqueness conflict no earlier clause does. A
+/// target names the constraint it answers -- the rowid (`INTEGER PRIMARY
+/// KEY`, or `rowid`) or a unique index over the same columns -- and
+/// sqlite3 refuses one that matches none (partial indexes do not exist
+/// here, so a target `WHERE` matches none either).
+fn conflict_handlers(
     insert: &Insert,
     schema: &TableSchema,
-) -> Result<SkippedConflicts, CodegenError> {
+) -> Result<ConflictHandlers, CodegenError> {
     let mismatch = || {
         CodegenError::Rejected(
             "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".to_string(),
         )
     };
-    let mut skipped = SkippedConflicts::default();
-    for clause in &insert.upsert {
-        if matches!(clause.action, UpsertAction::DoUpdate { .. }) {
-            return Err(CodegenError::Unsupported {
-                reason: "INSERT ... ON CONFLICT DO UPDATE is not supported yet".to_string(),
-            });
-        }
+    let mut handlers = ConflictHandlers::default();
+    for (position, clause) in insert.upsert.iter().enumerate() {
+        let handler = match clause.action {
+            UpsertAction::DoNothing => Handler::Skip,
+            UpsertAction::DoUpdate { .. } => Handler::Update(position),
+        };
         let Some(target) = &clause.target else {
-            skipped.rowid = true;
-            skipped.indexes.extend(
-                schema
-                    .indexes
-                    .iter()
-                    .filter(|index| index.unique)
-                    .map(|index| index.name.clone()),
-            );
+            handlers.rowid.get_or_insert(handler);
+            for index in schema.indexes.iter().filter(|index| index.unique) {
+                handlers.add_index(&index.name, handler);
+            }
             continue;
         };
         let mut names = Vec::with_capacity(target.columns.len());
@@ -1072,34 +1167,190 @@ fn skipped_conflicts(
             return Err(mismatch());
         }
         if is_rowid_target {
-            skipped.rowid = true;
+            handlers.rowid.get_or_insert(handler);
         } else if let Some(index) = matching_index {
-            skipped.indexes.push(index.name.clone());
+            handlers.add_index(&index.name, handler);
         } else {
             return Err(mismatch());
         }
     }
-    Ok(skipped)
+    Ok(handlers)
 }
 
-/// Enforces one non-rowid UNIQUE index (#207) against the row currently
-/// staged in `col_regs` (read back via `CHECK_CURSOR`'s pseudo cursor,
-/// same trick `has_checks` uses — see `compile_row`). Emits the probe
-/// key (the index's declared columns, in order) into a fresh contiguous
-/// register run, reserves one more register for `Opcode::NoConflict`'s
-/// conflicting-rowid output, then dispatches on `action` exactly like
-/// `emit_pk_conflict` does for the rowid-PK case.
+/// One `DO UPDATE SET ... [WHERE ...]` clause, resolved against the table
+/// (#696): the expression each column is set to (`None` for a column the
+/// clause leaves alone), the `WHERE` that gates the update, and which
+/// indexes the `SET` re-keys.
+struct UpsertUpdate {
+    assigned: Vec<Option<Expr>>,
+    where_clause: Option<Expr>,
+    index_touched: Vec<bool>,
+    rowid_reassigned: bool,
+}
+
+/// [`UpsertUpdate`] for each of `insert`'s upsert clauses, `None` for a
+/// `DO NOTHING`.
+fn upsert_updates(
+    insert: &Insert,
+    schema: &TableSchema,
+) -> Result<Vec<Option<UpsertUpdate>>, CodegenError> {
+    let mut updates = Vec::with_capacity(insert.upsert.len());
+    for clause in &insert.upsert {
+        let UpsertAction::DoUpdate {
+            assignments,
+            where_clause,
+        } = &clause.action
+        else {
+            updates.push(None);
+            continue;
+        };
+        let mut assigned: Vec<Option<Expr>> = vec![None; schema.columns.len()];
+        for assignment in assignments {
+            for name in &assignment.columns {
+                let idx = column_index(schema, name)
+                    .ok_or_else(|| CodegenError::UnknownColumn { name: name.clone() })?;
+                if let Some(slot) = assigned.get_mut(idx) {
+                    *slot = Some(assignment.value.clone());
+                }
+            }
+        }
+        let refs: Vec<Option<&Expr>> = assigned.iter().map(Option::as_ref).collect();
+        let index_touched = crate::codegen::row::stmt::update::index_touched_flags(schema, &refs);
+        let rowid_reassigned = schema
+            .rowid_alias
+            .and_then(|idx| assigned.get(idx))
+            .is_some_and(Option::is_some);
+        updates.push(Some(UpsertUpdate {
+            assigned,
+            where_clause: where_clause.clone(),
+            index_touched,
+            rowid_reassigned,
+        }));
+    }
+    Ok(updates)
+}
+
+fn upsert_update_at(
+    updates: &[Option<UpsertUpdate>],
+    clause: usize,
+) -> Result<&UpsertUpdate, CodegenError> {
+    updates
+        .get(clause)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| CodegenError::Internal {
+            reason: format!("upsert clause {clause} has no DO UPDATE to compile"),
+        })
+}
+
+/// The `DO UPDATE` of a conflicting row (#696), emitted with `TABLE_CURSOR`
+/// already on the existing row: stage the row that would have been
+/// inserted as the `excluded` pseudo-table (affinities applied, the real
+/// rowid in an `INTEGER PRIMARY KEY` column), gate on the clause's
+/// `WHERE`, then run `UPDATE`'s own row body -- so the new values meet
+/// the same NOT NULL, CHECK and UNIQUE checks and keep every index in
+/// step -- and finally skip the insert (`row_skip`). A bare column in the
+/// `SET`/`WHERE` is the existing row's; only `excluded.<column>` reads
+/// the new one.
 #[allow(clippy::too_many_arguments)]
-fn emit_unique_check(
+fn emit_upsert_update(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    schema: &TableSchema,
+    check_schema: &TableSchema,
+    plans: &[ColumnPlan],
+    table_checks: &[(Expr, String)],
+    update: &UpsertUpdate,
+    col_regs: &[i32],
+    rowid_reg: i32,
+    row_skip: Label,
+) -> Result<(), CodegenError> {
+    let mut staged = Vec::with_capacity(col_regs.len());
+    for (idx, col_reg) in col_regs.iter().enumerate() {
+        let src = if Some(idx) == schema.rowid_alias {
+            rowid_reg
+        } else {
+            *col_reg
+        };
+        let r = reg.alloc();
+        em.emit(Instruction::new(Opcode::Copy, src, r, 0));
+        staged.push(r);
+    }
+    let base_reg = first_reg(&staged)?;
+    let count = i32::try_from(staged.len()).unwrap_or(0);
+    let excluded_record = reg.alloc();
+    let affinities: Vec<u8> = schema
+        .column_types
+        .iter()
+        .map(|t| affinity_of(t).to_p4_byte())
+        .collect();
+    em.emit(Instruction::with_p4(
+        Opcode::MakeRecord,
+        base_reg,
+        count,
+        excluded_record,
+        P4::Affinity(affinities),
+    ));
+    let excluded_cursor = reg.alloc_cursor();
+    em.emit(Instruction::new(
+        Opcode::OpenPseudo,
+        excluded_cursor,
+        excluded_record,
+        0,
+    ));
+    let excluded_schema = TableSchema {
+        name: "excluded".to_string(),
+        indexes: Vec::new(),
+        ..schema.clone()
+    };
+    let scope = crate::codegen::row::Scope::single(schema, TABLE_CURSOR).with_outer(
+        crate::codegen::row::Scope::single(&excluded_schema, excluded_cursor).with_record_cursors(),
+    );
+
+    if let Some(where_clause) = &update.where_clause {
+        compile_cond(
+            em,
+            reg,
+            &scope,
+            where_clause,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(row_skip)),
+        )?;
+    }
+    let assigned: Vec<Option<&Expr>> = update.assigned.iter().map(Option::as_ref).collect();
+    crate::codegen::row::stmt::update::emit_update_row_body(
+        em,
+        reg,
+        schema,
+        &scope,
+        plans,
+        table_checks,
+        check_schema,
+        ConflictAction::Abort,
+        schema.rowid_alias,
+        update.rowid_reassigned,
+        &assigned,
+        &update.index_touched,
+        row_skip,
+    )?;
+    em.goto(row_skip);
+    Ok(())
+}
+
+/// Probes one non-rowid UNIQUE index (#207) for the row currently staged
+/// in `col_regs` (read back via `CHECK_CURSOR`'s pseudo cursor, same trick
+/// `has_checks` uses — see `compile_row`). Emits the probe key (the
+/// index's declared columns, in order) into a fresh contiguous register
+/// run, reserves one more register for `Opcode::NoConflict`'s
+/// conflicting-rowid output, and `NoConflict`. Returns that register and
+/// the label of the no-conflict path; falling through the emitted code
+/// means the key is taken and the register holds the other row's rowid.
+fn emit_unique_probe(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     schema: &TableSchema,
     check_schema: &TableSchema,
     index_cursor: i32,
     index: &crate::codegen::row::IndexSchema,
-    action: ConflictAction,
-    row_skip: Label,
-) -> Result<(), CodegenError> {
+) -> Result<(i32, Label), CodegenError> {
     let mut start = None;
     let mut key_col_indices = Vec::with_capacity(index.columns.len());
     for col in &index.columns {
@@ -1132,7 +1383,7 @@ fn emit_unique_check(
     // `NoConflict`'s contract (`src/vdbe/cursor.rs::no_conflict`): the
     // register immediately after the probe range receives the
     // conflicting row's rowid on a fallthrough (conflict) — reserved
-    // here even when `action` doesn't need it (`Ignore`/`Abort`/etc.),
+    // here even when the caller doesn't need it (`Ignore`/`Abort`/etc.),
     // to keep the register layout uniform.
     let conflict_rowid_reg = reg.alloc();
 
@@ -1156,7 +1407,25 @@ fn emit_unique_check(
         P4::Int(count.into()),
     ));
     em.patch_p2(addr, no_conflict);
+    Ok((conflict_rowid_reg, no_conflict))
+}
 
+/// Enforces one non-rowid UNIQUE index (#207): [`emit_unique_probe`], then
+/// dispatches on `action` exactly like `emit_pk_conflict` does for the
+/// rowid-PK case.
+#[allow(clippy::too_many_arguments)]
+fn emit_unique_check(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    schema: &TableSchema,
+    check_schema: &TableSchema,
+    index_cursor: i32,
+    index: &crate::codegen::row::IndexSchema,
+    action: ConflictAction,
+    row_skip: Label,
+) -> Result<(), CodegenError> {
+    let (conflict_rowid_reg, no_conflict) =
+        emit_unique_probe(em, reg, schema, check_schema, index_cursor, index)?;
     match action {
         ConflictAction::Ignore => em.goto(row_skip),
         ConflictAction::Replace => {
