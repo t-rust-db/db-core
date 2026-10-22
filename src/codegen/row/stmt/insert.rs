@@ -93,7 +93,7 @@ use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, Label, NullTarget, RegAlloc, Target};
 use crate::parser::ast::{
     ColumnConstraint, ConflictAction, CreateTable, DefaultValue, Expr, ExprKind, Insert,
-    InsertSource, Literal, TableConstraint, TableRef,
+    InsertSource, Literal, TableConstraint, TableRef, UpsertAction,
 };
 use crate::parser::row::error::ParseOutcome;
 use crate::parser::row::parse_create_table;
@@ -410,6 +410,7 @@ pub fn compile_insert(
     }
 
     let action = insert.or_action.unwrap_or(ConflictAction::Abort);
+    let skipped = skipped_conflicts(insert, schema)?;
 
     // Column references inside `CHECK` expressions resolve against
     // this shadow schema instead of `schema` itself: same columns, but
@@ -455,6 +456,7 @@ pub fn compile_insert(
                     |pos| values.get(pos).cloned().map(ColumnSource::Expr),
                     rowid_alias,
                     action,
+                    &skipped,
                     is_autoincrement,
                 )?;
             }
@@ -471,6 +473,7 @@ pub fn compile_insert(
                 |_pos| None,
                 rowid_alias,
                 action,
+                &skipped,
                 is_autoincrement,
             )?;
         }
@@ -511,6 +514,7 @@ pub fn compile_insert(
                     },
                     rowid_alias,
                     action,
+                    &skipped,
                     is_autoincrement,
                 )
             };
@@ -648,6 +652,7 @@ fn compile_row(
     mut column_at: impl FnMut(usize) -> Option<ColumnSource>,
     rowid_alias: Option<usize>,
     action: ConflictAction,
+    skipped: &SkippedConflicts,
     is_autoincrement: bool,
 ) -> Result<(), CodegenError> {
     let mut value_sources: Vec<Option<ColumnSource>> = vec![None; schema.columns.len()];
@@ -675,7 +680,12 @@ fn compile_row(
                     let seek_addr =
                         em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));
                     em.patch_p2(seek_addr, no_conflict);
-                    emit_pk_conflict(em, reg, action, row_skip, schema, idx)?;
+                    let pk_action = if skipped.rowid {
+                        ConflictAction::Ignore
+                    } else {
+                        action
+                    };
+                    emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;
                     em.place(no_conflict);
                     r
                 }
@@ -825,6 +835,11 @@ fn compile_row(
     }
 
     for (index_cursor, index) in &unique_indexes {
+        let index_action = if skipped.indexes.contains(&index.name) {
+            ConflictAction::Ignore
+        } else {
+            action
+        };
         emit_unique_check(
             em,
             reg,
@@ -832,7 +847,7 @@ fn compile_row(
             check_schema,
             *index_cursor,
             index,
-            action,
+            index_action,
             row_skip,
         )?;
     }
@@ -962,6 +977,109 @@ fn emit_pk_conflict(
         }
     }
     Ok(())
+}
+
+/// The uniqueness conflicts an `INSERT`'s `ON CONFLICT ... DO NOTHING`
+/// clauses answer by skipping the row (#696): the rowid, and the unique
+/// indexes (by name). Any other conflict, and every NOT NULL or CHECK
+/// violation, still follows the statement's own `OR` action -- unlike
+/// `OR IGNORE`, `DO NOTHING` only covers uniqueness.
+#[derive(Default)]
+struct SkippedConflicts {
+    rowid: bool,
+    indexes: Vec<String>,
+}
+
+/// Resolves `insert`'s upsert clauses against `schema`. A clause without
+/// a target answers every uniqueness conflict. A target names the
+/// constraint it answers -- the rowid (`INTEGER PRIMARY KEY`, or `rowid`)
+/// or a unique index over the same columns -- and sqlite3 refuses one
+/// that matches none (partial indexes do not exist here, so a target
+/// `WHERE` matches none either). `DO UPDATE` is not compiled yet.
+fn skipped_conflicts(
+    insert: &Insert,
+    schema: &TableSchema,
+) -> Result<SkippedConflicts, CodegenError> {
+    let mismatch = || {
+        CodegenError::Rejected(
+            "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint".to_string(),
+        )
+    };
+    let mut skipped = SkippedConflicts::default();
+    for clause in &insert.upsert {
+        if matches!(clause.action, UpsertAction::DoUpdate { .. }) {
+            return Err(CodegenError::Unsupported {
+                reason: "INSERT ... ON CONFLICT DO UPDATE is not supported yet".to_string(),
+            });
+        }
+        let Some(target) = &clause.target else {
+            skipped.rowid = true;
+            skipped.indexes.extend(
+                schema
+                    .indexes
+                    .iter()
+                    .filter(|index| index.unique)
+                    .map(|index| index.name.clone()),
+            );
+            continue;
+        };
+        let mut names = Vec::with_capacity(target.columns.len());
+        for term in &target.columns {
+            let mut expr = &term.expr;
+            while let ExprKind::Paren(inner) | ExprKind::Collate { expr: inner, .. } = &expr.kind {
+                expr = inner;
+            }
+            let ExprKind::Column { name, .. } = &expr.kind else {
+                return Err(mismatch());
+            };
+            // `rowid` and its aliases name the rowid unless a column
+            // shadows them, and only on a table that has one.
+            let is_column = schema
+                .columns
+                .iter()
+                .any(|col| col.eq_ignore_ascii_case(name));
+            let is_rowid_keyword = !schema.without_rowid
+                && !is_column
+                && ["rowid", "oid", "_rowid_"]
+                    .iter()
+                    .any(|r| name.eq_ignore_ascii_case(r));
+            if let (false, false) = (is_column, is_rowid_keyword) {
+                return Err(CodegenError::Rejected(format!("no such column: {name}")));
+            }
+            names.push((name.as_str(), is_rowid_keyword));
+        }
+        let is_rowid_target = match (names.as_slice(), schema.rowid_alias) {
+            ([(only, is_rowid_keyword)], alias) => {
+                let named_alias = alias
+                    .and_then(|idx| schema.columns.get(idx))
+                    .is_some_and(|col| col.eq_ignore_ascii_case(only));
+                named_alias || *is_rowid_keyword
+            }
+            _ => false,
+        };
+        let matching_index = schema.indexes.iter().find(|index| {
+            index.unique
+                && index.columns.len() == names.len()
+                && names.iter().all(|(name, _)| {
+                    index
+                        .columns
+                        .iter()
+                        .any(|col| col.name.eq_ignore_ascii_case(name))
+                })
+        });
+        // A target `WHERE` selects a partial index; there are none.
+        if target.where_clause.is_some() {
+            return Err(mismatch());
+        }
+        if is_rowid_target {
+            skipped.rowid = true;
+        } else if let Some(index) = matching_index {
+            skipped.indexes.push(index.name.clone());
+        } else {
+            return Err(mismatch());
+        }
+    }
+    Ok(skipped)
 }
 
 /// Enforces one non-rowid UNIQUE index (#207) against the row currently

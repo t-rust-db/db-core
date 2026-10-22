@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.163.0] - 2026-10-22
+
+### Added
+
+- **`INSERT ... ON CONFLICT ... DO NOTHING`** (#696, first of three steps). The parser reads sqlite3's whole upsert clause: `ON CONFLICT [(column, ...) [WHERE expr]] DO NOTHING` or `DO UPDATE SET ... [WHERE expr]`, chained as sqlite3 chains them (only a clause with a target may be followed by another), after a `VALUES` or `SELECT` source; `Insert` gains `upsert` and the AST gains `UpsertClause`, `UpsertTarget` and `UpsertAction`. `DO NOTHING` skips a row that conflicts on the constraint its target names (the rowid, or a `PRIMARY KEY`/`UNIQUE` index over the same columns in any order), or on any uniqueness constraint when it has no target. A conflict on another constraint, and every `NOT NULL` or `CHECK` violation, still aborts, unlike `OR IGNORE`. A target that matches no constraint is refused with sqlite3's `ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint`. `DO UPDATE` parses but is refused as `Unsupported` until the next step, and `WITHOUT ROWID` writes until the one after.
+
 ## [0.162.0] - 2026-10-22
 
 ### Added
