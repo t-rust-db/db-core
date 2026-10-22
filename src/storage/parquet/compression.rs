@@ -7,6 +7,7 @@
 mod decoder_fuzz;
 mod snappy;
 pub mod zstd;
+pub mod zstd_spike;
 
 pub use snappy::SnappyError;
 pub use zstd::ZstdError;

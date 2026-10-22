@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use db_core::storage::parquet::compression::zstd;
+use db_core::storage::parquet::compression::{zstd, zstd_spike};
 use db_core::storage::ParquetFile;
 
 fn main() {
@@ -35,6 +35,39 @@ fn main() {
         }
         best = best.min(start.elapsed().as_secs_f64());
     }
+    // The spike decoder must agree with ruzstd byte for byte on every page.
+    let mut mismatches = 0;
+    for (i, (frame, size)) in pages.iter().enumerate() {
+        let want = zstd::decompress(frame, *size).expect("ruzstd");
+        match zstd_spike::decompress(frame, *size) {
+            Ok(got) if got == want => {}
+            Ok(_) => {
+                mismatches += 1;
+                eprintln!("page {i}: different bytes");
+            }
+            Err(e) => {
+                mismatches += 1;
+                eprintln!("page {i}: {e}");
+            }
+        }
+    }
+    let mut spike_best = f64::MAX;
+    if mismatches == 0 {
+        for _ in 0..10 {
+            let start = Instant::now();
+            for (frame, size) in &pages {
+                let body = zstd_spike::decompress(frame, *size).expect("spike");
+                assert_eq!(body.len(), *size);
+            }
+            spike_best = spike_best.min(start.elapsed().as_secs_f64());
+        }
+    }
+    println!(
+        "spike: mismatches={} spike_best_ms={:.2} spike_mb_s={:.0}",
+        mismatches,
+        spike_best * 1e3,
+        uncompressed as f64 / spike_best / 1e6
+    );
     println!(
         "pages={} compressed={} uncompressed={} ruzstd_best_ms={:.2} ruzstd_mb_s={:.0}",
         pages.len(),
