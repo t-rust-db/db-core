@@ -34540,9 +34540,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_compression_zstd_frame_copy_match_45d8ecd1",
+    "file": "src/storage/parquet/compression/zstd/frame.rs",
+    "line": 196,
+    "decision": "let Some(slot) = window.get_mut(i.wrapping_add(offset))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_compression_zstd_frame_decode_1c4df617",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 218,
+    "line": 221,
     "decision": "frame.get(..4) != Some(&[0x28, 0xB5, 0x2F, 0xFD])",
     "conditions": 1,
     "vectors_required": 2,
@@ -34552,7 +34562,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_7580c8e4",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 226,
+    "line": 229,
     "decision": "descriptor & 0x03 != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -34562,7 +34572,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_daba81b6",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 231,
+    "line": 234,
     "decision": "descriptor & 0x08 != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -34572,7 +34582,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_c0a08cdb",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 236,
+    "line": 239,
     "decision": "match descriptor >> 6 {\n        0 => usize::from(single_segment),\n        1 => 2,\n        2 => 4,\n        _ => 8,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34582,7 +34592,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_191b710f",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 248,
+    "line": 251,
     "decision": "!content_size.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34592,7 +34602,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_11913b8c",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 255,
+    "line": 258,
     "decision": "content_size_bytes == 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -34602,7 +34612,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_56233ec5",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 261,
+    "line": 264,
     "decision": "value != size",
     "conditions": 1,
     "vectors_required": 2,
@@ -34612,7 +34622,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_edb75145",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 293,
+    "line": 296,
     "decision": "block_size > MAX_BLOCK",
     "conditions": 1,
     "vectors_required": 2,
@@ -34622,7 +34632,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_00462b19",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 296,
+    "line": 299,
     "decision": "match (h >> 1) & 3 {\n            0 => {\n                let raw = frame\n                    .get(pos..pos.saturating_add(block_size))\n                    .ok_or_else(|| corrupt(\"short raw block\"))?;\n                out.room(block_size)?;\n                out.buf\n                    .get_mut(out.op..out.op.wrapping_add(block_size))\n                    .ok_or_else(|| corrupt(\"output overrun\"))?\n                    .copy_from_slice(raw);\n                out.op = out.op.wrapping_add(block_size);\n                pos = pos.wrapping_add(block_size);\n            }\n            1 => {\n                let b = *frame.get(pos).ok_or_else(|| corrupt(\"short RLE block\"))?;\n                out.room(block_size)?;\n                out.buf\n                    .get_mut(out.op..out.op.wrapping_add(block_size))\n                    .ok_or_else(|| corrupt(\"output overrun\"))?\n                    .fill(b);\n                out.op = out.op.wrapping_add(block_size);\n                pos = pos.wrapping_add(1);\n            }\n            2 => {\n                let block = frame\n                    .get(pos..pos.saturating_add(block_size))\n                    .ok_or_else(|| corrupt(\"short compressed block\"))?;\n                compressed_block(block, &mut state, &mut out)?;\n                pos = pos.wrapping_add(block_size);\n            }\n            _ => return Err(corrupt(\"reserved block type\")),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34632,7 +34642,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_940e9574",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 328,
+    "line": 331,
     "decision": "last",
     "conditions": 1,
     "vectors_required": 2,
@@ -34642,7 +34652,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_2fbc9abc",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 332,
+    "line": 335,
     "decision": "out.op != size",
     "conditions": 1,
     "vectors_required": 2,
@@ -34652,7 +34662,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_536ddc3b",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 339,
+    "line": 342,
     "decision": "checksum",
     "conditions": 1,
     "vectors_required": 2,
@@ -34662,7 +34672,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_12c30bd8",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 346,
+    "line": 349,
     "decision": "computed.get(..4) != Some(&stored[..])",
     "conditions": 1,
     "vectors_required": 2,
@@ -34672,7 +34682,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_e35548ae",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 376,
+    "line": 379,
     "decision": "kind < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -34682,7 +34692,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_0a4a08d4",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 378,
+    "line": 381,
     "decision": "match size_format {\n            0 | 2 => (1, usize::from(b0 >> 3)),\n            1 => (2, high | byte(1)? << 4),\n            _ => (3, high | byte(1)? << 4 | byte(2)? << 12),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34692,7 +34702,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_10e91ddf",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 383,
+    "line": 386,
     "decision": "regenerated > MAX_BLOCK",
     "conditions": 1,
     "vectors_required": 2,
@@ -34702,7 +34712,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_7fb7b375",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 386,
+    "line": 389,
     "decision": "kind == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -34712,7 +34722,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_3e51b752",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 401,
+    "line": 404,
     "decision": "match size_format {\n        0 => (3, 10, 1),\n        1 => (3, 10, 4),\n        2 => (4, 14, 4),\n        _ => (5, 18, 4),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34722,7 +34732,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_10e91ddf_2",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 416,
+    "line": 419,
     "decision": "regenerated > MAX_BLOCK",
     "conditions": 1,
     "vectors_required": 2,
@@ -34732,7 +34742,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_7fb7b60f",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 422,
+    "line": 425,
     "decision": "kind == 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -34742,7 +34752,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_0acabcba",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 434,
+    "line": 437,
     "decision": "streams == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -34752,7 +34762,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_read_table_39b026fa",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 477,
+    "line": 480,
     "decision": "match mode {\n        0 => {\n            *slot = Some(fse::Table::build(default, default_log)?);\n            Ok(0)\n        }\n        1 => {\n            let symbol = *data.first().ok_or_else(|| corrupt(\"short RLE table\"))?;\n            if usize::from(symbol) >= default.len() {\n                return Err(corrupt(\"RLE symbol out of range\"));\n            }\n            *slot = Some(fse::Table::rle(symbol));\n            Ok(1)\n        }\n        2 => {\n            let (table, used) = fse::Table::read(data, max_log, default.len().saturating_sub(1))?;\n            *slot = Some(table);\n            Ok(used)\n        }\n        _ => {\n            if slot.is_none() {\n                return Err(corrupt(\"repeated sequence table without a previous one\"));\n            }\n            Ok(0)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34762,7 +34772,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_read_table_e47b2e20",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 484,
+    "line": 487,
     "decision": "usize::from(symbol) >= default.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34772,7 +34782,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_read_table_4536ab16",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 496,
+    "line": 499,
     "decision": "slot.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34782,7 +34792,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_e6071482",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 514,
+    "line": 517,
     "decision": "match b0 {\n        0 => {\n            out.room(state.literals_len)?;\n            return out.wild_copy(&state.literals, 0, state.literals_len);\n        }\n        1..=127 => (usize::from(b0), 1),\n        128..=254 => ((usize::from(b0).wrapping_sub(128) << 8) | byte(1)?, 2),\n        255 => ((byte(1)? | byte(2)? << 8).wrapping_add(0x7F00), 3),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34792,7 +34802,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_38cc1dbc",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 588,
+    "line": 591,
     "decision": "lit_len > literals_len.saturating_sub(lit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -34802,7 +34812,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_cfb935c3",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 595,
+    "line": 598,
     "decision": "offset.wrapping_sub(1) >= out.op",
     "conditions": 1,
     "vectors_required": 2,
@@ -34812,7 +34822,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_7aa3dce4",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 599,
+    "line": 602,
     "decision": "i.wrapping_add(1) < count",
     "conditions": 1,
     "vectors_required": 2,
@@ -34822,7 +34832,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_9942ad92",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 609,
+    "line": 612,
     "decision": "!br.finished()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34832,7 +34842,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_1457a876",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 621,
+    "line": 624,
     "decision": "value > 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -34842,7 +34852,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_61296e5a",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 626,
+    "line": 629,
     "decision": "lit_len == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -34852,7 +34862,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_4b284295",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 631,
+    "line": 634,
     "decision": "match index {\n        0 => return Ok(reps[0]),\n        1 => reps[1],\n        2 => reps[2],\n        _ => reps[0]\n            .checked_sub(1)\n            .ok_or_else(|| corrupt(\"repeat offset underflow\"))?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34862,7 +34872,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_c3207d60",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 639,
+    "line": 642,
     "decision": "index == 1",
     "conditions": 1,
     "vectors_required": 2,

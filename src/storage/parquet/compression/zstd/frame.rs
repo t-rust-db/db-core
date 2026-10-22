@@ -165,7 +165,7 @@ impl Out {
     /// checked with [`Self::room`].
     #[inline(always)]
     fn copy_match(&mut self, offset: usize, n: usize) -> Result<()> {
-        let mut src = self.op.wrapping_sub(offset);
+        let src = self.op.wrapping_sub(offset);
         if offset >= 16 {
             // Each chunk reads only bytes written before it.
             let mut i = 0usize;
@@ -185,16 +185,19 @@ impl Out {
             }
             self.op = self.op.wrapping_add(n);
         } else {
-            // Overlapping: the match repeats its own output, byte by byte.
-            for _ in 0..n {
-                let b = *self.buf.get(src).ok_or_else(|| corrupt("match overrun"))?;
-                *self
-                    .buf
-                    .get_mut(self.op)
-                    .ok_or_else(|| corrupt("output overrun"))? = b;
-                self.op = self.op.wrapping_add(1);
-                src = src.wrapping_add(1);
+            // Overlapping: the match repeats its own output, byte by byte,
+            // inside one window checked once (`offset + n` long).
+            let window = self
+                .buf
+                .get_mut(src..self.op.saturating_add(n))
+                .ok_or_else(|| corrupt("match overrun"))?;
+            for i in 0..n {
+                let b = window.get(i).copied().unwrap_or(0);
+                if let Some(slot) = window.get_mut(i.wrapping_add(offset)) {
+                    *slot = b;
+                }
             }
+            self.op = self.op.wrapping_add(n);
         }
         Ok(())
     }
