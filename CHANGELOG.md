@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.167.2] - 2026-10-22
+
+### Fixed
+
+- **Emptying an index left a file sqlite3 calls malformed.** Deleting rows from an indexed table (a `CREATE INDEX`, or the implicit index of a `PRIMARY KEY` or `UNIQUE` column) left every index page that lost its last entry in the b-tree, and SQLite refuses to open a page with no cells: after `DELETE FROM big` over 3000 rows, `PRAGMA integrity_check` in sqlite3 answered `database disk image is malformed (11)` (partial deletes that emptied a leaf did the same). A page that is emptied is now taken out of its parent and freed. The parent entry beside it is a real index entry, not just a routing key, so it is put back into the neighbouring subtree rather than dropped; an interior page left with no entries is replaced by its only child, and a root left that way takes the child's place. The pages go back to the freelist, which they never did.
+- **Deleting an entry that sits in an interior page could fail with `cells do not fit in page`.** The entry is replaced by its in-order predecessor, and a predecessor longer than the entry it replaces can overflow the page (found by a randomized test with keys of mixed length). The page is now split as an insert would split it. The replaced entry's overflow chain, which leaked, is freed.
+- **`PRAGMA integrity_check` reported a freelist mismatch that was not there.** It compared the freelist chain with the page count and freelist length of the header the connection opened with, and the pager changes both as pages are freed; it now reads page 1 as it is.
+
+Checked by a randomized test against a sorted model (1,500 seeds, mixed key sizes, no page leaked) and by engine tests that run a delete and have sqlite3 check the file after every statement; three of those fail on the previous release.
+
 ## [0.167.1] - 2026-10-22
 
 ### Fixed

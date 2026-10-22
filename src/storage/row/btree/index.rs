@@ -734,6 +734,8 @@ pub(super) enum IndexDescent {
         leaf_page: u32,
     },
     InteriorMatch {
+        /// The pages above `interior_page`, root first.
+        ancestors: Vec<u32>,
         interior_page: u32,
         entry_child: u32,
     },
@@ -789,6 +791,7 @@ pub(super) fn descend_index_tree(
                 .position(|(_, entry_key, _)| compare_keys(key, entry_key) == Ordering::Equal)
             {
                 return Ok(IndexDescent::InteriorMatch {
+                    ancestors,
                     interior_page: page_num,
                     entry_child: entries
                         .get(entry_index)
