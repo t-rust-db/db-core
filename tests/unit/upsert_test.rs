@@ -19,6 +19,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use db_core::engine::row::RowEngine;
 use db_core::engine::{Cell, Engine, ErrorKind};
@@ -27,16 +28,17 @@ const FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 
 struct TempDb(PathBuf);
 
+/// Tests run on parallel threads of one process: a clock reading alone can
+/// repeat, and two tests then share (and delete) one file.
+static NEXT_DB: AtomicU64 = AtomicU64::new(0);
+
 impl TempDb {
     fn new(label: &str) -> Self {
         let mut path = std::env::temp_dir();
         path.push(format!(
             "db-core-upsert-{label}-{}-{}.db",
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .subsec_nanos()
+            NEXT_DB.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::copy(FIXTURE, &path).expect("copy fixture");
         TempDb(path)
