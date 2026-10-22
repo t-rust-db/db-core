@@ -313,6 +313,26 @@ pub fn decode_dictionary_string(dictionary_body: &[u8], num_values: i32) -> Resu
         .collect()
 }
 
+/// [`decode_dictionary_string`] keeping only the entries `wanted` marks, in
+/// dictionary order (#699): an unwanted entry is skipped by its length
+/// prefix, never copied or UTF-8 checked.
+pub fn decode_dictionary_string_picked(
+    dictionary_body: &[u8],
+    wanted: impl IntoIterator<Item = bool>,
+) -> Result<Vec<String>> {
+    let mut buf = dictionary_body;
+    let mut out = Vec::new();
+    for keep in wanted {
+        if keep {
+            out.push(read_plain_string(&mut buf)?);
+        } else {
+            let len = u32::from_le_bytes(take_array(&mut buf)?) as usize;
+            take(&mut buf, len)?;
+        }
+    }
+    Ok(out)
+}
+
 /// Decode a PLAIN-encoded BYTE_ARRAY dictionary page body into its
 /// `num_values` entries as raw bytes (no UTF-8 check).
 pub fn decode_dictionary_bytes(dictionary_body: &[u8], num_values: i32) -> Result<Vec<Vec<u8>>> {

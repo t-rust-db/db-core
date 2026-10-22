@@ -196,8 +196,9 @@ pub fn decode_column_full(
 /// already return the identical `Vec<Option<T>>` shape those helpers
 /// expect, so no separate positional `Value`-rebuild path is needed.
 /// A string chunk with a dictionary gathers its codes at `positions` into
-/// a [`Column::Dict`] (#671): each dictionary string is decoded once,
-/// never cloned per wanted row. Others use the positional string reader.
+/// a [`Column::Dict`] (#671) holding only the entries those codes use
+/// (#699): each is decoded once, never cloned per wanted row. Others use
+/// the positional string reader.
 pub fn decode_column_at(
     rg: &RowGroupReader<'_, '_>,
     index: usize,
@@ -264,19 +265,8 @@ pub fn decode_column_at(
         PhysicalType::Boolean => rg
             .read_boolean_column_at(index, positions)
             .map(|col| Decoded::Column(bool_column(col))),
-        _ => match rg.read_string_column_dictionary_indices(index)? {
-            Some((dict, codes)) => {
-                let picked = positions
-                    .iter()
-                    .map(|&p| {
-                        usize::try_from(p)
-                            .ok()
-                            .and_then(|i| codes.get(i).copied())
-                            .ok_or(FileError::RowPositionOutOfRange(p))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(Decoded::Column(dict_column(dict, picked)))
-            }
+        _ => match rg.read_string_column_dictionary_at(index, positions)? {
+            Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),
             None => rg
                 .read_string_column_at(index, positions)
                 .map(|col| Decoded::Column(str_column(col))),
@@ -416,6 +406,50 @@ mod tests {
             decode_column_at(&rg, 0, PhysicalType::ByteArray, &[1_000]),
             Err(FileError::RowPositionOutOfRange(1_000))
         ));
+    }
+
+    #[test]
+    fn a_positional_dictionary_string_read_builds_only_the_entries_it_returns() {
+        // #699: k wanted rows of a chunk with an N-entry dictionary build
+        // at most k strings, and read the same values as the eager decode.
+        use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+        use crate::storage::parquet::writer::{ParquetWriter, WriterOptions};
+        let rows: Vec<Option<String>> = (0..5_000)
+            .map(|i| (i % 7 != 0).then(|| format!("user-{}", i % 1_000)))
+            .collect();
+        let mut w = ParquetWriter::new(
+            Vec::new(),
+            vec![ColumnSpec::new("s", ColumnType::Utf8, true)],
+            WriterOptions::default(),
+        )
+        .unwrap();
+        w.write_columns(vec![ColumnValues::Utf8(rows)]).unwrap();
+        let (bytes, _) = w.finish().unwrap();
+        let file = crate::storage::ParquetFile::open(&bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let Decoded::Column(full) = decode_column_full(&rg, 0, PhysicalType::ByteArray).unwrap();
+        let Column::Dict { dict, .. } = &full else {
+            panic!("expected Column::Dict, got {full:?}");
+        };
+        assert_eq!(dict.len(), 1_000);
+
+        // Two NULL rows (0, 7), one value twice (rows 1 and 2_001), and three
+        // other distinct values.
+        let positions = [4_999, 0, 1, 7, 2_001, 2_500, 3_333, 1];
+        let Decoded::Column(column) =
+            decode_column_at(&rg, 0, PhysicalType::ByteArray, &positions).unwrap();
+        let Column::Dict { dict, indices, .. } = &column else {
+            panic!("expected Column::Dict, got {column:?}");
+        };
+        assert_eq!(dict.len(), 4, "only the distinct non-NULL values wanted");
+        assert_eq!(indices.len(), positions.len());
+        for (row, &p) in positions.iter().enumerate() {
+            assert_eq!(column.get(row), full.get(p as usize), "position {p}");
+        }
+
+        let Decoded::Column(empty) =
+            decode_column_at(&rg, 0, PhysicalType::ByteArray, &[]).unwrap();
+        assert_eq!(empty.len(), 0);
     }
 
     #[test]
