@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod decoder_fuzz;
 mod snappy;
-mod zstd;
+pub mod zstd;
 
 pub use snappy::SnappyError;
 pub use zstd::ZstdError;

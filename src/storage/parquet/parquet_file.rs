@@ -627,6 +627,21 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         })
     }
 
+    /// SPIKE #697: every ZSTD page of column chunk `column_index` as
+    /// `(compressed frame, uncompressed size)`, undecoded.
+    #[doc(hidden)]
+    pub fn spike_zstd_pages(&self, column_index: usize) -> Result<Vec<(Vec<u8>, usize)>> {
+        if self.column_meta(column_index)?.codec != footer::Codec::Zstd {
+            return Ok(Vec::new());
+        }
+        let mut pages = self.pages_with(column_index, u64::MAX)?;
+        let mut out = Vec::new();
+        while let Some((header, compressed)) = pages.next()? {
+            out.push((compressed.to_vec(), page_size("uncompressed_page_size", header.uncompressed_page_size)?));
+        }
+        Ok(out)
+    }
+
     /// The pages of flat column chunk `column_index`: one value per row.
     fn pages(&self, column_index: usize) -> Result<Pages<'a>> {
         self.pages_with(column_index, count("row_group.num_rows", self.num_rows())?)
