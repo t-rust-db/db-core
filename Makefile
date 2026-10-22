@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bench-events check-row-functions-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help bench-events check-row-functions-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -216,6 +216,15 @@ check-column-profile: ## Charter gate: the column profile carries exactly its na
 # https://duckdb.org/docs/installation).
 check-column-oracle: ## Local-only: column engine query results agree with DuckDB over Parquet fixtures (tools/check_column_oracle.sh)
 	@tools/check_column_oracle.sh
+
+# sqlite-rs parses with this crate's parser::row, so its grammar must say
+# the same as grammar.ebnf's SQLITE-RS ONLY section (#565). Pairs with
+# sqlite-rs's own check-grammar-drift (its EBNF against parse.y).
+SQLITE_RS ?= ../tools/sqlite-rs
+check-grammar-sync: ## Local-only: grammar.ebnf's SQLITE-RS ONLY section agrees with sqlite-rs's .openspec/grammar/sqlite.ebnf (SQLITE_RS=../tools/sqlite-rs)
+	@f="$(SQLITE_RS)/.openspec/grammar/sqlite.ebnf"; \
+	if [ -f "$$f" ]; then cargo run -q -p fuzz-gen --bin grammar_sync -- "$$f"; \
+	else echo "check-grammar-sync: skipped -- no sqlite-rs checkout at $(SQLITE_RS) (set SQLITE_RS=)"; fi
 
 check-row-functions-oracle: ## Local-only: row engine scalar functions agree with sqlite3 3.53.4 (Homebrew's, on PATH) -- tools/row_functions_cases*.sql (#651)
 	@for f in tools/row_functions_cases*.sql; do python3 tools/check_row_functions_oracle.py $$f || exit 1; done
