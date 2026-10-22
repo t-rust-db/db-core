@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.157.0] - 2026-10-22
+
+### Changed
+
+- **zstd pages are decoded by a decoder of our own** (#700), replacing ruzstd's (ruzstd stays as the encoder until #692). An RFC 8878 decoder writes each page straight into an output buffer sized from the page header, with 16-byte wild copies. It checks the frame's content checksum (XXH64), and refuses a declared size above 32 KiB per compressed byte, blocks or literals over 128 KiB, sequence counts the output cannot hold, and dictionary frames. The error contract (`ZstdError::Frame`, `Read`, `SizeMismatch`) is unchanged. Decode throughput is about 2x ruzstd on db-core-written pages and 1.5x on DuckDB's. A full-scan free-text search over 2M rows (t-rust-db/examples `parquet-codecs`) runs 32.1 -> 29.6 ms on db-core's zstd file and 29.2 -> 26.8 ms on DuckDB's; zstd's cost over the uncompressed file drops by about 36%.
+
 ## [0.156.0] - 2026-10-22
 
 ### Changed
