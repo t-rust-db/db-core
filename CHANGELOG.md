@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.158.0] - 2026-10-22
+
+### Added
+
+- **`engine::column::file_segments`** (#699): a Parquet file's row groups as late-materializing `FileSegment`s, for callers that run the batch engine themselves over a file, as column-rs does (t-rust-db/tools#62). It works like `snapshot_segments` does for table directories. A filtered query decodes its other columns only at the matching rows (ADR-0026), and a top-N fetches only its winning rows (#513). `t.col` names the column `col`, and batches are keyed by the name as given.
+
+### Changed
+
+- **A late-materialized dictionary string column decodes only the entries it returns** (#699). `decode_column_at` used to decode a row group's whole dictionary into `String`s, copy each into an `Arc<str>`, and only then gather the codes it needed. `RowGroupReader::read_string_column_dictionary_at` gathers the codes first and decodes only the entries they use, skipping the rest by their length prefix. In t-rust-db/examples `parquet-codecs` (2M rows), through column-rs with tools#62: `SELECT id, user_name … WHERE note LIKE '%request 1999%'` used to cost 10–33 ms more than `SELECT id`, and now costs 1.6–2.5 ms more (46.0 -> 31.7 ms on DuckDB's zstd file).
+
 ## [0.157.0] - 2026-10-22
 
 ### Changed
