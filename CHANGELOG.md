@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.162.0] - 2026-10-22
+
+### Added
+
+- **`BatchEngine::from_bytes(table, bytes)` opens a Parquet file from memory** (#707). A host with no filesystem, such as a browser running db-core on `wasm32-unknown-unknown`, has the file's bytes but no path for `Engine::open`. The constructor wraps them in `MmapRegion::Owned` and shares the rest of `open`; `table` is the name queries use in `FROM`.
+
 ## [0.161.0] - 2026-10-22
 
 ### Fixed
