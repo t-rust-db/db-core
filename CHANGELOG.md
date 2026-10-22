@@ -4,6 +4,14 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.164.0] - 2026-10-22
+
+### Changed
+
+- **`CREATE TABLE ... WITHOUT ROWID` is refused** (#696). The statement was accepted but no `INSERT`, `UPDATE` or `DELETE` could write the table, so it could only be created and never filled. It now fails with `unsupported: WITHOUT ROWID tables are not supported yet`, after sqlite3's own definition errors (`PRIMARY KEY missing`, `AUTOINCREMENT not allowed`) so those messages are unchanged. A `WITHOUT ROWID` table in a file sqlite3 wrote still opens and reads; writes to it keep failing at compile time. Writing to such tables is tracked separately.
+
+||||||| d74ad294
+
 ## [0.163.0] - 2026-10-22
 
 ### Added
