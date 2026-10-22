@@ -8,43 +8,46 @@
 //! than in a leaf, and removing a routing entry can never be conflated
 //! with discarding whatever value that entry itself carries.
 //!
-//! **Underflow policy.** An emptied leaf (or an interior page that drains
-//! to zero of its own entries) is simply **left in place** — 0 cells is a
-//! structurally valid page, still correctly reachable via its parent's
-//! existing child/rightmost pointer, so no entry ever needs adjusting
-//! just because a child became empty. This is a deliberate simplification
-//! of SQLite's proactive sibling-redistributing `balance()` (see
-//! `delete.rs`'s module doc for the same philosophy applied to tables):
-//! it trades away freelist reuse of drained pages for a much simpler,
-//! harder-to-get-wrong implementation. The one case that DOES need
-//! structural surgery is covered by [`extract_max_entry`] below.
+//! **Underflow policy.** A page may be as sparse as it likes, but never
+//! empty: SQLite refuses to open a non-root page with no cells (and an
+//! interior root with none), so a tree holding one reads back as a
+//! malformed file. When a delete empties a page, [`repair_emptied_page`]
+//! takes it out of the tree and frees it. Its parent entry is a real index
+//! entry, not just a routing key, so it is not dropped: it is put back
+//! into the tree afterwards, where it sorts into the neighbouring subtree.
+//! An interior page left with no entries (only its rightmost child) is
+//! replaced by that child, and so on up to the root. This is a smaller
+//! thing than SQLite's sibling-redistributing `balance()`: pages are not
+//! merged while they are merely sparse. (Before this, emptied pages were
+//! left in place, and emptying a large index produced a file sqlite3
+//! called malformed.)
 //!
 //! **Interior-match deletion (predecessor swap).** When
 //! [`super::descend_index_tree`] reports
 //! [`IndexDescent::InteriorMatch`] (the target key IS an interior page's
 //! own entry), the entry can't simply be dropped — its child pointer is
-//! load-bearing (routes to the subtree of lesser keys) and, separately,
-//! *other* interior entries along the way to a replacement each carry
-//! their own live value that must never be discarded as a side effect of
-//! removing routing. [`extract_max_entry`] recursively finds and
-//! physically removes the maximum entry of `entry_child`'s subtree (its
-//! in-order predecessor), correctly falling back to an interior page's
-//! own last entry (rather than erroring) when that page's `rightmost`
-//! subtree turns out to already be fully drained — the entry it pops in
-//! that fallback is handled by promoting its own child to the new
-//! `rightmost`, never dropping the live data that child still holds. If
-//! `entry_child`'s entire subtree is drained (no predecessor at all —
-//! everything in it was already deleted earlier), the matched entry is
-//! removed outright instead of swapped.
+//! load-bearing (it routes to the subtree of lesser keys). The entry is
+//! overwritten by its in-order predecessor, the last entry of the
+//! rightmost leaf of that subtree ([`delete_interior_entry`]), which is
+//! then removed from its leaf like any other leaf entry, so an emptied
+//! leaf is repaired the same way.
+//!
+//! A tree already damaged by the old policy can hold empty pages on that
+//! rightmost path; [`delete_via_predecessor_swap`] and
+//! [`extract_max_entry`] are what a delete falls back to there. They find
+//! the maximum of the subtree even when `rightmost` is drained, promoting
+//! an interior page's own last entry; if the whole subtree is drained
+//! the matched entry is removed outright instead of swapped.
 
+use crate::storage::row::btree::index::insert::{insert_entry, write_interior_splitting};
 use crate::storage::row::btree::index::{
     build_index_interior_cell, collect_index_interior_entries, collect_index_leaf_cells,
     decode_payload_len, descend_index_tree, search_index_leaf, write_index_interior_page,
-    IndexDescent, LeafSearch, INTERIOR_INDEX, LEAF_INDEX,
+    write_index_leaf_page, IndexDescent, IndexLeafCell, LeafSearch, INTERIOR_INDEX, LEAF_INDEX,
 };
 use crate::storage::row::btree::{
-    local_payload_size, page1_header_start, read_page_type, read_u32, splice_delete_cell,
-    BtreeError, MAX_PAGES_VISITED,
+    local_payload_size, page1_header_start, read_num_cells, read_page_type, read_u32,
+    splice_delete_cell, BtreeError, MAX_PAGES_VISITED,
 };
 use crate::storage::row::header::DatabaseHeader;
 use crate::storage::row::pager::Pager;
@@ -109,13 +112,26 @@ pub fn delete_entry(
 ) -> Result<(), BtreeError> {
     let usable_size = header.usable_page_size();
     match descend_index_tree(pager, root_page, usable_size, key, encoding)? {
-        IndexDescent::Leaf { leaf_page, .. } => {
-            delete_from_leaf(pager, usable_size, leaf_page, key, encoding)
+        IndexDescent::Leaf {
+            ancestors,
+            leaf_page,
+        } => {
+            delete_from_leaf(pager, usable_size, leaf_page, key, encoding)?;
+            repair_if_empty(pager, header, root_page, encoding, &ancestors, leaf_page)
         }
         IndexDescent::InteriorMatch {
+            ancestors,
             interior_page,
             entry_child,
-        } => delete_via_predecessor_swap(pager, usable_size, interior_page, entry_child, encoding),
+        } => delete_interior_entry(
+            pager,
+            header,
+            root_page,
+            encoding,
+            ancestors,
+            interior_page,
+            entry_child,
+        ),
     }
 }
 
@@ -154,8 +170,339 @@ fn delete_from_leaf(
     free_overflow_chain(pager, overflow_page)
 }
 
-/// Handles a delete target found at interior level — see the module doc
-/// for the predecessor-swap algorithm.
+/// Removes the entry that sits in `interior_page` as the separator in
+/// front of `entry_child` (#722): it is overwritten by its in-order
+/// predecessor, the last entry of the rightmost leaf below `entry_child`,
+/// and the copy of that entry in its leaf is then removed (its overflow
+/// chain now belongs to the interior cell, so it is not freed there; the
+/// matched entry's own chain is freed instead). `ancestors` are the pages
+/// above `interior_page`, root first. A predecessor larger than the entry
+/// it replaces can make the interior page overflow, which splits it as an
+/// insert would; so the predecessor's leaf is found again afterwards, by
+/// descending for it, rather than trusting a path recorded before the
+/// split. A leaf emptied by the removal is repaired.
+fn delete_interior_entry(
+    pager: &mut Pager,
+    header: &DatabaseHeader,
+    root_page: u32,
+    encoding: TextEncoding,
+    ancestors: Vec<u32>,
+    interior_page: u32,
+    entry_child: u32,
+) -> Result<(), BtreeError> {
+    let usable_size = header.usable_page_size();
+    let Some((predecessor_key, predecessor_bytes)) =
+        rightmost_leaf(pager, usable_size, encoding, entry_child)?
+    else {
+        // An empty leaf on the way down: the tree predates the repair.
+        return delete_via_predecessor_swap(
+            pager,
+            usable_size,
+            interior_page,
+            entry_child,
+            encoding,
+        );
+    };
+
+    let interior_start = page1_header_start(interior_page);
+    let interior_buf = pager.get_page_mut(interior_page)?.clone();
+    let (mut entries, rightmost) = collect_index_interior_entries(
+        pager,
+        &interior_buf,
+        interior_start,
+        interior_page,
+        usable_size,
+        encoding,
+    )?;
+    let entry = entries
+        .iter_mut()
+        .find(|(child, _, _)| *child == entry_child)
+        .ok_or(BtreeError::Internal(
+            "entry_child's routing entry must still exist in interior_page",
+        ))?;
+    let replaced_overflow = overflow_page_of(&entry.2, usable_size)?;
+    entry.1 = predecessor_key.clone();
+    entry.2 = predecessor_bytes;
+    write_interior_splitting(
+        pager,
+        usable_size,
+        interior_buf.len(),
+        &ancestors,
+        root_page,
+        interior_page,
+        entries,
+        rightmost,
+        encoding,
+    )?;
+    free_overflow_chain(pager, replaced_overflow)?;
+
+    // The predecessor now sits in an interior page; its old copy is the
+    // last entry of the rightmost leaf below that entry's left child.
+    let IndexDescent::InteriorMatch {
+        mut ancestors,
+        interior_page,
+        entry_child,
+    } = descend_index_tree(pager, root_page, usable_size, &predecessor_key, encoding)?
+    else {
+        return Err(BtreeError::Internal(
+            "the predecessor must be an interior entry after the swap",
+        ));
+    };
+    ancestors.push(interior_page);
+    let (path, leaf) = walk_rightmost(pager, entry_child, ancestors)?;
+    let leaf_start = page1_header_start(leaf);
+    let leaf_buf = pager.get_page_mut(leaf)?.clone();
+    let cells =
+        collect_index_leaf_cells(pager, &leaf_buf, leaf_start, leaf, usable_size, encoding)?;
+    let matches_predecessor = cells.last().is_some_and(|(key, _)| {
+        crate::storage::row::btree::index::compare_keys(key, &predecessor_key)
+            == std::cmp::Ordering::Equal
+    });
+    if !matches_predecessor {
+        return Err(BtreeError::Internal(
+            "the predecessor's leaf copy must be the last entry of its leaf",
+        ));
+    }
+    let last = cells.len().saturating_sub(1);
+    let buf = pager.get_page_mut(leaf)?;
+    splice_delete_cell(buf, leaf_start, leaf, usable_size, last, false)?;
+    repair_if_empty(pager, header, root_page, encoding, &path, leaf)
+}
+
+/// Follows the rightmost child at every level from `page`, appending each
+/// interior page passed to `path` (root first); returns `path` and the
+/// leaf reached.
+fn walk_rightmost(
+    pager: &mut Pager,
+    mut page: u32,
+    mut path: Vec<u32>,
+) -> Result<(Vec<u32>, u32), BtreeError> {
+    let mut visited = 0usize;
+    loop {
+        visited = visited.saturating_add(1);
+        if visited > MAX_PAGES_VISITED {
+            return Err(BtreeError::TraversalTooLong {
+                max: MAX_PAGES_VISITED,
+            });
+        }
+        let buf = pager.get_page_mut(page)?.clone();
+        let header_start = page1_header_start(page);
+        let page_type = read_page_type(&buf, header_start, page)?;
+        if page_type == LEAF_INDEX {
+            return Ok((path, page));
+        }
+        if page_type != INTERIOR_INDEX {
+            return Err(BtreeError::UnexpectedPageType {
+                page_num: page,
+                page_type,
+            });
+        }
+        path.push(page);
+        page = read_u32(&buf, header_start.saturating_add(8), page)?;
+    }
+}
+
+/// The last entry (key and cell bytes) of the rightmost leaf below `page`,
+/// or `None` if that leaf is empty.
+fn rightmost_leaf(
+    pager: &mut Pager,
+    usable_size: u32,
+    encoding: TextEncoding,
+    page: u32,
+) -> Result<Option<IndexLeafCell>, BtreeError> {
+    let (_, leaf) = walk_rightmost(pager, page, Vec::new())?;
+    let leaf_start = page1_header_start(leaf);
+    let leaf_buf = pager.get_page_mut(leaf)?.clone();
+    let cells =
+        collect_index_leaf_cells(pager, &leaf_buf, leaf_start, leaf, usable_size, encoding)?;
+    Ok(cells.last().cloned())
+}
+
+/// [`repair_emptied_page`] if `page` has no cells left.
+fn repair_if_empty(
+    pager: &mut Pager,
+    header: &DatabaseHeader,
+    root_page: u32,
+    encoding: TextEncoding,
+    ancestors: &[u32],
+    page: u32,
+) -> Result<(), BtreeError> {
+    let buf = pager.get_page_mut(page)?.clone();
+    if read_num_cells(&buf, page1_header_start(page), page)? > 0 {
+        return Ok(());
+    }
+    repair_emptied_page(pager, header, root_page, encoding, ancestors, page)
+}
+
+/// Takes `page`, which has just lost its last cell, out of the tree it is
+/// in (see the module doc's underflow policy). `ancestors` are the pages
+/// above it, root first.
+///
+/// - The root left with no entries is a valid empty leaf, or, if it is an
+///   interior page with only a rightmost child, becomes that child (the
+///   root keeps its page number).
+/// - A non-root interior page with no entries is its rightmost child: the
+///   parent points there instead.
+/// - An empty leaf is dropped from its parent. A parent entry whose left
+///   child it was cannot just go, because it is a real index entry: it is
+///   collected and put back into the tree at the end, and sorts into the
+///   neighbouring subtree. If the leaf was the rightmost child, the last
+///   entry's child takes its place the same way. A parent left with no
+///   entries is then repaired in turn.
+fn repair_emptied_page(
+    pager: &mut Pager,
+    header: &DatabaseHeader,
+    root_page: u32,
+    encoding: TextEncoding,
+    ancestors: &[u32],
+    page: u32,
+) -> Result<(), BtreeError> {
+    let usable_size = header.usable_page_size();
+    let mut page = page;
+    let mut ancestors = ancestors;
+    let mut displaced: Vec<(Vec<Value>, Vec<u8>)> = Vec::new();
+    loop {
+        let header_start = page1_header_start(page);
+        let buf = pager.get_page_mut(page)?.clone();
+        let page_type = read_page_type(&buf, header_start, page)?;
+        if read_num_cells(&buf, header_start, page)? > 0 {
+            break;
+        }
+        let rightmost_of_page = if page_type == INTERIOR_INDEX {
+            Some(read_u32(&buf, header_start.saturating_add(8), page)?)
+        } else {
+            None
+        };
+        let Some((&parent, upper)) = ancestors.split_last() else {
+            // The root.
+            let Some(child) = rightmost_of_page else {
+                break; // an empty root leaf: an empty tree
+            };
+            // The child's cells are written into the root afresh rather
+            // than its bytes copied over: the two pages need not lay
+            // their header out at the same offset (page 1 does not).
+            let child_start = page1_header_start(child);
+            let child_buf = pager.get_page_mut(child)?.clone();
+            match read_page_type(&child_buf, child_start, child)? {
+                LEAF_INDEX => {
+                    let cells = collect_index_leaf_cells(
+                        pager,
+                        &child_buf,
+                        child_start,
+                        child,
+                        usable_size,
+                        encoding,
+                    )?;
+                    let cells: Vec<Vec<u8>> = cells.into_iter().map(|(_, bytes)| bytes).collect();
+                    let buf = pager.get_page_mut(page)?;
+                    write_index_leaf_page(buf, header_start, page, &cells)?;
+                }
+                INTERIOR_INDEX => {
+                    let (entries, rightmost) = collect_index_interior_entries(
+                        pager,
+                        &child_buf,
+                        child_start,
+                        child,
+                        usable_size,
+                        encoding,
+                    )?;
+                    write_interior(pager, page, header_start, &entries, rightmost)?;
+                }
+                page_type => {
+                    return Err(BtreeError::UnexpectedPageType {
+                        page_num: child,
+                        page_type,
+                    })
+                }
+            }
+            pager.deallocate_page(child)?;
+            continue;
+        };
+
+        let parent_start = page1_header_start(parent);
+        let parent_buf = pager.get_page_mut(parent)?.clone();
+        let (mut entries, mut parent_rightmost) = collect_index_interior_entries(
+            pager,
+            &parent_buf,
+            parent_start,
+            parent,
+            usable_size,
+            encoding,
+        )?;
+        if let Some(child) = rightmost_of_page {
+            // An interior page that is only its rightmost child.
+            if let Some(entry) = entries.iter_mut().find(|(c, _, _)| *c == page) {
+                entry.0 = child;
+            } else if parent_rightmost == page {
+                parent_rightmost = child;
+            } else {
+                return Err(BtreeError::MissingChildRoute {
+                    page_num: parent,
+                    child: page,
+                });
+            }
+            pager.deallocate_page(page)?;
+            write_interior(pager, parent, parent_start, &entries, parent_rightmost)?;
+            break;
+        }
+        // An empty leaf.
+        if let Some(position) = entries.iter().position(|(c, _, _)| *c == page) {
+            let (_, key, bytes) = entries.remove(position);
+            displaced.push((key, bytes));
+        } else if parent_rightmost == page {
+            match entries.pop() {
+                Some((child, key, bytes)) => {
+                    parent_rightmost = child;
+                    displaced.push((key, bytes));
+                }
+                None => {
+                    // The parent's only child: the parent is empty as well.
+                    pager.deallocate_page(page)?;
+                    let buf = pager.get_page_mut(parent)?;
+                    write_index_leaf_page(buf, parent_start, parent, &[])?;
+                    page = parent;
+                    ancestors = upper;
+                    continue;
+                }
+            }
+        } else {
+            return Err(BtreeError::MissingChildRoute {
+                page_num: parent,
+                child: page,
+            });
+        }
+        pager.deallocate_page(page)?;
+        write_interior(pager, parent, parent_start, &entries, parent_rightmost)?;
+        page = parent;
+        ancestors = upper;
+    }
+
+    for (key, bytes) in displaced {
+        insert_entry(pager, header, root_page, &key, encoding)?;
+        free_overflow_chain(pager, overflow_page_of(&bytes, usable_size)?)?;
+    }
+    Ok(())
+}
+
+/// Rewrites interior page `page` as `entries` and `rightmost`.
+fn write_interior(
+    pager: &mut Pager,
+    page: u32,
+    header_start: usize,
+    entries: &[crate::storage::row::btree::index::IndexInteriorEntry],
+    rightmost: u32,
+) -> Result<(), BtreeError> {
+    let cells: Vec<Vec<u8>> = entries
+        .iter()
+        .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))
+        .collect();
+    let buf = pager.get_page_mut(page)?;
+    write_index_interior_page(buf, header_start, page, &cells, rightmost)
+}
+
+/// Handles a delete target found at interior level when the tree already
+/// holds empty pages -- see the module doc for the predecessor-swap
+/// algorithm this falls back to.
 fn delete_via_predecessor_swap(
     pager: &mut Pager,
     usable_size: u32,
@@ -423,6 +770,252 @@ mod tests {
     fn freelist_page_count(pager: &mut Pager) -> u32 {
         let page1 = pager.get_page_mut(1).unwrap().clone();
         u32::from_be_bytes(page1[36..40].try_into().unwrap())
+    }
+
+    /// The page count in page 1's header: every page the file has.
+    fn file_page_count(pager: &mut Pager) -> u32 {
+        let page1 = pager.get_page_mut(1).unwrap().clone();
+        u32::from_be_bytes(page1[28..32].try_into().unwrap())
+    }
+
+    // ---- structure checks shared by the emptied-page tests ----
+
+    /// Walks the tree under `page`, appending every entry's key in order,
+    /// and asserts what SQLite insists on: no page but the root is empty,
+    /// and an interior page has at least one entry.
+    fn walk(
+        pager: &mut Pager,
+        header: &DatabaseHeader,
+        page: u32,
+        is_root: bool,
+        out: &mut Vec<Vec<Value>>,
+    ) {
+        let usable = header.usable_page_size();
+        let buf = pager.get_page_mut(page).unwrap().clone();
+        let header_start = page1_header_start(page);
+        match read_page_type(&buf, header_start, page).unwrap() {
+            LEAF_INDEX => {
+                let cells = collect_index_leaf_cells(
+                    pager,
+                    &buf,
+                    header_start,
+                    page,
+                    usable,
+                    TextEncoding::Utf8,
+                )
+                .unwrap();
+                assert!(is_root || !cells.is_empty(), "leaf {page} is empty");
+                out.extend(cells.into_iter().map(|(key, _)| key));
+            }
+            INTERIOR_INDEX => {
+                let (entries, rightmost) = collect_index_interior_entries(
+                    pager,
+                    &buf,
+                    header_start,
+                    page,
+                    usable,
+                    TextEncoding::Utf8,
+                )
+                .unwrap();
+                assert!(!entries.is_empty(), "interior page {page} has no entries");
+                for (child, key, _) in entries {
+                    walk(pager, header, child, false, out);
+                    out.push(key);
+                }
+                walk(pager, header, rightmost, false, out);
+            }
+            other => panic!("page {page} has type {other:#x}"),
+        }
+    }
+
+    /// The tree's keys in order, after checking it is well formed and its
+    /// keys strictly ascend.
+    fn keys_of(pager: &mut Pager, header: &DatabaseHeader, root: u32) -> Vec<Vec<Value>> {
+        let mut keys = Vec::new();
+        walk(pager, header, root, true, &mut keys);
+        for pair in keys.windows(2) {
+            assert_eq!(
+                crate::storage::row::btree::index::compare_keys(&pair[0], &pair[1]),
+                std::cmp::Ordering::Less,
+                "keys out of order: {:?} then {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        keys
+    }
+
+    fn fixed_key(n: u32) -> Vec<Value> {
+        key(&format!("key{n:06}"), i64::from(n))
+    }
+
+    fn insert_all(pager: &mut Pager, header: &DatabaseHeader, count: u32) {
+        for n in 0..count {
+            insert_entry(pager, header, 1, &fixed_key(n), TextEncoding::Utf8).unwrap();
+        }
+    }
+
+    /// 600 entries on 512-byte pages: three levels.
+    const MANY: u32 = 600;
+
+    fn tree_of_many() -> (MemoryVfs, DatabaseHeader) {
+        minimal_index_db(512)
+    }
+
+    #[test]
+    fn deleting_every_entry_in_ascending_order_leaves_a_valid_tree_throughout() {
+        let (vfs, header) = tree_of_many();
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        insert_all(&mut pager, &header, MANY);
+        assert_eq!(keys_of(&mut pager, &header, 1).len(), MANY as usize);
+        for n in 0..MANY {
+            delete_entry(&mut pager, &header, 1, &fixed_key(n), TextEncoding::Utf8).unwrap();
+            if n % 7 == 0 {
+                let expected: Vec<_> = (n + 1..MANY).map(fixed_key).collect();
+                assert_eq!(keys_of(&mut pager, &header, 1), expected, "after {n}");
+            }
+        }
+        assert!(keys_of(&mut pager, &header, 1).is_empty());
+    }
+
+    #[test]
+    fn deleting_every_entry_in_descending_order_leaves_a_valid_tree_throughout() {
+        let (vfs, header) = tree_of_many();
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        insert_all(&mut pager, &header, MANY);
+        for n in (0..MANY).rev() {
+            delete_entry(&mut pager, &header, 1, &fixed_key(n), TextEncoding::Utf8).unwrap();
+            if n % 7 == 0 {
+                let expected: Vec<_> = (0..n).map(fixed_key).collect();
+                assert_eq!(keys_of(&mut pager, &header, 1), expected, "after {n}");
+            }
+        }
+        assert!(keys_of(&mut pager, &header, 1).is_empty());
+    }
+
+    #[test]
+    fn deleting_from_the_middle_outwards_leaves_a_valid_tree_throughout() {
+        let (vfs, header) = tree_of_many();
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        insert_all(&mut pager, &header, MANY);
+        let mut remaining: Vec<u32> = (0..MANY).collect();
+        let mut step = 0;
+        while !remaining.is_empty() {
+            let at = remaining.len() / 2;
+            let n = remaining.remove(at);
+            delete_entry(&mut pager, &header, 1, &fixed_key(n), TextEncoding::Utf8).unwrap();
+            step += 1;
+            if step % 11 == 0 {
+                let expected: Vec<_> = remaining.iter().copied().map(fixed_key).collect();
+                assert_eq!(keys_of(&mut pager, &header, 1), expected, "step {step}");
+            }
+        }
+        assert!(keys_of(&mut pager, &header, 1).is_empty());
+    }
+
+    #[test]
+    fn an_emptied_tree_takes_entries_again() {
+        let (vfs, header) = tree_of_many();
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        for round in 0..3 {
+            insert_all(&mut pager, &header, MANY);
+            for n in 0..MANY {
+                delete_entry(&mut pager, &header, 1, &fixed_key(n), TextEncoding::Utf8).unwrap();
+            }
+            assert!(keys_of(&mut pager, &header, 1).is_empty(), "round {round}");
+        }
+        insert_all(&mut pager, &header, 10);
+        assert_eq!(keys_of(&mut pager, &header, 1).len(), 10);
+    }
+
+    #[test]
+    fn emptied_pages_go_back_to_the_freelist() {
+        let (vfs, header) = tree_of_many();
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        insert_all(&mut pager, &header, MANY);
+        let pages_in_use = file_page_count(&mut pager);
+        for n in 0..MANY {
+            delete_entry(&mut pager, &header, 1, &fixed_key(n), TextEncoding::Utf8).unwrap();
+        }
+        // Everything but the root is free again.
+        assert_eq!(freelist_page_count(&mut pager), pages_in_use - 1);
+    }
+
+    /// A small xorshift, so the random test is the same every run.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+
+    /// Random inserts and deletes (some keys large enough to overflow a
+    /// 512-byte page) against a sorted model: the tree always holds
+    /// exactly the model's keys, is always well formed, and never leaks a
+    /// page.
+    #[test]
+    fn random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid() {
+        for seed in 1u64..=30 {
+            let (vfs, header) = minimal_index_db(512);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            // A real index root: page 1's b-tree header sits after the
+            // database header, so it holds less than any other page.
+            let root = crate::storage::row::btree::create_empty_index_root(&mut pager).unwrap();
+            let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+            let mut model: std::collections::BTreeMap<String, Vec<Value>> =
+                std::collections::BTreeMap::new();
+            let make = |n: u64, big: bool| {
+                let text = if big {
+                    format!("key{n:05}{}", "x".repeat(250))
+                } else {
+                    format!("key{n:05}")
+                };
+                (text.clone(), key(&text, n as i64))
+            };
+            for step in 0..2500u32 {
+                let n = rng.next() % 400;
+                let big = n.is_multiple_of(9);
+                let (text, entry) = make(n, big);
+                // Weighted towards inserts early and deletes late, so the
+                // tree grows and then drains.
+                let insert_bias = if step < 1200 { 70 } else { 30 };
+                if rng.next() % 100 < insert_bias {
+                    if let std::collections::btree_map::Entry::Vacant(slot) = model.entry(text) {
+                        insert_entry(&mut pager, &header, root, &entry, TextEncoding::Utf8)
+                            .unwrap();
+                        slot.insert(entry);
+                    }
+                } else if model.remove(&text).is_some() {
+                    delete_entry(&mut pager, &header, root, &entry, TextEncoding::Utf8).unwrap();
+                } else {
+                    let err = delete_entry(&mut pager, &header, root, &entry, TextEncoding::Utf8)
+                        .unwrap_err();
+                    assert!(matches!(err, BtreeError::KeyNotFound), "seed {seed}");
+                }
+                if step % 20 == 0 {
+                    let expected: Vec<Vec<Value>> = model.values().cloned().collect();
+                    assert_eq!(
+                        keys_of(&mut pager, &header, root),
+                        expected,
+                        "seed {seed}, step {step}"
+                    );
+                }
+            }
+            for (_, entry) in std::mem::take(&mut model) {
+                delete_entry(&mut pager, &header, root, &entry, TextEncoding::Utf8).unwrap();
+            }
+            assert!(keys_of(&mut pager, &header, root).is_empty(), "seed {seed}");
+            // Nothing leaked: every page but page 1 and the root is free.
+            assert_eq!(
+                freelist_page_count(&mut pager),
+                file_page_count(&mut pager) - 2,
+                "seed {seed}: a page was leaked"
+            );
+        }
     }
 
     #[test]

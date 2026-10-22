@@ -23,7 +23,8 @@
 use crate::storage::row::btree::index::{
     build_index_interior_cell, collect_index_interior_entries, collect_index_leaf_cells,
     descend_index_tree, search_index_leaf, value_cell_len, write_index_interior_page,
-    write_index_leaf_page, IndexDescent, LeafSearch, INTERIOR_INDEX, LEAF_INDEX,
+    write_index_leaf_page, IndexDescent, IndexInteriorEntry, LeafSearch, INTERIOR_INDEX,
+    LEAF_INDEX,
 };
 use crate::storage::row::btree::{
     cell_bytes, cell_ptr_offset, local_payload_size, page1_header_start, put, read_cell_pointer,
@@ -315,6 +316,39 @@ fn insert_into_index_parent(
         }
     }
 
+    write_interior_splitting(
+        pager,
+        usable_size,
+        page_len,
+        rest,
+        root_page,
+        parent_page,
+        entries,
+        rightmost,
+        encoding,
+    )
+}
+
+/// Writes interior page `page` as `entries` and `rightmost`, or, if they
+/// do not fit in a page, splits it: the median entry is promoted into the
+/// parent (`ancestors` are the pages above `page`, root first), possibly
+/// splitting that in turn. `page` keeps its number and the entries before
+/// the median. Shared by the insert path and by a delete that swaps a
+/// larger entry into an interior page.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn write_interior_splitting(
+    pager: &mut Pager,
+    usable_size: u32,
+    page_len: usize,
+    ancestors: &[u32],
+    root_page: u32,
+    parent_page: u32,
+    entries: Vec<IndexInteriorEntry>,
+    rightmost: u32,
+    encoding: TextEncoding,
+) -> Result<(), BtreeError> {
+    let rest = ancestors;
+    let header_start = page1_header_start(parent_page);
     let cell_bytes: Vec<Vec<u8>> = entries
         .iter()
         .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))

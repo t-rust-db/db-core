@@ -16872,7 +16872,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 727,
+    "line": 739,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -16882,7 +16882,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_f76da1f3",
     "file": "src/engine/row/adapter.rs",
-    "line": 730,
+    "line": 742,
     "decision": "prev_leading.as_ref() != leading.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16892,7 +16892,7 @@
   {
     "id": "engine_row_adapter_delete_master_row_8e51437e",
     "file": "src/engine/row/adapter.rs",
-    "line": 814,
+    "line": 826,
     "decision": "match e {\n                // The error carries no name (#658); this caller has it.\n                btree::BtreeError::MasterEntryNotFound => {\n                    SchemaStorageError(format!(\"no sqlite_master {kind} named {name}\"))\n                }\n                other => schema_err(other),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16902,7 +16902,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 877,
+    "line": 889,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -16912,7 +16912,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_15a637f2",
     "file": "src/engine/row/adapter.rs",
-    "line": 879,
+    "line": 891,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) =\n                    (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16922,7 +16922,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_892d9090",
     "file": "src/engine/row/adapter.rs",
-    "line": 882,
+    "line": 894,
     "decision": "&**n == table",
     "conditions": 1,
     "vectors_required": 2,
@@ -40542,7 +40542,7 @@
   {
     "id": "storage_row_btree_index_descend_index_tree_b88484d8",
     "file": "src/storage/row/btree/index.rs",
-    "line": 763,
+    "line": 765,
     "decision": "visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -40552,7 +40552,7 @@
   {
     "id": "storage_row_btree_index_descend_index_tree_3e2a0607",
     "file": "src/storage/row/btree/index.rs",
-    "line": 773,
+    "line": 775,
     "decision": "page_type == LEAF_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -40562,7 +40562,7 @@
   {
     "id": "storage_row_btree_index_descend_index_tree_2e9b5930",
     "file": "src/storage/row/btree/index.rs",
-    "line": 778,
+    "line": 780,
     "decision": "page_type == INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -40572,7 +40572,7 @@
   {
     "id": "storage_row_btree_index_descend_index_tree_9fa8ac49",
     "file": "src/storage/row/btree/index.rs",
-    "line": 787,
+    "line": 789,
     "decision": "let Some(entry_index) = entries\n                .iter()\n                .position(|(_, entry_key, _)| compare_keys(key, entry_key) == Ordering::Equal)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40582,7 +40582,7 @@
   {
     "id": "storage_row_btree_index_descend_index_tree_8b71c421",
     "file": "src/storage/row/btree/index.rs",
-    "line": 806,
+    "line": 809,
     "decision": "compare_keys(key, entry_key) == Ordering::Less",
     "conditions": 1,
     "vectors_required": 2,
@@ -40592,7 +40592,7 @@
   {
     "id": "storage_row_btree_index_text_cf9777d8",
     "file": "src/storage/row/btree/index.rs",
-    "line": 879,
+    "line": 882,
     "decision": "match v {\n            Value::Text(s) => s,\n            other => panic!(\"expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40602,7 +40602,7 @@
   {
     "id": "storage_row_btree_index_int_50ac411a",
     "file": "src/storage/row/btree/index.rs",
-    "line": 886,
+    "line": 889,
     "decision": "match v {\n            Value::Integer(i) => *i,\n            other => panic!(\"expected integer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40612,7 +40612,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_walk_matches_oracle_binary_order_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 901,
+    "line": 904,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40622,7 +40622,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_last_prev_matches_reversed_forward_walk_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 936,
+    "line": 939,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40632,7 +40632,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_last_prev_matches_reversed_forward_walk_c6c2d2df_2",
     "file": "src/storage/row/btree/index.rs",
-    "line": 944,
+    "line": 947,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40642,7 +40642,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_seek_between_keys_matches_full_scan_and_next_continues_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 976,
+    "line": 979,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40652,7 +40652,7 @@
   {
     "id": "storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1079,
+    "line": 1082,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40662,7 +40662,7 @@
   {
     "id": "storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_559109f7",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1095,
+    "line": 1098,
     "decision": "idx < expect_order.len() && text(&key[0]) == expect_order[idx]",
     "conditions": 2,
     "vectors_required": 3,
@@ -40672,7 +40672,7 @@
   {
     "id": "storage_row_btree_index_index_local_payload_borrows_from_the_page_instead_of_copying_a3f083e9",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1116,
+    "line": 1119,
     "decision": "match &row.payload {\n            Payload::Local { page, .. } => {\n                assert!(\n                    Rc::strong_count(page) >= 2,\n                    \"expected the row to share the page's Rc, not hold the only reference\"\n                );\n            }\n            Payload::Owned(_) => panic!(\"expected a borrowed Local payload, got an Owned copy\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40682,7 +40682,7 @@
   {
     "id": "storage_row_btree_index_index_delete_overflow_page_of_19a1ec7a",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 63,
+    "line": 66,
     "decision": "(local_size as u64) < payload_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -40692,7 +40692,7 @@
   {
     "id": "storage_row_btree_index_index_delete_free_overflow_chain_9abbafb0",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 81,
+    "line": 84,
     "decision": "page_num != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40702,7 +40702,7 @@
   {
     "id": "storage_row_btree_index_index_delete_free_overflow_chain_b422ffe0",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 82,
+    "line": 85,
     "decision": "!visited.insert(page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40710,10 +40710,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_index_index_delete_delete_entry_43293925",
+    "id": "storage_row_btree_index_index_delete_delete_entry_96d4e6e5",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 111,
-    "decision": "match descend_index_tree(pager, root_page, usable_size, key, encoding)? {\n        IndexDescent::Leaf { leaf_page, .. } => {\n            delete_from_leaf(pager, usable_size, leaf_page, key, encoding)\n        }\n        IndexDescent::InteriorMatch {\n            interior_page,\n            entry_child,\n        } => delete_via_predecessor_swap(pager, usable_size, interior_page, entry_child, encoding),\n    }",
+    "line": 114,
+    "decision": "match descend_index_tree(pager, root_page, usable_size, key, encoding)? {\n        IndexDescent::Leaf {\n            ancestors,\n            leaf_page,\n        } => {\n            delete_from_leaf(pager, usable_size, leaf_page, key, encoding)?;\n            repair_if_empty(pager, header, root_page, encoding, &ancestors, leaf_page)\n        }\n        IndexDescent::InteriorMatch {\n            ancestors,\n            interior_page,\n            entry_child,\n        } => delete_interior_entry(\n            pager,\n            header,\n            root_page,\n            encoding,\n            ancestors,\n            interior_page,\n            entry_child,\n        ),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -40722,8 +40722,148 @@
   {
     "id": "storage_row_btree_index_index_delete_delete_from_leaf_b7d2c071",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 138,
+    "line": 154,
     "decision": "match search_index_leaf(\n        pager,\n        &buf,\n        header_start,\n        leaf_page,\n        usable_size,\n        encoding,\n        key,\n    )? {\n        LeafSearch::Found(pos, cell) => (pos, cell),\n        LeafSearch::NotFound(_) => return Err(BtreeError::KeyNotFound),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_delete_interior_entry_822a82e5",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 261,
+    "decision": "!matches_predecessor",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_walk_rightmost_b88484d8",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 283,
+    "decision": "visited > MAX_PAGES_VISITED",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_walk_rightmost_3e2a0607",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 291,
+    "decision": "page_type == LEAF_INDEX",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_walk_rightmost_594ac9a2",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 294,
+    "decision": "page_type != INTERIOR_INDEX",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_if_empty_e58bacb3",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 331,
+    "decision": "read_num_cells(&buf, page1_header_start(page), page)? > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_3c59b052",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 368,
+    "decision": "read_num_cells(&buf, header_start, page)? > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_2e9b5930",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 371,
+    "decision": "page_type == INTERIOR_INDEX",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_66436700",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 386,
+    "decision": "match read_page_type(&child_buf, child_start, child)? {\n                LEAF_INDEX => {\n                    let cells = collect_index_leaf_cells(\n                        pager,\n                        &child_buf,\n                        child_start,\n                        child,\n                        usable_size,\n                        encoding,\n                    )?;\n                    let cells: Vec<Vec<u8>> = cells.into_iter().map(|(_, bytes)| bytes).collect();\n                    let buf = pager.get_page_mut(page)?;\n                    write_index_leaf_page(buf, header_start, page, &cells)?;\n                }\n                INTERIOR_INDEX => {\n                    let (entries, rightmost) = collect_index_interior_entries(\n                        pager,\n                        &child_buf,\n                        child_start,\n                        child,\n                        usable_size,\n                        encoding,\n                    )?;\n                    write_interior(pager, page, header_start, &entries, rightmost)?;\n                }\n                page_type => {\n                    return Err(BtreeError::UnexpectedPageType {\n                        page_num: child,\n                        page_type,\n                    })\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_185ed498",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 432,
+    "decision": "let Some(child) = rightmost_of_page",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_4852112d",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 434,
+    "decision": "let Some(entry) = entries.iter_mut().find(|(c, _, _)| *c == page)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_5d774099",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 436,
+    "decision": "parent_rightmost == page",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_2a8268b9",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 449,
+    "decision": "let Some(position) = entries.iter().position(|(c, _, _)| *c == page)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_5d774099_2",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 452,
+    "decision": "parent_rightmost == page",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_18da445f",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 453,
+    "decision": "match entries.pop() {\n                Some((child, key, bytes)) => {\n                    parent_rightmost = child;\n                    displaced.push((key, bytes));\n                }\n                None => {\n                    // The parent's only child: the parent is empty as well.\n                    pager.deallocate_page(page)?;\n                    let buf = pager.get_page_mut(parent)?;\n                    write_index_leaf_page(buf, parent_start, parent, &[])?;\n                    page = parent;\n                    ancestors = upper;\n                    continue;\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -40732,7 +40872,7 @@
   {
     "id": "storage_row_btree_index_index_delete_delete_via_predecessor_swap_7605c3dc",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 166,
+    "line": 513,
     "decision": "match extract_max_entry(pager, usable_size, entry_child, encoding, 0)? {\n        Some(predecessor_bytes) => {\n            let header_start = page1_header_start(interior_page);\n            let buf = pager.get_page_mut(interior_page)?.clone();\n            let (mut entries, rightmost) = collect_index_interior_entries(\n                pager,\n                &buf,\n                header_start,\n                interior_page,\n                usable_size,\n                encoding,\n            )?;\n            let entry = entries\n                .iter_mut()\n                .find(|(child, _, _)| *child == entry_child)\n                .ok_or(BtreeError::Internal(\n                    \"entry_child's routing entry must still exist in interior_page\",\n                ))?;\n            entry.2 = predecessor_bytes;\n            let cell_bytes: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))\n                .collect();\n            let buf = pager.get_page_mut(interior_page)?;\n            write_index_interior_page(buf, header_start, interior_page, &cell_bytes, rightmost)\n        }\n        None => {\n            // `entry_child`'s entire subtree is drained (nothing left to\n            // swap in) — the matched entry is deleted outright, since\n            // there is nothing left to preserve.\n            pager.deallocate_page(entry_child)?;\n            remove_entry_by_child(pager, usable_size, interior_page, entry_child, encoding)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40742,7 +40882,7 @@
   {
     "id": "storage_row_btree_index_index_delete_extract_max_entry_db09da46",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 225,
+    "line": 572,
     "decision": "depth > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -40752,7 +40892,7 @@
   {
     "id": "storage_row_btree_index_index_delete_extract_max_entry_3e2a0607",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 234,
+    "line": 581,
     "decision": "page_type == LEAF_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -40762,7 +40902,7 @@
   {
     "id": "storage_row_btree_index_index_delete_extract_max_entry_594ac9a2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 245,
+    "line": 592,
     "decision": "page_type != INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -40772,8 +40912,118 @@
   {
     "id": "storage_row_btree_index_index_delete_extract_max_entry_412391a2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 255,
+    "line": 602,
     "decision": "let Some(max_bytes) = extract_max_entry(\n        pager,\n        usable_size,\n        rightmost,\n        encoding,\n        depth.saturating_add(1),\n    )?",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_walk_f1135128",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 796,
+    "decision": "match read_page_type(&buf, header_start, page).unwrap() {\n            LEAF_INDEX => {\n                let cells = collect_index_leaf_cells(\n                    pager,\n                    &buf,\n                    header_start,\n                    page,\n                    usable,\n                    TextEncoding::Utf8,\n                )\n                .unwrap();\n                assert!(is_root || !cells.is_empty(), \"leaf {page} is empty\");\n                out.extend(cells.into_iter().map(|(key, _)| key));\n            }\n            INTERIOR_INDEX => {\n                let (entries, rightmost) = collect_index_interior_entries(\n                    pager,\n                    &buf,\n                    header_start,\n                    page,\n                    usable,\n                    TextEncoding::Utf8,\n                )\n                .unwrap();\n                assert!(!entries.is_empty(), \"interior page {page} has no entries\");\n                for (child, key, _) in entries {\n                    walk(pager, header, child, false, out);\n                    out.push(key);\n                }\n                walk(pager, header, rightmost, false, out);\n            }\n            other => panic!(\"page {page} has type {other:#x}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_deleting_every_entry_in_ascending_order_leaves_a_valid_tree_throughout_2b65e5c5",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 873,
+    "decision": "n % 7 == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_deleting_every_entry_in_descending_order_leaves_a_valid_tree_throughout_2b65e5c5",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 888,
+    "decision": "n % 7 == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_deleting_from_the_middle_outwards_leaves_a_valid_tree_throughout_a3d20f7f",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 903,
+    "decision": "!remaining.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_deleting_from_the_middle_outwards_leaves_a_valid_tree_throughout_d707b591",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 908,
+    "decision": "step % 11 == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_131bc340",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 972,
+    "decision": "big",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_5b29cd39",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 985,
+    "decision": "step < 1200",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_453b75ea",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 986,
+    "decision": "rng.next() % 100 < insert_bias",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_2b85f343",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 987,
+    "decision": "let std::collections::btree_map::Entry::Vacant(slot) = model.entry(text)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_c8b82283",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 992,
+    "decision": "model.remove(&text).is_some()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_f3a7aabf",
+    "file": "src/storage/row/btree/index/index_delete.rs",
+    "line": 999,
+    "decision": "step % 20 == 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -40782,7 +41032,7 @@
   {
     "id": "storage_row_btree_index_index_delete_split_then_delete_all_including_promoted_interior_entries_734b4601",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 499,
+    "line": 1092,
     "decision": "let Err(e) = r",
     "conditions": 1,
     "vectors_required": 2,
@@ -40792,7 +41042,7 @@
   {
     "id": "storage_row_btree_index_index_delete_split_then_delete_descending_hits_the_interior_predecessor_swap_with_a_nonempty_subtree_734b4601",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 538,
+    "line": 1131,
     "decision": "let Err(e) = r",
     "conditions": 1,
     "vectors_required": 2,
@@ -40802,7 +41052,7 @@
   {
     "id": "storage_row_btree_index_index_delete_reachable_pages_594ac9a2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 556,
+    "line": 1149,
     "decision": "page_type != INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -40812,7 +41062,7 @@
   {
     "id": "storage_row_btree_index_index_delete_freelist_pages_ccf8b9e2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 580,
+    "line": 1173,
     "decision": "trunk != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40822,7 +41072,7 @@
   {
     "id": "storage_row_btree_index_index_insert_insert_entry_58ddf37c",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 51,
+    "line": 52,
     "decision": "match descend_index_tree(pager, root_page, usable_size, key, encoding)? {\n            IndexDescent::Leaf {\n                ancestors,\n                leaf_page,\n            } => (ancestors, leaf_page),\n            IndexDescent::InteriorMatch { .. } => return Err(BtreeError::DuplicateKey),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40832,7 +41082,7 @@
   {
     "id": "storage_row_btree_index_index_insert_encode_index_cell_3f6580ef",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 93,
+    "line": 94,
     "decision": "!overflow_bytes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40842,7 +41092,7 @@
   {
     "id": "storage_row_btree_index_index_insert_write_overflow_chain_c443a5e5",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 112,
+    "line": 113,
     "decision": "!rest.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40852,7 +41102,7 @@
   {
     "id": "storage_row_btree_index_index_insert_insert_into_index_leaf_8f7e859c",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 159,
+    "line": 160,
     "decision": "match search_index_leaf(\n        pager,\n        &buf,\n        header_start,\n        leaf_page,\n        usable_size,\n        encoding,\n        key,\n    )? {\n        LeafSearch::Found(..) => return Err(BtreeError::DuplicateKey),\n        LeafSearch::NotFound(pos) => pos,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40862,7 +41112,7 @@
   {
     "id": "storage_row_btree_index_index_insert_insert_into_index_leaf_438f6407",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 188,
+    "line": 189,
     "decision": "needed <= page_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -40872,7 +41122,7 @@
   {
     "id": "storage_row_btree_index_index_insert_insert_into_index_leaf_e0c1e063",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 198,
+    "line": 199,
     "decision": "!spliced",
     "conditions": 1,
     "vectors_required": 2,
@@ -40882,7 +41132,7 @@
   {
     "id": "storage_row_btree_index_index_insert_insert_into_index_parent_b6dc23cd",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 296,
+    "line": 297,
     "decision": "match entries.iter().position(|(child, _, _)| *child == old_page) {\n        Some(idx) => {\n            entries.insert(idx, (old_page, promoted_key.to_vec(), promoted_bytes));\n            let successor = entries\n                .get_mut(idx.saturating_add(1))\n                .ok_or(BtreeError::Internal(\n                    \"split successor entry must exist right after insertion\",\n                ))?;\n            successor.0 = new_page;\n        }\n        None if rightmost == old_page => {\n            entries.push((old_page, promoted_key.to_vec(), promoted_bytes));\n            rightmost = new_page;\n        }\n        None => {\n            return Err(BtreeError::MissingChildRoute {\n                page_num: parent_page,\n                child: old_page,\n            });\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40892,7 +41142,7 @@
   {
     "id": "storage_row_btree_index_index_insert_insert_into_index_parent_0e6ec6f6",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 306,
+    "line": 307,
     "decision": "rightmost == old_page",
     "conditions": 1,
     "vectors_required": 2,
@@ -40900,9 +41150,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_index_index_insert_insert_into_index_parent_438f6407",
+    "id": "storage_row_btree_index_index_insert_write_interior_splitting_438f6407",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 328,
+    "line": 362,
     "decision": "needed <= page_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -40912,7 +41162,7 @@
   {
     "id": "storage_row_btree_index_index_insert_root_split_d85f5a00",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 400,
+    "line": 434,
     "decision": "match page_type {\n        LEAF_INDEX => {\n            let cells = collect_index_leaf_cells(\n                pager,\n                &content,\n                header_start_root,\n                root_page,\n                usable_size,\n                encoding,\n            )?;\n            let dest = pager.get_page_mut(relocated)?;\n            write_index_leaf_page(dest, 0, relocated, &cell_bytes(cells))?;\n        }\n        INTERIOR_INDEX => {\n            let (entries, rightmost) = collect_index_interior_entries(\n                pager,\n                &content,\n                header_start_root,\n                root_page,\n                usable_size,\n                encoding,\n            )?;\n            let cells: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))\n                .collect();\n            let dest = pager.get_page_mut(relocated)?;\n            write_index_interior_page(dest, 0, relocated, &cells, rightmost)?;\n        }\n        other => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num: root_page,\n                page_type: other,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40922,7 +41172,7 @@
   {
     "id": "storage_row_btree_index_index_insert_entries_stay_in_ascending_key_order_813e3486",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 555,
+    "line": 589,
     "decision": "match &k[0] {\n                Value::Text(s) => s.as_ref(),\n                _ => panic!(\"expected text\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,

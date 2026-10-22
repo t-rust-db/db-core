@@ -684,9 +684,21 @@ impl Transaction for PagerTransaction {
     }
 
     fn integrity_check(&mut self, quick: bool) -> Option<Result<Vec<String>, TransactionError>> {
+        // Page 1 as it is now, not as it was when the connection opened:
+        // the pager has moved the page count and the freelist since, and a
+        // check against the old header reports a mismatch that is not there.
+        let header = self
+            .source
+            .read_page(1)
+            .ok()
+            .and_then(|page| {
+                let bytes: [u8; 100] = page.get(..100)?.try_into().ok()?;
+                DatabaseHeader::parse(&bytes).ok()
+            })
+            .unwrap_or(self.header);
         Some(Ok(crate::storage::row::integrity::run_integrity_check(
             Rc::clone(&self.source),
-            &self.header,
+            &header,
             quick,
         )))
     }
