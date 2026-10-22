@@ -253,6 +253,182 @@ fn resolve_expr_aliases(expr: &mut AstExpr, aliases: &HashMap<String, String>) {
     }
 }
 
+/// Lowers every `x IN (a, b, ...)` and `x NOT IN (a, b, ...)` in `select` to
+/// an `OR` chain of equalities and an `AND` chain of inequalities (#716),
+/// so the planner, the VM and the stream engine only ever see comparisons.
+/// Three-valued logic gives DuckDB's NULL behaviour: `x IN (1, NULL)` is
+/// TRUE or NULL, `x NOT IN (1, NULL)` is never TRUE, a NULL `x` is NULL.
+/// It runs before validation, which checks some positions (HAVING, an
+/// aggregate's argument) on a clone, where a rewrite would be lost.
+fn lower_in_lists(select: &mut Select) -> Result<()> {
+    if let Some(e) = &mut select.where_clause {
+        lower_in_expr(e)?;
+    }
+    for col in &mut select.columns {
+        if let crate::parser::ast::ResultColumn::Expr { expr, .. } = col {
+            lower_in_expr(expr)?;
+        }
+    }
+    for e in &mut select.group_by {
+        lower_in_expr(e)?;
+    }
+    if let Some(e) = &mut select.having {
+        lower_in_expr(e)?;
+    }
+    for term in &mut select.order_by {
+        lower_in_expr(&mut term.expr)?;
+    }
+    if let Some(from_clause) = select.from.as_mut() {
+        for j in &mut from_clause.joins {
+            if let Some(JoinConstraint::On(e)) = &mut j.constraint {
+                lower_in_expr(e)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// [`lower_in_lists`] for one expression: children first, then the node.
+fn lower_in_expr(expr: &mut AstExpr) -> Result<()> {
+    match &mut expr.kind {
+        ExprKind::FunctionCall { args, tail, .. } => {
+            if let FunctionArgs::List(list) = args {
+                for e in list {
+                    lower_in_expr(e)?;
+                }
+            }
+            if let Some(tail) = tail {
+                if let Some(filter) = &mut tail.filter {
+                    lower_in_expr(filter)?;
+                }
+                if let Some(window_def) = &mut tail.over {
+                    for e in &mut window_def.partition_by {
+                        lower_in_expr(e)?;
+                    }
+                    for term in &mut window_def.order_by {
+                        lower_in_expr(&mut term.expr)?;
+                    }
+                }
+            }
+        }
+        ExprKind::Unary { expr: inner, .. }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Paren(inner)
+        | ExprKind::InSubquery { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. } => lower_in_expr(inner)?,
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            lower_in_expr(lhs)?;
+            lower_in_expr(rhs)?;
+        }
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
+            lower_in_expr(inner)?;
+            lower_in_expr(lo)?;
+            lower_in_expr(hi)?;
+        }
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
+            lower_in_expr(inner)?;
+            for e in list {
+                lower_in_expr(e)?;
+            }
+        }
+        ExprKind::Like {
+            expr: inner,
+            pattern,
+            escape,
+            ..
+        } => {
+            lower_in_expr(inner)?;
+            lower_in_expr(pattern)?;
+            if let Some(e) = escape {
+                lower_in_expr(e)?;
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(o) = operand {
+                lower_in_expr(o)?;
+            }
+            for (cond, result) in whens {
+                lower_in_expr(cond)?;
+                lower_in_expr(result)?;
+            }
+            if let Some(e) = else_ {
+                lower_in_expr(e)?;
+            }
+        }
+        ExprKind::Column { .. }
+        | ExprKind::Literal(_)
+        | ExprKind::Param(_)
+        | ExprKind::Subquery(_)
+        | ExprKind::Exists { .. }
+        | ExprKind::InSubqueryMulti { .. } => {}
+    }
+    if matches!(expr.kind, ExprKind::In { .. }) {
+        let span = expr.span;
+        let kind = std::mem::replace(&mut expr.kind, ExprKind::Literal(AstLiteral::Null));
+        if let ExprKind::In {
+            expr: subject,
+            list,
+            negated,
+        } = kind
+        {
+            *expr = lower_in_list(span, *subject, list, negated)?;
+        }
+    }
+    Ok(())
+}
+
+/// `subject IN (list)` as `subject = a OR subject = b ...`, or, `negated`,
+/// `subject <> a AND subject <> b ...` (De Morgan, which holds in
+/// three-valued logic).
+fn lower_in_list(
+    span: Span,
+    subject: AstExpr,
+    list: Vec<AstExpr>,
+    negated: bool,
+) -> Result<AstExpr> {
+    let (cmp, join) = if negated {
+        (AstBinOp::Ne, AstBinOp::And)
+    } else {
+        (AstBinOp::Eq, AstBinOp::Or)
+    };
+    let mut items = list.into_iter();
+    let Some(first) = items.next() else {
+        return Err(unsupported(span, "IN with an empty list".into()));
+    };
+    let compare = |item: AstExpr| AstExpr {
+        span: item.span,
+        kind: ExprKind::Binary {
+            op: cmp,
+            lhs: Box::new(subject.clone()),
+            rhs: Box::new(item),
+        },
+    };
+    let mut acc = compare(first);
+    for item in items {
+        acc = AstExpr {
+            span,
+            kind: ExprKind::Binary {
+                op: join,
+                lhs: Box::new(acc),
+                rhs: Box::new(compare(item)),
+            },
+        };
+    }
+    Ok(acc)
+}
+
 /// Extract `(left_col, right_col)` from a `JOIN ... ON <expr>` condition.
 fn extract_equi_join(expr: &AstExpr) -> Result<(String, String)> {
     match &expr.kind {
@@ -795,6 +971,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
     if !select.compound.is_empty() {
         return Err(unsupported(select.span, "UNION".into()));
     }
+    lower_in_lists(select)?;
     // (alias, real_table) in FROM-then-JOIN order; deferred into `aliases`
     // below rather than inserted directly, so a self-join (two aliases for
     // the same real table -- e.g. `log AS a JOIN log AS b`, ADR-0022,
@@ -1206,6 +1383,73 @@ mod tests {
         assert!(text.contains("NOT ilike(b, 'y')"), "{text}");
         assert!(parse("SELECT a FROM t WHERE a ILIKE 'x' ESCAPE '!'").is_err());
     }
+    /// #716: `x IN (a, b, c)` is an `OR` chain of equalities and
+    /// `x NOT IN (...)` an `AND` chain of inequalities, wherever an
+    /// expression sits: WHERE, HAVING, the select list, an aggregate's
+    /// argument, a function's argument, a `CASE`.
+    #[test]
+    fn in_list_is_lowered_to_comparisons_everywhere() {
+        let where_of = |sql: &str| format!("{}", parse(sql).unwrap().where_clause.unwrap());
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE a IN (1, 2, 3)"),
+            "a = 1 OR a = 2 OR a = 3"
+        );
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE a NOT IN (1, 2)"),
+            "a != 1 AND a != 2"
+        );
+        assert_eq!(where_of("SELECT a FROM t WHERE a IN (1)"), "a = 1");
+        // The items may be expressions, and the subject is repeated.
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE a + 1 IN (b, 2 * c)"),
+            "a + 1 = b OR a + 1 = 2 * c"
+        );
+        // Nested under other operators.
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE NOT (a IN (1, 2)) AND b IN (3)"),
+            "NOT (a = 1 OR a = 2) AND b = 3"
+        );
+
+        let select = parse("SELECT a IN (1, 2) FROM t GROUP BY a HAVING a IN (3, 4)").unwrap();
+        assert_eq!(format!("{}", select.having.unwrap()), "a = 3 OR a = 4");
+        let ResultColumn::Expr { expr, .. } = &select.columns[0] else {
+            panic!("expected an expression column");
+        };
+        assert_eq!(format!("{expr}"), "a = 1 OR a = 2");
+
+        let col_text = |sql: &str| {
+            let select = parse(sql).unwrap();
+            match &select.columns[0] {
+                ResultColumn::Expr { expr, .. } => format!("{expr}"),
+                other => format!("{other:?}"),
+            }
+        };
+        assert_eq!(
+            col_text("SELECT sum(a IN (1, 2)) FROM t"),
+            "sum(a = 1 OR a = 2)"
+        );
+        assert_eq!(
+            col_text("SELECT map_get_ci(h, 'k') IN ('x') FROM t"),
+            "map_get_ci(h, 'k') = 'x'"
+        );
+    }
+
+    /// #716: an `IN` list is left alone where it is not the column
+    /// subset's `IN (list)`: a subquery keeps its own rules, and an empty
+    /// list is a syntax error in DuckDB too.
+    #[test]
+    fn in_subquery_is_untouched_and_an_empty_list_is_refused() {
+        let select = parse("SELECT a FROM t WHERE a IN (SELECT b FROM u)").unwrap();
+        assert!(matches!(
+            select.where_clause.unwrap().kind,
+            ExprKind::InSubquery { .. }
+        ));
+        let err = parse("SELECT a FROM t WHERE a IN ()").unwrap_err();
+        assert!(format!("{err}").contains("empty list"), "{err}");
+        // NOT IN (SELECT ...) is still refused, as before.
+        assert!(parse("SELECT a FROM t WHERE a NOT IN (SELECT b FROM u)").is_err());
+    }
+
     use crate::parser::ast::ResultColumn;
 
     /// #621: `m['k']` is `map_extract_value(m, 'k')`, and a scalar
@@ -2199,6 +2443,10 @@ mod tests {
         assert_alias_resolved("SELECT o.id FROM orders o WHERE o.a IS NULL");
         assert_alias_resolved("SELECT o.id FROM orders o WHERE o.name LIKE o.pattern");
         assert_alias_resolved("SELECT o.id FROM orders o WHERE o.id IN (SELECT id FROM other)");
+        // #716: an IN list is lowered to comparisons first, which are
+        // then resolved like any others.
+        assert_alias_resolved("SELECT o.id FROM orders o WHERE o.a IN (o.b, 2)");
+        assert_alias_resolved("SELECT o.id FROM orders o WHERE o.a NOT IN (o.b, 2)");
     }
 
     #[test]
@@ -2233,7 +2481,6 @@ mod tests {
         // outcome, the walk is the point.
         for sql in [
             "SELECT o.id FROM orders o WHERE o.a BETWEEN o.lo AND o.hi",
-            "SELECT o.id FROM orders o WHERE o.a IN (o.b, 2)",
             "SELECT o.id FROM orders o WHERE o.name LIKE o.p ESCAPE '\\'",
             "SELECT CASE o.a WHEN o.b THEN o.c ELSE o.d END FROM orders o",
             "SELECT CAST(o.a AS INTEGER) FROM orders o",

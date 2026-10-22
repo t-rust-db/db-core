@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.166.0] - 2026-10-22
+
+### Added
+
+- **`IN (list)` and `NOT IN (list)` in the column and stream engines** (#716, first of milestone 2 of #678). The parser lowers `x IN (a, b, c)` to `x = a OR x = b OR x = c` and `x NOT IN (a, b, c)` to `x <> a AND x <> b AND x <> c` before it validates the query, so the planner and the VM are unchanged. It applies in WHERE, HAVING, the select list, an aggregate's argument and a function's argument. The list items may be expressions (`id IN (3, 1 + 1)`), and a quoted number against a number column converts as DuckDB does (#679). The three-valued `OR` and `AND` of #679 give DuckDB's NULL behaviour: `x IN (1, NULL)` is TRUE or NULL, `x NOT IN (1, NULL)` is never TRUE, and a NULL `x` is NULL. An empty list is refused, as DuckDB does, and `IN (SELECT ...)` is unchanged. The cost is a comparison per item per row; a hash-set opcode waits for a benchmark that needs it. A new sqllogictest file (`tests/sqllogictest/column/in_list_716.test`) and six `check_column_oracle.sh` cases agree with DuckDB.
+
 ## [0.165.0] - 2026-10-22
 
 ### Added
