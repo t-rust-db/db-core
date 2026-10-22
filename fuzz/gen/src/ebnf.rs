@@ -90,7 +90,9 @@ enum Token {
     RBrace,
     Ident(String),
     Str(String),
-    Comment(String),
+    /// A `(* ... *)` comment's text, and whether it starts its line (no
+    /// indentation): a section header rather than a rule's trailing tag.
+    Comment(String, bool),
 }
 
 #[derive(Debug)]
@@ -111,12 +113,16 @@ fn err(msg: impl Into<String>) -> GrammarError {
 fn tokenize(src: &str) -> Result<Vec<Token>, GrammarError> {
     let mut tokens = Vec::new();
     let mut chars = src.chars().peekable();
+    let mut at_line_start = true;
 
     while let Some(&c) = chars.peek() {
         if c.is_whitespace() {
             chars.next();
+            at_line_start = c == '\n';
             continue;
         }
+        let starts_line = at_line_start;
+        at_line_start = false;
         match c {
             '(' => {
                 chars.next();
@@ -156,7 +162,7 @@ fn tokenize(src: &str) -> Result<Vec<Token>, GrammarError> {
                             None => return Err(err("unterminated (* comment *)")),
                         }
                     }
-                    tokens.push(Token::Comment(content));
+                    tokens.push(Token::Comment(content, starts_line));
                 } else {
                     tokens.push(Token::LParen);
                 }
@@ -284,7 +290,7 @@ impl Parser {
     }
 
     fn skip_comments(&mut self) {
-        while matches!(self.peek(), Some(Token::Comment(_))) {
+        while matches!(self.peek(), Some(Token::Comment(..))) {
             self.pos = self.pos.saturating_add(1);
         }
     }
@@ -296,7 +302,7 @@ impl Parser {
     /// of being silently skipped here.
     fn peek_significant(&self) -> Option<&Token> {
         let mut i = self.pos;
-        while matches!(self.tokens.get(i), Some(Token::Comment(_))) {
+        while matches!(self.tokens.get(i), Some(Token::Comment(..))) {
             i = i.saturating_add(1);
         }
         self.tokens.get(i)
@@ -322,7 +328,7 @@ impl Parser {
         loop {
             let seq = self.parse_sequence()?;
             let mut collected = Vec::new();
-            while let Some(Token::Comment(text)) = self.peek() {
+            while let Some(Token::Comment(text, _)) = self.peek() {
                 let text = text.clone();
                 self.bump();
                 if top_level {
@@ -396,14 +402,32 @@ impl Parser {
         let name = name.clone();
         self.bump();
         self.expect(&Token::Assign)?;
-        let (alternatives, v_tags) = self.parse_alternation(true)?;
+        let (alternatives, mut v_tags) = self.parse_alternation(true)?;
         self.expect(&Token::Semi)?;
+        // A tag written after the `;` (`rule ::= x ; (* V2 *)`, or indented
+        // on the next line) is the last alternative's; a comment that
+        // starts its line is the next rule's or a section header (#565).
+        let mut trailing = Vec::new();
+        while let Some(Token::Comment(text, false)) = self.peek() {
+            trailing.extend(extract_v_tags(text));
+            self.bump();
+        }
+        if let Some(last) = v_tags.last_mut() {
+            last.extend(trailing);
+        }
         Ok(Some(Rule {
             name,
             alternatives,
             v_tags,
         }))
     }
+}
+
+/// Parses a file that is one section only, with no banners: every rule in
+/// `src`, keyed by name. sqlite-rs's `.openspec/grammar/sqlite.ebnf` is one
+/// (#565); [`parse_source`] is for db-core's three-section file.
+pub fn parse_section(src: &str) -> Result<BTreeMap<String, Rule>, GrammarError> {
+    parse_rules(src)
 }
 
 fn parse_rules(src: &str) -> Result<BTreeMap<String, Rule>, GrammarError> {

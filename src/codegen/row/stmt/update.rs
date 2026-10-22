@@ -52,7 +52,7 @@ use crate::codegen::row::select::{
 };
 use crate::codegen::row::stmt::insert::{
     cached_create_table, column_plans, emit_constraint_violation, table_check_constraints,
-    ColumnPlan, SQLITE_CONSTRAINT_CHECK, SQLITE_CONSTRAINT_NOTNULL,
+    ColumnPlan, SQLITE_CONSTRAINT_CHECK, SQLITE_CONSTRAINT_NOTNULL, SQLITE_CONSTRAINT_UNIQUE,
 };
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, Label, NullTarget, RegAlloc, Scope, Target};
@@ -126,17 +126,7 @@ pub fn compile_update_with_catalog(
     // as touched — same reasoning `range_seek_touches_scanned_index`
     // below already applies to the single index a range-seek scans.
     let rowid_reassigned = rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten());
-    let index_touched: Vec<bool> = schema
-        .indexes
-        .iter()
-        .map(|index| {
-            rowid_reassigned.is_some()
-                || index.columns.iter().any(|c| {
-                    column_index(schema, &c.name)
-                        .is_none_or(|idx| assigned.get(idx).is_some_and(Option::is_some))
-                })
-        })
-        .collect();
+    let index_touched = index_touched_flags(schema, &assigned);
 
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
@@ -450,6 +440,29 @@ pub fn compile_update_with_catalog(
     Ok(em.finish())
 }
 
+/// For each of `schema.indexes`, whether a `SET` that assigns the columns
+/// `assigned` (one slot per table column) changes that index's key (#524).
+/// A reassigned rowid changes every index's key (the rowid is its last
+/// component); an expression index cannot be proven untouched. Shared with
+/// `INSERT ... ON CONFLICT DO UPDATE` (#696).
+pub(crate) fn index_touched_flags(schema: &TableSchema, assigned: &[Option<&Expr>]) -> Vec<bool> {
+    let rowid_reassigned = schema
+        .rowid_alias
+        .and_then(|idx| assigned.get(idx).copied().flatten())
+        .is_some();
+    schema
+        .indexes
+        .iter()
+        .map(|index| {
+            rowid_reassigned
+                || index.columns.iter().any(|c| {
+                    column_index(schema, &c.name)
+                        .is_none_or(|idx| assigned.get(idx).is_some_and(Option::is_some))
+                })
+        })
+        .collect()
+}
+
 /// Shared per-matched-row body for [`compile_update_with_catalog`]'s
 /// three positioning strategies (`SeekRowid` #336 fast path, #666's
 /// range-seek fast path, and the ordinary `Rewind`/`Next` scan): reads
@@ -461,7 +474,7 @@ pub fn compile_update_with_catalog(
 /// whatever "next row" mechanism (or none, for the single-row seek
 /// cases) follows.
 #[allow(clippy::too_many_arguments)]
-fn emit_update_row_body(
+pub(crate) fn emit_update_row_body(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     schema: &TableSchema,
@@ -611,6 +624,30 @@ fn emit_update_row_body(
         }
     }
 
+    // #694: a `SET` that changes a UNIQUE index's key must not repeat
+    // another row's key. Probed before the old entries are removed, so
+    // the row's own entry (an unchanged key) is told apart by its rowid.
+    for (position, index) in schema.indexes.iter().enumerate() {
+        if !index.unique {
+            continue;
+        }
+        if index_touched.get(position) != Some(&true) {
+            continue;
+        }
+        emit_update_unique_check(
+            em,
+            reg,
+            schema,
+            index,
+            position,
+            &col_regs,
+            rowid_alias,
+            rowid_reg,
+            action,
+            row_skip,
+        )?;
+    }
+
     let base_reg = first_reg(&col_regs)?;
     let count = i32::try_from(col_regs.len()).unwrap_or(0);
     let record_reg = reg.alloc();
@@ -672,6 +709,120 @@ fn emit_update_row_body(
         )?;
     }
 
+    Ok(())
+}
+
+/// Enforces one UNIQUE `index` (the `position`th of `schema.indexes`)
+/// against the new row staged in `col_regs`/`rowid_reg`: probe the new
+/// key with `NoConflict` (a `NULL` in the key never conflicts), and
+/// treat an entry that belongs to the row being updated as no conflict.
+/// `UPDATE OR REPLACE` would have to delete the other row, which this
+/// codegen does not do, so it is refused rather than left unenforced.
+#[allow(clippy::too_many_arguments)]
+fn emit_update_unique_check(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    schema: &TableSchema,
+    index: &crate::codegen::row::IndexSchema,
+    position: usize,
+    col_regs: &[i32],
+    rowid_alias: Option<usize>,
+    rowid_reg: i32,
+    action: ConflictAction,
+    row_skip: Label,
+) -> Result<(), CodegenError> {
+    if matches!(action, ConflictAction::Replace) {
+        return Err(CodegenError::Unsupported {
+            reason: format!(
+                "UPDATE OR REPLACE on a table with the UNIQUE index {} isn't supported yet",
+                index.name
+            ),
+        });
+    }
+    let mut start = None;
+    for col in &index.columns {
+        crate::codegen::row::index_maintenance::reject_non_binary_key(index, col)?;
+        if col.desc {
+            return Err(CodegenError::Unsupported {
+                reason: format!(
+                    "index {} has a DESC column ({}); descending index keys aren't supported yet",
+                    index.name, col.name
+                ),
+            });
+        }
+        let col_idx = column_index(schema, &col.name).ok_or_else(|| CodegenError::Unsupported {
+            reason: format!(
+                "index {} references a column or expression this codegen can't resolve: {}",
+                index.name, col.name
+            ),
+        })?;
+        // The rowid-alias column's own register holds NULL; its live
+        // value is the rowid.
+        let src = if Some(col_idx) == rowid_alias {
+            rowid_reg
+        } else {
+            col_regs
+                .get(col_idx)
+                .copied()
+                .ok_or_else(|| CodegenError::Internal {
+                    reason: format!(
+                        "no register for column {} of index {}",
+                        col.name, index.name
+                    ),
+                })?
+        };
+        let r = reg.alloc();
+        start.get_or_insert(r);
+        em.emit(Instruction::new(Opcode::Copy, src, r, 0));
+    }
+    let start = start.ok_or_else(|| CodegenError::Internal {
+        reason: "unique index has no key columns to probe".to_string(),
+    })?;
+    let count = i32::try_from(index.columns.len()).unwrap_or(0);
+    // `NoConflict` writes the conflicting entry's rowid to the register
+    // right after the probe key.
+    let conflict_rowid_reg = reg.alloc();
+    let no_conflict = em.new_label();
+    for offset in 0..count {
+        let null_addr = em.emit(Instruction::new(
+            Opcode::IsNull,
+            start.saturating_add(offset),
+            0,
+            0,
+        ));
+        em.patch_p2(null_addr, no_conflict);
+    }
+    let index_cursor = FIRST_INDEX_CURSOR.saturating_add(i32::try_from(position).unwrap_or(0));
+    let probe_addr = em.emit(Instruction::with_p4(
+        Opcode::NoConflict,
+        index_cursor,
+        0,
+        start,
+        P4::Int(count.into()),
+    ));
+    em.patch_p2(probe_addr, no_conflict);
+    let own_rowid_reg = reg.alloc();
+    em.emit(Instruction::new(
+        Opcode::Rowid,
+        TABLE_CURSOR,
+        own_rowid_reg,
+        0,
+    ));
+    let own_addr = em.emit(Instruction::new(
+        Opcode::Eq,
+        conflict_rowid_reg,
+        0,
+        own_rowid_reg,
+    ));
+    em.patch_p2(own_addr, no_conflict);
+    emit_constraint_violation(
+        em,
+        action,
+        SQLITE_CONSTRAINT_UNIQUE,
+        crate::codegen::row::index_maintenance::unique_violation_message(schema, index),
+        row_skip,
+    );
+    em.place(no_conflict);
     Ok(())
 }
 

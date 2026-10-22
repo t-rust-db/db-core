@@ -114,7 +114,7 @@ pub fn render_rows(result: &QueryResult) -> Vec<Vec<String>> {
 
 /// Puts a rendered cell into canonical form: a bare real (not quoted,
 /// not a blob, not NULL, has a `.`/exponent) is re-rendered with
-/// `format_real` (`%!.15g`). sqlite3's `.mode quote` prints reals at
+/// `format_real` (`%!.17g`). sqlite3's `.mode quote` prints reals at
 /// round-trip precision (`3.140000000000000124`), db-core at display
 /// precision (`3.14`); both denote the same double.
 pub fn normalize_cell(cell: &str) -> String {

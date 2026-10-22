@@ -20,6 +20,7 @@
 
 use std::hash::{BuildHasher, Hasher};
 
+use super::fp;
 use super::{as_text, FunctionError, ScalarFn, MAX_LENGTH};
 use crate::value::Value;
 
@@ -621,20 +622,39 @@ impl Spec {
 
     /// A `%f`/`%e`/`%g` conversion. The value is rounded once, half away
     /// from zero, to the digits the conversion shows but at most 16
-    /// significant digits (18 with `!`), and zero-filled past that, as
+    /// significant digits (26 with `!`), and zero-filled past that, as
     /// sqlite3's `sqlite3FpDecode` does. `!` also drops trailing zeros
     /// but keeps one decimal (`1.0`, `2.5e+00`).
     fn real(&self, x: f64) -> String {
-        let negative = x.is_sign_negative() && x != 0.0 && !x.is_nan();
-        let (exact, exp) = decode(x);
+        let mut negative = x.is_sign_negative() && x != 0.0 && !x.is_nan();
         let precision = self.precision.unwrap_or(6).min(FP_PRECISION_LIMIT);
-        let p = i64::try_from(precision).unwrap_or(i64::MAX);
-        let shown = match self.conversion {
-            'f' => exp.saturating_add(1).saturating_add(p),
+        let p = i32::try_from(precision).unwrap_or(i32::MAX);
+        let i_round = match self.conversion {
+            'f' => p.saturating_neg(),
             'e' | 'E' => p.saturating_add(1),
             _ => p.max(1),
         };
-        let (digits, exp) = round(&exact, exp, shown.min(if self.bang { 18 } else { 16 }));
+        let mx_round = if self.bang { 26 } else { 16 };
+        let (digits, exp) = if x.is_finite() {
+            match fp::fp_decode(x.abs(), i_round, mx_round) {
+                fp::Decoded::Finite { digits, idp } => (
+                    digits.iter().map(|d| d.saturating_sub(b'0')).collect(),
+                    i64::from(idp).saturating_sub(1),
+                ),
+                fp::Decoded::Special(_) => (vec![0], 0),
+            }
+        } else {
+            // Infinity reads as 1e301 and NaN as 0, as sqlite3's printf
+            // shows them.
+            let (exact, exp) = decode(x);
+            let p = i64::from(p);
+            let shown = match self.conversion {
+                'f' => exp.saturating_add(1).saturating_add(p),
+                'e' | 'E' => p.saturating_add(1),
+                _ => p.max(1),
+            };
+            round(&exact, exp, shown.min(18))
+        };
         let mut body = match self.conversion {
             'f' => self.fixed(&digits, exp, precision),
             'e' | 'E' => self.scientific(&digits, exp, precision),
@@ -642,6 +662,15 @@ impl Spec {
         };
         if self.bang {
             body = alternate_form_2(&body);
+        }
+        // `#` drops the sign of a negative value that shows as zero.
+        if self.alt
+            && !split_exponent(&body)
+                .0
+                .bytes()
+                .any(|b| matches!(b, b'1'..=b'9'))
+        {
+            negative = false;
         }
         if matches!(self.conversion, 'E' | 'G') {
             body = body.to_ascii_uppercase();
@@ -907,6 +936,29 @@ mod tests {
 
     fn p(args: &[Value]) -> Value {
         call("printf", args).unwrap()
+    }
+
+    /// MC/DC vector (obligation `functions_text_real_d63cc931`, `#` with
+    /// every digit zero drops the sign): leaf A false -- without `#`
+    /// a negative value that rounds to zero keeps its sign.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_real_d63cc931__v1_no_alt_keeps_the_sign() {
+        assert_eq!(p(&[t("%.2f"), Value::Real(-0.001)]), t("-0.00"));
+    }
+
+    /// Leaf A true, leaf B false: `#` with a non-zero digit keeps it.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_real_d63cc931__v2_alt_with_digits_keeps_the_sign() {
+        assert_eq!(p(&[t("%#.2f"), Value::Real(-1.5)]), t("-1.50"));
+    }
+
+    /// Both leaves true: `#` and nothing but zeros drops the sign.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_real_d63cc931__v3_alt_all_zero_drops_the_sign() {
+        assert_eq!(p(&[t("%#.2f"), Value::Real(-0.001)]), t("0.00"));
     }
 
     /// #651: past `MAX_LENGTH` is "string or blob too big", decided

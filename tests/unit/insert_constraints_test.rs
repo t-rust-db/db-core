@@ -300,11 +300,9 @@ fn default_insert_conflict_action_reports_the_error_but_keeps_prior_rows_in_the_
 
 #[test]
 fn unique_index_rejects_a_duplicate_non_pk_value() {
-    // An inline column `UNIQUE` constraint alone has no backing index
-    // (db-core doesn't auto-create a `sqlite_autoindex_*` entry the way
-    // stock SQLite does -- a documented `CREATE TABLE`-side gap, not an
-    // INSERT-codegen one), so enforcement here goes through an explicit
-    // `CREATE UNIQUE INDEX` instead.
+    // An explicit `CREATE UNIQUE INDEX`; the implicit index of an inline
+    // `UNIQUE`/`PRIMARY KEY` constraint is covered by `autoindex_test.rs`
+    // (#694).
     let db = TempDb::new("unique");
     let mut e = open(&db);
     e.run_query(
@@ -381,13 +379,33 @@ fn insert_select_from_a_joined_source() {
 
 #[test]
 fn without_rowid_table_is_rejected_at_insert_compile_time() {
+    // A file sqlite3 wrote: this engine no longer creates such tables.
     let db = TempDb::new("without-rowid");
+    std::fs::copy("tests/fixtures/btrees/without_rowid.db", db.path())
+        .expect("copy sqlite3 fixture");
     let mut e = open(&db);
-    e.run_query("CREATE TABLE wr(a INTEGER PRIMARY KEY) WITHOUT ROWID")
-        .unwrap();
-    let err = e.run_query("INSERT INTO wr VALUES (1)").unwrap_err();
+    let err = e.run_query("INSERT INTO t VALUES ('a', 'b')").unwrap_err();
     assert_eq!(err.kind, ErrorKind::Compile);
     assert!(err.message.contains("WITHOUT ROWID"), "{}", err.message);
+}
+
+#[test]
+fn create_table_without_rowid_is_refused() {
+    // #696: the table could be created but not written, so refuse it.
+    let db = TempDb::new("create-without-rowid");
+    let mut e = open(&db);
+    let err = e
+        .run_query("CREATE TABLE wr(a INTEGER PRIMARY KEY) WITHOUT ROWID")
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Compile);
+    assert!(err.message.contains("WITHOUT ROWID"), "{}", err.message);
+    // sqlite3's own definition errors still come first.
+    let err = e.run_query("CREATE TABLE wr(a) WITHOUT ROWID").unwrap_err();
+    assert!(
+        err.message.contains("PRIMARY KEY missing"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]

@@ -518,7 +518,7 @@ impl fmt::Display for Insert {
             }
             write!(f, ")")?;
         }
-        match &self.source {
+        let source = match &self.source {
             InsertSource::DefaultValues => write!(f, " DEFAULT VALUES"),
             InsertSource::Values(rows) => {
                 write!(f, " VALUES ")?;
@@ -538,7 +538,45 @@ impl fmt::Display for Insert {
                 Ok(())
             }
             InsertSource::Select(select) => write!(f, " {select}"),
+        };
+        source?;
+        for clause in &self.upsert {
+            write!(f, " ON CONFLICT")?;
+            if let Some(target) = &clause.target {
+                write!(f, " (")?;
+                write_indexed_columns(f, &target.columns)?;
+                write!(f, ")")?;
+                if let Some(where_clause) = &target.where_clause {
+                    write!(f, " WHERE {where_clause}")?;
+                }
+            }
+            match &clause.action {
+                UpsertAction::DoNothing => write!(f, " DO NOTHING")?,
+                UpsertAction::DoUpdate {
+                    assignments,
+                    where_clause,
+                } => {
+                    write!(f, " DO UPDATE SET ")?;
+                    for (i, assignment) in assignments.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        // The parser yields one column per assignment (a
+                        // tuple assignment is expanded).
+                        write!(
+                            f,
+                            "{} = {}",
+                            assignment.columns.join(", "),
+                            assignment.value
+                        )?;
+                    }
+                    if let Some(where_clause) = where_clause {
+                        write!(f, " WHERE {where_clause}")?;
+                    }
+                }
+            }
         }
+        Ok(())
     }
 }
 
@@ -785,6 +823,8 @@ impl fmt::Display for ParamKind {
 
 #[cfg(test)]
 mod tests {
+    use crate::parser::ast::UpsertAction;
+
     use super::super::error::{
         parse_begin, parse_commit, parse_create_index, parse_create_table, parse_create_view,
         parse_delete, parse_drop_index, parse_drop_table, parse_drop_view, parse_insert,
@@ -1011,6 +1051,83 @@ mod tests {
                 assert_eq!(insert.to_string(), "INSERT INTO t SELECT * FROM u");
             }
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// #696: every shape of the upsert clause prints back as sqlite3's
+    /// own spelling and re-parses to the same AST.
+    #[test]
+    fn insert_on_conflict_round_trips() {
+        for sql in [
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT DO NOTHING",
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT (a) DO NOTHING",
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT (a, b DESC) DO NOTHING",
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT (a) WHERE a > 0 DO NOTHING",
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT (a) DO UPDATE SET b = excluded.b",
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT (a) DO UPDATE SET b = b + excluded.b, a = 2 WHERE b < 9",
+            "INSERT INTO t (a, b) VALUES (1, 2) ON CONFLICT DO UPDATE SET b = 3",
+            "INSERT INTO t (a, b) VALUES (1, 2), (3, 4) ON CONFLICT (a) DO NOTHING ON CONFLICT (b) DO UPDATE SET a = 1 ON CONFLICT DO NOTHING",
+            "INSERT OR REPLACE INTO t SELECT a, b FROM u WHERE TRUE ON CONFLICT (a) DO NOTHING",
+        ] {
+            let insert = match parse_insert(sql) {
+                ParseOutcome::Accepted(insert) => insert,
+                other => panic!("{sql}: {other:?}"),
+            };
+            assert!(!insert.upsert.is_empty(), "{sql}");
+            assert_eq!(insert.to_string(), sql);
+            match parse_insert(&insert.to_string()) {
+                ParseOutcome::Accepted(again) => assert_eq!(again.upsert, insert.upsert, "{sql}"),
+                other => panic!("{sql}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn insert_on_conflict_shapes_the_ast() {
+        let ParseOutcome::Accepted(insert) = parse_insert(
+            "INSERT INTO t VALUES (1) ON CONFLICT (a) WHERE a > 0 DO NOTHING ON CONFLICT DO UPDATE SET b = 1 WHERE b = 2",
+        ) else {
+            panic!("expected Accepted");
+        };
+        assert_eq!(insert.upsert.len(), 2);
+        let first = &insert.upsert[0];
+        let target = first.target.as_ref().expect("first clause has a target");
+        assert_eq!(target.columns.len(), 1);
+        assert!(target.where_clause.is_some());
+        assert_eq!(first.action, UpsertAction::DoNothing);
+        let second = &insert.upsert[1];
+        assert!(second.target.is_none());
+        match &second.action {
+            UpsertAction::DoUpdate {
+                assignments,
+                where_clause,
+            } => {
+                assert_eq!(assignments.len(), 1);
+                assert!(where_clause.is_some());
+            }
+            other => panic!("{other:?}"),
+        }
+        // The statement span reaches the end of the last clause.
+        assert!(insert.span.len > 40);
+    }
+
+    #[test]
+    fn insert_on_conflict_rejects_what_sqlite3_rejects() {
+        for sql in [
+            // A clause without a target ends the chain.
+            "INSERT INTO t VALUES (1) ON CONFLICT DO NOTHING ON CONFLICT (a) DO NOTHING",
+            // DEFAULT VALUES takes no upsert clause.
+            "INSERT INTO t DEFAULT VALUES ON CONFLICT DO NOTHING",
+            "INSERT INTO t VALUES (1) ON CONFLICT (a) DO",
+            "INSERT INTO t VALUES (1) ON CONFLICT (a)",
+            "INSERT INTO t VALUES (1) ON CONFLICT () DO NOTHING",
+            "INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE b = 1",
+            "INSERT INTO t VALUES (1) ON DO NOTHING",
+        ] {
+            assert!(
+                !matches!(parse_insert(sql), ParseOutcome::Accepted(_)),
+                "{sql} should not parse"
+            );
         }
     }
 

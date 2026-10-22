@@ -204,13 +204,20 @@ mod tests {
         assert_eq!(format_real(2.5e300), "2.5e+300");
         assert_eq!(format_real(0.0001), "0.0001");
         assert_eq!(format_real(100000000000000.0), "100000000000000.0");
-        assert_eq!(format_real(1e15), "1.0e+15");
+        assert_eq!(format_real(1e15), "1000000000000000.0");
+        assert_eq!(format_real(1e16), "10000000000000000.0");
+        assert_eq!(format_real(1e17), "1.0e+17");
+        assert_eq!(format_real(1.0 / 3.0), "0.33333333333333332");
+        assert_eq!(format_real(123456789012345678.0), "1.2345678901234568e+17");
+        assert_eq!(format_real(0.000123456), "0.000123456");
+        assert_eq!(format_real(f64::INFINITY), "Inf");
+        assert_eq!(format_real(f64::NEG_INFINITY), "-Inf");
         assert_eq!(format_real(999999999999999.0), "999999999999999.0");
         assert_eq!(format_real(0.00001), "1.0e-05");
         assert_eq!(format_real(-2.5), "-2.5");
         assert_eq!(format_real(123.456), "123.456");
         assert_eq!(format_real(0.0), "0.0");
-        assert_eq!(format_real(-0.0), "-0.0");
+        assert_eq!(format_real(-0.0), "0.0");
     }
 
     #[test]

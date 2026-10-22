@@ -13,9 +13,13 @@ repo's specs for the fuller worked example of the requirement/scenario
 format, and its `README.md` for how it tracks spec-to-implementation
 coverage.
 
-This directory is currently empty: no spec has been written yet for
-`db-core`. Candidates once this crate's surface stabilizes further:
-a parser spec (`sql-parser`'s grammar -- though the grammar itself stays
-in the separate `t-rust-db/grammar` repo, not duplicated here) and a join
-spec (`sql-join`'s `JoinKind`/`should_emit` semantics and the hash table's
-correctness invariants).
+## Specs
+
+Row storage (`storage::row`), moved from sqlite-rs's `.openspec/specs/`
+(#575), where they were 003, 006 and 007. A path written `sqlite-rs:...`
+is in t-rust-db/tools' `sqlite-rs/` (most of the oracle-backed tests
+stayed there); every other path is db-core's.
+
+- [001-file-format](001-file-format/spec.md) — database header and record byte layout (`storage::row::header`, `storage::row::record`)
+- [002-btree](002-btree/spec.md) — table and index b-trees (`storage::row::btree`)
+- [003-pager](003-pager/spec.md) — pager, rollback journal and WAL (`storage::row::pager`)

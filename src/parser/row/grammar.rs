@@ -332,13 +332,81 @@ impl Parser {
             return self.invalid("expected VALUES, DEFAULT VALUES, or SELECT after INSERT INTO");
         };
 
+        // `DEFAULT VALUES` takes no upsert clause (sqlite3's grammar).
+        let upsert = if matches!(source, InsertSource::DefaultValues) {
+            Vec::new()
+        } else {
+            self.upsert_clauses()?
+        };
+        let end = if upsert.is_empty() {
+            end
+        } else {
+            self.tokens
+                .get(self.pos.saturating_sub(1))
+                .map_or(end, |t| t.span)
+        };
+
         Ok(Insert {
             or_action,
             table,
             columns,
             source,
+            upsert,
             span: join_span(start, end),
         })
+    }
+
+    /// The `upsert-clause` chain after an INSERT's source (#696):
+    /// `ON CONFLICT [ "(" indexed-column { "," indexed-column } ")" [ WHERE
+    /// expr ] ] DO NOTHING`, or `... DO UPDATE SET assignment { ","
+    /// assignment } [ WHERE expr ]`. Only a clause with a target may be
+    /// followed by another, as in sqlite3's `parse.y`.
+    fn upsert_clauses(&mut self) -> PResult<Vec<UpsertClause>> {
+        let mut clauses = Vec::new();
+        while self.eat_kw(Keyword::ON) {
+            self.expect_kw(Keyword::CONFLICT)?;
+            let target = if matches!(self.peek().kind, TokenKind::LParen) {
+                let columns = self.indexed_column_list()?;
+                let where_clause = if self.eat_kw(Keyword::WHERE) {
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
+                Some(UpsertTarget {
+                    columns,
+                    where_clause,
+                })
+            } else {
+                None
+            };
+            self.expect_kw(Keyword::DO)?;
+            let action = if self.eat_kw(Keyword::NOTHING) {
+                UpsertAction::DoNothing
+            } else if self.eat_kw(Keyword::UPDATE) {
+                self.expect_kw(Keyword::SET)?;
+                let mut assignments = self.assignment()?;
+                while self.eat_punct(&TokenKind::Comma) {
+                    assignments.extend(self.assignment()?);
+                }
+                let where_clause = if self.eat_kw(Keyword::WHERE) {
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
+                UpsertAction::DoUpdate {
+                    assignments,
+                    where_clause,
+                }
+            } else {
+                return self.invalid("expected NOTHING or UPDATE after DO");
+            };
+            let ends_chain = target.is_none();
+            clauses.push(UpsertClause { target, action });
+            if ends_chain {
+                break;
+            }
+        }
+        Ok(clauses)
     }
 
     pub(super) fn parse_delete_stmt(&mut self) -> PResult<Delete> {

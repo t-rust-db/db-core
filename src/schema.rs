@@ -80,9 +80,56 @@ fn is_ascending_primary_key(constraint: &crate::parser::ast::ColumnConstraint) -
     }
 }
 
+/// The column a single-term table-level `PRIMARY KEY (c [DESC])` names,
+/// when it is a rowid alias: `c` is `INTEGER`-typed (sqlite3's
+/// `sqlite3AddPrimaryKey`). Unlike the column-constraint form, `DESC`
+/// does not matter here: `PRIMARY KEY (c DESC)` is still the rowid in
+/// sqlite3 3.53. `None` for a composite key or a non-`INTEGER` column.
+#[cfg(feature = "parser-row")]
+fn table_key_alias(
+    create: &crate::parser::ast::CreateTable,
+    terms: &[crate::parser::ast::IndexedColumn],
+) -> Option<usize> {
+    let [term] = terms else {
+        return None;
+    };
+    let name = key_term_column(&term.expr)?.0;
+    create.columns.iter().position(|def| {
+        def.name.eq_ignore_ascii_case(&name)
+            && def
+                .type_name
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case("INTEGER"))
+    })
+}
+
+/// A `PRIMARY KEY`/`UNIQUE` term's column name and its explicit
+/// `COLLATE`, looking through parentheses. `None` for anything that is
+/// not a bare column (the DDL validator already refuses those).
+#[cfg(feature = "parser-row")]
+fn key_term_column(expr: &crate::parser::ast::Expr) -> Option<(String, Option<String>)> {
+    use crate::parser::ast::ExprKind;
+    let mut collation = None;
+    let mut expr = expr;
+    loop {
+        match &expr.kind {
+            ExprKind::Paren(inner) => expr = inner,
+            ExprKind::Collate {
+                expr: inner,
+                collation: name,
+            } => {
+                collation.get_or_insert_with(|| name.clone());
+                expr = inner;
+            }
+            ExprKind::Column { name, .. } => return Some((name.clone(), collation)),
+            _ => return None,
+        }
+    }
+}
+
 #[cfg(feature = "parser-row")]
 fn rowid_alias_from_sql(sql: &str) -> Option<usize> {
-    use crate::parser::ast::{ExprKind, TableConstraint};
+    use crate::parser::ast::TableConstraint;
     use crate::parser::row::error::ParseOutcome;
 
     let create = match crate::parser::row::parse_create_table(sql) {
@@ -106,21 +153,153 @@ fn rowid_alias_from_sql(sql: &str) -> Option<usize> {
             return Some(idx);
         }
     }
-    if let [only] = create.columns.as_slice() {
-        if is_integer(only) {
-            let named = create.constraints.iter().any(|c| match c {
-                TableConstraint::PrimaryKey(cols) => match cols.as_slice() {
-                    [col] => matches!(&col.expr.kind, ExprKind::Column { name, .. } if name.eq_ignore_ascii_case(&only.name)),
-                    _ => false,
-                },
-                _ => false,
-            });
-            if named {
-                return Some(0);
+    create.constraints.iter().find_map(|c| match c {
+        TableConstraint::PrimaryKey(terms) => table_key_alias(&create, terms),
+        _ => None,
+    })
+}
+
+/// One implicit index a `CREATE TABLE`'s `PRIMARY KEY`/`UNIQUE`
+/// constraints define (#694), named `sqlite_autoindex_<table>_<number>`.
+#[cfg(all(
+    feature = "parser-row",
+    any(feature = "codegen-row", feature = "storage-row")
+))]
+pub(crate) struct AutoIndex {
+    /// The `<number>` of its name: its 1-based position among the
+    /// table's implicit indexes.
+    pub(crate) number: usize,
+    /// The key columns, with the collation each compares by.
+    pub(crate) columns: Vec<IndexedColumn>,
+    /// The `PRIMARY KEY` of a `WITHOUT ROWID` table: the table's own
+    /// b-tree is that index, so it takes a number but has no schema row
+    /// and no b-tree of its own.
+    pub(crate) is_table: bool,
+}
+
+/// The implicit indexes of `create`, as sqlite3's `sqlite3CreateIndex`
+/// makes them: one per `PRIMARY KEY` or `UNIQUE` constraint in
+/// declaration order (column constraints, then table constraints),
+/// except a rowid alias (an ascending `INTEGER PRIMARY KEY`), which
+/// needs none, and a constraint over the same columns and collations as
+/// an earlier one, which adds none.
+#[cfg(all(
+    feature = "parser-row",
+    any(feature = "codegen-row", feature = "storage-row")
+))]
+pub(crate) fn autoindexes(create: &crate::parser::ast::CreateTable) -> Vec<AutoIndex> {
+    use crate::parser::ast::{ColumnConstraint, TableConstraint};
+    use crate::value::Collation;
+
+    let collation_named = |name: &str| {
+        if name.eq_ignore_ascii_case("NOCASE") {
+            Collation::NoCase
+        } else if name.eq_ignore_ascii_case("RTRIM") {
+            Collation::RTrim
+        } else {
+            Collation::Binary
+        }
+    };
+    // `(is_primary_key, columns)` in declaration order.
+    let mut constraints: Vec<(bool, Vec<IndexedColumn>)> = Vec::new();
+    let column_key = |def: &crate::parser::ast::ColumnDef, desc: bool| {
+        let collation = def
+            .constraints
+            .iter()
+            .find_map(|c| match c {
+                ColumnConstraint::Collate(name) => Some(collation_named(name)),
+                _ => None,
+            })
+            .unwrap_or_default();
+        vec![IndexedColumn {
+            name: def.name.clone(),
+            desc,
+            collation,
+        }]
+    };
+    let table_key = |terms: &[crate::parser::ast::IndexedColumn]| -> Vec<IndexedColumn> {
+        terms
+            .iter()
+            .filter_map(|term| {
+                let (name, collate) = key_term_column(&term.expr)?;
+                let def = create
+                    .columns
+                    .iter()
+                    .find(|def| def.name.eq_ignore_ascii_case(&name))?;
+                let declared = column_key(def, false).pop()?;
+                Some(IndexedColumn {
+                    name: def.name.clone(),
+                    desc: term.desc == Some(true),
+                    collation: collate.map_or(declared.collation, |c| collation_named(&c)),
+                })
+            })
+            .collect()
+    };
+    for def in &create.columns {
+        for constraint in &def.constraints {
+            match constraint {
+                ColumnConstraint::PrimaryKey { desc, .. } => {
+                    let integer = def
+                        .type_name
+                        .as_deref()
+                        .is_some_and(|t| t.eq_ignore_ascii_case("INTEGER"));
+                    // A rowid alias: the table's own b-tree is its key.
+                    if matches!(
+                        (integer, *desc, create.without_rowid),
+                        (true, None | Some(false), false)
+                    ) {
+                        continue;
+                    }
+                    constraints.push((true, column_key(def, *desc == Some(true))));
+                }
+                ColumnConstraint::Unique => constraints.push((false, column_key(def, false))),
+                _ => {}
             }
         }
     }
-    None
+    for constraint in &create.constraints {
+        match constraint {
+            TableConstraint::PrimaryKey(terms) => {
+                if let (false, Some(_)) = (create.without_rowid, table_key_alias(create, terms)) {
+                    continue;
+                }
+                constraints.push((true, table_key(terms)));
+            }
+            TableConstraint::Unique(terms) => constraints.push((false, table_key(terms))),
+            TableConstraint::Check { .. } => {}
+        }
+    }
+
+    let mut indexes: Vec<AutoIndex> = Vec::new();
+    for (is_primary_key, columns) in constraints {
+        let same = |other: &AutoIndex| {
+            other.columns.len() == columns.len()
+                && other.columns.iter().zip(&columns).all(|(a, b)| {
+                    a.name.eq_ignore_ascii_case(&b.name) && a.collation == b.collation
+                })
+        };
+        if let Some(existing) = indexes.iter_mut().find(|other| same(other)) {
+            existing.is_table |= is_primary_key && create.without_rowid;
+            continue;
+        }
+        indexes.push(AutoIndex {
+            number: indexes.len().saturating_add(1),
+            columns,
+            is_table: is_primary_key && create.without_rowid,
+        });
+    }
+    indexes
+}
+
+/// [`autoindexes`] of the `CREATE TABLE` text `sql`; none when it does
+/// not parse.
+#[cfg(all(feature = "parser-row", feature = "storage-row"))]
+pub(crate) fn autoindexes_from_sql(sql: &str) -> Vec<AutoIndex> {
+    use crate::parser::row::error::ParseOutcome;
+    match crate::parser::row::parse_create_table(sql) {
+        ParseOutcome::Accepted(create) => autoindexes(&create),
+        _ => Vec::new(),
+    }
 }
 
 /// A `CREATE INDEX` entry, same shape as
@@ -188,6 +367,30 @@ mod tests {
             alias("CREATE TABLE t (id INTEGER PRIMARY KEY DESC, name TEXT)"),
             None
         );
+    }
+
+    #[test]
+    fn table_level_integer_primary_key_is_the_alias_in_any_table() {
+        // sqlite3: `PRIMARY KEY(a)` over an `INTEGER` column is the rowid
+        // whatever the other columns are, `DESC` or not; a composite or
+        // non-`INTEGER` key is not (#694).
+        assert_eq!(
+            alias("CREATE TABLE t (a INTEGER, b, PRIMARY KEY(a))"),
+            Some(0)
+        );
+        assert_eq!(
+            alias("CREATE TABLE t (b, a INTEGER, PRIMARY KEY(a))"),
+            Some(1)
+        );
+        assert_eq!(
+            alias("CREATE TABLE t (a INTEGER, b, PRIMARY KEY(a DESC))"),
+            Some(0)
+        );
+        assert_eq!(
+            alias("CREATE TABLE t (a INTEGER, b, PRIMARY KEY(a, b))"),
+            None
+        );
+        assert_eq!(alias("CREATE TABLE t (a TEXT, b, PRIMARY KEY(a))"), None);
     }
 
     #[test]

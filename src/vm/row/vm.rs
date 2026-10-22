@@ -2535,6 +2535,8 @@ mod tests {
             P4::CreateTable {
                 name: "t".to_string(),
                 sql: "CREATE TABLE t (a)".to_string(),
+                without_rowid: false,
+                autoindexes: Vec::new(),
             },
         )]);
         assert!(matches!(
@@ -2559,6 +2561,8 @@ mod tests {
                 P4::CreateTable {
                     name: "t".to_string(),
                     sql: "CREATE TABLE t (a)".to_string(),
+                    without_rowid: false,
+                    autoindexes: Vec::new(),
                 },
             ),
             Instruction::new(Opcode::Halt, 0, 0, 0),

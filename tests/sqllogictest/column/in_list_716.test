@@ -1,0 +1,156 @@
+# #716: IN (list) / NOT IN (list). Table null_types: five rows, NULLs in
+# every typed column, mixed-case and empty text, a decimal and a timestamp
+# column. Expected results come from DuckDB (make refresh-column-sqllogictest).
+
+# 1. Membership, and its negation (a NULL subject is neither in nor out).
+
+query I nosort
+SELECT id FROM null_types WHERE s IN ('a', 'b') ORDER BY id
+----
+1
+3
+
+query I nosort
+SELECT id FROM null_types WHERE s NOT IN ('a', 'b') ORDER BY id
+----
+4
+5
+
+query I nosort
+SELECT id FROM null_types WHERE n IN (10, 3) ORDER BY id
+----
+1
+4
+
+query I nosort
+SELECT id FROM null_types WHERE NOT (n IN (10, 3)) ORDER BY id
+----
+3
+5
+
+query I nosort
+SELECT id FROM null_types WHERE n IN (0) ORDER BY id
+----
+5
+
+# 2. A NULL in the list: IN is TRUE or NULL, NOT IN is never TRUE.
+
+query I nosort
+SELECT id FROM null_types WHERE s IN ('a', NULL) ORDER BY id
+----
+1
+
+query I nosort
+SELECT id FROM null_types WHERE s NOT IN ('a', NULL) ORDER BY id
+----
+
+query I nosort
+SELECT id FROM null_types WHERE n NOT IN (1, 2, NULL) ORDER BY id
+----
+
+query I nosort
+SELECT id FROM null_types WHERE NOT (s IN ('a', NULL)) ORDER BY id
+----
+
+# 3. Items that are expressions, not only literals.
+
+query I nosort
+SELECT id FROM null_types WHERE n IN (10, 1 + 2, 5 - 5) ORDER BY id
+----
+1
+4
+5
+
+query I nosort
+SELECT id FROM null_types WHERE n NOT IN (n + 1, 10) ORDER BY id
+----
+3
+4
+5
+
+# 4. Other column types: decimal, and quoted numbers converted as DuckDB does.
+
+query I nosort
+SELECT id FROM null_types WHERE d IN (1.5, 2.5) ORDER BY id
+----
+1
+3
+
+query I nosort
+SELECT id FROM null_types WHERE n IN ('10', '3') ORDER BY id
+----
+1
+4
+
+# 5. In other clauses and combined with other conditions.
+
+query I nosort
+SELECT id FROM null_types WHERE s IN ('a') OR n IN (3, -7) ORDER BY id
+----
+1
+3
+4
+
+query I nosort
+SELECT id FROM null_types WHERE s NOT IN ('a') AND n IN (0, 3) ORDER BY id
+----
+4
+5
+
+query TI nosort
+SELECT s, count(*) FROM null_types GROUP BY s HAVING s IN ('a', 'b', 'B') ORDER BY s
+----
+B
+1
+a
+1
+b
+1
+
+query II nosort
+SELECT id, n IN (10, 3) FROM null_types ORDER BY id
+----
+1
+1
+2
+NULL
+3
+0
+4
+1
+5
+0
+
+query I nosort
+SELECT sum(n) FROM null_types WHERE id IN (1, 4, 99)
+----
+13
+
+# 6. A larger table.
+
+query I nosort
+SELECT count(*) FROM production WHERE region IN ('north', 'south')
+----
+2500
+
+query I nosort
+SELECT count(*) FROM production WHERE region NOT IN ('north', 'south')
+----
+2500
+
+query TI nosort
+SELECT region, count(*) FROM production WHERE id IN (1, 2, 3, 4, 5, 6) GROUP BY region ORDER BY region
+----
+east
+1
+north
+2
+south
+1
+west
+2
+
+# 7. An empty list is a syntax error in DuckDB, and is refused here.
+
+statement error
+SELECT id FROM null_types WHERE s IN ()
