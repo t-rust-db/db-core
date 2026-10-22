@@ -230,6 +230,11 @@ name = "02_groupreduce_key_hashing_adjusted"
 path = "tests/spike/002_arrow_optimization/02_groupreduce_key_hashing_adjusted.rs"
 
 [[test]]
+name = "01_zstd_decoder"
+path = "tests/spike/003_zstd_decoder/01_zstd_decoder.rs"
+required-features = ["storage-column"]
+
+[[test]]
 name = "integration_opcode_granularity"
 path = "tests/integration/opcode_granularity_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream"]
