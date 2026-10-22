@@ -15912,7 +15912,7 @@
   {
     "id": "engine_column_table_tests_random_line_3d4dc5a3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 207,
+    "line": 199,
     "decision": "rng.below(10) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15922,7 +15922,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645",
     "file": "src/engine/column/table/tests.rs",
-    "line": 212,
+    "line": 204,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15932,7 +15932,7 @@
   {
     "id": "engine_column_table_tests_random_line_c832c68e",
     "file": "src/engine/column/table/tests.rs",
-    "line": 215,
+    "line": 207,
     "decision": "rng.below(3) > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15942,7 +15942,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 218,
+    "line": 210,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15952,7 +15952,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 221,
+    "line": 213,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15962,7 +15962,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_4",
     "file": "src/engine/column/table/tests.rs",
-    "line": 224,
+    "line": 216,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15972,7 +15972,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_5",
     "file": "src/engine/column/table/tests.rs",
-    "line": 227,
+    "line": 219,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15982,7 +15982,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_6",
     "file": "src/engine/column/table/tests.rs",
-    "line": 230,
+    "line": 222,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15992,7 +15992,7 @@
   {
     "id": "engine_column_table_tests_random_line_2b0e2d15",
     "file": "src/engine/column/table/tests.rs",
-    "line": 232,
+    "line": 224,
     "decision": "i < switch.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16002,7 +16002,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_7",
     "file": "src/engine/column/table/tests.rs",
-    "line": 238,
+    "line": 230,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16012,7 +16012,7 @@
   {
     "id": "engine_column_table_tests_random_line_2b0e2c42",
     "file": "src/engine/column/table/tests.rs",
-    "line": 240,
+    "line": 232,
     "decision": "i < switch.1",
     "conditions": 1,
     "vectors_required": 2,
@@ -16022,7 +16022,7 @@
   {
     "id": "engine_column_table_tests_random_line_3db240d1",
     "file": "src/engine/column/table/tests.rs",
-    "line": 246,
+    "line": 238,
     "decision": "match rng.below(5) {\n        0 => fields.push(format!(r#\"\"m\":{}\"#, rng.below(9))),\n        1 => fields.push(format!(r#\"\"m\":{}.75\"#, rng.below(9))),\n        2 => fields.push(format!(r#\"\"m\":\"m{}\"\"#, rng.below(9))),\n        3 => fields.push(format!(r#\"\"m\":{}\"#, rng.below(2) == 0)),\n        _ => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16032,7 +16032,7 @@
   {
     "id": "engine_column_table_tests_random_row_9ca45e12",
     "file": "src/engine/column/table/tests.rs",
-    "line": 338,
+    "line": 329,
     "decision": "rng.below(4) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16042,7 +16042,7 @@
   {
     "id": "engine_column_table_tests_append_0a7de807",
     "file": "src/engine/column/table/tests.rs",
-    "line": 414,
+    "line": 405,
     "decision": "match self {\n            Record::Line(l) => w.append(l.as_bytes(), Ack::Memory),\n            Record::Row(r) => w.append_row(r.clone(), Ack::Memory),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16052,7 +16052,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_e6d3ec00",
     "file": "src/engine/column/table/tests.rs",
-    "line": 444,
+    "line": 434,
     "decision": "match kind {\n        Kind::Lines => (&INVARIANCE_QUERIES, [&[], &[\"s\"], &[\"k\", \"n\"]]),\n        Kind::Records => (&RECORD_INVARIANCE_QUERIES, [&[], &[\"kind\"], &[\"u\", \"n\"]]),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16062,7 +16062,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_3c26becb",
     "file": "src/engine/column/table/tests.rs",
-    "line": 454,
+    "line": 444,
     "decision": "match kind {\n                Kind::Lines => Record::Line(random_line(&mut rng, i, switch)),\n                Kind::Records => Record::Row(random_row(&mut rng, i)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16072,7 +16072,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_62fa6506",
     "file": "src/engine/column/table/tests.rs",
-    "line": 468,
+    "line": 458,
     "decision": "tiered",
     "conditions": 1,
     "vectors_required": 2,
@@ -16082,7 +16082,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_89187645",
     "file": "src/engine/column/table/tests.rs",
-    "line": 475,
+    "line": 465,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16092,7 +16092,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_89187645_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 478,
+    "line": 468,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16102,7 +16102,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d2cddf82",
     "file": "src/engine/column/table/tests.rs",
-    "line": 499,
+    "line": 489,
     "decision": "rng.below(8) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16112,7 +16112,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_bc08b02e",
     "file": "src/engine/column/table/tests.rs",
-    "line": 504,
+    "line": 494,
     "decision": "rng.below(seal_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16122,7 +16122,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d4525ddd",
     "file": "src/engine/column/table/tests.rs",
-    "line": 507,
+    "line": 497,
     "decision": "rng.below(flush_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16132,7 +16132,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d4525ddd_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 510,
+    "line": 500,
     "decision": "rng.below(flush_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16142,7 +16142,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_a58ed6fd",
     "file": "src/engine/column/table/tests.rs",
-    "line": 514,
+    "line": 504,
     "decision": "[rng.below(40) == 0, last].contains(&true)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16152,7 +16152,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_62fa6506_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 526,
+    "line": 516,
     "decision": "tiered",
     "conditions": 1,
     "vectors_required": 2,
@@ -16162,7 +16162,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_62fa6506_3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 531,
+    "line": 521,
     "decision": "tiered",
     "conditions": 1,
     "vectors_required": 2,
@@ -34532,7 +34532,7 @@
   {
     "id": "storage_ingest_table_record_tests_value_at_0cea1e54",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 148,
+    "line": 141,
     "decision": "match values {\n        ColumnValues::UInt64(v) => at(v, i).map(RecordValue::UInt),\n        ColumnValues::TimestampNanos(v) => at(v, i).map(RecordValue::Int),\n        ColumnValues::UInt16(v) => at(v, i).map(|x| RecordValue::Int(i64::from(x))),\n        ColumnValues::Utf8(v) => at(v, i).map(RecordValue::Str),\n        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {\n            at(v, i).map(RecordValue::Bytes)\n        }\n        ColumnValues::Decimal(v) => at(v, i).map(RecordValue::Decimal),\n        ColumnValues::Map(v) => at(v, i).map(|m| {\n            RecordValue::Map(\n                m.into_iter()\n                    .map(|(k, v)| (k.to_string(), v.map(|v| v.to_string())))\n                    .collect(),\n            )\n        }),\n        other => panic!(\"not in the test schema: {other:?}\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34542,7 +34542,7 @@
   {
     "id": "storage_ingest_table_record_tests_a_crash_at_every_flush_and_compaction_step_of_a_tiered_table_recovers_every_row_once_b0b5282f",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 317,
+    "line": 307,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -34552,7 +34552,7 @@
   {
     "id": "storage_ingest_table_record_tests_a_crash_at_every_flush_and_compaction_step_of_a_tiered_table_recovers_every_row_once_b0b5282f_2",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 323,
+    "line": 313,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -34562,7 +34562,7 @@
   {
     "id": "storage_ingest_table_record_tests_invalid_schemas_and_sort_keys_are_refused_740f3227",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 500,
+    "line": 486,
     "decision": "let Layout::Tiered(tier) = &mut options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -34572,7 +34572,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_walk_03cfa916",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 126,
+    "line": 115,
     "decision": "e.file_type().unwrap().is_dir()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34582,7 +34582,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_flush_and_compaction_step_recovers_every_record_once_b0b5282f",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 335,
+    "line": 319,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -34592,7 +34592,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_flush_and_compaction_step_recovers_every_record_once_b0b5282f_2",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 341,
+    "line": 325,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -34602,7 +34602,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_spill_and_close_step_recovers_every_record_once_ab360a62",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 621,
+    "line": 597,
     "decision": "closing",
     "conditions": 1,
     "vectors_required": 2,
@@ -34612,7 +34612,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_spill_and_close_step_recovers_every_record_once_ab360a62_2",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 628,
+    "line": 604,
     "decision": "closing",
     "conditions": 1,
     "vectors_required": 2,
@@ -46858,6 +46858,16 @@
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
+  },
+  {
+    "id": "test_clock_set_fe25222e",
+    "file": "src/test_clock.rs",
+    "line": 26,
+    "decision": "match clocks.iter_mut().find(|(id, _)| *id == me) {\n        Some((_, slot)) => *slot = ns,\n        None => clocks.push((me, ns)),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
   },
   {
     "id": "types_from_14b8f658",

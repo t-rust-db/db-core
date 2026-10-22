@@ -20,6 +20,21 @@ env:
   MVL_RUST_REV: "5a5ffd5a8e79298271a65649b3f586ebce2ffb31"
 
 jobs:
+  # The full-size test run (#726). The pull-request `Test` job samples the
+  # Parquet corruption test so that it stays quick; this runs every
+  # mutation. Unlike the dashboards here it is a gate, not a report: a
+  # failure turns the run red.
+  full-size-tests:
+    name: Full-size tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+      - run: make test-full
+
   # MC/DC discharge dashboard over all of src/. `check-mcdc-fresh` (a PR
   # gate) proves the snapshot is current and every tagged test names a real
   # obligation; this reports how many multi-leaf obligations are actually

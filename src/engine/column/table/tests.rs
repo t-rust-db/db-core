@@ -29,22 +29,14 @@ impl TempTable {
     }
 }
 
-/// The tests' clock: shared, so tests that move it hold [`serial`].
-static NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(20_737 * DAY_NS);
-static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn serial() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
+/// The tests' clock: one per test (see `test_clock`), starting at
+/// 2026-10-11.
 fn clock() -> i64 {
-    NOW.load(Ordering::SeqCst)
+    crate::test_clock::now(20_737 * DAY_NS)
 }
 
 fn advance_clock(ns: i64) {
-    NOW.fetch_add(ns, Ordering::SeqCst);
+    crate::test_clock::set(clock() + ns);
 }
 
 fn append(w: &mut TableWriter, lines: &[&str]) {
@@ -279,7 +271,6 @@ const INVARIANCE_QUERIES: [&str; 14] = [
 /// from Parquet -- and a quoted value that is no timestamp is an error.
 #[test]
 fn a_timestamp_column_compares_with_a_quoted_timestamp() {
-    let _guard = serial();
     let t = TempTable::new();
     let mut w = t.writer_with(TableOptions {
         schema: Some(vec![
@@ -440,7 +431,6 @@ fn flush_timing_invariance(kind: Kind) {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(12u64);
-    let _serial = serial();
     let (queries, sort_keys): (&[&str], [&[&str]; 3]) = match kind {
         Kind::Lines => (&INVARIANCE_QUERIES, [&[], &["s"], &["k", "n"]]),
         Kind::Records => (&RECORD_INVARIANCE_QUERIES, [&[], &["kind"], &["u", "n"]]),
@@ -675,9 +665,8 @@ fn take_values_reads_either_column_map() {
 /// non-time predicate cannot match; in arrival order they skip none.
 #[test]
 fn a_sort_key_lets_statistics_skip_row_groups() {
-    let _serial = serial();
     let pruned = |sort_key: &[&str]| {
-        NOW.store(20_737 * DAY_NS, Ordering::SeqCst);
+        crate::test_clock::set(20_737 * DAY_NS);
         let t = TempTable::new();
         let mut w = t.writer_with(TableOptions {
             layout: Layout::Tiered(TierOptions {
@@ -948,7 +937,7 @@ fn snapshot_segments_drive_a_join_as_a_caller_runs_one() {
 /// A tiered table with `sort_key = ["kind"]`, one closed hour per entry of
 /// `hours`, each hour the kinds listed.
 fn hours_of_kinds(t: &TempTable, hours: &[&[&str]], parquet: WriterOptions) -> TableWriter {
-    NOW.store(20_737 * DAY_NS, Ordering::SeqCst);
+    crate::test_clock::set(20_737 * DAY_NS);
     let mut w = t.writer_with(TableOptions {
         layout: Layout::Tiered(TierOptions {
             sort_key: vec!["kind".to_string()],
@@ -978,7 +967,6 @@ fn hours_of_kinds(t: &TempTable, hours: &[&[&str]], parquet: WriterOptions) -> T
 /// manifest range can hold a match.
 #[test]
 fn a_sort_key_filter_opens_only_the_files_whose_range_matches() {
-    let _serial = serial();
     let t = TempTable::new();
     let hours: &[&[&str]] = &[&["a", "b"], &["c", "d"], &["a"], &["x", "y"]];
     let w = hours_of_kinds(&t, hours, WriterOptions::default());
@@ -1024,7 +1012,6 @@ fn a_sort_key_filter_opens_only_the_files_whose_range_matches() {
 /// is dictionary-encoded.
 #[test]
 fn a_dictionary_skips_a_row_group_its_range_does_not() {
-    let _serial = serial();
     let skipped = |parquet: WriterOptions, sql: &str| {
         let t = TempTable::new();
         let w = hours_of_kinds(&t, &[&["a", "c", "a", "c"]], parquet);
@@ -1070,8 +1057,7 @@ fn a_dictionary_skips_a_row_group_its_range_does_not() {
 /// once the column is a string it bounds nothing, as its statistics.
 #[test]
 fn a_key_range_of_a_widened_column_never_skips_a_file() {
-    let _serial = serial();
-    NOW.store(20_737 * DAY_NS, Ordering::SeqCst);
+    crate::test_clock::set(20_737 * DAY_NS);
     let t = TempTable::new();
     let mut w = t.writer_with(TableOptions {
         layout: Layout::Tiered(TierOptions {
