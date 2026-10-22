@@ -1225,12 +1225,24 @@ fn query_result(select: &Select, output: crate::vm::batch::QueryOutput) -> Query
     }
 }
 
-impl Engine for BatchEngine {
-    fn open(path: &Path) -> Result<Self, EngineError> {
-        let data = PosixVfs
-            .open(path)
-            .and_then(|f| f.mmap())
-            .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())))?;
+impl BatchEngine {
+    /// Opens a Parquet file already held in memory as the single table
+    /// `table`: for hosts without a filesystem, such as a browser running
+    /// db-core as WebAssembly. Queries behave as on a file [`Engine::open`]
+    /// maps; [`BatchEngine::path`] is `table`.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorKind::Open`] when `bytes` is not a readable Parquet file.
+    pub fn from_bytes(table: &str, bytes: impl Into<Arc<[u8]>>) -> Result<Self, EngineError> {
+        Self::from_region(
+            PathBuf::from(table),
+            table.to_string(),
+            MmapRegion::Owned(bytes.into()),
+        )
+    }
+
+    fn from_region(path: PathBuf, table: String, data: MmapRegion) -> Result<Self, EngineError> {
         let (leaves, timestamps, num_rows, num_row_groups) = {
             let file =
                 ParquetFile::open(&data).map_err(|e| EngineError::new(ErrorKind::Open, e))?;
@@ -1241,13 +1253,8 @@ impl Engine for BatchEngine {
                 file.num_row_groups(),
             )
         };
-        let table = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("data")
-            .to_string();
         Ok(BatchEngine {
-            path: path.to_path_buf(),
+            path,
             data,
             table,
             leaves,
@@ -1255,6 +1262,21 @@ impl Engine for BatchEngine {
             num_rows,
             num_row_groups,
         })
+    }
+}
+
+impl Engine for BatchEngine {
+    fn open(path: &Path) -> Result<Self, EngineError> {
+        let data = PosixVfs
+            .open(path)
+            .and_then(|f| f.mmap())
+            .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())))?;
+        let table = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("data")
+            .to_string();
+        Self::from_region(path.to_path_buf(), table, data)
     }
 
     fn mode(&self) -> Mode {
@@ -1789,6 +1811,22 @@ mod tests {
         assert_eq!(rows(&mut engine, "SELECT sum(x) FROM nested_map"), ["100"]);
         let err = engine.run_query("SELECT key FROM nested_map").unwrap_err();
         assert!(err.to_string().contains("unknown column: key"), "{err}");
+    }
+
+    /// A file handed over as bytes answers as the same file opened from disk.
+    #[test]
+    fn from_bytes_answers_as_the_mapped_file() {
+        let path = Path::new("tests/fixtures/parquet/production.parquet");
+        let bytes = std::fs::read(path).unwrap();
+        let sql = "SELECT count(*), sum(amount) FROM production WHERE id > 100";
+        let mut mapped = BatchEngine::open(path).unwrap();
+        let mut owned = BatchEngine::from_bytes("production", bytes).unwrap();
+        assert_eq!(owned.table_name(), "production");
+        assert_eq!(
+            owned.run_query(sql).unwrap().rows,
+            mapped.run_query(sql).unwrap().rows
+        );
+        assert!(BatchEngine::from_bytes("x", vec![0u8; 16]).is_err());
     }
 
     /// End to end over the 3-row-group fixture whose `id`/`amount` are
