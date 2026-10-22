@@ -1,0 +1,172 @@
+# #717: BETWEEN / NOT BETWEEN. Table null_types: five rows, NULLs in every
+# typed column, mixed-case and empty text, a decimal and a timestamp column.
+# Expected results come from DuckDB (make refresh-column-sqllogictest).
+
+# 1. Inclusive bounds, and the negation (a NULL subject is neither in nor out).
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN 0 AND 10 ORDER BY id
+----
+1
+4
+5
+
+query I nosort
+SELECT id FROM null_types WHERE n NOT BETWEEN 0 AND 10 ORDER BY id
+----
+3
+
+query I nosort
+SELECT id FROM null_types WHERE NOT (n BETWEEN 0 AND 10) ORDER BY id
+----
+3
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN -7 AND -7 ORDER BY id
+----
+3
+
+# 2. Reversed bounds match nothing; NOT BETWEEN matches every non-NULL.
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN 10 AND 0 ORDER BY id
+----
+
+query I nosort
+SELECT id FROM null_types WHERE n NOT BETWEEN 10 AND 0 ORDER BY id
+----
+1
+3
+4
+5
+
+# 3. A NULL bound: BETWEEN is never TRUE; NOT BETWEEN is TRUE when the
+# other bound already decides.
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN NULL AND 5 ORDER BY id
+----
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN 0 AND NULL ORDER BY id
+----
+
+query I nosort
+SELECT id FROM null_types WHERE n NOT BETWEEN NULL AND 3 ORDER BY id
+----
+1
+
+query I nosort
+SELECT id FROM null_types WHERE n NOT BETWEEN 0 AND NULL ORDER BY id
+----
+3
+
+# 4. Other types: decimal, text, quoted numbers converted as DuckDB does.
+
+query I nosort
+SELECT id FROM null_types WHERE d BETWEEN 1 AND 2 ORDER BY id
+----
+1
+
+query I nosort
+SELECT id FROM null_types WHERE d BETWEEN 1.5 AND 2.5 ORDER BY id
+----
+1
+3
+
+query I nosort
+SELECT id FROM null_types WHERE s BETWEEN 'a' AND 'b' ORDER BY id
+----
+1
+3
+
+query I nosort
+SELECT id FROM null_types WHERE s NOT BETWEEN 'a' AND 'b' ORDER BY id
+----
+4
+5
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN '0' AND '5' ORDER BY id
+----
+4
+5
+
+# 5. Bounds and subject that are expressions.
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN 1 + 1 AND 5 * 2 ORDER BY id
+----
+1
+4
+
+query I nosort
+SELECT id FROM null_types WHERE n * 2 BETWEEN 0 AND 6 ORDER BY id
+----
+4
+5
+
+# 6. In other clauses and combined with other conditions.
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN 0 AND 10 AND s IN ('a', 'B') ORDER BY id
+----
+1
+4
+
+query I nosort
+SELECT id FROM null_types WHERE n BETWEEN 5 AND 10 OR d BETWEEN 2 AND 3 ORDER BY id
+----
+1
+3
+
+query TI nosort
+SELECT s, count(*) FROM null_types GROUP BY s HAVING s BETWEEN 'a' AND 'c' ORDER BY s
+----
+a
+1
+b
+1
+
+query II nosort
+SELECT id, n BETWEEN 0 AND 10 FROM null_types ORDER BY id
+----
+1
+1
+2
+NULL
+3
+0
+4
+1
+5
+1
+
+query I nosort
+SELECT sum(n) FROM null_types WHERE n BETWEEN 0 AND 10
+----
+13
+
+# 7. A larger table.
+
+query I nosort
+SELECT count(*) FROM production WHERE id BETWEEN 100 AND 199
+----
+100
+
+query I nosort
+SELECT count(*) FROM production WHERE id NOT BETWEEN 100 AND 4999
+----
+100
+
+query TI nosort
+SELECT region, count(*) FROM production WHERE id BETWEEN 1 AND 6 GROUP BY region ORDER BY region
+----
+east
+1
+north
+2
+south
+1
+west
+2
