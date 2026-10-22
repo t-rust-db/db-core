@@ -274,10 +274,15 @@ fn timestamp_units(text: &str, per_second: i64) -> Option<i64> {
     if !fraction.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    let seconds = match crate::functions::call(
-        "unixepoch",
-        &[crate::value::Value::Text(whole.to_string().into())],
-    ) {
+    // A literal names its own instant, so the clock is read only for
+    // `'now'`: a host without one (`wasm32-unknown-unknown`) panics on it.
+    let arg = [crate::value::Value::Text(whole.to_string().into())];
+    let parsed = if whole.eq_ignore_ascii_case("now") {
+        crate::functions::call("unixepoch", &arg)
+    } else {
+        crate::functions::call_at("unixepoch", &arg, 0)
+    };
+    let seconds = match parsed {
         Ok(crate::value::Value::Integer(s)) => s,
         _ => return None,
     };
