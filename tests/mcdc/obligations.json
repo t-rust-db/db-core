@@ -34842,7 +34842,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_1457a876",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 624,
+    "line": 625,
     "decision": "value > 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -34852,7 +34852,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_61296e5a",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 629,
+    "line": 630,
     "decision": "lit_len == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -34862,7 +34862,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_4b284295",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 634,
+    "line": 635,
     "decision": "match index {\n        0 => return Ok(reps[0]),\n        1 => reps[1],\n        2 => reps[2],\n        _ => reps[0]\n            .checked_sub(1)\n            .ok_or_else(|| corrupt(\"repeat offset underflow\"))?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34872,7 +34872,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_c3207d60",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 642,
+    "line": 643,
     "decision": "index == 1",
     "conditions": 1,
     "vectors_required": 2,

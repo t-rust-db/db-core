@@ -620,6 +620,7 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
 /// The match offset an offset value stands for, updating the repeat
 /// offsets (RFC 8878 §3.1.1.5). Values 1-3 are repeat offsets, shifted by
 /// one when the sequence has no literals; larger values are `value - 3`.
+#[inline(always)]
 pub(super) fn resolve_offset(reps: &mut [usize; 3], value: usize, lit_len: usize) -> Result<usize> {
     if value > 3 {
         let offset = value.wrapping_sub(3);
