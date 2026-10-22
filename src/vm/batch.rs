@@ -4100,6 +4100,93 @@ impl Vm {
         Ok(None)
     }
 
+    /// Fast path for [`Opcode::Map`]'s `LIKE`/`ILIKE`/`GLOB` (#691) when
+    /// the text operand `a` is a typed [`Column::Str`] or [`Column::Dict`]
+    /// and the pattern `b` is one string literal (a `LoadConst`, read as
+    /// is, or a register whose every value is the same string). The
+    /// pattern is compiled once ([`crate::vm::like`]) and matched on each
+    /// row's bytes in the column's own buffer: no `Value` or `String` per
+    /// row. A dictionary column matches each distinct value once. `None`
+    /// otherwise; the caller then takes the general elementwise path,
+    /// which gives the same answers.
+    fn typed_like(
+        &mut self,
+        op: MapOp,
+        a: usize,
+        b: usize,
+        opcode: &'static str,
+    ) -> Result<Option<Vec<Value>>> {
+        use crate::vm::like::{Dialect, Matcher};
+        let (dialect, negated, nocase) = match op {
+            MapOp::Like { negated, nocase } => (Dialect::Like, negated, nocase),
+            MapOp::Glob { negated } => (Dialect::Glob, negated, false),
+            _ => return Ok(None),
+        };
+        // An `Arc` clone, as in `dict_literal_compare`: the pattern lookup
+        // below needs `&mut self`.
+        let Some(column) = self.typed_registers.get(&a).cloned() else {
+            return Ok(None);
+        };
+        if !matches!(column.as_ref(), Column::Str { .. } | Column::Dict { .. }) {
+            return Ok(None);
+        }
+        let pattern = if let Some(value) = self.const_value(b) {
+            match value {
+                Value::Str(s) => s.to_string(),
+                _ => return Ok(None),
+            }
+        } else {
+            self.ensure_materialized(b);
+            let other = self.reg(b, opcode)?;
+            if other.len() != column.len() {
+                return Ok(None);
+            }
+            let Some(literal) = single_str_literal(other) else {
+                return Ok(None);
+            };
+            literal.to_string()
+        };
+        let matcher = Matcher::new(&pattern, dialect, nocase);
+        let mut buf = String::new();
+        let result = match column.as_ref() {
+            Column::Str {
+                offsets,
+                data,
+                valid,
+            } => (0..column.len())
+                .map(|i| {
+                    let text = offsets
+                        .get(i)
+                        .zip(offsets.get(i.saturating_add(1)))
+                        .and_then(|(&lo, &hi)| data.get(lo as usize..hi as usize));
+                    match text {
+                        Some(text) if valid.get(i) => {
+                            Value::Bool(matcher.matches(text, &mut buf) != negated)
+                        }
+                        _ => Value::Null,
+                    }
+                })
+                .collect(),
+            Column::Dict {
+                dict,
+                indices,
+                valid,
+            } => {
+                let hits: Vec<bool> = dict.iter().map(|s| matcher.matches(s, &mut buf)).collect();
+                indices
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &code)| match hits.get(code as usize) {
+                        Some(&hit) if valid.get(i) => Value::Bool(hit != negated),
+                        _ => Value::Null,
+                    })
+                    .collect()
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(result))
+    }
+
     /// Fast path for [`Opcode::Map`]'s `Add`/`Sub`/`Mul`/`Div` when
     /// *both* operands are typed `Int`/`Float` columns (#130 child 4
     /// slice 2, db-core#431): computes over the packed buffers, honoring
@@ -4295,6 +4382,9 @@ impl Vm {
                 // (compacted) first rather than taught to this opcode.
                 self.resolve_selection(opcode)?;
                 if let Some(result) = self.dict_literal_compare(*op, *a, *b, opcode)? {
+                    self.registers.insert(*dst, Arc::new(result));
+                    self.typed_registers.remove(dst);
+                } else if let Some(result) = self.typed_like(*op, *a, *b, opcode)? {
                     self.registers.insert(*dst, Arc::new(result));
                     self.typed_registers.remove(dst);
                 } else if let Some(column) = self.typed_arithmetic(*op, *a, *b, opcode)? {
@@ -6591,6 +6681,196 @@ mod tests {
             vm.register(2).unwrap(),
             &[Value::Bool(true), Value::Bool(false), Value::Bool(true)]
         );
+    }
+
+    /// #691: runs `text <op> pattern` over the batch's `text` column and
+    /// returns the result register, and whether the text column was ever
+    /// materialized as `Value`s.
+    fn like_over(batch: &Batch, op: MapOp, pattern: &str) -> (Vec<Value>, bool) {
+        let mut vm = Vm::new();
+        vm.execute(
+            batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "text".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Str(pattern.to_string().into()),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        (
+            vm.register(2).unwrap().to_vec(),
+            vm.registers.contains_key(&0),
+        )
+    }
+
+    #[test]
+    fn like_over_a_typed_string_column_matches_in_place_as_the_general_path_does() {
+        let values = vec![
+            Value::Str("request 1 from host 42".into()),
+            Value::Null,
+            Value::Str("Request 2 from HOST 7".into()),
+            Value::Str("".into()),
+            Value::Str("abc".into()),
+        ];
+        let typed = Batch::new(5).with_typed_column("text", Column::from(values.clone()));
+        let plain = Batch::new(5).with_column("text", values);
+        let like = |negated, nocase| MapOp::Like { negated, nocase };
+        for (op, pattern) in [
+            (like(false, false), "%host 42%"),
+            (like(true, false), "%host%"),
+            (like(false, true), "%HOST%"),
+            (like(false, false), "a_c"),
+            (like(false, false), ""),
+            (MapOp::Glob { negated: false }, "*from*"),
+            (MapOp::Glob { negated: true }, "a?c"),
+        ] {
+            let (fast, materialized) = like_over(&typed, op, pattern);
+            let (general, _) = like_over(&plain, op, pattern);
+            assert_eq!(fast, general, "{op:?} {pattern:?}");
+            assert!(
+                !materialized,
+                "{op:?} {pattern:?}: the text column stays typed"
+            );
+        }
+        let (fast, _) = like_over(&typed, like(false, false), "%host 42%");
+        assert_eq!(
+            fast,
+            [
+                Value::Bool(true),
+                Value::Null,
+                Value::Bool(false),
+                Value::Bool(false),
+                Value::Bool(false)
+            ]
+        );
+    }
+
+    #[test]
+    fn like_over_a_dictionary_column_matches_each_distinct_value_once() {
+        let dict = Column::Dict {
+            dict: vec!["login".into(), "logout".into(), "search".into()],
+            indices: vec![0, 1, 2, 0, 0, 1],
+            valid: crate::vm::column::Bitmap::from_bools(
+                [true, true, true, false, true, true].into_iter(),
+            ),
+        };
+        let values: Vec<Value> = (0..6).map(|i| dict.get(i)).collect();
+        let typed = Batch::new(6).with_typed_column("text", dict);
+        let plain = Batch::new(6).with_column("text", values);
+        for pattern in ["log%", "%out", "%a%", "x"] {
+            let op = MapOp::Like {
+                negated: false,
+                nocase: false,
+            };
+            let (fast, materialized) = like_over(&typed, op, pattern);
+            assert_eq!(fast, like_over(&plain, op, pattern).0, "{pattern:?}");
+            assert!(!materialized);
+        }
+        let (fast, _) = like_over(
+            &typed,
+            MapOp::Like {
+                negated: false,
+                nocase: false,
+            },
+            "log%",
+        );
+        assert_eq!(
+            fast,
+            [
+                Value::Bool(true),
+                Value::Bool(true),
+                Value::Bool(false),
+                Value::Null,
+                Value::Bool(true),
+                Value::Bool(true)
+            ]
+        );
+    }
+
+    #[test]
+    fn like_with_a_non_string_or_per_row_pattern_takes_the_general_path() {
+        let values = vec![Value::Str("ab".into()), Value::Str("cd".into())];
+        let typed = Batch::new(2).with_typed_column("text", Column::from(values));
+        let (result, materialized) = like_over(
+            &typed,
+            MapOp::Like {
+                negated: false,
+                nocase: false,
+            },
+            "a%",
+        );
+        assert_eq!(result, [Value::Bool(true), Value::Bool(false)]);
+        assert!(!materialized);
+        // A pattern that differs per row is no literal: the general path.
+        let batch = typed.with_column(
+            "pattern",
+            vec![Value::Str("a%".into()), Value::Str("c%".into())],
+        );
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "text".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "pattern".into(),
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Like {
+                        negated: false,
+                        nocase: false,
+                    },
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Bool(true), Value::Bool(true)]
+        );
+        // A NULL pattern is NULL for every row.
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "text".into(),
+                },
+                Opcode::LoadConst {
+                    reg: 1,
+                    value: Value::Null,
+                },
+                Opcode::Map {
+                    dst: 2,
+                    op: MapOp::Like {
+                        negated: false,
+                        nocase: false,
+                    },
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(vm.register(2).unwrap(), &[Value::Null, Value::Null]);
     }
 
     #[test]
