@@ -301,8 +301,10 @@ pub(super) fn decode(frame: &[u8], size: usize) -> Result<Vec<u8>> {
             break;
         }
     }
-    if checksum && frame.get(pos..pos.saturating_add(4)).is_none() {
-        return Err(corrupt("missing content checksum"));
+    if checksum {
+        frame
+            .get(pos..pos.saturating_add(4))
+            .ok_or_else(|| corrupt("missing content checksum"))?;
     }
     if out.op != size {
         return Err(ZstdError::SizeMismatch {
@@ -524,11 +526,12 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
         let mle = ml.entry(ml_state)?;
         let ofe = of.entry(of_state)?;
         // Extra bits come in this order: offset, match length, literals.
+        // An offset code is at most 28: tables are read with that bound.
         let of_code = u32::from(ofe.symbol);
-        if of_code > 31 {
-            return Err(corrupt("offset code too large"));
-        }
-        let offset_value = state_of((1u64 << of_code).wrapping_add(br.read(stream, of_code)));
+        let offset_value = state_of(
+            1u64.wrapping_shl(of_code)
+                .wrapping_add(br.read(stream, of_code)),
+        );
         let &(ml_base, ml_bits) = ML_CODES
             .get(usize::from(mle.symbol))
             .ok_or_else(|| corrupt("match-length code too large"))?;
@@ -544,7 +547,8 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
         out.room(lit_len.saturating_add(match_len))?;
         out.wild_copy(literals, lit, lit_len)?;
         lit = lit.wrapping_add(lit_len);
-        if offset == 0 || offset > out.op {
+        // 1..=op reaches back into the output; 0 wraps past it too.
+        if offset.wrapping_sub(1) >= out.op {
             return Err(corrupt("match offset before the output"));
         }
         out.copy_match(offset, match_len)?;
@@ -569,7 +573,7 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
 /// The match offset an offset value stands for, updating the repeat
 /// offsets (RFC 8878 §3.1.1.5). Values 1-3 are repeat offsets, shifted by
 /// one when the sequence has no literals; larger values are `value - 3`.
-fn resolve_offset(reps: &mut [usize; 3], value: usize, lit_len: usize) -> Result<usize> {
+pub(super) fn resolve_offset(reps: &mut [usize; 3], value: usize, lit_len: usize) -> Result<usize> {
     if value > 3 {
         let offset = value.wrapping_sub(3);
         *reps = [offset, reps[0], reps[1]];

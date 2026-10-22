@@ -123,7 +123,10 @@ impl Table {
         let mut threshold: i32 = 1i32 << log;
         let mut nb_bits = log.wrapping_add(1);
         let mut norm: Vec<i16> = Vec::new();
-        while remaining > 1 && norm.len() <= max_symbol {
+        while remaining > 1 {
+            if norm.len() > max_symbol {
+                return Err(corrupt("FSE table describes too many symbols"));
+            }
             let max = threshold
                 .wrapping_mul(2)
                 .wrapping_sub(1)
@@ -150,17 +153,24 @@ impl Table {
                     let repeat = br.peek(data, 2);
                     br.skip(2);
                     norm.extend(std::iter::repeat_n(0, usize::try_from(repeat).unwrap_or(0)));
-                    if repeat != 3 || norm.len() > max_symbol {
+                    if repeat != 3 {
                         break;
+                    }
+                    if norm.len() > max_symbol {
+                        return Err(corrupt("FSE table describes too many symbols"));
                     }
                 }
             }
-            while remaining < threshold && threshold > 1 {
+            // A count's encoding caps it at `remaining - 1`, so `remaining`
+            // stays >= 1 and this stops by `threshold` 1.
+            while remaining < threshold {
                 nb_bits = nb_bits.wrapping_sub(1);
                 threshold >>= 1;
             }
         }
-        if remaining != 1 || norm.len() > max_symbol.saturating_add(1) {
+        // A count is only added while there are symbols left, so a table
+        // that sums correctly also has at most `max_symbol + 1` of them.
+        if remaining != 1 {
             return Err(corrupt("bad FSE table description"));
         }
         if br.bytes_used() > data.len() {

@@ -48,9 +48,6 @@ impl Table {
             return Err(corrupt("Huffman weights do not complete a tree"));
         }
         weights.push(u8::try_from(left.trailing_zeros().wrapping_add(1)).unwrap_or(0));
-        if weights.len() > 256 {
-            return Err(corrupt("too many Huffman symbols"));
-        }
         // Codes are handed out by increasing weight, then by symbol.
         let mut rank_start = [0u32; MAX_BITS as usize + 2];
         let mut next = 0u32;
@@ -137,6 +134,11 @@ fn fse_weights(data: &[u8], size: usize) -> Result<(Vec<u8>, usize)> {
         if weights.len() > 255 {
             return Err(corrupt("too many Huffman weights"));
         }
+    }
+    // The last iteration can add two weights past the loop's bound; the
+    // implied last weight then makes at most 256 symbols.
+    if weights.len() > 255 {
+        return Err(corrupt("too many Huffman weights"));
     }
     Ok((weights, size.saturating_add(1)))
 }

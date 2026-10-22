@@ -18,6 +18,8 @@
 //! dictionary ID is refused: Parquet pages carry none.
 
 mod bits;
+#[cfg(test)]
+mod decoder_tests;
 mod frame;
 mod fse;
 mod huffman;
