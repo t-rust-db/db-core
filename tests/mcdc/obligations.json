@@ -11412,7 +11412,7 @@
   {
     "id": "codegen_row_select_range_scan_plan_conjunct_seek_54fe59bc",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1728,
+    "line": 1731,
     "decision": "eq.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -11422,7 +11422,7 @@
   {
     "id": "codegen_row_select_range_scan_plan_conjunct_seek_49c4ae76",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1732,
+    "line": 1738,
     "decision": "!range_seek_wins(\n                schema,\n                index_position,\n                bound(lower),\n                bound(upper),\n                covering,\n                stats,\n            )",
     "conditions": 1,
     "vectors_required": 2,
@@ -11432,7 +11432,7 @@
   {
     "id": "codegen_row_select_range_scan_plan_conjunct_seek_c6836d5c",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1746,
+    "line": 1752,
     "decision": "better",
     "conditions": 1,
     "vectors_required": 2,
@@ -11442,7 +11442,7 @@
   {
     "id": "codegen_row_select_range_scan_bound_inclusive_af305b98",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1764,
+    "line": 1770,
     "decision": "match terms.get(i) {\n        Some((_, _, _, Term::Lower(inclusive) | Term::Upper(inclusive))) => *inclusive,\n        _ => true,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11452,7 +11452,7 @@
   {
     "id": "codegen_row_select_range_scan_conjunct_seek_detail_f217a4df",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1797,
+    "line": 1803,
     "decision": "let (Some(col), Some(_)) = (range_col, plan.lower)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11462,7 +11462,7 @@
   {
     "id": "codegen_row_select_range_scan_conjunct_seek_detail_72a85cf5",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1800,
+    "line": 1806,
     "decision": "let (Some(col), Some(_)) = (range_col, plan.upper)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11472,7 +11472,7 @@
   {
     "id": "codegen_row_select_range_scan_compile_conjunct_keys_c2cb3a06",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1865,
+    "line": 1871,
     "decision": "len == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -11482,7 +11482,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_conjunct_index_walk_b530ca4c",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1902,
+    "line": 1908,
     "decision": "keys.lo_len == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -11492,7 +11492,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_conjunct_index_walk_29a68938",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1915,
+    "line": 1921,
     "decision": "plan.lower.is_some_and(|(_, inclusive)| !inclusive)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11502,7 +11502,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_conjunct_index_walk_f89a3060",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1936,
+    "line": 1942,
     "decision": "keys.hi_len > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -11512,7 +11512,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_conjunct_index_walk_cac36572",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1937,
+    "line": 1943,
     "decision": "plan.upper.is_some_and(|(_, inclusive)| !inclusive)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11522,7 +11522,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_conjunct_index_walk_9dd17412",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1951,
+    "line": 1957,
     "decision": "let (Some(_), None) = (plan.upper, plan.lower)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11532,7 +11532,7 @@
   {
     "id": "codegen_row_select_range_scan_try_compile_conjunct_seek_4a09e420",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 1989,
+    "line": 1995,
     "decision": "matches!(select.distinct, Some(Distinctness::Distinct))",
     "conditions": 1,
     "vectors_required": 2,
@@ -11542,7 +11542,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_bounded_index_walk_a6f6ca28",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 2056,
+    "line": 2062,
     "decision": "hi_reg != lo_reg",
     "conditions": 1,
     "vectors_required": 2,
@@ -11552,7 +11552,7 @@
   {
     "id": "codegen_row_select_range_scan_emit_upper_bound_index_walk_7fb39176",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 2113,
+    "line": 2119,
     "decision": "inclusive",
     "conditions": 1,
     "vectors_required": 2,
@@ -11562,7 +11562,7 @@
   {
     "id": "codegen_row_select_range_scan_select_96ddc009",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 2160,
+    "line": 2166,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"expected {sql:?} to parse as a SELECT, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11572,7 +11572,7 @@
   {
     "id": "codegen_row_select_range_scan_update_9195b174",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 2167,
+    "line": 2173,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(u) => *u,\n            other => panic!(\"expected {sql:?} to parse as an UPDATE, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11582,7 +11582,7 @@
   {
     "id": "codegen_row_select_range_scan_schema_cfa672e9",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 2197,
+    "line": 2203,
     "decision": "indexed",
     "conditions": 1,
     "vectors_required": 2,
@@ -11592,7 +11592,7 @@
   {
     "id": "codegen_row_select_range_scan_schema_3534660c",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 2219,
+    "line": 2225,
     "decision": "alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -11602,7 +11602,7 @@
   {
     "id": "codegen_row_select_range_scan_upper_walks_e00e9d2c",
     "file": "src/codegen/row/select/range_scan.rs",
-    "line": 2426,
+    "line": 2432,
     "decision": "exclusive",
     "conditions": 1,
     "vectors_required": 2,

@@ -224,6 +224,15 @@ fn terms_the_index_does_not_serve_are_a_residual_filter() {
 }
 
 #[test]
+fn a_one_sided_range_with_a_residual_keeps_its_scan() {
+    let (_db, mut e) = seeded("one-sided");
+    for pred in ["n > 1 AND pad = 'z'", "n < 3 AND pad = 'z'"] {
+        assert_eq!(plan(&e, pred), "SCAN ct", "plan of {pred}");
+        assert_eq!(ids(&mut e, "ct", pred), ids(&mut e, "cm", pred), "{pred}");
+    }
+}
+
+#[test]
 fn contradictory_and_null_terms_match_nothing_like_a_scan() {
     let (_db, mut e) = seeded("empty");
     for pred in [

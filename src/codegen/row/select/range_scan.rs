@@ -1725,7 +1725,13 @@ fn plan_conjunct_seek(
         {
             continue;
         }
+        // Without an equality prefix only a closed range narrows enough to
+        // beat the scan: a one-sided range walks about a quarter of the
+        // index and fetches each row from the table.
         if eq.is_empty() {
+            let (Some(_), Some(_)) = (lower, upper) else {
+                continue;
+            };
             let bound = |side: Option<(usize, bool)>| {
                 side.and_then(|(i, inclusive)| terms.get(i).map(|t| (t.2, inclusive)))
             };
