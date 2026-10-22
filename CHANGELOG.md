@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [Unreleased]
+
+### Changed
+
+- **`LIKE`, `ILIKE` and `GLOB` over a string column compile their pattern once** (#691). A constant pattern whose only wildcard is "any run" (`%`, or `*` for `GLOB`) becomes literal segments, matched with `starts_with`, `find` and `ends_with` on each row's bytes in the typed column's own buffer: no `Value`, `String` or `Vec<char>` per row, and no backtracking. A dictionary column matches each distinct value once. Patterns with `_`, `?` or `[...]`, and non-literal patterns, take the general matcher as before. A full-scan free-text search over 2M rows (t-rust-db/examples `parquet-codecs`): `count(*) … LIKE '%host 42%'` 95 -> 24 ms (DuckDB 22 ms), and with a projection and `ORDER BY` 110 -> 40 ms (DuckDB 22 ms).
+
 ## [0.155.0] - 2026-10-21
 
 ### Added
