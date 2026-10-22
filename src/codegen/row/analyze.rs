@@ -25,8 +25,13 @@ use crate::vm::row::{AnalyzeIndexTarget, AnalyzeTarget, Instruction, Opcode, Pro
 /// this bakes root pages/names in at codegen time instead of a
 /// cursor-driven sequence.
 pub fn compile_analyze(targets: &[&TableSchema]) -> Result<Program, CodegenError> {
+    // A `WITHOUT ROWID` table is skipped (#722): the statistics walk reads
+    // a table b-tree, which its index b-tree is not, and failing the whole
+    // `ANALYZE` over one such table would leave every other table
+    // unanalyzed. Without statistics the planner just scans it.
     let targets: Vec<AnalyzeTarget> = targets
         .iter()
+        .filter(|schema| !schema.without_rowid)
         .map(|schema| AnalyzeTarget {
             table_name: schema.name.clone(),
             table_root_page: schema.root_page,

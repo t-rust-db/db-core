@@ -544,10 +544,11 @@ pub fn compile_statement(
                             }
                             .into());
                         }
+                        let readable = readable_catalog(schemas);
                         let mut joined_schemas =
-                            vec![resolve_from_table_schema(&from.first, schemas)?];
+                            vec![resolve_from_table_schema(&from.first, &readable)?];
                         for join in &from.joins {
-                            joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);
+                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);
                         }
                         insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
                         Some(joined_schemas)
@@ -561,14 +562,22 @@ pub fn compile_statement(
         "UPDATE" => match parse_update(sql) {
             ParseOutcome::Accepted(update) => {
                 let schema = find_schema(&update.table)?;
-                Ok(compile_update_with_catalog(&update, schema, schemas)?)
+                Ok(compile_update_with_catalog(
+                    &update,
+                    schema,
+                    &readable_catalog(schemas),
+                )?)
             }
             other => Err(parse_error(other)),
         },
         "DELETE" => match parse_delete(sql) {
             ParseOutcome::Accepted(delete) => {
                 let schema = find_schema(&delete.table)?;
-                Ok(compile_delete_with_catalog(&delete, schema, schemas)?)
+                Ok(compile_delete_with_catalog(
+                    &delete,
+                    schema,
+                    &readable_catalog(schemas),
+                )?)
             }
             other => Err(parse_error(other)),
         },
@@ -601,6 +610,34 @@ fn rewrite_select(select: &Select, views: &[ViewSchema]) -> Result<Select, Dispa
     Ok(expanded)
 }
 
+/// The catalog a statement *reads* tables through (#722). A `WITHOUT
+/// ROWID` table's secondary indexes end in its key columns, not a rowid,
+/// so none of the index walks the planner has -- they all fetch the row
+/// by rowid afterwards -- can run on them. Those tables go in without
+/// their indexes, and are scanned. `DROP TABLE` and the other DDL keep
+/// the full catalog, so the index pages are still freed.
+fn readable_catalog(schemas: &[TableSchema]) -> std::borrow::Cow<'_, [TableSchema]> {
+    if !schemas
+        .iter()
+        .any(|s| s.without_rowid && !s.indexes.is_empty())
+    {
+        return std::borrow::Cow::Borrowed(schemas);
+    }
+    std::borrow::Cow::Owned(
+        schemas
+            .iter()
+            .map(|s| TableSchema {
+                indexes: if s.without_rowid {
+                    Vec::new()
+                } else {
+                    s.indexes.clone()
+                },
+                ..s.clone()
+            })
+            .collect(),
+    )
+}
+
 /// Compiles one `SELECT` against `schemas`/`views`, choosing the
 /// single-table, joined, or compound entry point exactly as sqlite-rs's
 /// CLI does. `stats_by_table` carries `ANALYZE` statistics per table
@@ -613,6 +650,8 @@ pub fn compile_select_statement(
     stats_by_table: &HashMap<String, Stats>,
 ) -> Result<Program, DispatchError> {
     let select = rewrite_select(select, views)?;
+    let readable = readable_catalog(schemas);
+    let schemas: &[TableSchema] = &readable;
     let resolve_table = |table_ref: &TableRef| resolve_from_table_schema(table_ref, schemas);
 
     let Some(from) = &select.from else {
@@ -656,6 +695,8 @@ pub fn explain_select_statement(
     stats_by_table: &HashMap<String, Stats>,
 ) -> Result<Vec<EqpRow>, DispatchError> {
     let select = rewrite_select(select, views)?;
+    let readable = readable_catalog(schemas);
+    let schemas: &[TableSchema] = &readable;
     let Some(from) = &select.from else {
         return Err(DispatchError::NoFromClause);
     };
