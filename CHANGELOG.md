@@ -8,6 +8,7 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 ### Added
 
+- **Batch queries run on a host without threads.** The morsel pools (`run_morsels`, `run_morsels_fold`, `run_morsels_ordered`) run on the calling thread when they would get one worker, instead of spawning one. `wasm32-unknown-unknown` reports no parallelism and cannot spawn, so a query there panicked (`unwrap_failed` in `Scope::spawn`); a one-core host also skips the spawn.
 - **`BatchEngine::from_bytes`**: opens a Parquet file already held in memory as a single table, for hosts without a filesystem (a browser running db-core as `wasm32-unknown-unknown`). `Engine::open` now maps the file and goes through the same constructor, so both answer alike.
 
 ## [0.157.0] - 2026-10-22
