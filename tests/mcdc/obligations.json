@@ -25450,9 +25450,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_lists_c01a2146",
+    "id": "parser_column_lower_in_between_c01a2146",
     "file": "src/parser/column.rs",
-    "line": 264,
+    "line": 265,
     "decision": "let Some(e) = &mut select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -25460,9 +25460,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_lists_2df8cbb9",
+    "id": "parser_column_lower_in_between_2df8cbb9",
     "file": "src/parser/column.rs",
-    "line": 268,
+    "line": 269,
     "decision": "let crate::parser::ast::ResultColumn::Expr { expr, .. } = col",
     "conditions": 1,
     "vectors_required": 2,
@@ -25470,9 +25470,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_lists_2a989e4a",
+    "id": "parser_column_lower_in_between_2a989e4a",
     "file": "src/parser/column.rs",
-    "line": 275,
+    "line": 276,
     "decision": "let Some(e) = &mut select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -25480,9 +25480,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_lists_e529865c",
+    "id": "parser_column_lower_in_between_e529865c",
     "file": "src/parser/column.rs",
-    "line": 281,
+    "line": 282,
     "decision": "let Some(from_clause) = select.from.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25490,9 +25490,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_lists_dbd48fea",
+    "id": "parser_column_lower_in_between_dbd48fea",
     "file": "src/parser/column.rs",
-    "line": 283,
+    "line": 284,
     "decision": "let Some(JoinConstraint::On(e)) = &mut j.constraint",
     "conditions": 1,
     "vectors_required": 2,
@@ -25500,19 +25500,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_ea504ea5",
+    "id": "parser_column_lower_in_between_expr_083c6136",
     "file": "src/parser/column.rs",
-    "line": 293,
-    "decision": "match &mut expr.kind {\n        ExprKind::FunctionCall { args, tail, .. } => {\n            if let FunctionArgs::List(list) = args {\n                for e in list {\n                    lower_in_expr(e)?;\n                }\n            }\n            if let Some(tail) = tail {\n                if let Some(filter) = &mut tail.filter {\n                    lower_in_expr(filter)?;\n                }\n                if let Some(window_def) = &mut tail.over {\n                    for e in &mut window_def.partition_by {\n                        lower_in_expr(e)?;\n                    }\n                    for term in &mut window_def.order_by {\n                        lower_in_expr(&mut term.expr)?;\n                    }\n                }\n            }\n        }\n        ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Paren(inner)\n        | ExprKind::InSubquery { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. } => lower_in_expr(inner)?,\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            lower_in_expr(lhs)?;\n            lower_in_expr(rhs)?;\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            lower_in_expr(inner)?;\n            lower_in_expr(lo)?;\n            lower_in_expr(hi)?;\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            lower_in_expr(inner)?;\n            for e in list {\n                lower_in_expr(e)?;\n            }\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            lower_in_expr(inner)?;\n            lower_in_expr(pattern)?;\n            if let Some(e) = escape {\n                lower_in_expr(e)?;\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(o) = operand {\n                lower_in_expr(o)?;\n            }\n            for (cond, result) in whens {\n                lower_in_expr(cond)?;\n                lower_in_expr(result)?;\n            }\n            if let Some(e) = else_ {\n                lower_in_expr(e)?;\n            }\n        }\n        ExprKind::Column { .. }\n        | ExprKind::Literal(_)\n        | ExprKind::Param(_)\n        | ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubqueryMulti { .. } => {}\n    }",
+    "line": 298,
+    "decision": "match &mut expr.kind {\n        ExprKind::FunctionCall { args, tail, .. } => {\n            if let FunctionArgs::List(list) = args {\n                for e in list {\n                    lower_in_between_expr(e)?;\n                }\n            }\n            if let Some(tail) = tail {\n                if let Some(filter) = &mut tail.filter {\n                    lower_in_between_expr(filter)?;\n                }\n                if let Some(window_def) = &mut tail.over {\n                    for e in &mut window_def.partition_by {\n                        lower_in_between_expr(e)?;\n                    }\n                    for term in &mut window_def.order_by {\n                        lower_in_between_expr(&mut term.expr)?;\n                    }\n                }\n            }\n        }\n        ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Paren(inner)\n        | ExprKind::InSubquery { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. } => lower_in_between_expr(inner)?,\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            lower_in_between_expr(lhs)?;\n            lower_in_between_expr(rhs)?;\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            lower_in_between_expr(inner)?;\n            lower_in_between_expr(lo)?;\n            lower_in_between_expr(hi)?;\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            lower_in_between_expr(inner)?;\n            for e in list {\n                lower_in_between_expr(e)?;\n            }\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            lower_in_between_expr(inner)?;\n            lower_in_between_expr(pattern)?;\n            if let Some(e) = escape {\n                lower_in_between_expr(e)?;\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(o) = operand {\n                lower_in_between_expr(o)?;\n            }\n            for (cond, result) in whens {\n                lower_in_between_expr(cond)?;\n                lower_in_between_expr(result)?;\n            }\n            if let Some(e) = else_ {\n                lower_in_between_expr(e)?;\n            }\n        }\n        ExprKind::Column { .. }\n        | ExprKind::Literal(_)\n        | ExprKind::Param(_)\n        | ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubqueryMulti { .. } => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_a77e706f",
+    "id": "parser_column_lower_in_between_expr_a77e706f",
     "file": "src/parser/column.rs",
-    "line": 295,
+    "line": 300,
     "decision": "let FunctionArgs::List(list) = args",
     "conditions": 1,
     "vectors_required": 2,
@@ -25520,9 +25520,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_756219c6",
+    "id": "parser_column_lower_in_between_expr_756219c6",
     "file": "src/parser/column.rs",
-    "line": 300,
+    "line": 305,
     "decision": "let Some(tail) = tail",
     "conditions": 1,
     "vectors_required": 2,
@@ -25530,9 +25530,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_a60126d0",
+    "id": "parser_column_lower_in_between_expr_a60126d0",
     "file": "src/parser/column.rs",
-    "line": 301,
+    "line": 306,
     "decision": "let Some(filter) = &mut tail.filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -25540,9 +25540,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_04b008cc",
+    "id": "parser_column_lower_in_between_expr_04b008cc",
     "file": "src/parser/column.rs",
-    "line": 304,
+    "line": 309,
     "decision": "let Some(window_def) = &mut tail.over",
     "conditions": 1,
     "vectors_required": 2,
@@ -25550,9 +25550,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_ef9b411b",
+    "id": "parser_column_lower_in_between_expr_ef9b411b",
     "file": "src/parser/column.rs",
-    "line": 350,
+    "line": 355,
     "decision": "let Some(e) = escape",
     "conditions": 1,
     "vectors_required": 2,
@@ -25560,9 +25560,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_1bf37598",
+    "id": "parser_column_lower_in_between_expr_1bf37598",
     "file": "src/parser/column.rs",
-    "line": 359,
+    "line": 364,
     "decision": "let Some(o) = operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -25570,9 +25570,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_56705ec3",
+    "id": "parser_column_lower_in_between_expr_56705ec3",
     "file": "src/parser/column.rs",
-    "line": 366,
+    "line": 371,
     "decision": "let Some(e) = else_",
     "conditions": 1,
     "vectors_required": 2,
@@ -25580,9 +25580,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_fd97c40a",
+    "id": "parser_column_lower_in_between_expr_fd97c40a",
     "file": "src/parser/column.rs",
-    "line": 377,
+    "line": 382,
     "decision": "matches!(expr.kind, ExprKind::In { .. })",
     "conditions": 1,
     "vectors_required": 2,
@@ -25590,10 +25590,40 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_column_lower_in_expr_e78ee74e",
+    "id": "parser_column_lower_in_between_expr_e78ee74e",
     "file": "src/parser/column.rs",
-    "line": 380,
+    "line": 385,
     "decision": "let ExprKind::In {\n            expr: subject,\n            list,\n            negated,\n        } = kind",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_column_lower_in_between_expr_7f061aee",
+    "file": "src/parser/column.rs",
+    "line": 393,
+    "decision": "matches!(expr.kind, ExprKind::Between { .. })",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_column_lower_in_between_expr_a98a427b",
+    "file": "src/parser/column.rs",
+    "line": 396,
+    "decision": "let ExprKind::Between {\n            expr: subject,\n            lo,\n            hi,\n            negated,\n        } = kind",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "parser_column_lower_between_5f337291",
+    "file": "src/parser/column.rs",
+    "line": 413,
+    "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -25602,7 +25632,7 @@
   {
     "id": "parser_column_lower_in_list_5f337291",
     "file": "src/parser/column.rs",
-    "line": 401,
+    "line": 445,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -25612,7 +25642,7 @@
   {
     "id": "parser_column_extract_equi_join_113dfaa2",
     "file": "src/parser/column.rs",
-    "line": 434,
+    "line": 478,
     "decision": "match &expr.kind {\n        ExprKind::Binary {\n            op: AstBinOp::Eq,\n            lhs,\n            rhs,\n        } => Ok((column_name(lhs)?, column_name(rhs)?)),\n        _ => Err(unsupported(expr.span, \"JOIN ON must be col = col\".into())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25622,7 +25652,7 @@
   {
     "id": "parser_column_validate_distinct_eac99047",
     "file": "src/parser/column.rs",
-    "line": 461,
+    "line": 505,
     "decision": "distinct && !(name.eq_ignore_ascii_case(\"COUNT\") && matches!(args, FunctionArgs::List(_)))",
     "conditions": 2,
     "vectors_required": 3,
@@ -25632,7 +25662,7 @@
   {
     "id": "parser_column_validate_aggregate_call_84c84d61",
     "file": "src/parser/column.rs",
-    "line": 471,
+    "line": 515,
     "decision": "!is_known_agg_name(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25642,7 +25672,7 @@
   {
     "id": "parser_column_validate_aggregate_call_5cd9b223",
     "file": "src/parser/column.rs",
-    "line": 474,
+    "line": 518,
     "decision": "match args {\n        FunctionArgs::Star => {\n            if !name.eq_ignore_ascii_case(\"COUNT\") {\n                return Err(unsupported(span, \"only COUNT supports (*)\".into()));\n            }\n            Ok(())\n        }\n        FunctionArgs::List(list) => match list.as_slice() {\n            [one] => validate_aggregate_arg(one),\n            _ => Err(unsupported(\n                span,\n                \"an aggregate takes exactly one column or *\".into(),\n            )),\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25652,7 +25682,7 @@
   {
     "id": "parser_column_validate_aggregate_call_6912e1c7",
     "file": "src/parser/column.rs",
-    "line": 476,
+    "line": 520,
     "decision": "!name.eq_ignore_ascii_case(\"COUNT\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -25662,7 +25692,7 @@
   {
     "id": "parser_column_validate_aggregate_call_3e03845d",
     "file": "src/parser/column.rs",
-    "line": 481,
+    "line": 525,
     "decision": "match list.as_slice() {\n            [one] => validate_aggregate_arg(one),\n            _ => Err(unsupported(\n                span,\n                \"an aggregate takes exactly one column or *\".into(),\n            )),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25672,7 +25702,7 @@
   {
     "id": "parser_column_validate_aggregate_arg_adbd8ed7",
     "file": "src/parser/column.rs",
-    "line": 499,
+    "line": 543,
     "decision": "match &expr.kind {\n        ExprKind::Column { .. } => column_name(expr).map(|_| ()),\n        ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => Err(unsupported(\n            expr.span,\n            format!(\"nested aggregate: {name} inside an aggregate argument\"),\n        )),\n        _ => validate_expr(&mut expr.clone(), false),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25682,7 +25712,7 @@
   {
     "id": "parser_column_validate_aggregate_arg_646e078e",
     "file": "src/parser/column.rs",
-    "line": 501,
+    "line": 545,
     "decision": "is_known_agg_name(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25692,7 +25722,7 @@
   {
     "id": "parser_column_window_shape_1d5bf674",
     "file": "src/parser/column.rs",
-    "line": 525,
+    "line": 569,
     "decision": "match name.to_ascii_uppercase().as_str() {\n        \"ROW_NUMBER\" | \"RANK\" | \"DENSE_RANK\" => Some(WindowShape::Niladic),\n        \"LAG\" | \"LEAD\" => Some(WindowShape::LagLead),\n        \"COUNT\" => Some(WindowShape::CountLike),\n        \"SUM\" | \"AVG\" | \"FIRST_VALUE\" | \"LAST_VALUE\" => Some(WindowShape::OneArg),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25702,7 +25732,7 @@
   {
     "id": "parser_column_validate_window_call_ae3b9b12",
     "file": "src/parser/column.rs",
-    "line": 551,
+    "line": 595,
     "decision": "match (&shape, args) {\n        (WindowShape::Niladic, FunctionArgs::List(list)) if list.is_empty() => {}\n        (WindowShape::Niladic, _) => {\n            return Err(unsupported(span, format!(\"{name} takes no arguments\")))\n        }\n        (WindowShape::CountLike, FunctionArgs::Star) => {}\n        (_, FunctionArgs::Star) => return Err(unsupported(span, \"only COUNT supports (*)\".into())),\n        (WindowShape::LagLead, FunctionArgs::List(list)) => match list.as_slice() {\n            [one] => {\n                column_name(one)?;\n            }\n            [one, offset_expr] => {\n                column_name(one)?;\n                if !matches!(offset_expr.kind, ExprKind::Literal(AstLiteral::Integer(_))) {\n                    return Err(unsupported(offset_expr.span, \"non-integer offset\".into()));\n                }\n            }\n            _ => return Err(unsupported(span, format!(\"{name} takes 1 or 2 arguments\"))),\n        },\n        (_, FunctionArgs::List(list)) => match list.as_slice() {\n            [one] => {\n                column_name(one)?;\n            }\n            _ => {\n                return Err(unsupported(\n                    span,\n                    \"a window function takes exactly one column or *\".into(),\n                ))\n            }\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25712,7 +25742,7 @@
   {
     "id": "parser_column_validate_window_call_6b7539d1",
     "file": "src/parser/column.rs",
-    "line": 552,
+    "line": 596,
     "decision": "list.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25722,7 +25752,7 @@
   {
     "id": "parser_column_validate_window_call_0894fb86",
     "file": "src/parser/column.rs",
-    "line": 558,
+    "line": 602,
     "decision": "match list.as_slice() {\n            [one] => {\n                column_name(one)?;\n            }\n            [one, offset_expr] => {\n                column_name(one)?;\n                if !matches!(offset_expr.kind, ExprKind::Literal(AstLiteral::Integer(_))) {\n                    return Err(unsupported(offset_expr.span, \"non-integer offset\".into()));\n                }\n            }\n            _ => return Err(unsupported(span, format!(\"{name} takes 1 or 2 arguments\"))),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25732,7 +25762,7 @@
   {
     "id": "parser_column_validate_window_call_d31149de",
     "file": "src/parser/column.rs",
-    "line": 564,
+    "line": 608,
     "decision": "!matches!(offset_expr.kind, ExprKind::Literal(AstLiteral::Integer(_)))",
     "conditions": 1,
     "vectors_required": 2,
@@ -25742,7 +25772,7 @@
   {
     "id": "parser_column_validate_window_call_997dbb61",
     "file": "src/parser/column.rs",
-    "line": 570,
+    "line": 614,
     "decision": "match list.as_slice() {\n            [one] => {\n                column_name(one)?;\n            }\n            _ => {\n                return Err(unsupported(\n                    span,\n                    \"a window function takes exactly one column or *\".into(),\n                ))\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25752,7 +25782,7 @@
   {
     "id": "parser_column_validate_window_call_a7326c49",
     "file": "src/parser/column.rs",
-    "line": 588,
+    "line": 632,
     "decision": "term.nulls_last.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25762,7 +25792,7 @@
   {
     "id": "parser_column_arg_count_5ce8b048",
     "file": "src/parser/column.rs",
-    "line": 609,
+    "line": 653,
     "decision": "match args {\n        FunctionArgs::Star => 0,\n        FunctionArgs::List(list) => list.len(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25772,7 +25802,7 @@
   {
     "id": "parser_column_validate_result_column_3bd6c2c9",
     "file": "src/parser/column.rs",
-    "line": 617,
+    "line": 661,
     "decision": "match col {\n        ResultColumn::Star => Ok(()),\n        ResultColumn::TableStar { .. } => Err(unsupported(\n            Span::UNKNOWN,\n            \"table.* is not supported\".into(),\n        )),\n        // `alias` (#307) only renames this column's output header; it\n        // doesn't change how `expr` itself validates below.\n        ResultColumn::Expr { expr, alias: _ } => match &expr.kind {\n            ExprKind::Column { .. } => column_name(expr).map(|_| ()),\n            ExprKind::FunctionCall {\n                name,\n                distinct,\n                args,\n                tail,\n            } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {\n                if *distinct {\n                    return Err(unsupported(\n                        expr.span,\n                        \"DISTINCT inside a window function\".into(),\n                    ));\n                }\n                // The guard above makes the `else` unreachable; a typed\n                // error keeps it total without an `expect` (db-core#231).\n                let Some(window_def) = tail.as_deref().and_then(|t| t.over.as_ref()) else {\n                    return Err(unsupported(\n                        expr.span,\n                        \"window function call without an OVER clause\".into(),\n                    ));\n                };\n                validate_window_call(expr.span, name, args, window_def)\n            }\n            // A range-vector call (#308, ADR 0018 §Opcodes): stream-only,\n            // like `SINCE`/`UNTIL` -- `codegen::batch`/`codegen::row`\n            // reject a `Select` whose only column carries a `RANGE` tail\n            // just as they reject one carrying `Select::scope`, so this\n            // validator only needs to accept the shape, not decide which\n            // engine may run it.\n            ExprKind::FunctionCall {\n                name,\n                distinct,\n                args,\n                tail,\n            } if matches!(tail.as_deref(), Some(t) if t.range.is_some()) => {\n                if *distinct {\n                    return Err(unsupported(\n                        expr.span,\n                        \"DISTINCT inside a range-vector call\".into(),\n                    ));\n                }\n                // Range-vector functions (`count_over_time`, ...) only\n                // exist behind `vm-stream` -- a consumer built without\n                // it (column-rs's `vm-batch`-only build, per this\n                // Cargo.toml's own feature-isolation comment) can't\n                // execute one regardless of its name, so reject\n                // unconditionally rather than pulling `vm::stream` in\n                // just to validate a name it will never run. Each `cfg`\n                // arm below produces the whole match arm's result, so\n                // exactly one compiles -- no unreachable-code fallthrough.\n                #[cfg(not(feature = \"vm-stream\"))]\n                {\n                    Err(unsupported(\n                        expr.span,\n                        format!(\"range-vector function {name}: requires the vm-stream feature\"),\n                    ))\n                }\n                #[cfg(feature = \"vm-stream\")]\n                {\n                    if crate::vm::stream::RangeAggFunc::from_name(name).is_none() {\n                        return Err(unsupported(\n                            expr.span,\n                            format!(\"unknown range-vector function {name}\"),\n                        ));\n                    }\n                    match args {\n                        FunctionArgs::Star => Ok(()),\n                        FunctionArgs::List(list) => match list.as_slice() {\n                            [] => Ok(()),\n                            [arg] => match &arg.kind {\n                                ExprKind::Column { .. } => column_name(arg).map(|_| ()),\n                                _ => Err(unsupported(\n                                    arg.span,\n                                    format!(\"{name}(...): argument must be a bare column\"),\n                                )),\n                            },\n                            _ => Err(unsupported(\n                                expr.span,\n                                format!(\"{name}(...) takes at most one argument\"),\n                            )),\n                        },\n                    }\n                }\n            }\n            ExprKind::FunctionCall {\n                name,\n                distinct,\n                args,\n                ..\n            } => {\n                if is_known_agg_name(name) {\n                    validate_distinct(expr.span, name, *distinct, args)?;\n                    return validate_aggregate_call(expr.span, name, args);\n                }\n                // Not an aggregate: a scalar call (#307) -- its arguments\n                // are validated like any other expression (e.g. `raw`/\n                // `message` column references, or a literal path/key/\n                // group), same as an aggregate's own column argument.\n                if !is_known_scalar_function(name, arg_count(args)) {\n                    return Err(unsupported(expr.span, format!(\"unknown function {name}\")));\n                }\n                match args {\n                    FunctionArgs::Star => Err(unsupported(\n                        expr.span,\n                        format!(\"{name} does not accept (*)\"),\n                    )),\n                    // A column reference or a literal (path/key/group) --\n                    // `validate_expr` isn't reused here because it takes\n                    // `&mut`, and none of these three functions' arguments\n                    // need anything beyond what `column_name`/a literal\n                    // check already cover.\n                    FunctionArgs::List(list) => {\n                        for arg in list {\n                            match &arg.kind {\n                                ExprKind::Column { .. } => {\n                                    column_name(arg)?;\n                                }\n                                ExprKind::Literal(_) => {}\n                                _ => {\n                                    return Err(unsupported(\n                                        arg.span,\n                                        format!(\"{name} arguments must be a column or literal\"),\n                                    ))\n                                }\n                            }\n                        }\n                        Ok(())\n                    }\n                }\n            }\n            _ => validate_expr(expr, true),\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25782,7 +25812,7 @@
   {
     "id": "parser_column_validate_result_column_ba82fb21",
     "file": "src/parser/column.rs",
-    "line": 625,
+    "line": 669,
     "decision": "match &expr.kind {\n            ExprKind::Column { .. } => column_name(expr).map(|_| ()),\n            ExprKind::FunctionCall {\n                name,\n                distinct,\n                args,\n                tail,\n            } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {\n                if *distinct {\n                    return Err(unsupported(\n                        expr.span,\n                        \"DISTINCT inside a window function\".into(),\n                    ));\n                }\n                // The guard above makes the `else` unreachable; a typed\n                // error keeps it total without an `expect` (db-core#231).\n                let Some(window_def) = tail.as_deref().and_then(|t| t.over.as_ref()) else {\n                    return Err(unsupported(\n                        expr.span,\n                        \"window function call without an OVER clause\".into(),\n                    ));\n                };\n                validate_window_call(expr.span, name, args, window_def)\n            }\n            // A range-vector call (#308, ADR 0018 §Opcodes): stream-only,\n            // like `SINCE`/`UNTIL` -- `codegen::batch`/`codegen::row`\n            // reject a `Select` whose only column carries a `RANGE` tail\n            // just as they reject one carrying `Select::scope`, so this\n            // validator only needs to accept the shape, not decide which\n            // engine may run it.\n            ExprKind::FunctionCall {\n                name,\n                distinct,\n                args,\n                tail,\n            } if matches!(tail.as_deref(), Some(t) if t.range.is_some()) => {\n                if *distinct {\n                    return Err(unsupported(\n                        expr.span,\n                        \"DISTINCT inside a range-vector call\".into(),\n                    ));\n                }\n                // Range-vector functions (`count_over_time`, ...) only\n                // exist behind `vm-stream` -- a consumer built without\n                // it (column-rs's `vm-batch`-only build, per this\n                // Cargo.toml's own feature-isolation comment) can't\n                // execute one regardless of its name, so reject\n                // unconditionally rather than pulling `vm::stream` in\n                // just to validate a name it will never run. Each `cfg`\n                // arm below produces the whole match arm's result, so\n                // exactly one compiles -- no unreachable-code fallthrough.\n                #[cfg(not(feature = \"vm-stream\"))]\n                {\n                    Err(unsupported(\n                        expr.span,\n                        format!(\"range-vector function {name}: requires the vm-stream feature\"),\n                    ))\n                }\n                #[cfg(feature = \"vm-stream\")]\n                {\n                    if crate::vm::stream::RangeAggFunc::from_name(name).is_none() {\n                        return Err(unsupported(\n                            expr.span,\n                            format!(\"unknown range-vector function {name}\"),\n                        ));\n                    }\n                    match args {\n                        FunctionArgs::Star => Ok(()),\n                        FunctionArgs::List(list) => match list.as_slice() {\n                            [] => Ok(()),\n                            [arg] => match &arg.kind {\n                                ExprKind::Column { .. } => column_name(arg).map(|_| ()),\n                                _ => Err(unsupported(\n                                    arg.span,\n                                    format!(\"{name}(...): argument must be a bare column\"),\n                                )),\n                            },\n                            _ => Err(unsupported(\n                                expr.span,\n                                format!(\"{name}(...) takes at most one argument\"),\n                            )),\n                        },\n                    }\n                }\n            }\n            ExprKind::FunctionCall {\n                name,\n                distinct,\n                args,\n                ..\n            } => {\n                if is_known_agg_name(name) {\n                    validate_distinct(expr.span, name, *distinct, args)?;\n                    return validate_aggregate_call(expr.span, name, args);\n                }\n                // Not an aggregate: a scalar call (#307) -- its arguments\n                // are validated like any other expression (e.g. `raw`/\n                // `message` column references, or a literal path/key/\n                // group), same as an aggregate's own column argument.\n                if !is_known_scalar_function(name, arg_count(args)) {\n                    return Err(unsupported(expr.span, format!(\"unknown function {name}\")));\n                }\n                match args {\n                    FunctionArgs::Star => Err(unsupported(\n                        expr.span,\n                        format!(\"{name} does not accept (*)\"),\n                    )),\n                    // A column reference or a literal (path/key/group) --\n                    // `validate_expr` isn't reused here because it takes\n                    // `&mut`, and none of these three functions' arguments\n                    // need anything beyond what `column_name`/a literal\n                    // check already cover.\n                    FunctionArgs::List(list) => {\n                        for arg in list {\n                            match &arg.kind {\n                                ExprKind::Column { .. } => {\n                                    column_name(arg)?;\n                                }\n                                ExprKind::Literal(_) => {}\n                                _ => {\n                                    return Err(unsupported(\n                                        arg.span,\n                                        format!(\"{name} arguments must be a column or literal\"),\n                                    ))\n                                }\n                            }\n                        }\n                        Ok(())\n                    }\n                }\n            }\n            _ => validate_expr(expr, true),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25792,7 +25822,7 @@
   {
     "id": "parser_column_validate_result_column_3691bf01",
     "file": "src/parser/column.rs",
-    "line": 632,
+    "line": 676,
     "decision": "matches!(tail.as_deref(), Some(t) if t.over.is_some())",
     "conditions": 1,
     "vectors_required": 2,
@@ -25802,7 +25832,7 @@
   {
     "id": "parser_column_validate_result_column_f8fbb224",
     "file": "src/parser/column.rs",
-    "line": 660,
+    "line": 704,
     "decision": "matches!(tail.as_deref(), Some(t) if t.range.is_some())",
     "conditions": 1,
     "vectors_required": 2,
@@ -25812,7 +25842,7 @@
   {
     "id": "parser_column_validate_result_column_3a6ee6e5",
     "file": "src/parser/column.rs",
-    "line": 633,
+    "line": 677,
     "decision": "*distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -25822,7 +25852,7 @@
   {
     "id": "parser_column_validate_result_column_3a6ee6e5_2",
     "file": "src/parser/column.rs",
-    "line": 661,
+    "line": 705,
     "decision": "*distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -25832,7 +25862,7 @@
   {
     "id": "parser_column_validate_result_column_5489248c",
     "file": "src/parser/column.rs",
-    "line": 685,
+    "line": 729,
     "decision": "crate::vm::stream::RangeAggFunc::from_name(name).is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25842,7 +25872,7 @@
   {
     "id": "parser_column_validate_result_column_b79ccc08",
     "file": "src/parser/column.rs",
-    "line": 691,
+    "line": 735,
     "decision": "match args {\n                        FunctionArgs::Star => Ok(()),\n                        FunctionArgs::List(list) => match list.as_slice() {\n                            [] => Ok(()),\n                            [arg] => match &arg.kind {\n                                ExprKind::Column { .. } => column_name(arg).map(|_| ()),\n                                _ => Err(unsupported(\n                                    arg.span,\n                                    format!(\"{name}(...): argument must be a bare column\"),\n                                )),\n                            },\n                            _ => Err(unsupported(\n                                expr.span,\n                                format!(\"{name}(...) takes at most one argument\"),\n                            )),\n                        },\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25852,7 +25882,7 @@
   {
     "id": "parser_column_validate_result_column_573e494d",
     "file": "src/parser/column.rs",
-    "line": 693,
+    "line": 737,
     "decision": "match list.as_slice() {\n                            [] => Ok(()),\n                            [arg] => match &arg.kind {\n                                ExprKind::Column { .. } => column_name(arg).map(|_| ()),\n                                _ => Err(unsupported(\n                                    arg.span,\n                                    format!(\"{name}(...): argument must be a bare column\"),\n                                )),\n                            },\n                            _ => Err(unsupported(\n                                expr.span,\n                                format!(\"{name}(...) takes at most one argument\"),\n                            )),\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25862,7 +25892,7 @@
   {
     "id": "parser_column_validate_result_column_228a4486",
     "file": "src/parser/column.rs",
-    "line": 695,
+    "line": 739,
     "decision": "match &arg.kind {\n                                ExprKind::Column { .. } => column_name(arg).map(|_| ()),\n                                _ => Err(unsupported(\n                                    arg.span,\n                                    format!(\"{name}(...): argument must be a bare column\"),\n                                )),\n                            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25872,7 +25902,7 @@
   {
     "id": "parser_column_validate_result_column_646e078e",
     "file": "src/parser/column.rs",
-    "line": 716,
+    "line": 760,
     "decision": "is_known_agg_name(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25882,7 +25912,7 @@
   {
     "id": "parser_column_validate_result_column_7d6f40e3",
     "file": "src/parser/column.rs",
-    "line": 724,
+    "line": 768,
     "decision": "!is_known_scalar_function(name, arg_count(args))",
     "conditions": 1,
     "vectors_required": 2,
@@ -25892,7 +25922,7 @@
   {
     "id": "parser_column_validate_result_column_c160f2e6",
     "file": "src/parser/column.rs",
-    "line": 727,
+    "line": 771,
     "decision": "match args {\n                    FunctionArgs::Star => Err(unsupported(\n                        expr.span,\n                        format!(\"{name} does not accept (*)\"),\n                    )),\n                    // A column reference or a literal (path/key/group) --\n                    // `validate_expr` isn't reused here because it takes\n                    // `&mut`, and none of these three functions' arguments\n                    // need anything beyond what `column_name`/a literal\n                    // check already cover.\n                    FunctionArgs::List(list) => {\n                        for arg in list {\n                            match &arg.kind {\n                                ExprKind::Column { .. } => {\n                                    column_name(arg)?;\n                                }\n                                ExprKind::Literal(_) => {}\n                                _ => {\n                                    return Err(unsupported(\n                                        arg.span,\n                                        format!(\"{name} arguments must be a column or literal\"),\n                                    ))\n                                }\n                            }\n                        }\n                        Ok(())\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25902,7 +25932,7 @@
   {
     "id": "parser_column_validate_result_column_98676ae1",
     "file": "src/parser/column.rs",
-    "line": 739,
+    "line": 783,
     "decision": "match &arg.kind {\n                                ExprKind::Column { .. } => {\n                                    column_name(arg)?;\n                                }\n                                ExprKind::Literal(_) => {}\n                                _ => {\n                                    return Err(unsupported(\n                                        arg.span,\n                                        format!(\"{name} arguments must be a column or literal\"),\n                                    ))\n                                }\n                            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25912,7 +25942,7 @@
   {
     "id": "parser_column_expr_contains_agg_ee3d8cc1",
     "file": "src/parser/column.rs",
-    "line": 777,
+    "line": 821,
     "decision": "match &expr.kind {\n        ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => true,\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        } => list.iter().any(expr_contains_agg),\n        ExprKind::Binary { lhs, rhs, .. }\n        | ExprKind::Is { lhs, rhs, .. }\n        | ExprKind::Like {\n            expr: lhs,\n            pattern: rhs,\n            ..\n        } => expr_contains_agg(lhs) || expr_contains_agg(rhs),\n        ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Paren(inner) => expr_contains_agg(inner),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25922,7 +25952,7 @@
   {
     "id": "parser_column_expr_contains_agg_646e078e",
     "file": "src/parser/column.rs",
-    "line": 778,
+    "line": 822,
     "decision": "is_known_agg_name(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25932,7 +25962,7 @@
   {
     "id": "parser_column_ungrouped_column_5f8f79e7",
     "file": "src/parser/column.rs",
-    "line": 800,
+    "line": 844,
     "decision": "match &expr.kind {\n        ExprKind::Column { .. } => {\n            let name = column_name(expr)?;\n            (!group_by.contains(&name)).then_some(name)\n        }\n        ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => None,\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        } => {\n            for arg in list {\n                if let Some(name) = ungrouped_column(arg, group_by)? {\n                    return Ok(Some(name));\n                }\n            }\n            None\n        }\n        ExprKind::Binary { lhs, rhs, .. }\n        | ExprKind::Is { lhs, rhs, .. }\n        | ExprKind::Like {\n            expr: lhs,\n            pattern: rhs,\n            ..\n        } => match ungrouped_column(lhs, group_by)? {\n            Some(name) => Some(name),\n            None => ungrouped_column(rhs, group_by)?,\n        },\n        ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Paren(inner) => ungrouped_column(inner, group_by)?,\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25942,7 +25972,7 @@
   {
     "id": "parser_column_ungrouped_column_646e078e",
     "file": "src/parser/column.rs",
-    "line": 805,
+    "line": 849,
     "decision": "is_known_agg_name(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25952,7 +25982,7 @@
   {
     "id": "parser_column_ungrouped_column_7e959f92",
     "file": "src/parser/column.rs",
-    "line": 811,
+    "line": 855,
     "decision": "let Some(name) = ungrouped_column(arg, group_by)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -25962,7 +25992,7 @@
   {
     "id": "parser_column_ungrouped_column_3fe641db",
     "file": "src/parser/column.rs",
-    "line": 823,
+    "line": 867,
     "decision": "match ungrouped_column(lhs, group_by)? {\n            Some(name) => Some(name),\n            None => ungrouped_column(rhs, group_by)?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25972,7 +26002,7 @@
   {
     "id": "parser_column_item_kind_c63b1cc5",
     "file": "src/parser/column.rs",
-    "line": 836,
+    "line": 880,
     "decision": "match col {\n        ResultColumn::Star | ResultColumn::TableStar { .. } => ItemKind::Star,\n        ResultColumn::Expr { expr, .. } => match &expr.kind {\n            // A catalog-qualified column is rejected here with its span,\n            // not folded into an empty name that the GROUP BY check would\n            // then compare against (db-core#232).\n            ExprKind::Column { .. } => {\n                column_name(expr)?;\n                ItemKind::Column\n            }\n            ExprKind::FunctionCall { tail, .. } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {\n                ItemKind::Window\n            }\n            // A scalar call (#307) is a computed expression, not an\n            // aggregate -- `is_known_agg_name` is the real distinction\n            // `validate_result_column` already draws for the same call.\n            ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => ItemKind::Agg,\n            _ if expr_contains_agg(expr) => ItemKind::Agg,\n            _ => ItemKind::Expr,\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25982,7 +26012,7 @@
   {
     "id": "parser_column_item_kind_bad3cb76",
     "file": "src/parser/column.rs",
-    "line": 838,
+    "line": 882,
     "decision": "match &expr.kind {\n            // A catalog-qualified column is rejected here with its span,\n            // not folded into an empty name that the GROUP BY check would\n            // then compare against (db-core#232).\n            ExprKind::Column { .. } => {\n                column_name(expr)?;\n                ItemKind::Column\n            }\n            ExprKind::FunctionCall { tail, .. } if matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {\n                ItemKind::Window\n            }\n            // A scalar call (#307) is a computed expression, not an\n            // aggregate -- `is_known_agg_name` is the real distinction\n            // `validate_result_column` already draws for the same call.\n            ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => ItemKind::Agg,\n            _ if expr_contains_agg(expr) => ItemKind::Agg,\n            _ => ItemKind::Expr,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25992,7 +26022,7 @@
   {
     "id": "parser_column_item_kind_3691bf01",
     "file": "src/parser/column.rs",
-    "line": 846,
+    "line": 890,
     "decision": "matches!(tail.as_deref(), Some(t) if t.over.is_some())",
     "conditions": 1,
     "vectors_required": 2,
@@ -26002,7 +26032,7 @@
   {
     "id": "parser_column_item_kind_646e078e",
     "file": "src/parser/column.rs",
-    "line": 852,
+    "line": 896,
     "decision": "is_known_agg_name(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26012,7 +26042,7 @@
   {
     "id": "parser_column_item_kind_f0f4e45c",
     "file": "src/parser/column.rs",
-    "line": 853,
+    "line": 897,
     "decision": "expr_contains_agg(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26022,7 +26052,7 @@
   {
     "id": "parser_column_validate_expr_7a325137",
     "file": "src/parser/column.rs",
-    "line": 867,
+    "line": 911,
     "decision": "match &mut expr.kind {\n        ExprKind::Literal(_) => Ok(()),\n        ExprKind::Column {\n            catalog: Some(_), ..\n        } => Err(unsupported(expr.span, \"catalog-qualified column\".into())),\n        ExprKind::Column { .. } => Ok(()),\n        ExprKind::Unary {\n            op: UnaryOp::Not | UnaryOp::Minus | UnaryOp::Plus,\n            expr: inner,\n        } => validate_expr(inner, allow_agg),\n        ExprKind::Unary { op, .. } => Err(unsupported(expr.span, format!(\"unary operator {op:?}\"))),\n        // `expr IS [NOT] NULL` may parse as `Is{lhs, rhs: NULL literal,\n        // negated}` instead of the dedicated `IsNull` node.\n        ExprKind::Is { lhs, rhs, .. }\n            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>\n        {\n            validate_expr(lhs, allow_agg)\n        }\n        ExprKind::Binary { op, lhs, rhs } => {\n            ast_binop_allowed(*op, expr.span)?;\n            validate_expr(lhs, allow_agg)?;\n            validate_expr(rhs, allow_agg)\n        }\n        ExprKind::IsNull { expr: inner, .. } => validate_expr(inner, allow_agg),\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape: None,\n            ..\n        } => {\n            validate_expr(inner, allow_agg)?;\n            validate_expr(pattern, allow_agg)\n        }\n        ExprKind::Like {\n            escape: Some(_), ..\n        } => Err(unsupported(expr.span, \"LIKE ... ESCAPE\".into())),\n        ExprKind::Paren(inner) => validate_expr(inner, allow_agg),\n        ExprKind::InSubquery {\n            expr: inner,\n            subquery,\n            negated: false,\n        } => {\n            // The planner compiles `x IN (SELECT ...)` as a per-row semi-\n            // join; an aggregate on its left would be evaluated per row\n            // and never merged.\n            validate_expr(inner, false)?;\n            validate_select(subquery)\n        }\n        ExprKind::InSubquery { negated: true, .. } => {\n            Err(unsupported(expr.span, \"NOT IN (SELECT ...)\".into()))\n        }\n        ExprKind::Exists { subquery, .. } => validate_select(subquery),\n        // #496: an aggregate composed with arithmetic (`SUM(x) * 2`,\n        // `SUM(x) + SUM(y)`, `SUM(x) / COUNT(*)`) is only valid where an\n        // aggregate itself is valid (a `SELECT`-list expression), not\n        // inside `WHERE` or another aggregate's argument -- `allow_agg`\n        // distinguishes the two, both of which reach `validate_expr`.\n        ExprKind::FunctionCall {\n            name,\n            distinct,\n            args,\n            tail: None,\n        } if allow_agg && is_known_agg_name(name) => {\n            if *distinct {\n                return Err(unsupported(\n                    expr.span,\n                    \"DISTINCT inside an aggregate\".into(),\n                ));\n            }\n            validate_aggregate_call(expr.span, name, args)\n        }\n        ExprKind::FunctionCall { name, .. } if is_known_agg_name(name) => Err(unsupported(\n            expr.span,\n            format!(\"aggregate function {name} not allowed here\"),\n        )),\n        // A scalar function (json_extract, the map functions of #621...)\n        // anywhere an expression is: `WHERE map_get_ci(h, 'host') = 'x'`.\n        ExprKind::FunctionCall {\n            name,\n            distinct: false,\n            args: FunctionArgs::List(args),\n            tail: None,\n        } if is_known_scalar_function(name, args.len()) => {\n            args.iter_mut().try_for_each(|a| validate_expr(a, false))\n        }\n        other => Err(unsupported(\n            expr.span,\n            format!(\"unsupported expression form {other:?}\"),\n        )),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26032,7 +26062,7 @@
   {
     "id": "parser_column_validate_expr_50192d90",
     "file": "src/parser/column.rs",
-    "line": 881,
+    "line": 925,
     "decision": "matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -26042,7 +26072,7 @@
   {
     "id": "parser_column_validate_expr_a300f79e",
     "file": "src/parser/column.rs",
-    "line": 929,
+    "line": 973,
     "decision": "allow_agg && is_known_agg_name(name)",
     "conditions": 2,
     "vectors_required": 3,
@@ -26052,7 +26082,7 @@
   {
     "id": "parser_column_validate_expr_646e078e",
     "file": "src/parser/column.rs",
-    "line": 938,
+    "line": 982,
     "decision": "is_known_agg_name(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26062,7 +26092,7 @@
   {
     "id": "parser_column_validate_expr_a218d668",
     "file": "src/parser/column.rs",
-    "line": 949,
+    "line": 993,
     "decision": "is_known_scalar_function(name, args.len())",
     "conditions": 1,
     "vectors_required": 2,
@@ -26072,7 +26102,7 @@
   {
     "id": "parser_column_validate_expr_3a6ee6e5",
     "file": "src/parser/column.rs",
-    "line": 930,
+    "line": 974,
     "decision": "*distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -26082,7 +26112,7 @@
   {
     "id": "parser_column_validate_select_6d5ac6f7",
     "file": "src/parser/column.rs",
-    "line": 968,
+    "line": 1012,
     "decision": "select.with_clause.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26092,7 +26122,7 @@
   {
     "id": "parser_column_validate_select_13fa7590",
     "file": "src/parser/column.rs",
-    "line": 971,
+    "line": 1015,
     "decision": "!select.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26102,7 +26132,7 @@
   {
     "id": "parser_column_validate_select_ec956ec2",
     "file": "src/parser/column.rs",
-    "line": 994,
+    "line": 1038,
     "decision": "match &mut from_clause.first.kind {\n            TableRefKind::Name(name) => name.clone(),\n            TableRefKind::Subquery(subselect) => {\n                let Some(alias) = from_clause.first.alias.clone() else {\n                    return Err(unsupported(\n                        from_clause.first.span,\n                        \"a subquery in FROM requires an alias\".into(),\n                    ));\n                };\n                validate_select(subselect)?;\n                alias\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26112,7 +26142,7 @@
   {
     "id": "parser_column_validate_select_4f49920a",
     "file": "src/parser/column.rs",
-    "line": 1007,
+    "line": 1051,
     "decision": "let Some(alias) = &from_clause.first.alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -26122,7 +26152,7 @@
   {
     "id": "parser_column_validate_select_6f175796",
     "file": "src/parser/column.rs",
-    "line": 1012,
+    "line": 1056,
     "decision": "j.natural",
     "conditions": 1,
     "vectors_required": 2,
@@ -26132,7 +26162,7 @@
   {
     "id": "parser_column_validate_select_003bcc70",
     "file": "src/parser/column.rs",
-    "line": 1015,
+    "line": 1059,
     "decision": "match &j.table.kind {\n                TableRefKind::Name(table) => table.clone(),\n                TableRefKind::Subquery(_) => {\n                    return Err(unsupported(j.table.span, \"subquery in JOIN\".into()))\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26142,7 +26172,7 @@
   {
     "id": "parser_column_validate_select_20906431",
     "file": "src/parser/column.rs",
-    "line": 1021,
+    "line": 1065,
     "decision": "let Some(alias) = &j.table.alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -26152,7 +26182,7 @@
   {
     "id": "parser_column_validate_select_712c06c4",
     "file": "src/parser/column.rs",
-    "line": 1024,
+    "line": 1068,
     "decision": "j.op == JoinOp::Cross",
     "conditions": 1,
     "vectors_required": 2,
@@ -26162,7 +26192,7 @@
   {
     "id": "parser_column_validate_select_e208fc74",
     "file": "src/parser/column.rs",
-    "line": 1027,
+    "line": 1071,
     "decision": "match &j.constraint {\n                Some(JoinConstraint::On(expr)) => {\n                    extract_equi_join(expr)?;\n                }\n                Some(JoinConstraint::Using(_)) => {\n                    return Err(unsupported(j.table.span, \"USING join\".into()))\n                }\n                None if j.op == JoinOp::Cross => {}\n                None => return Err(unsupported(j.table.span, \"join without ON\".into())),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26172,7 +26202,7 @@
   {
     "id": "parser_column_validate_select_712c06c4_2",
     "file": "src/parser/column.rs",
-    "line": 1034,
+    "line": 1078,
     "decision": "j.op == JoinOp::Cross",
     "conditions": 1,
     "vectors_required": 2,
@@ -26182,7 +26212,7 @@
   {
     "id": "parser_column_validate_select_4efc088b",
     "file": "src/parser/column.rs",
-    "line": 1047,
+    "line": 1091,
     "decision": "real_name_counts.get(&real) == Some(&1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26192,7 +26222,7 @@
   {
     "id": "parser_column_validate_select_50437a12",
     "file": "src/parser/column.rs",
-    "line": 1052,
+    "line": 1096,
     "decision": "!aliases.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26202,7 +26232,7 @@
   {
     "id": "parser_column_validate_select_fb6b358f",
     "file": "src/parser/column.rs",
-    "line": 1053,
+    "line": 1097,
     "decision": "let Some(where_clause) = &mut select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -26212,7 +26242,7 @@
   {
     "id": "parser_column_validate_select_2df8cbb9",
     "file": "src/parser/column.rs",
-    "line": 1057,
+    "line": 1101,
     "decision": "let crate::parser::ast::ResultColumn::Expr { expr, .. } = col",
     "conditions": 1,
     "vectors_required": 2,
@@ -26222,7 +26252,7 @@
   {
     "id": "parser_column_validate_select_672b9f80",
     "file": "src/parser/column.rs",
-    "line": 1064,
+    "line": 1108,
     "decision": "let Some(having) = &mut select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -26232,7 +26262,7 @@
   {
     "id": "parser_column_validate_select_e529865c",
     "file": "src/parser/column.rs",
-    "line": 1070,
+    "line": 1114,
     "decision": "let Some(from_clause) = select.from.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26242,7 +26272,7 @@
   {
     "id": "parser_column_validate_select_be8fdf18",
     "file": "src/parser/column.rs",
-    "line": 1072,
+    "line": 1116,
     "decision": "let Some(JoinConstraint::On(expr)) = &mut j.constraint",
     "conditions": 1,
     "vectors_required": 2,
@@ -26252,7 +26282,7 @@
   {
     "id": "parser_column_validate_select_fb6b358f_2",
     "file": "src/parser/column.rs",
-    "line": 1079,
+    "line": 1123,
     "decision": "let Some(where_clause) = &mut select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -26262,7 +26292,7 @@
   {
     "id": "parser_column_validate_select_a7326c49",
     "file": "src/parser/column.rs",
-    "line": 1090,
+    "line": 1134,
     "decision": "term.nulls_last.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26272,7 +26302,7 @@
   {
     "id": "parser_column_validate_select_da5e6488",
     "file": "src/parser/column.rs",
-    "line": 1093,
+    "line": 1137,
     "decision": "match &term.expr.kind {\n            ExprKind::Column { .. } => {\n                column_name(&term.expr)?;\n            }\n            ExprKind::FunctionCall {\n                name,\n                distinct,\n                args,\n                tail,\n            } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {\n                validate_distinct(term.expr.span, name, *distinct, args)?;\n                validate_aggregate_call(term.expr.span, name, args)?;\n            }\n            _ => {\n                return Err(unsupported(\n                    term.expr.span,\n                    format!(\n                        \"expected a column reference or aggregate, found {:?}\",\n                        term.expr.kind\n                    ),\n                ))\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26282,7 +26312,7 @@
   {
     "id": "parser_column_validate_select_702232e7",
     "file": "src/parser/column.rs",
-    "line": 1102,
+    "line": 1146,
     "decision": "!matches!(tail.as_deref(), Some(t) if t.over.is_some())",
     "conditions": 1,
     "vectors_required": 2,
@@ -26292,7 +26322,7 @@
   {
     "id": "parser_column_validate_select_4b82305b",
     "file": "src/parser/column.rs",
-    "line": 1118,
+    "line": 1162,
     "decision": "match &select.limit {\n        Some(l) => matches!(&l.limit.kind, ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0),\n        None => true,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26302,7 +26332,7 @@
   {
     "id": "parser_column_validate_select_2107b5da",
     "file": "src/parser/column.rs",
-    "line": 1122,
+    "line": 1166,
     "decision": "let Some(l) = &select.limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -26312,7 +26342,7 @@
   {
     "id": "parser_column_validate_select_184ed0c3",
     "file": "src/parser/column.rs",
-    "line": 1123,
+    "line": 1167,
     "decision": "!limit_ok",
     "conditions": 1,
     "vectors_required": 2,
@@ -26322,7 +26352,7 @@
   {
     "id": "parser_column_validate_select_91043f75",
     "file": "src/parser/column.rs",
-    "line": 1126,
+    "line": 1170,
     "decision": "let Some(offset) = &l.offset",
     "conditions": 1,
     "vectors_required": 2,
@@ -26332,7 +26362,7 @@
   {
     "id": "parser_column_validate_select_683470e6",
     "file": "src/parser/column.rs",
-    "line": 1127,
+    "line": 1171,
     "decision": "!matches!(&offset.kind, ExprKind::Literal(AstLiteral::Integer(n)) if *n >= 0)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26342,7 +26372,7 @@
   {
     "id": "parser_column_validate_select_4cae2899",
     "file": "src/parser/column.rs",
-    "line": 1133,
+    "line": 1177,
     "decision": "has_cross_join && select.limit.is_none()",
     "conditions": 2,
     "vectors_required": 3,
@@ -26352,7 +26382,7 @@
   {
     "id": "parser_column_validate_select_b892af2d",
     "file": "src/parser/column.rs",
-    "line": 1156,
+    "line": 1200,
     "decision": "has_window && has_expr",
     "conditions": 2,
     "vectors_required": 3,
@@ -26362,7 +26392,7 @@
   {
     "id": "parser_column_validate_select_8e763e04",
     "file": "src/parser/column.rs",
-    "line": 1162,
+    "line": 1206,
     "decision": "has_agg && !has_window",
     "conditions": 2,
     "vectors_required": 3,
@@ -26372,7 +26402,7 @@
   {
     "id": "parser_column_validate_select_95a2cc4c",
     "file": "src/parser/column.rs",
-    "line": 1182,
+    "line": 1226,
     "decision": "match item {\n                ItemKind::Star | ItemKind::Window => continue,\n                ItemKind::Column | ItemKind::Expr if grouped_by_alias => continue,\n                ItemKind::Column if group_by.is_empty() => {\n                    \"a plain column alongside an aggregate requires GROUP BY\".to_string()\n                }\n                ItemKind::Expr if group_by.is_empty() => {\n                    \"a computed expression alongside an aggregate requires GROUP BY\".to_string()\n                }\n                ItemKind::Column | ItemKind::Expr | ItemKind::Agg => {\n                    match ungrouped_column(expr, &group_by)? {\n                        Some(name) => {\n                            format!(\"column `{name}` must be a GROUP BY key or inside an aggregate\")\n                        }\n                        None => continue,\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26382,7 +26412,7 @@
   {
     "id": "parser_column_validate_select_a8a85530",
     "file": "src/parser/column.rs",
-    "line": 1184,
+    "line": 1228,
     "decision": "grouped_by_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -26392,7 +26422,7 @@
   {
     "id": "parser_column_validate_select_0aa91de1",
     "file": "src/parser/column.rs",
-    "line": 1185,
+    "line": 1229,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26402,7 +26432,7 @@
   {
     "id": "parser_column_validate_select_0aa91de1_2",
     "file": "src/parser/column.rs",
-    "line": 1188,
+    "line": 1232,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26412,7 +26442,7 @@
   {
     "id": "parser_column_validate_select_b61dc80b",
     "file": "src/parser/column.rs",
-    "line": 1192,
+    "line": 1236,
     "decision": "match ungrouped_column(expr, &group_by)? {\n                        Some(name) => {\n                            format!(\"column `{name}` must be a GROUP BY key or inside an aggregate\")\n                        }\n                        None => continue,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26422,7 +26452,7 @@
   {
     "id": "parser_column_validate_select_75087af1",
     "file": "src/parser/column.rs",
-    "line": 1203,
+    "line": 1247,
     "decision": "let Some(having) = &select.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -26432,7 +26462,7 @@
   {
     "id": "parser_column_validate_having_6416ea7f",
     "file": "src/parser/column.rs",
-    "line": 1221,
+    "line": 1265,
     "decision": "has_window",
     "conditions": 1,
     "vectors_required": 2,
@@ -26442,7 +26472,7 @@
   {
     "id": "parser_column_validate_having_8d3dd7da",
     "file": "src/parser/column.rs",
-    "line": 1237,
+    "line": 1281,
     "decision": "group_by.is_empty() && !has_agg && !expr_contains_agg(having)",
     "conditions": 3,
     "vectors_required": 4,
@@ -26452,7 +26482,7 @@
   {
     "id": "parser_column_validate_having_186f6f57",
     "file": "src/parser/column.rs",
-    "line": 1244,
+    "line": 1288,
     "decision": "match col {\n        crate::parser::ast::ResultColumn::Expr {\n            alias: Some(alias), ..\n        } => Some(alias.clone()),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26462,7 +26492,7 @@
   {
     "id": "parser_column_validate_having_89ee9db7",
     "file": "src/parser/column.rs",
-    "line": 1250,
+    "line": 1294,
     "decision": "match ungrouped_column(having, &known)? {\n        Some(name) => Err(unsupported(\n            having.span,\n            format!(\"column `{name}` must be a GROUP BY key or inside an aggregate\"),\n        )),\n        None => Ok(()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26472,7 +26502,7 @@
   {
     "id": "parser_column_clear_distinct_c2026133",
     "file": "src/parser/column.rs",
-    "line": 1262,
+    "line": 1306,
     "decision": "match &mut expr.kind {\n        ExprKind::FunctionCall {\n            name,\n            distinct,\n            args,\n            ..\n        } if is_known_agg_name(name) => {\n            validate_distinct(span, name, *distinct, args)?;\n            *distinct = false;\n            Ok(())\n        }\n        ExprKind::Binary { lhs, rhs, .. }\n        | ExprKind::Is { lhs, rhs, .. }\n        | ExprKind::Like {\n            expr: lhs,\n            pattern: rhs,\n            ..\n        } => {\n            clear_distinct(lhs)?;\n            clear_distinct(rhs)\n        }\n        ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Paren(inner) => clear_distinct(inner),\n        _ => Ok(()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26482,7 +26512,7 @@
   {
     "id": "parser_column_clear_distinct_646e078e",
     "file": "src/parser/column.rs",
-    "line": 1268,
+    "line": 1312,
     "decision": "is_known_agg_name(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26492,7 +26522,7 @@
   {
     "id": "parser_column_parse_3142afd4",
     "file": "src/parser/column.rs",
-    "line": 1298,
+    "line": 1342,
     "decision": "match crate::parser::row::parse_select_with_subscripts(sql_text) {\n        ParseOutcome::Accepted(mut select) => {\n            validate_select(&mut select)?;\n            Ok(*select)\n        }\n        ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {\n            Err(from_outcome(message, span))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26502,7 +26532,7 @@
   {
     "id": "parser_column_parse_explain_d923390a",
     "file": "src/parser/column.rs",
-    "line": 1332,
+    "line": 1376,
     "decision": "!starts_with_explain",
     "conditions": 1,
     "vectors_required": 2,
@@ -26512,7 +26542,7 @@
   {
     "id": "parser_column_parse_explain_ecd02f8a",
     "file": "src/parser/column.rs",
-    "line": 1335,
+    "line": 1379,
     "decision": "match crate::parser::row::parse_explain_with_subscripts(sql_text) {\n        ParseOutcome::Accepted(explain) => {\n            let form = if explain.query_plan {\n                Explain::QueryPlan\n            } else {\n                Explain::Opcodes\n            };\n            // This entry point's return type (`Select`) predates #524's\n            // `EXPLAIN UPDATE`/`EXPLAIN DELETE` widening — `column-rs`'s\n            // analytics subset has no UPDATE/DELETE codegen to hand an\n            // `Update`/`Delete` body to, so those remain `Unsupported`\n            // here (row's own `parse_explain`/`compile_statement` do\n            // support them).\n            let mut select = match explain.body {\n                crate::parser::ast::ExplainBody::Select(select) => *select,\n                crate::parser::ast::ExplainBody::Update(update) => {\n                    return Err(unsupported(\n                        update.span,\n                        \"EXPLAIN UPDATE is not supported here\".to_string(),\n                    ))\n                }\n                crate::parser::ast::ExplainBody::Delete(delete) => {\n                    return Err(unsupported(\n                        delete.span,\n                        \"EXPLAIN DELETE is not supported here\".to_string(),\n                    ))\n                }\n            };\n            validate_select(&mut select)?;\n            Ok((form, select))\n        }\n        ParseOutcome::Unsupported { message, span } | ParseOutcome::Invalid { message, span } => {\n            Err(from_outcome(message, span))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26522,7 +26552,7 @@
   {
     "id": "parser_column_parse_explain_89444f51",
     "file": "src/parser/column.rs",
-    "line": 1337,
+    "line": 1381,
     "decision": "explain.query_plan",
     "conditions": 1,
     "vectors_required": 2,
@@ -26532,7 +26562,7 @@
   {
     "id": "parser_column_parse_explain_a9200493",
     "file": "src/parser/column.rs",
-    "line": 1348,
+    "line": 1392,
     "decision": "match explain.body {\n                crate::parser::ast::ExplainBody::Select(select) => *select,\n                crate::parser::ast::ExplainBody::Update(update) => {\n                    return Err(unsupported(\n                        update.span,\n                        \"EXPLAIN UPDATE is not supported here\".to_string(),\n                    ))\n                }\n                crate::parser::ast::ExplainBody::Delete(delete) => {\n                    return Err(unsupported(\n                        delete.span,\n                        \"EXPLAIN DELETE is not supported here\".to_string(),\n                    ))\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26542,7 +26572,7 @@
   {
     "id": "parser_column_in_list_is_lowered_to_comparisons_everywhere_005ab458",
     "file": "src/parser/column.rs",
-    "line": 1422,
+    "line": 1466,
     "decision": "match &select.columns[0] {\n                ResultColumn::Expr { expr, .. } => format!(\"{expr}\"),\n                other => format!(\"{other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26552,7 +26582,7 @@
   {
     "id": "parser_column_bare_col_0f88bcf2",
     "file": "src/parser/column.rs",
-    "line": 1479,
+    "line": 1565,
     "decision": "match rc {\n            ResultColumn::Expr { expr, alias: None }\n                if matches!(expr.kind, ExprKind::Column { .. }) =>\n            {\n                column_name(expr).ok()\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26562,7 +26592,7 @@
   {
     "id": "parser_column_bare_col_0fa6e87f",
     "file": "src/parser/column.rs",
-    "line": 1481,
+    "line": 1567,
     "decision": "matches!(expr.kind, ExprKind::Column { .. })",
     "conditions": 1,
     "vectors_required": 2,
@@ -26572,7 +26602,7 @@
   {
     "id": "parser_column_from_name_f82695b0",
     "file": "src/parser/column.rs",
-    "line": 1500,
+    "line": 1586,
     "decision": "match &from.first.kind {\n            TableRefKind::Name(name) => name,\n            TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26582,7 +26612,7 @@
   {
     "id": "parser_column_parses_is_null_ed581d7b",
     "file": "src/parser/column.rs",
-    "line": 2302,
+    "line": 2388,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(!negated),\n            ExprKind::Is { negated, .. } => assert!(!negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -26592,7 +26622,7 @@
   {
     "id": "parser_column_parses_is_not_null_9a123387",
     "file": "src/parser/column.rs",
-    "line": 2312,
+    "line": 2398,
     "decision": "match &where_expr(&q).kind {\n            ExprKind::IsNull { negated, .. } => assert!(negated),\n            ExprKind::Is { negated, .. } => assert!(negated),\n            other => panic!(\"expected IsNull-shaped expr, found {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
