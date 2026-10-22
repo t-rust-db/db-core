@@ -16,6 +16,7 @@ pub fn scan(s: &str) -> impl Iterator<Item = (&str, Option<&str>)> {
 }
 
 /// The values of `s` that were written in quotes, escapes left verbatim.
+#[cfg(feature = "ingest")]
 pub(crate) fn quoted_values(s: &str) -> impl Iterator<Item = &str> {
     tokens(s).filter_map(|(_, value)| match value {
         Some((text, true)) => Some(text),
