@@ -13,6 +13,18 @@ use crate::vm::row::{Instruction, Opcode, Program, P4};
 /// frees the index's pages, removes its `sqlite_master` row, and bumps the
 /// schema cookie at exec time.
 pub fn compile_drop_index(di: &DropIndex, root_page: u32) -> Result<Program, CodegenError> {
+    // An implicit PRIMARY KEY/UNIQUE index (#694) lives and dies with its
+    // constraint, as sqlite3 words it. Only catalogued indexes reach
+    // here, and the prefix is reserved, so the name alone identifies one.
+    if di
+        .name
+        .get(.."sqlite_autoindex_".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("sqlite_autoindex_"))
+    {
+        return Err(CodegenError::Rejected(
+            "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped".to_string(),
+        ));
+    }
     let mut em = Emitter::new();
     let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
     let body_start = em.new_label();
@@ -56,5 +68,20 @@ mod tests {
             }
             other => panic!("expected P4::DropIndex, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn an_implicit_index_cannot_be_dropped() {
+        let di = match parse_drop_index("DROP INDEX sqlite_autoindex_t_1") {
+            ParseOutcome::Accepted(d) => d,
+            other => panic!("expected Accepted, got {other:?}"),
+        };
+        assert_eq!(
+            compile_drop_index(&di, 3).unwrap_err(),
+            CodegenError::Rejected(
+                "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped"
+                    .to_string()
+            )
+        );
     }
 }

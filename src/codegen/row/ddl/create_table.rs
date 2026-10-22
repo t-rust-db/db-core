@@ -48,6 +48,12 @@ pub fn compile_create_table(create: &CreateTable, source: &str) -> Result<Progra
         P4::CreateTable {
             name: create.name.clone(),
             sql,
+            without_rowid: create.without_rowid,
+            autoindexes: crate::schema::autoindexes(create)
+                .into_iter()
+                .filter(|index| !index.is_table)
+                .map(|index| format!("sqlite_autoindex_{}_{}", create.name, index.number))
+                .collect(),
         },
     ));
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
@@ -359,11 +365,93 @@ mod tests {
             vec![Opcode::Init, Opcode::CreateTable, Opcode::Halt]
         );
         match &program.instructions[1].p4 {
-            P4::CreateTable { name, sql: got_sql } => {
+            P4::CreateTable {
+                name,
+                sql: got_sql,
+                without_rowid,
+                autoindexes,
+            } => {
                 assert_eq!(name, "t");
                 assert_eq!(got_sql, sql);
+                assert!(!without_rowid);
+                assert!(autoindexes.is_empty());
             }
             other => panic!("expected P4::CreateTable, got {other:?}"),
         }
+    }
+
+    fn autoindex_names(sql: &str) -> Vec<String> {
+        let create = match crate::parser::row::error::parse_create_table(sql) {
+            ParseOutcome::Accepted(c) => c,
+            other => panic!("expected Accepted, got {other:?}"),
+        };
+        let program = compile_create_table(&create, sql).unwrap();
+        match &program.instructions[1].p4 {
+            P4::CreateTable { autoindexes, .. } => autoindexes.clone(),
+            other => panic!("expected P4::CreateTable, got {other:?}"),
+        }
+    }
+
+    /// The implicit indexes sqlite3 3.51 gives each of these tables,
+    /// checked against its `sqlite_schema` (#694).
+    #[test]
+    fn implicit_indexes_follow_sqlite3_naming_and_dedupe() {
+        for (sql, count) in [
+            ("CREATE TABLE t1 (x TEXT PRIMARY KEY, y INT UNIQUE, z)", 2),
+            (
+                "CREATE TABLE t2 (x, y, UNIQUE(y), PRIMARY KEY(x, y), UNIQUE(x))",
+                3,
+            ),
+            ("CREATE TABLE t3 (x INTEGER PRIMARY KEY, y UNIQUE)", 1),
+            ("CREATE TABLE t4 (x TEXT PRIMARY KEY, UNIQUE(x))", 1),
+            (
+                "CREATE TABLE t6 (x, y, PRIMARY KEY(x), UNIQUE(x COLLATE NOCASE))",
+                2,
+            ),
+            // The PRIMARY KEY of a WITHOUT ROWID table is the table: it
+            // takes `_1` but gets no row, so only `y` is created.
+            (
+                "CREATE TABLE t7 (x TEXT PRIMARY KEY, y UNIQUE) WITHOUT ROWID",
+                1,
+            ),
+            ("CREATE TABLE t8 (x INT PRIMARY KEY)", 1),
+            ("CREATE TABLE t9 (x INTEGER PRIMARY KEY DESC)", 1),
+            ("CREATE TABLE t10 (x, PRIMARY KEY(x DESC))", 1),
+            // Table-level DESC does not stop a rowid alias; the column
+            // constraint form (`t9`) does.
+            ("CREATE TABLE t18 (a INTEGER, b, PRIMARY KEY(a DESC))", 0),
+            (
+                "CREATE TABLE t11 (a, b, UNIQUE(a,b), UNIQUE(b,a), UNIQUE(a,b))",
+                2,
+            ),
+            (
+                "CREATE TABLE t12 (a TEXT COLLATE NOCASE PRIMARY KEY, b UNIQUE)",
+                2,
+            ),
+            ("CREATE TABLE t13 (a INTEGER, b, PRIMARY KEY(a))", 0),
+            ("CREATE TABLE t14 (a INTEGER, b, PRIMARY KEY(a, b))", 1),
+            ("CREATE TABLE t15 (a, UNIQUE(a), PRIMARY KEY(a))", 1),
+            ("CREATE TABLE t17 (a, b)", 0),
+        ] {
+            let table = sql.split_whitespace().nth(2).unwrap();
+            let names = autoindex_names(sql);
+            assert_eq!(names.len(), count, "{sql}: {names:?}");
+            assert!(
+                names
+                    .iter()
+                    .all(|n| n.starts_with(&format!("sqlite_autoindex_{table}_"))),
+                "{sql}: {names:?}"
+            );
+        }
+        // Numbers come from the declaration order, a WITHOUT ROWID
+        // key's slot included.
+        assert_eq!(
+            autoindex_names("CREATE TABLE t7 (x TEXT PRIMARY KEY, y UNIQUE) WITHOUT ROWID"),
+            vec!["sqlite_autoindex_t7_2"]
+        );
+        assert_eq!(
+            autoindex_names("CREATE TABLE t1 (x TEXT PRIMARY KEY, y INT UNIQUE, z)"),
+            vec!["sqlite_autoindex_t1_1", "sqlite_autoindex_t1_2"]
+        );
     }
 }

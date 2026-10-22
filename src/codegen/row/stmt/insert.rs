@@ -46,12 +46,13 @@
 //! probes the candidate row via the new `Opcode::NoConflict` real-index
 //! seek+branch primitive (`src/vdbe/cursor.rs`, built on
 //! `IndexCursor::seek`) and dispatches `ON CONFLICT` the same way
-//! `emit_pk_conflict` does for the rowid-PK case. A composite
-//! `PRIMARY KEY(...)`/`UNIQUE(...)` *table* constraint with no backing
-//! `CREATE INDEX`/on-disk index (this codebase doesn't auto-create
-//! `sqlite_autoindex_*` entries yet) has no real index to seek against,
-//! so it still isn't enforced — that's a `CREATE TABLE`-side gap, not
-//! an INSERT-codegen one.
+//! `emit_pk_conflict` does for the rowid-PK case. A `PRIMARY KEY`/
+//! `UNIQUE` constraint is such an index too: `CREATE TABLE` creates its
+//! `sqlite_autoindex_<table>_<n>` entry and the catalog reads sqlite3's
+//! back (#694), so it is enforced like any `CREATE UNIQUE INDEX`. A
+//! `NULL` in any key column never conflicts, and an index keyed by a
+//! non-`BINARY` collation is refused (`index_maintenance::
+//! reject_non_binary_key`), not silently mis-keyed.
 //!
 //! Known simplifications (deferred to follow-up tickets, not chased
 //! here):
@@ -148,7 +149,7 @@ const SQLITE_CONSTRAINT_PRIMARYKEY: i32 = 1555;
 pub(crate) const SQLITE_CONSTRAINT_CHECK: i32 = 275;
 // #207: non-rowid UNIQUE violation, enforced via the new `NoConflict`
 // real-index seek+branch primitive (`src/vdbe/cursor.rs::no_conflict`).
-const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
+pub(crate) const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
 
 #[derive(Debug, Default)]
 pub(crate) struct ColumnPlan {
@@ -984,6 +985,7 @@ fn emit_unique_check(
     let mut start = None;
     let mut key_col_indices = Vec::with_capacity(index.columns.len());
     for col in &index.columns {
+        crate::codegen::row::index_maintenance::reject_non_binary_key(index, col)?;
         if col.desc {
             return Err(CodegenError::Unsupported {
                 reason: format!(
@@ -1017,6 +1019,17 @@ fn emit_unique_check(
     let conflict_rowid_reg = reg.alloc();
 
     let no_conflict = em.new_label();
+    // A NULL in any key column never conflicts: sqlite3 treats NULLs as
+    // distinct in a UNIQUE index, so `(1, NULL)` can repeat (#694).
+    for offset in 0..count {
+        let null_addr = em.emit(Instruction::new(
+            Opcode::IsNull,
+            start.saturating_add(offset),
+            0,
+            0,
+        ));
+        em.patch_p2(null_addr, no_conflict);
+    }
     let addr = em.emit(Instruction::with_p4(
         Opcode::NoConflict,
         index_cursor,
@@ -1056,7 +1069,8 @@ fn emit_unique_check(
             em.place(seek_ok);
         }
         ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {
-            let message = format!("UNIQUE constraint failed: {}.{}", schema.name, index.name);
+            let message =
+                crate::codegen::row::index_maintenance::unique_violation_message(schema, index);
             em.emit(Instruction::with_p4(
                 Opcode::Halt,
                 SQLITE_CONSTRAINT_UNIQUE,

@@ -4,6 +4,19 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.161.0] - 2026-10-22
+
+### Fixed
+
+- **`PRIMARY KEY` and `UNIQUE` constraints write a valid file and are enforced** (#694). A `PRIMARY KEY` on a non-`INTEGER` column, a composite `PRIMARY KEY` and a `UNIQUE` constraint define an implicit index, `sqlite_autoindex_<table>_<n>`. `CREATE TABLE` never created it, so sqlite3 reported the file as malformed (`PRAGMA integrity_check`) and a duplicate key was accepted. It now allocates each index's b-tree and writes its `sqlite_schema` row with a `NULL` `sql`, numbered and de-duplicated as sqlite3 does (a rowid alias needs none; a `WITHOUT ROWID` table's key is the table). The catalog reads these rows back from files sqlite3 wrote, so `INSERT`, `UPDATE` and `DELETE` keep them consistent and `DROP TABLE` frees them. `CREATE TABLE ... WITHOUT ROWID` now allocates an index b-tree for its root, so the empty table is a valid file (writes to it are still unsupported, #696). `DROP INDEX sqlite_autoindex_*` is refused as sqlite3 refuses it.
+- **A `UNIQUE` index is enforced on `UPDATE`, and a `NULL` key never conflicts.** `UPDATE` accepted a key that duplicated another row; it now fails with `UNIQUE constraint failed`, an unchanged key is not a conflict with itself, and `UPDATE OR IGNORE` skips the row. `UPDATE OR REPLACE` on a table with a touched unique index is refused (it would have to delete the other row), not left unenforced. `INSERT` rejected a second row with a `NULL` in a unique key; sqlite3 allows it. The error names the columns (`UNIQUE constraint failed: t.a, t.b`), not the index.
+- **A table-level `PRIMARY KEY (c)` over an `INTEGER` column is the rowid in a table of any width.** It was recognized only in a one-column table, so in `CREATE TABLE t (a INTEGER, b, PRIMARY KEY (a))` the column read as `NULL`.
+
+### Changed
+
+- **Writes to a table with a non-`BINARY` index key are refused** (`Unsupported`). The index b-tree orders keys byte for byte, so a `COLLATE NOCASE` or `RTRIM` key was written out of order and a uniqueness probe missed case variants. Reads and updates that leave such a key alone are unaffected.
+- **Public API:** `P4::CreateTable` gains `without_rowid` and `autoindexes`; `SchemaStorage` gains `insert_autoindex_row` (the default refuses, so a storage without it fails `CREATE TABLE` instead of writing a malformed file); `storage::row::btree::insert_autoindex_master_row` is new.
+
 ## [0.160.0] - 2026-10-22
 
 ### Changed

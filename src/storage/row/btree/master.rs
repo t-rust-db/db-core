@@ -112,6 +112,27 @@ pub fn insert_master_row(
     header: &DatabaseHeader,
     entry: &MasterEntry,
 ) -> Result<(), BtreeError> {
+    insert_master_values(pager, header, entry, Value::Text(entry.sql.as_str().into()))
+}
+
+/// Inserts the `sqlite_master` row of an implicit `PRIMARY KEY`/`UNIQUE`
+/// index (`sqlite_autoindex_<table>_<n>`): `entry.sql` is ignored and the
+/// `sql` column is `NULL`, as sqlite3 writes it (#694). Does not bump the
+/// schema cookie -- see [`insert_master_row`].
+pub fn insert_autoindex_master_row(
+    pager: &mut Pager,
+    header: &DatabaseHeader,
+    entry: &MasterEntry,
+) -> Result<(), BtreeError> {
+    insert_master_values(pager, header, entry, Value::Null)
+}
+
+fn insert_master_values(
+    pager: &mut Pager,
+    header: &DatabaseHeader,
+    entry: &MasterEntry,
+    sql: Value,
+) -> Result<(), BtreeError> {
     let next_rowid = max_rowid(pager, header, SQLITE_MASTER_ROOT_PAGE)?
         .unwrap_or(0)
         .saturating_add(1);
@@ -120,7 +141,7 @@ pub fn insert_master_row(
         Value::Text(entry.name.as_str().into()),
         Value::Text(entry.tbl_name.as_str().into()),
         Value::Integer(entry.rootpage as i64),
-        Value::Text(entry.sql.as_str().into()),
+        sql,
     ];
     let payload = encode_record(&values, header.text_encoding);
     super::insert_row(pager, header, SQLITE_MASTER_ROOT_PAGE, next_rowid, &payload)

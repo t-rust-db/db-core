@@ -300,11 +300,9 @@ fn default_insert_conflict_action_reports_the_error_but_keeps_prior_rows_in_the_
 
 #[test]
 fn unique_index_rejects_a_duplicate_non_pk_value() {
-    // An inline column `UNIQUE` constraint alone has no backing index
-    // (db-core doesn't auto-create a `sqlite_autoindex_*` entry the way
-    // stock SQLite does -- a documented `CREATE TABLE`-side gap, not an
-    // INSERT-codegen one), so enforcement here goes through an explicit
-    // `CREATE UNIQUE INDEX` instead.
+    // An explicit `CREATE UNIQUE INDEX`; the implicit index of an inline
+    // `UNIQUE`/`PRIMARY KEY` constraint is covered by `autoindex_test.rs`
+    // (#694).
     let db = TempDb::new("unique");
     let mut e = open(&db);
     e.run_query(

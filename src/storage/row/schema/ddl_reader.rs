@@ -97,6 +97,10 @@ pub fn read_schema_and_views<P: PageSource>(
     // a hash lookup instead of an O(indexes × tables) linear scan (#589).
     let mut table_pos: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut pending_indexes: Vec<(String, IndexSchema)> = Vec::new();
+    // `(table, index name, root page)` of each implicit PRIMARY KEY /
+    // UNIQUE index (a `NULL` `sql`), resolved against its table's DDL
+    // once every table is known (#694).
+    let mut pending_autoindexes: Vec<(String, String, u32)> = Vec::new();
     let mut row = cursor.first_row()?;
     while let Some(r) = row {
         let values = decode_record(&r.payload, encoding)?;
@@ -109,7 +113,10 @@ pub fn read_schema_and_views<P: PageSource>(
                 table_pos.insert(schema.name.clone(), schemas.len());
                 schemas.push(schema);
             }
-            "index" => pending_indexes.extend(index_schema(&values)),
+            "index" => match index_schema(&values) {
+                Some(index) => pending_indexes.push(index),
+                None => pending_autoindexes.extend(autoindex_row(&values)),
+            },
             "view" => views.push(ViewSchema {
                 name: text(values.get(1)).to_string(),
                 sql: text(values.get(4)).to_string(),
@@ -117,6 +124,32 @@ pub fn read_schema_and_views<P: PageSource>(
             _ => {}
         }
         row = cursor.next_row()?;
+    }
+    // The implicit indexes come first: sqlite3 creates them with their
+    // table, before any `CREATE INDEX` on it.
+    for (table_name, index_name, root_page) in pending_autoindexes {
+        let Some(schema) = table_pos
+            .get(&table_name)
+            .and_then(|&pos| schemas.get_mut(pos))
+        else {
+            continue;
+        };
+        let number = index_name
+            .rsplit('_')
+            .next()
+            .and_then(|n| n.parse::<usize>().ok());
+        let columns = crate::schema::autoindexes_from_sql(&schema.sql)
+            .into_iter()
+            .find(|auto| Some(auto.number) == number && !auto.is_table)
+            .map(|auto| auto.columns);
+        if let Some(columns) = columns {
+            schema.indexes.push(IndexSchema {
+                name: index_name,
+                unique: true,
+                columns,
+                root_page,
+            });
+        }
     }
     for (table_name, index) in pending_indexes {
         if let Some(schema) = table_pos
@@ -223,11 +256,28 @@ fn table_schema(values: &[Value]) -> TableSchema {
     .with_computed_rowid_alias()
 }
 
+/// A `sqlite_master` row for an implicit `PRIMARY KEY`/`UNIQUE` index
+/// (`sqlite_autoindex_<table>_<n>`, `sql` is `NULL`): the owning table,
+/// the index's name and its root page. `None` for any other index row.
+fn autoindex_row(values: &[Value]) -> Option<(String, String, u32)> {
+    let name = text(values.get(1));
+    let Some(Value::Null) = values.get(4) else {
+        return None;
+    };
+    name.strip_prefix("sqlite_autoindex_")?;
+    let root_page = match values.get(3) {
+        Some(Value::Integer(i)) => u32::try_from(*i).unwrap_or(0),
+        _ => 0,
+    };
+    Some((text(values.get(2)).to_string(), name.to_string(), root_page))
+}
+
 /// Parses a `sqlite_master` row with `type = 'index'` into the owning
 /// table's name and a naive [`IndexSchema`]. Returns `None` for anything
 /// this naive reader can't find a column list in — most notably
-/// auto-indexes (`sql` is `NULL` in `sqlite_master`) — treated identically
-/// to unparseable table DDL: graceful, never an error.
+/// auto-indexes (`sql` is `NULL` in `sqlite_master`; [`autoindex_row`]
+/// picks those up) — treated identically to unparseable table DDL:
+/// graceful, never an error.
 fn index_schema(values: &[Value]) -> Option<(String, IndexSchema)> {
     let name = text(values.get(1)).to_string();
     let table_name = text(values.get(2)).to_string();

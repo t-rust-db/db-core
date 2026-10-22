@@ -483,12 +483,21 @@ pub enum P4 {
     /// `GROUP BY` term, in `GROUP BY` order.
     GroupKey(Vec<GroupKeyColumn>),
     /// `CreateTable` (db-core#97): the new table's name and verbatim
-    /// `sqlite_master.sql` text.
+    /// `sqlite_master.sql` text, plus what #694 added: whether its
+    /// b-tree is an index b-tree and the implicit indexes to create.
     CreateTable {
         /// The new table's name.
         name: String,
         /// The verbatim `sqlite_master.sql` text.
         sql: String,
+        /// `WITHOUT ROWID`: the table's b-tree is an index b-tree, not
+        /// a table b-tree.
+        without_rowid: bool,
+        /// The implicit `PRIMARY KEY`/`UNIQUE` indexes
+        /// (`sqlite_autoindex_<table>_<n>`), in creation order: each
+        /// gets an empty index b-tree and a `sqlite_master` row with a
+        /// `NULL` `sql`, right after the table's own row.
+        autoindexes: Vec<String>,
     },
     /// `CreateView` (db-core#97): same shape as `CreateTable`'s payload,
     /// its own variant so a `Program`'s P4 operand names the DDL kind

@@ -28,8 +28,8 @@ pub use error::BtreeError;
 pub use index::{delete_entry, insert_entry, IndexCursor, IndexRow};
 pub use master::{
     bump_schema_cookie, delete_master_row, delete_stat1_rows_for_table,
-    ensure_sqlite_sequence_table, ensure_sqlite_stat1_table, insert_master_row, insert_stat1_row,
-    update_sequence, MasterEntry, SQLITE_MASTER_ROOT_PAGE,
+    ensure_sqlite_sequence_table, ensure_sqlite_stat1_table, insert_autoindex_master_row,
+    insert_master_row, insert_stat1_row, update_sequence, MasterEntry, SQLITE_MASTER_ROOT_PAGE,
 };
 pub use schema::{create_empty_index_root, create_empty_table_root, populate_index_from_table};
 pub use table::{delete_row, insert_row, update_row};
