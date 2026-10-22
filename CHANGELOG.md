@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.159.1] - 2026-10-22
+
+### Fixed
+
+- **A REAL becomes text the way sqlite3 3.53 does** (#652): `%!.17g` through `sqlite3FpDecode`, whose double-double arithmetic approximates past about 16 digits, where db-core followed 3.51's `%!.15g`. `CAST(1e15 AS TEXT)` is `1000000000000000.0` (was `1.0e+15`), `1.0/3` is `0.33333333333333332`, `123456789012345678.0` is `1.2345678901234568e+17`, `printf('%!.17g', 0.000123456)` is `0.000123456`, an infinity is `Inf` and negative zero `0.0`. This covers `CAST`, `||`, the text functions, result display and the shell modes. `printf`'s `%f`, `%e` and `%g` use the same decoder, including its rounding of exact ties (`printf('%.0e', 450.0)` is `4e+02`) and `!` past 18 digits (up to 26), and `#` drops the sign of a negative value that shows as zero. `tools/check_row_functions_oracle.py` gains a REAL-to-text section and `--random N [SEED]`, a randomized byte-for-byte comparison of REAL-to-text and `printf`, run by `make check-row-functions-oracle`.
+
 ## [0.159.0] - 2026-10-22
 
 ### Changed
