@@ -6,8 +6,7 @@
 #[cfg(test)]
 mod decoder_fuzz;
 mod snappy;
-pub mod zstd;
-pub mod zstd_spike;
+mod zstd;
 
 pub use snappy::SnappyError;
 pub use zstd::ZstdError;
@@ -67,12 +66,7 @@ pub fn decompress<'a>(
     match codec {
         Codec::Uncompressed => Ok(Cow::Borrowed(compressed)),
         Codec::Snappy => Ok(Cow::Owned(snappy::decompress(compressed)?)),
-        // SPIKE #697: the prototype decoder, falling back to ruzstd on any
-        // frame it refuses.
-        Codec::Zstd => match zstd_spike::decompress(compressed, uncompressed_size) {
-            Ok(body) => Ok(Cow::Owned(body)),
-            Err(_) => Ok(Cow::Owned(zstd::decompress(compressed, uncompressed_size)?)),
-        },
+        Codec::Zstd => Ok(Cow::Owned(zstd::decompress(compressed, uncompressed_size)?)),
         Codec::Other(c) => Err(CompressionError::UnsupportedCodec(c)),
     }
 }

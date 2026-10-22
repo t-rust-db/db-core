@@ -1,4 +1,4 @@
-//! SPIKE #697 (not for merging): a zstd decoder for Parquet pages, from
+//! SPIKE #697: a zstd decoder for Parquet pages, from
 //! RFC 8878, that writes straight into an output buffer of the page's
 //! known size. No ring buffer, no `Read` trait, no dictionary support, no
 //! checksum verification (the checksum is skipped).
@@ -10,6 +10,9 @@
     clippy::cast_possible_wrap,
     clippy::cast_lossless,
     clippy::arithmetic_side_effects,
+    clippy::needless_late_init,
+    clippy::needless_range_loop,
+    clippy::same_item_push,
     missing_docs
 )]
 
