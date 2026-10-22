@@ -50,9 +50,7 @@ pub fn compile_delete_with_catalog(
     catalog: &[TableSchema],
 ) -> Result<Program, CodegenError> {
     if schema.without_rowid {
-        return Err(CodegenError::Unsupported {
-            reason: "WITHOUT ROWID tables are not supported by DELETE codegen yet".to_string(),
-        });
+        return compile_delete_without_rowid(delete, schema, catalog);
     }
 
     let mut em = Emitter::new();
@@ -158,6 +156,50 @@ pub fn compile_delete_with_catalog(
     em.patch_p2(next_addr, loop_start);
 
     em.place(end_label);
+    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+    Ok(em.finish())
+}
+
+/// `DELETE` on a `WITHOUT ROWID` table (#722): collect the key of every
+/// row the `WHERE` keeps, then seek each and delete it
+/// (`without_rowid::emit_two_pass` says why in two passes).
+fn compile_delete_without_rowid(
+    delete: &Delete,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+) -> Result<Program, CodegenError> {
+    use super::without_rowid::{emit_two_pass, writable_key};
+
+    let key = writable_key(schema, "DELETE")?;
+    let mut em = Emitter::new();
+    let mut reg = RegAlloc::new();
+
+    let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
+    let body_start = em.new_label();
+    em.place(body_start);
+    em.patch_p2(init_addr, body_start);
+
+    let root_page = valid_table_root_page(schema)?;
+    em.emit(Instruction::new(
+        Opcode::OpenWrite,
+        TABLE_CURSOR,
+        root_page,
+        0,
+    ));
+    let scope = Scope::single(schema, TABLE_CURSOR).with_catalog(catalog);
+    emit_two_pass(
+        &mut em,
+        &mut reg,
+        schema,
+        &scope,
+        delete.where_clause.as_ref(),
+        &key,
+        TABLE_CURSOR,
+        |em, _reg, _skip| {
+            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0).with_p5(OPFLAG_NCHANGE));
+            Ok(())
+        },
+    )?;
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
     Ok(em.finish())
 }

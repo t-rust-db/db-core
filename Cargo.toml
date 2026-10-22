@@ -63,6 +63,11 @@ path = "tests/unit/without_rowid_read_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_without_rowid_write"
+path = "tests/unit/without_rowid_write_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_upsert"
 path = "tests/unit/upsert_test.rs"
 required-features = ["engine-row"]

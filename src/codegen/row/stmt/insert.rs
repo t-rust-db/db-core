@@ -145,7 +145,7 @@ const FIRST_INDEX_CURSOR: i32 = 2;
 // codebase defines these yet (grep turns up nothing), so they're
 // introduced here rather than borrowed from an existing constant.
 pub(crate) const SQLITE_CONSTRAINT_NOTNULL: i32 = 1299;
-const SQLITE_CONSTRAINT_PRIMARYKEY: i32 = 1555;
+pub(crate) const SQLITE_CONSTRAINT_PRIMARYKEY: i32 = 1555;
 pub(crate) const SQLITE_CONSTRAINT_CHECK: i32 = 275;
 // #207: non-rowid UNIQUE violation, enforced via the new `NoConflict`
 // real-index seek+branch primitive (`src/vdbe/cursor.rs::no_conflict`).
@@ -291,16 +291,45 @@ pub fn compile_insert(
     schema: &TableSchema,
     select_schemas: Option<&[TableSchema]>,
 ) -> Result<Program, CodegenError> {
-    if schema.without_rowid {
-        return Err(CodegenError::Unsupported {
-            reason: "WITHOUT ROWID tables are not supported by INSERT codegen yet".to_string(),
-        });
-    }
+    // A `WITHOUT ROWID` table is written by key (#722): no rowid, no
+    // rowid-keyed upsert, and a source scan must not read the b-tree it is
+    // inserting into (a split under a live scan would move rows it has yet
+    // to reach).
+    let without_rowid_key = if schema.without_rowid {
+        if !insert.upsert.is_empty() {
+            return Err(CodegenError::Unsupported {
+                reason: "INSERT ... ON CONFLICT on a WITHOUT ROWID table isn't supported yet"
+                    .to_string(),
+            });
+        }
+        if select_schemas
+            .unwrap_or_default()
+            .iter()
+            .any(|source| source.name.eq_ignore_ascii_case(&schema.name))
+        {
+            return Err(CodegenError::Unsupported {
+                reason: format!(
+                    "INSERT ... SELECT from WITHOUT ROWID table {0} into itself isn't supported yet",
+                    schema.name
+                ),
+            });
+        }
+        Some(super::without_rowid::writable_key(schema, "INSERT")?)
+    } else {
+        None
+    };
 
     let create = cached_create_table(schema)?;
 
     let rowid_alias = schema.rowid_alias;
-    let plans = column_plans(schema, &create, rowid_alias);
+    let mut plans = column_plans(schema, &create, rowid_alias);
+    // Every column of a `WITHOUT ROWID` table's primary key is NOT NULL,
+    // however it was declared.
+    for &column in without_rowid_key.iter().flatten() {
+        if let Some(plan) = plans.get_mut(column) {
+            plan.not_null = true;
+        }
+    }
     // `AUTOINCREMENT` only ever attaches to the rowid-alias column's
     // own `INTEGER PRIMARY KEY` declaration (SQLite grammar doesn't
     // allow it on a table-level `PRIMARY KEY(...)`), so it's enough to
@@ -459,6 +488,7 @@ pub fn compile_insert(
                     action,
                     &handlers,
                     &updates,
+                    without_rowid_key.as_deref(),
                     is_autoincrement,
                 )?;
             }
@@ -477,6 +507,7 @@ pub fn compile_insert(
                 action,
                 &handlers,
                 &updates,
+                without_rowid_key.as_deref(),
                 is_autoincrement,
             )?;
         }
@@ -519,6 +550,7 @@ pub fn compile_insert(
                     action,
                     &handlers,
                     &updates,
+                    without_rowid_key.as_deref(),
                     is_autoincrement,
                 )
             };
@@ -658,6 +690,7 @@ fn compile_row(
     action: ConflictAction,
     handlers: &ConflictHandlers,
     updates: &[Option<UpsertUpdate>],
+    without_rowid_key: Option<&[usize]>,
     is_autoincrement: bool,
 ) -> Result<(), CodegenError> {
     let mut value_sources: Vec<Option<ColumnSource>> = vec![None; schema.columns.len()];
@@ -676,43 +709,51 @@ fn compile_row(
     // Pass 1: resolve the rowid before touching any column's register,
     // so its register(s) never fall inside the contiguous run `col_regs`
     // needs for `MakeRecord` below.
-    let rowid_reg = match rowid_alias {
-        Some(idx) => {
-            let explicit = value_source_at(idx)
-                .filter(|source| !matches!(source, ColumnSource::Expr(e) if is_null_literal(e)));
-            match explicit {
-                Some(source) => {
-                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;
-                    // `DO UPDATE` needs the new row's other values (for
-                    // `excluded`), so its probe waits until they exist.
-                    if let Some(Handler::Update(_)) = handlers.rowid {
-                        rowid_probe_deferred = true;
-                    } else {
-                        let no_conflict = em.new_label();
-                        let seek_addr =
-                            em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));
-                        em.patch_p2(seek_addr, no_conflict);
-                        let pk_action = if let Some(Handler::Skip) = handlers.rowid {
-                            ConflictAction::Ignore
+    let rowid_reg = if without_rowid_key.is_some() {
+        // No rowid: `Insert` still takes a register there, and ignores it.
+        let r = reg.alloc();
+        em.emit(Instruction::new(Opcode::Integer, 0, r, 0));
+        r
+    } else {
+        match rowid_alias {
+            Some(idx) => {
+                let explicit = value_source_at(idx).filter(
+                    |source| !matches!(source, ColumnSource::Expr(e) if is_null_literal(e)),
+                );
+                match explicit {
+                    Some(source) => {
+                        let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;
+                        // `DO UPDATE` needs the new row's other values (for
+                        // `excluded`), so its probe waits until they exist.
+                        if let Some(Handler::Update(_)) = handlers.rowid {
+                            rowid_probe_deferred = true;
                         } else {
-                            action
-                        };
-                        emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;
-                        em.place(no_conflict);
+                            let no_conflict = em.new_label();
+                            let seek_addr =
+                                em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));
+                            em.patch_p2(seek_addr, no_conflict);
+                            let pk_action = if let Some(Handler::Skip) = handlers.rowid {
+                                ConflictAction::Ignore
+                            } else {
+                                action
+                            };
+                            emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;
+                            em.place(no_conflict);
+                        }
+                        r
                     }
-                    r
-                }
-                None => {
-                    let r = reg.alloc();
-                    emit_new_rowid(em, r, schema, is_autoincrement);
-                    r
+                    None => {
+                        let r = reg.alloc();
+                        emit_new_rowid(em, r, schema, is_autoincrement);
+                        r
+                    }
                 }
             }
-        }
-        None => {
-            let r = reg.alloc();
-            emit_new_rowid(em, r, schema, is_autoincrement);
-            r
+            None => {
+                let r = reg.alloc();
+                emit_new_rowid(em, r, schema, is_autoincrement);
+                r
+            }
         }
     };
 
@@ -939,9 +980,16 @@ fn compile_row(
         record_reg,
         P4::Affinity(affinities),
     ));
+    // A `WITHOUT ROWID` row has a rowid to report no more than it has one
+    // to allocate: it counts as a change and leaves `last_insert_rowid`.
+    let insert_flags = if let Some(key) = without_rowid_key {
+        emit_without_rowid_key_check(em, reg, schema, record_reg, key, action, row_skip)?;
+        OPFLAG_NCHANGE
+    } else {
+        OPFLAG_NCHANGE | OPFLAG_LASTROWID
+    };
     em.emit(
-        Instruction::new(Opcode::Insert, TABLE_CURSOR, rowid_reg, record_reg)
-            .with_p5(OPFLAG_NCHANGE | OPFLAG_LASTROWID),
+        Instruction::new(Opcode::Insert, TABLE_CURSOR, rowid_reg, record_reg).with_p5(insert_flags),
     );
 
     if !schema.indexes.is_empty() {
@@ -960,6 +1008,43 @@ fn compile_row(
     }
 
     em.place(row_skip);
+    Ok(())
+}
+
+/// The primary-key conflict check of a `WITHOUT ROWID` row (#722), run on
+/// the finished record so the key it probes has its column affinities
+/// applied. On a conflict the cursor sits on the row that already has the
+/// key: `OR IGNORE` skips the new row, `OR REPLACE` deletes that row first
+/// (one change, as sqlite3 counts it), anything else fails.
+fn emit_without_rowid_key_check(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    schema: &TableSchema,
+    record_reg: i32,
+    key: &[usize],
+    action: ConflictAction,
+    row_skip: Label,
+) -> Result<(), CodegenError> {
+    use super::without_rowid::{emit_key_from_record, emit_seek_key, key_violation_message};
+    let probe = emit_key_from_record(em, reg, schema, record_reg, key)?;
+    let no_conflict = em.new_label();
+    emit_seek_key(em, reg, TABLE_CURSOR, &probe, no_conflict);
+    match action {
+        ConflictAction::Ignore => em.goto(row_skip),
+        ConflictAction::Replace => {
+            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));
+        }
+        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {
+            em.emit(Instruction::with_p4(
+                Opcode::Halt,
+                SQLITE_CONSTRAINT_PRIMARYKEY,
+                0,
+                0,
+                P4::Str(key_violation_message(schema, key)),
+            ));
+        }
+    }
+    em.place(no_conflict);
     Ok(())
 }
 
@@ -1329,6 +1414,7 @@ fn emit_upsert_update(
         update.rowid_reassigned,
         &assigned,
         &update.index_touched,
+        None,
         row_skip,
     )?;
     em.goto(row_skip);

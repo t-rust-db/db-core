@@ -8,3 +8,4 @@
 pub mod delete;
 pub mod insert;
 pub mod update;
+pub(crate) mod without_rowid;

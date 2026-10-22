@@ -81,9 +81,7 @@ pub fn compile_update_with_catalog(
     catalog: &[TableSchema],
 ) -> Result<Program, CodegenError> {
     if schema.without_rowid {
-        return Err(CodegenError::Unsupported {
-            reason: "WITHOUT ROWID tables are not supported by UPDATE codegen yet".to_string(),
-        });
+        return compile_update_without_rowid(update, schema, catalog);
     }
 
     let create = cached_create_table(schema)?;
@@ -196,6 +194,7 @@ pub fn compile_update_with_catalog(
             rowid_reassigned.is_some(),
             &assigned,
             &index_touched,
+            None,
             end_label,
         )?;
         em.place(end_label);
@@ -352,6 +351,7 @@ pub fn compile_update_with_catalog(
                         rowid_reassigned.is_some(),
                         &assigned,
                         &index_touched,
+                        None,
                         row_skip,
                     )
                 },
@@ -391,6 +391,7 @@ pub fn compile_update_with_catalog(
             rowid_reassigned.is_some(),
             &assigned,
             &index_touched,
+            None,
             row_skip,
         )?;
 
@@ -427,6 +428,7 @@ pub fn compile_update_with_catalog(
             rowid_reassigned.is_some(),
             &assigned,
             &index_touched,
+            None,
             row_skip,
         )?;
 
@@ -436,6 +438,91 @@ pub fn compile_update_with_catalog(
     }
 
     em.place(end_label);
+    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+    Ok(em.finish())
+}
+
+/// `UPDATE` on a `WITHOUT ROWID` table (#722): collect the key of every
+/// row the `WHERE` keeps, then seek each and work out its new row with
+/// `UPDATE`'s own row body (`without_rowid::emit_two_pass` says why in two
+/// passes). The key columns are NOT NULL however they were declared.
+fn compile_update_without_rowid(
+    update: &Update,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+) -> Result<Program, CodegenError> {
+    use super::without_rowid::{emit_two_pass, writable_key};
+
+    let key = writable_key(schema, "UPDATE")?;
+    let create = cached_create_table(schema)?;
+    let mut plans = column_plans(schema, &create, None);
+    for &column in &key {
+        if let Some(plan) = plans.get_mut(column) {
+            plan.not_null = true;
+        }
+    }
+    let table_checks: Vec<(Expr, String)> = table_check_constraints(schema, &create);
+    let action = update.or_action.unwrap_or(ConflictAction::Abort);
+    // `CHECK` reads the new row from a pseudo-cursor over a plain record
+    // (see `compile_update_with_catalog`).
+    let check_schema = TableSchema {
+        sql: String::new(),
+        rowid_alias: None,
+        ..schema.clone()
+    };
+    let mut assigned: Vec<Option<&Expr>> = vec![None; schema.columns.len()];
+    for assignment in &update.assignments {
+        for name in &assignment.columns {
+            let idx = column_index(schema, name)
+                .ok_or_else(|| CodegenError::UnknownColumn { name: name.clone() })?;
+            if let Some(slot) = assigned.get_mut(idx) {
+                *slot = Some(&assignment.value);
+            }
+        }
+    }
+
+    let mut em = Emitter::new();
+    let mut reg = RegAlloc::new();
+    let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
+    let body_start = em.new_label();
+    em.place(body_start);
+    em.patch_p2(init_addr, body_start);
+
+    let root_page = valid_table_root_page(schema)?;
+    em.emit(Instruction::new(
+        Opcode::OpenWrite,
+        TABLE_CURSOR,
+        root_page,
+        0,
+    ));
+    let scope = Scope::single(schema, TABLE_CURSOR).with_catalog(catalog);
+    emit_two_pass(
+        &mut em,
+        &mut reg,
+        schema,
+        &scope,
+        update.where_clause.as_ref(),
+        &key,
+        TABLE_CURSOR,
+        |em, reg, row_skip| {
+            emit_update_row_body(
+                em,
+                reg,
+                schema,
+                &scope,
+                &plans,
+                &table_checks,
+                &check_schema,
+                action,
+                None,
+                false,
+                &assigned,
+                &[],
+                Some(&key),
+                row_skip,
+            )
+        },
+    )?;
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
     Ok(em.finish())
 }
@@ -487,18 +574,44 @@ pub(crate) fn emit_update_row_body(
     rowid_reassigned: bool,
     assigned: &[Option<&Expr>],
     index_touched: &[bool],
+    without_rowid_key: Option<&[usize]>,
     row_skip: Label,
 ) -> Result<(), CodegenError> {
     // Every value the new row needs — including a possibly-reassigned
     // rowid — is read from the cursor's *current* row before `Delete`
     // below clears it (`cursor::delete` sets `state.current = None`).
-    let rowid_reg = match rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten()) {
-        Some(expr) => compile_value(em, reg, scope, expr)?,
-        None => {
-            let r = reg.alloc();
-            em.emit(Instruction::new(Opcode::Rowid, TABLE_CURSOR, r, 0));
-            r
+    let rowid_reg = if without_rowid_key.is_some() {
+        // No rowid (#722): `Update`/`Insert` still take a register there.
+        let r = reg.alloc();
+        em.emit(Instruction::new(Opcode::Integer, 0, r, 0));
+        r
+    } else {
+        match rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten()) {
+            Some(expr) => compile_value(em, reg, scope, expr)?,
+            None => {
+                let r = reg.alloc();
+                em.emit(Instruction::new(Opcode::Rowid, TABLE_CURSOR, r, 0));
+                r
+            }
         }
+    };
+    // A `WITHOUT ROWID` row whose key the `SET` changes moves in the
+    // b-tree; its old key is read now, while the cursor is on the row.
+    let old_key: Vec<i32> = match without_rowid_key {
+        Some(key)
+            if key
+                .iter()
+                .any(|&column| assigned.get(column).is_some_and(Option::is_some)) =>
+        {
+            let mut regs = Vec::with_capacity(key.len());
+            for &column in key {
+                let r = reg.alloc();
+                emit_column_read(em, schema, TABLE_CURSOR, column, r)?;
+                regs.push(r);
+            }
+            regs
+        }
+        _ => Vec::new(),
     };
 
     let mut col_regs = Vec::with_capacity(schema.columns.len());
@@ -663,6 +776,22 @@ pub(crate) fn emit_update_row_body(
         record_reg,
         P4::Affinity(affinities),
     ));
+
+    if let Some(key) = without_rowid_key {
+        return super::without_rowid::emit_row_rewrite(
+            em,
+            reg,
+            schema,
+            TABLE_CURSOR,
+            key,
+            &old_key,
+            record_reg,
+            rowid_reg,
+            action,
+            super::insert::SQLITE_CONSTRAINT_PRIMARYKEY,
+            row_skip,
+        );
+    }
 
     // Old index entries are read from the cursor's still-current
     // (pre-`Delete`) row — must happen before `Delete` clears it.

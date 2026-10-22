@@ -536,6 +536,19 @@ impl WithoutRowidCursorAdapter {
             source,
         }
     }
+
+    /// `payload`, a record in declared column order, as the entry the
+    /// b-tree stores: each value moved to its stored position. `None` for
+    /// a record that is not one, or has more values than the table has
+    /// columns.
+    fn stored_row(&self, payload: &[u8]) -> Option<Vec<Value>> {
+        let declared = decode_record(payload, self.inner.header.text_encoding).ok()?;
+        let mut stored = vec![Value::Null; self.stored_at.len()];
+        for (column, value) in declared.into_iter().enumerate() {
+            *stored.get_mut(*self.stored_at.get(column)?)? = value;
+        }
+        Some(stored)
+    }
 }
 
 impl Cursor for WithoutRowidCursorAdapter {
@@ -561,6 +574,81 @@ impl Cursor for WithoutRowidCursorAdapter {
 
     fn rowid(&self) -> Option<i64> {
         None
+    }
+
+    /// Positions on the row whose leading key columns equal `key` (the
+    /// `PRIMARY KEY` columns, in key order, which come first in the stored
+    /// record). The row has every other column after them, so a probe is
+    /// never as long as the entry unless every column is in the key.
+    fn seek_index_eq(&mut self, key: &[Value], collations: &[Collation]) -> bool {
+        let seeked = self.inner.cursor.seek(key, self.inner.header.text_encoding);
+        if !self.inner.set_current(seeked) {
+            return false;
+        }
+        let matched = self.inner.current.as_ref().is_some_and(|(_, values)| {
+            values.len() >= key.len()
+                && values
+                    .iter()
+                    .zip(key.iter())
+                    .zip(
+                        collations
+                            .iter()
+                            .chain(std::iter::repeat(&Collation::Binary)),
+                    )
+                    .all(|((stored, probe), &c)| compare(stored, probe, c).is_eq())
+        });
+        if !matched {
+            self.inner.current = None;
+        }
+        matched
+    }
+
+    /// Removes the row the cursor is on; it is positioned nowhere after.
+    fn delete(&mut self) -> bool {
+        let (Some(writer), Some((_, stored))) =
+            (self.inner.writer.as_ref(), self.inner.current.take())
+        else {
+            return false;
+        };
+        btree::delete_entry(
+            &mut writer.borrow_mut(),
+            &self.inner.header,
+            self.inner.root_page,
+            &stored,
+            self.inner.header.text_encoding,
+        )
+        .is_ok()
+    }
+
+    /// Adds the row `payload` (a record in declared column order, as
+    /// `MakeRecord` builds it). The caller has already probed that no row
+    /// has the same key: the b-tree itself only refuses an identical
+    /// record.
+    fn insert_payload(&mut self, _rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
+        self.inner.current = None;
+        let (Some(writer), Some(stored)) = (self.inner.writer.as_ref(), self.stored_row(payload))
+        else {
+            return Some(false);
+        };
+        Some(
+            btree::insert_entry(
+                &mut writer.borrow_mut(),
+                &self.inner.header,
+                self.inner.root_page,
+                &stored,
+                self.inner.header.text_encoding,
+            )
+            .is_ok(),
+        )
+    }
+
+    /// Replaces the row the cursor is on with `payload`, which must keep
+    /// its key: the entry is removed and the new one put in its place.
+    fn update_payload(&mut self, _rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
+        if !self.delete() {
+            return Some(false);
+        }
+        self.insert_payload(0, payload)
     }
 
     fn count(&self) -> Option<i64> {
