@@ -97,79 +97,18 @@ pub fn format_decimal(unscaled: i128, scale: u8) -> String {
     format!("{sign}{int}.{frac}")
 }
 
-/// Renders a REAL the way `sqlite3`'s `-list`/`-csv` modes do: 15
-/// significant digits (`%.15g`-equivalent), switching to scientific
-/// notation when the decimal exponent is `< -4` or `>= 15`, and always
-/// keeping an explicit decimal point or exponent -- a REAL never prints
-/// as a bare integer, so `1.0` never becomes `1`. Ported from
-/// sqlite-rs's `format::format_real`.
+/// Renders a REAL the way sqlite3 3.53 turns one into text (`CAST`, `||`,
+/// the shell's `-list`/`-csv` modes): `%!.17g` through `sqlite3FpDecode`,
+/// which approximates past about 16 digits (`1.0/3` is
+/// `0.33333333333333332`), switching to scientific notation when the
+/// decimal exponent is `< -4` or `> 16`, and always keeping an explicit
+/// decimal point or exponent -- a REAL never prints as a bare integer,
+/// so `1.0` never becomes `1`. Infinity is `Inf`, negative zero `0.0`.
 pub fn format_real(x: f64) -> String {
-    if x == 0.0 {
-        return if x.is_sign_negative() {
-            "-0.0".to_string()
-        } else {
-            "0.0".to_string()
-        };
-    }
     if x.is_nan() {
         return "NULL".to_string();
     }
-
-    let neg = x.is_sign_negative();
-    let ax = x.abs();
-    if ax.is_infinite() {
-        let mag = "9.0e+999";
-        return if neg {
-            format!("-{mag}")
-        } else {
-            mag.to_string()
-        };
-    }
-
-    let sci = format!("{ax:.14e}");
-    let (mantissa, exp_str) = sci.split_once('e').unwrap_or((sci.as_str(), "0"));
-    let exp: i32 = exp_str.parse().unwrap_or(0);
-    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
-    // `digits` is ASCII (`{:e}` output minus the '.'), so every byte
-    // offset below is a char boundary; the checked splits keep the
-    // slicing total anyway (db-core#225).
-    let (lead, rest) = digits.split_at_checked(1).unwrap_or((digits.as_str(), ""));
-
-    let body = if !(-4..15).contains(&exp) {
-        let mantissa_trimmed = trim_trailing_zeros(rest);
-        let mantissa_part = if mantissa_trimmed.is_empty() {
-            format!("{lead}.0")
-        } else {
-            format!("{lead}.{mantissa_trimmed}")
-        };
-        let exp_sign = if exp >= 0 { "+" } else { "-" };
-        format!("{mantissa_part}e{exp_sign}{:02}", exp.abs())
-    } else if exp >= 0 {
-        let split = usize::try_from(exp).unwrap_or(0).saturating_add(1);
-        let (int_part, frac_digits) = digits
-            .split_at_checked(split)
-            .unwrap_or((digits.as_str(), ""));
-        let frac_part = trim_trailing_zeros(frac_digits);
-        if frac_part.is_empty() {
-            format!("{int_part}.0")
-        } else {
-            format!("{int_part}.{frac_part}")
-        }
-    } else {
-        let leading_zeros = "0".repeat((exp.unsigned_abs() as usize).saturating_sub(1));
-        let frac = trim_trailing_zeros(&digits);
-        format!("0.{leading_zeros}{frac}")
-    };
-
-    if neg {
-        format!("-{body}")
-    } else {
-        body
-    }
-}
-
-fn trim_trailing_zeros(s: &str) -> &str {
-    s.trim_end_matches('0')
+    String::from_utf8_lossy(&crate::functions::fp::format_real17(x, false)).into_owned()
 }
 
 #[cfg(test)]
@@ -229,12 +168,19 @@ mod tests {
         assert_eq!(format_real(2.5e300), "2.5e+300");
         assert_eq!(format_real(0.0001), "0.0001");
         assert_eq!(format_real(100000000000000.0), "100000000000000.0");
-        assert_eq!(format_real(1e15), "1.0e+15");
+        assert_eq!(format_real(1e15), "1000000000000000.0");
+        assert_eq!(format_real(1e16), "10000000000000000.0");
+        assert_eq!(format_real(1e17), "1.0e+17");
+        assert_eq!(format_real(1.0 / 3.0), "0.33333333333333332");
+        assert_eq!(format_real(123456789012345678.0), "1.2345678901234568e+17");
+        assert_eq!(format_real(0.000123456), "0.000123456");
+        assert_eq!(format_real(f64::INFINITY), "Inf");
+        assert_eq!(format_real(f64::NEG_INFINITY), "-Inf");
         assert_eq!(format_real(999999999999999.0), "999999999999999.0");
         assert_eq!(format_real(0.00001), "1.0e-05");
         assert_eq!(format_real(-2.5), "-2.5");
         assert_eq!(format_real(123.456), "123.456");
         assert_eq!(format_real(0.0), "0.0");
-        assert_eq!(format_real(-0.0), "-0.0");
+        assert_eq!(format_real(-0.0), "0.0");
     }
 }

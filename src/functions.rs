@@ -44,6 +44,7 @@ use crate::value::{len_to_i64, Collation, Value};
 // sqlite3 built-ins by family (#651); each adds its own names to
 // [`lookup`] through its own `lookup`.
 mod datetime;
+pub(crate) mod fp;
 mod json;
 mod math;
 mod text;

@@ -218,6 +218,7 @@ check-column-oracle: ## Local-only: column engine query results agree with DuckD
 
 check-row-functions-oracle: ## Local-only: row engine scalar functions agree with sqlite3 3.53.4 (Homebrew's, on PATH) -- tools/row_functions_cases*.sql (#651)
 	@for f in tools/row_functions_cases*.sql; do python3 tools/check_row_functions_oracle.py $$f || exit 1; done
+	@python3 tools/check_row_functions_oracle.py --random 5000
 
 # #566: the Parquet writer's interoperability check -- files it writes
 # (examples/parquet_write_oracle.rs: every type, nulls, edge values, both
