@@ -1,10 +1,26 @@
-//! ZSTD page decompression, via the pure-Rust `ruzstd` decode-only crate
-//! (no C dependency).
+//! ZSTD page decompression (#700): a decoder of our own, from RFC 8878,
+//! for the frames Parquet pages hold.
 //!
-//! A hand-rolled decoder was attempted first (matching the hand-rolled
-//! Snappy decompressor's approach) but ZSTD's FSE/Huffman entropy coding
-//! proved too easy to get subtly bit-order-wrong without a reference
-//! decoder to diff against; see #47 for a possible future revisit.
+//! A page is one frame whose decompressed size the page header gives, so
+//! the decoder writes straight into an output buffer of that size (plus a
+//! little slack for 16-byte wild copies) instead of streaming through a
+//! window, as `ruzstd`'s decoder did. Spike #697 measured it at 1.8-2.5x
+//! `ruzstd`'s speed on real pages, about libzstd's. `ruzstd` stays for the
+//! writer's encoding until #692.
+//!
+//! The first hand-written decoder (#47) foundered on FSE/Huffman bit order
+//! with nothing to diff against; this one is checked byte for byte against
+//! `ruzstd`'s decoder, and pages written by DuckDB (libzstd) and pyarrow.
+//!
+//! Supported: raw, RLE and compressed blocks; Huffman literals (1 or 4
+//! streams, direct or FSE-coded weights, treeless); predefined, RLE,
+//! FSE-coded and repeated sequence tables; repeat offsets. A frame with a
+//! dictionary ID is refused: Parquet pages carry none.
+
+mod bits;
+mod frame;
+mod fse;
+mod huffman;
 
 use std::fmt;
 
@@ -43,33 +59,24 @@ impl std::error::Error for ZstdError {}
 
 type Result<T> = std::result::Result<T, ZstdError>;
 
-/// The most output buffer reserved up front from the page header's
-/// declared size alone. The header is untrusted, and a ZSTD frame's
-/// legitimate expansion is unbounded, so a larger page grows its buffer as
-/// the frame actually yields bytes instead of trusting the header with one
-/// allocation.
-const MAX_PREALLOC: usize = 64 << 20;
+/// The largest legitimate expansion of a frame: an RLE block, 4 bytes
+/// with its header, yields up to a 128 KiB block. A declared size past
+/// this many times the frame's length cannot be real, and is refused
+/// before the output buffer is sized from it.
+const MAX_EXPANSION: usize = 32 * 1024;
+
+/// A corrupt frame body.
+fn corrupt(why: &str) -> ZstdError {
+    ZstdError::Read(why.to_string())
+}
 
 /// Decompress one ZSTD frame, which must decode to exactly
 /// `uncompressed_size` bytes.
 pub fn decompress(data: &[u8], uncompressed_size: usize) -> Result<Vec<u8>> {
-    let decoder = ruzstd::decoding::StreamingDecoder::new(data)
-        .map_err(|e| ZstdError::Frame(e.to_string()))?;
-    // Read at most one byte past the declared size: enough to detect an
-    // oversized frame without letting a hostile page grow `out` unbounded.
-    let limit = u64::try_from(uncompressed_size)
-        .unwrap_or(u64::MAX)
-        .saturating_add(1);
-    let mut out = Vec::with_capacity(uncompressed_size.min(MAX_PREALLOC));
-    std::io::Read::read_to_end(&mut std::io::Read::take(decoder, limit), &mut out)
-        .map_err(|e| ZstdError::Read(e.to_string()))?;
-    if out.len() != uncompressed_size {
-        return Err(ZstdError::SizeMismatch {
-            expected: uncompressed_size,
-            actual: out.len(),
-        });
+    if uncompressed_size > data.len().saturating_mul(MAX_EXPANSION) {
+        return Err(corrupt("declared size past any frame's expansion"));
     }
-    Ok(out)
+    frame::decode(data, uncompressed_size)
 }
 
 #[cfg(test)]
