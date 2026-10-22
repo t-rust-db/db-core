@@ -741,6 +741,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -5654,6 +5655,7 @@ pub fn db_core::storage::row::btree::delete_stat1_rows_for_table(&mut db_core::s
 pub fn db_core::storage::row::btree::ensure_sqlite_sequence_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::ensure_sqlite_stat1_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::free_btree_pages(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::insert_autoindex_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &db_core::storage::row::btree::MasterEntry) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::insert_entry(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &[db_core::value::Value], db_core::value::TextEncoding) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::insert_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &db_core::storage::row::btree::MasterEntry) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::insert_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, i64, &[u8]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
@@ -9562,8 +9564,10 @@ pub db_core::vm::row::program::P4::CreateIndex::table_name: alloc::string::Strin
 pub db_core::vm::row::program::P4::CreateIndex::table_root_page: u32
 pub db_core::vm::row::program::P4::CreateIndex::unique: bool
 pub db_core::vm::row::program::P4::CreateTable
+pub db_core::vm::row::program::P4::CreateTable::autoindexes: alloc::vec::Vec<alloc::string::String>
 pub db_core::vm::row::program::P4::CreateTable::name: alloc::string::String
 pub db_core::vm::row::program::P4::CreateTable::sql: alloc::string::String
+pub db_core::vm::row::program::P4::CreateTable::without_rowid: bool
 pub db_core::vm::row::program::P4::CreateView
 pub db_core::vm::row::program::P4::CreateView::name: alloc::string::String
 pub db_core::vm::row::program::P4::CreateView::sql: alloc::string::String
@@ -9751,6 +9755,7 @@ pub fn db_core::vm::row::schema_storage::SchemaStorage::create_index_root(&mut s
 pub fn db_core::vm::row::schema_storage::SchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::vm::row::schema_storage::SchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -9761,6 +9766,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -10159,8 +10165,10 @@ pub db_core::vm::row::P4::CreateIndex::table_name: alloc::string::String
 pub db_core::vm::row::P4::CreateIndex::table_root_page: u32
 pub db_core::vm::row::P4::CreateIndex::unique: bool
 pub db_core::vm::row::P4::CreateTable
+pub db_core::vm::row::P4::CreateTable::autoindexes: alloc::vec::Vec<alloc::string::String>
 pub db_core::vm::row::P4::CreateTable::name: alloc::string::String
 pub db_core::vm::row::P4::CreateTable::sql: alloc::string::String
+pub db_core::vm::row::P4::CreateTable::without_rowid: bool
 pub db_core::vm::row::P4::CreateView
 pub db_core::vm::row::P4::CreateView::name: alloc::string::String
 pub db_core::vm::row::P4::CreateView::sql: alloc::string::String
@@ -11125,6 +11133,7 @@ pub fn db_core::vm::row::SchemaStorage::create_index_root(&mut self) -> core::re
 pub fn db_core::vm::row::SchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::vm::row::SchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
@@ -11135,6 +11144,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_index_root(&mut
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::create_table_root(&mut self) -> core::result::Result<u32, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::delete_master_row(&mut self, &str, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>

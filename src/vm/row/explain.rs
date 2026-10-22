@@ -89,7 +89,7 @@ fn render_p4(p4: &P4) -> String {
             .collect::<Vec<_>>()
             .join(","),
         P4::Bool(b) => i32::from(*b).to_string(),
-        P4::CreateTable { name, sql } => format!("{name}: {sql}"),
+        P4::CreateTable { name, sql, .. } => format!("{name}: {sql}"),
         P4::CreateView { name, sql } => format!("{name}: {sql}"),
         P4::DropView { name } => name.clone(),
         P4::DropTable { name, .. } => name.clone(),
@@ -611,6 +611,8 @@ mod tests {
                 P4::CreateTable {
                     name: "t".to_string(),
                     sql: "CREATE TABLE t(a)".to_string(),
+                    without_rowid: false,
+                    autoindexes: Vec::new(),
                 },
             ),
             Instruction::with_p4(

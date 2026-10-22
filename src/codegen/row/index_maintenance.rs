@@ -49,6 +49,39 @@ pub(crate) fn valid_table_root_page(schema: &TableSchema) -> Result<i32, Codegen
         })
 }
 
+/// Refuses to maintain or probe an index key column that is not
+/// `BINARY`-collated. The index b-tree orders and searches its keys
+/// byte for byte (#298), so a `NOCASE`/`RTRIM` key would be written out
+/// of order and a uniqueness probe would miss case variants -- a file
+/// sqlite3 reports as corrupt or a duplicate let through. Such an index
+/// is read through (the planner never seeks it), but not written (#694).
+pub(crate) fn reject_non_binary_key(
+    index: &IndexSchema,
+    col: &crate::codegen::row::IndexedColumn,
+) -> Result<(), CodegenError> {
+    if col.collation == crate::value::Collation::Binary {
+        return Ok(());
+    }
+    Err(CodegenError::Unsupported {
+        reason: format!(
+            "index {} keys {} by {:?}; non-BINARY index keys aren't supported yet",
+            index.name, col.name, col.collation
+        ),
+    })
+}
+
+/// sqlite3's message for a row that duplicates a key of the UNIQUE
+/// `index`: the indexed columns, each qualified by the table --
+/// `UNIQUE constraint failed: t.a, t.b`.
+pub(crate) fn unique_violation_message(schema: &TableSchema, index: &IndexSchema) -> String {
+    let columns: Vec<String> = index
+        .columns
+        .iter()
+        .map(|col| format!("{}.{}", schema.name, col.name))
+        .collect();
+    format!("UNIQUE constraint failed: {}", columns.join(", "))
+}
+
 /// Same validation as [`valid_table_root_page`], for an index's root page.
 pub(crate) fn valid_index_root_page(index: &IndexSchema) -> Result<i32, CodegenError> {
     i32::try_from(index.root_page)
@@ -113,6 +146,7 @@ pub(crate) fn emit_index_key_ops(
         let index_cursor = first_index_cursor.saturating_add(i32::try_from(i).unwrap_or(0));
         let mut start = None;
         for col in &index.columns {
+            reject_non_binary_key(index, col)?;
             if col.desc {
                 // No index b-tree comparator anywhere in this codebase
                 // (#171) is aware of per-column sort direction — it
@@ -188,6 +222,7 @@ pub(crate) fn emit_index_key_ops_from_regs(
         let index_cursor = first_index_cursor.saturating_add(i32::try_from(i).unwrap_or(0));
         let mut start = None;
         for col in &index.columns {
+            reject_non_binary_key(index, col)?;
             if col.desc {
                 return Err(CodegenError::Unsupported {
                     reason: format!(

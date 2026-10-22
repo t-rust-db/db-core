@@ -100,20 +100,46 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
         }
 
         Opcode::CreateTable => {
-            let P4::CreateTable { name, sql } = &instr.p4 else {
+            let P4::CreateTable {
+                name,
+                sql,
+                without_rowid,
+                autoindexes,
+            } = &instr.p4
+            else {
                 return Err(ExecError::MalformedInstruction {
                     opcode: "CreateTable",
                     reason: format!("expected a CreateTable P4, got {:?}", instr.p4),
                 });
             };
-            let (name, sql) = (name.clone(), sql.clone());
+            let (name, sql, without_rowid, autoindexes) = (
+                name.clone(),
+                sql.clone(),
+                *without_rowid,
+                autoindexes.clone(),
+            );
             let storage = vm.schema_storage("CreateTable")?;
-            let root = storage
-                .create_table_root()
-                .map_err(ExecError::SchemaStorageFailed)?;
+            // A WITHOUT ROWID table is an index b-tree keyed by its
+            // PRIMARY KEY.
+            let root = if without_rowid {
+                storage.create_index_root()
+            } else {
+                storage.create_table_root()
+            }
+            .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .insert_master_row("table", &name, &name, root, &sql)
                 .map_err(ExecError::SchemaStorageFailed)?;
+            // sqlite3's page order: the table, then each implicit index
+            // (an empty table needs no population).
+            for index_name in &autoindexes {
+                let index_root = storage
+                    .create_index_root()
+                    .map_err(ExecError::SchemaStorageFailed)?;
+                storage
+                    .insert_autoindex_row(index_name, &name, index_root)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
             storage
                 .bump_schema_cookie()
                 .map_err(ExecError::SchemaStorageFailed)?;

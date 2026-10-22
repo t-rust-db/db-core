@@ -51,6 +51,26 @@ pub trait SchemaStorage {
         sql: &str,
     ) -> Result<(), SchemaStorageError>;
 
+    /// Inserts the `sqlite_master` row of an implicit `PRIMARY KEY`/
+    /// `UNIQUE` index (`sqlite_autoindex_<table>_<n>`): type `index`,
+    /// `tbl_name` the indexed table, and a `NULL` `sql` column, as
+    /// sqlite3 writes it (#694). The default refuses, so a storage that
+    /// predates implicit indexes fails the `CREATE TABLE` instead of
+    /// writing a file sqlite3 calls malformed.
+    fn insert_autoindex_row(
+        &mut self,
+        name: &str,
+        tbl_name: &str,
+        root_page: u32,
+    ) -> Result<(), SchemaStorageError> {
+        let _ = (name, tbl_name, root_page);
+        Err(SchemaStorageError(
+            "implicit PRIMARY KEY/UNIQUE indexes require a SchemaStorage that implements \
+             insert_autoindex_row"
+                .to_string(),
+        ))
+    }
+
     /// Deletes the `sqlite_master` row of type `kind` (`table`, `index`,
     /// `view`) named `name` -- by type and name, so a same-named object
     /// of another kind is never the one removed (#658).
@@ -99,3 +119,86 @@ impl std::fmt::Display for SchemaStorageError {
 }
 
 impl std::error::Error for SchemaStorageError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A storage that implements only the required methods, so the
+    /// provided ones answer with their defaults.
+    struct Minimal;
+
+    impl SchemaStorage for Minimal {
+        fn create_table_root(&mut self) -> Result<u32, SchemaStorageError> {
+            Ok(2)
+        }
+        fn create_index_root(&mut self) -> Result<u32, SchemaStorageError> {
+            Ok(3)
+        }
+        fn populate_index(
+            &mut self,
+            _: u32,
+            _: u32,
+            _: &[usize],
+        ) -> Result<(), SchemaStorageError> {
+            Ok(())
+        }
+        fn free_root(&mut self, _: u32) -> Result<(), SchemaStorageError> {
+            Ok(())
+        }
+        fn insert_master_row(
+            &mut self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u32,
+            _: &str,
+        ) -> Result<(), SchemaStorageError> {
+            Ok(())
+        }
+        fn delete_master_row(&mut self, _: &str, _: &str) -> Result<(), SchemaStorageError> {
+            Ok(())
+        }
+        fn bump_schema_cookie(&mut self) -> Result<(), SchemaStorageError> {
+            Ok(())
+        }
+        fn write_stat1(&mut self, _: &AnalyzeTarget) -> Result<(), SchemaStorageError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_required_methods_are_the_ones_a_storage_provides() {
+        let mut storage = Minimal;
+        assert_eq!(storage.create_table_root(), Ok(2));
+        assert_eq!(storage.create_index_root(), Ok(3));
+        assert_eq!(storage.populate_index(3, 2, &[0]), Ok(()));
+        assert_eq!(storage.free_root(3), Ok(()));
+        assert_eq!(
+            storage.insert_master_row("table", "t", "t", 2, "sql"),
+            Ok(())
+        );
+        assert_eq!(storage.delete_master_row("table", "t"), Ok(()));
+        assert_eq!(storage.bump_schema_cookie(), Ok(()));
+        let target = AnalyzeTarget {
+            table_name: "t".to_string(),
+            table_root_page: 2,
+            indexes: Vec::new(),
+        };
+        assert_eq!(storage.write_stat1(&target), Ok(()));
+    }
+
+    #[test]
+    fn a_storage_without_implicit_index_support_refuses_instead_of_writing_a_malformed_file() {
+        let err = Minimal
+            .insert_autoindex_row("sqlite_autoindex_t_1", "t", 3)
+            .unwrap_err();
+        assert!(err.0.contains("insert_autoindex_row"), "{err}");
+    }
+
+    #[test]
+    fn a_storage_without_autoincrement_support_refuses() {
+        let err = Minimal.autoincrement_rowid("t", 7).unwrap_err();
+        assert!(err.0.contains("autoincrement_rowid"), "{err}");
+    }
+}

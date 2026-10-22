@@ -2852,7 +2852,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_3c109671",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 69,
+    "line": 75,
     "decision": "create\n            .columns\n            .iter()\n            .take(i)\n            .any(|c| c.name.eq_ignore_ascii_case(&column.name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2862,7 +2862,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_f357ecaf",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 78,
+    "line": 84,
     "decision": "match constraint {\n                ColumnConstraint::PrimaryKey {\n                    autoincrement: auto,\n                    ..\n                } => {\n                    primary_keys = primary_keys.saturating_add(1);\n                    let integer = column\n                        .type_name\n                        .as_deref()\n                        .is_some_and(|t| t.eq_ignore_ascii_case(\"INTEGER\"));\n                    if *auto && !integer {\n                        return reject(\n                            \"AUTOINCREMENT is only allowed on an INTEGER PRIMARY KEY\".into(),\n                        );\n                    }\n                    autoincrement |= *auto;\n                }\n                ColumnConstraint::Check { expr, .. } => check_constraint(create, expr)?,\n                _ => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2872,7 +2872,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_c4322884",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 88,
+    "line": 94,
     "decision": "*auto && !integer",
     "conditions": 2,
     "vectors_required": 3,
@@ -2882,7 +2882,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_031cae37",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 99,
+    "line": 105,
     "decision": "primary_keys > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -2892,7 +2892,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_a030afb7",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 107,
+    "line": 113,
     "decision": "match constraint {\n            TableConstraint::PrimaryKey(terms) | TableConstraint::Unique(terms) => {\n                for term in terms {\n                    key_term(create, term)?;\n                }\n                if matches!(constraint, TableConstraint::PrimaryKey(_)) {\n                    primary_keys = primary_keys.saturating_add(1);\n                    if primary_keys > 1 {\n                        return reject(format!(\n                            \"table \\\"{}\\\" has more than one primary key\",\n                            create.name\n                        ));\n                    }\n                }\n            }\n            TableConstraint::Check { expr, .. } => check_constraint(create, expr)?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2902,7 +2902,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_91e7c2b0",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 112,
+    "line": 118,
     "decision": "matches!(constraint, TableConstraint::PrimaryKey(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2912,7 +2912,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_031cae37_2",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 114,
+    "line": 120,
     "decision": "primary_keys > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -2922,7 +2922,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_8e9caab3",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 125,
+    "line": 131,
     "decision": "create.without_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -2932,7 +2932,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_083da51f",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 126,
+    "line": 132,
     "decision": "primary_keys == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -2942,7 +2942,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_274941ae",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 129,
+    "line": 135,
     "decision": "autoincrement",
     "conditions": 1,
     "vectors_required": 2,
@@ -2952,7 +2952,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_92e9fd71",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 133,
+    "line": 139,
     "decision": "create.strict",
     "conditions": 1,
     "vectors_required": 2,
@@ -2962,7 +2962,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_231e75c1",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 135,
+    "line": 141,
     "decision": "match column.type_name.as_deref() {\n                None => {\n                    return reject(format!(\n                        \"missing datatype for {}.{}\",\n                        create.name, column.name\n                    ))\n                }\n                Some(t)\n                    if ![\"INT\", \"INTEGER\", \"REAL\", \"TEXT\", \"BLOB\", \"ANY\"]\n                        .iter()\n                        .any(|ok| t.eq_ignore_ascii_case(ok)) =>\n                {\n                    return reject(format!(\n                        \"unknown datatype for {}.{}: \\\"{t}\\\"\",\n                        create.name, column.name\n                    ))\n                }\n                Some(_) => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2972,7 +2972,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_fc349794",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 143,
+    "line": 149,
     "decision": "![\"INT\", \"INTEGER\", \"REAL\", \"TEXT\", \"BLOB\", \"ANY\"]\n                        .iter()\n                        .any(|ok| t.eq_ignore_ascii_case(ok))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2982,7 +2982,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_63403704",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 162,
+    "line": 168,
     "decision": "any_node(&term.expr, &mut is_subquery)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2992,7 +2992,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_fa68ffac",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 168,
+    "line": 174,
     "decision": "let ExprKind::Paren(inner) | ExprKind::Collate { expr: inner, .. } = &expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -3002,7 +3002,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_0458d5e0",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 176,
+    "line": 182,
     "decision": "!create\n        .columns\n        .iter()\n        .any(|c| c.name.eq_ignore_ascii_case(name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -3012,7 +3012,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_47cea21b",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 189,
+    "line": 195,
     "decision": "any_node(expr, &mut is_subquery)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3022,7 +3022,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_b606406f",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 196,
+    "line": 202,
     "decision": "let ExprKind::Column { name, .. } = &e.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -3032,7 +3032,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_5ce8b048",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 212,
+    "line": 218,
     "decision": "match args {\n            FunctionArgs::Star => 0,\n            FunctionArgs::List(list) => list.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3042,7 +3042,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_31493ac7",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 216,
+    "line": 222,
     "decision": "is_aggregate_call(name, args)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3052,7 +3052,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_e1839695",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 239,
+    "line": 245,
     "decision": "pred(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3062,7 +3062,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_9c4e044b",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 242,
+    "line": 248,
     "decision": "match &expr.kind {\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        }\n        | ExprKind::In { list, .. } => {\n            let head = match &expr.kind {\n                ExprKind::In { expr: e, .. } => any_node(e, pred),\n                _ => false,\n            };\n            head || list.iter().any(|a| any_node(a, pred))\n        }\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e)\n        | ExprKind::InSubquery { expr: e, .. } => any_node(e, pred),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            any_node(lhs, pred) || any_node(rhs, pred)\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => any_node(e, pred) || any_node(lo, pred) || any_node(hi, pred),\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            any_node(e, pred)\n                || any_node(pattern, pred)\n                || escape.as_deref().is_some_and(|x| any_node(x, pred))\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            operand.as_deref().is_some_and(|x| any_node(x, pred))\n                || whens\n                    .iter()\n                    .any(|(w, t)| any_node(w, pred) || any_node(t, pred))\n                || else_.as_deref().is_some_and(|x| any_node(x, pred))\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().any(|a| any_node(a, pred)),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3072,7 +3072,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_5e97f93d",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 248,
+    "line": 254,
     "decision": "match &expr.kind {\n                ExprKind::In { expr: e, .. } => any_node(e, pred),\n                _ => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3082,7 +3082,7 @@
   {
     "id": "codegen_row_ddl_create_table_rejected_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 299,
+    "line": 305,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3092,7 +3092,7 @@
   {
     "id": "codegen_row_ddl_create_table_rejected_4dbd060c",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 303,
+    "line": 309,
     "decision": "match compile_create_table(&create, sql) {\n            Ok(_) => None,\n            Err(CodegenError::Rejected(m)) => Some(m),\n            Err(other) => panic!(\"{sql}: {other}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3102,7 +3102,7 @@
   {
     "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 350,
+    "line": 356,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3110,10 +3110,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_5fddf6a8",
+    "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_3dc50051",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 361,
-    "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable { name, sql: got_sql } => {\n                assert_eq!(name, \"t\");\n                assert_eq!(got_sql, sql);\n            }\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
+    "line": 367,
+    "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable {\n                name,\n                sql: got_sql,\n                without_rowid,\n                autoindexes,\n            } => {\n                assert_eq!(name, \"t\");\n                assert_eq!(got_sql, sql);\n                assert!(!without_rowid);\n                assert!(autoindexes.is_empty());\n            }\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_ddl_create_table_autoindex_names_61144a02",
+    "file": "src/codegen/row/ddl/create_table.rs",
+    "line": 384,
+    "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_ddl_create_table_autoindex_names_e668f035",
+    "file": "src/codegen/row/ddl/create_table.rs",
+    "line": 389,
+    "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable { autoindexes, .. } => autoindexes.clone(),\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -3130,9 +3150,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_ddl_drop_index_compile_drop_index_790d5bc2",
+    "file": "src/codegen/row/ddl/drop_index.rs",
+    "line": 19,
+    "decision": "di\n        .name\n        .get(..\"sqlite_autoindex_\".len())\n        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(\"sqlite_autoindex_\"))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_ddl_drop_index_compiles_to_init_drop_index_halt_d66bf27c",
     "file": "src/codegen/row/ddl/drop_index.rs",
-    "line": 44,
+    "line": 56,
     "decision": "match parse_drop_index(\"DROP INDEX idx_t_a\") {\n            ParseOutcome::Accepted(d) => d,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3142,8 +3172,18 @@
   {
     "id": "codegen_row_ddl_drop_index_compiles_to_init_drop_index_halt_fe4ded00",
     "file": "src/codegen/row/ddl/drop_index.rs",
-    "line": 52,
+    "line": 64,
     "decision": "match &program.instructions[1].p4 {\n            P4::DropIndex { name, root_page } => {\n                assert_eq!(name, \"idx_t_a\");\n                assert_eq!(*root_page, 3);\n            }\n            other => panic!(\"expected P4::DropIndex, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_ddl_drop_index_an_implicit_index_cannot_be_dropped_85181c11",
+    "file": "src/codegen/row/ddl/drop_index.rs",
+    "line": 75,
+    "decision": "match parse_drop_index(\"DROP INDEX sqlite_autoindex_t_1\") {\n            ParseOutcome::Accepted(d) => d,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -4780,9 +4820,19 @@
     "wildcard_risk": true
   },
   {
+    "id": "codegen_row_index_maintenance_reject_non_binary_key_2a521271",
+    "file": "src/codegen/row/index_maintenance.rs",
+    "line": 62,
+    "decision": "col.collation == crate::value::Collation::Binary",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_284cba5b",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 110,
+    "line": 143,
     "decision": "touched.is_some_and(|flags| flags.get(i) == Some(&false))",
     "conditions": 1,
     "vectors_required": 2,
@@ -4792,7 +4842,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_b7b491d5",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 116,
+    "line": 150,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -4802,7 +4852,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_0b949c87",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 140,
+    "line": 174,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -4812,7 +4862,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_0b949c87_2",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 146,
+    "line": 180,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -4822,7 +4872,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_284cba5b",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 185,
+    "line": 219,
     "decision": "touched.is_some_and(|flags| flags.get(i) == Some(&false))",
     "conditions": 1,
     "vectors_required": 2,
@@ -4832,7 +4882,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_b7b491d5",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 191,
+    "line": 226,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -4842,7 +4892,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_6c346ace",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 210,
+    "line": 245,
     "decision": "Some(col_idx) == schema.rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -4852,7 +4902,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_0b949c87",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 223,
+    "line": 258,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -4862,7 +4912,7 @@
   {
     "id": "codegen_row_index_maintenance_emit_index_key_ops_from_regs_0b949c87_2",
     "file": "src/codegen/row/index_maintenance.rs",
-    "line": 229,
+    "line": 264,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -11662,7 +11712,7 @@
   {
     "id": "codegen_row_stmt_insert_cached_create_table_50213569",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 122,
+    "line": 123,
     "decision": "let Some(create) = cache.get(&schema.sql)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11672,7 +11722,7 @@
   {
     "id": "codegen_row_stmt_insert_cached_create_table_109988d9",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 126,
+    "line": 127,
     "decision": "match parse_create_table(&schema.sql) {\n        ParseOutcome::Accepted(create) => Arc::new(*create),\n        ParseOutcome::Unsupported { message, .. } | ParseOutcome::Invalid { message, .. } => {\n            return Err(CodegenError::Unsupported {\n                reason: format!(\"could not recover constraints from schema DDL: {message}\"),\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11682,7 +11732,7 @@
   {
     "id": "codegen_row_stmt_insert_check_label_0dcca330",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 175,
+    "line": 176,
     "decision": "let Some(name) = name",
     "conditions": 1,
     "vectors_required": 2,
@@ -11692,7 +11742,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_column_source_8039594a",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 225,
+    "line": 226,
     "decision": "match source {\n        ColumnSource::Expr(expr) => compile_value(\n            em,\n            reg,\n            &crate::codegen::row::Scope::single(schema, cursor),\n            expr,\n        ),\n        ColumnSource::Reg(src) => {\n            let dest = reg.alloc();\n            em.emit(Instruction::new(Opcode::Copy, *src, dest, 0));\n            Ok(dest)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11702,7 +11752,7 @@
   {
     "id": "codegen_row_stmt_insert_stage_contiguous_726ff23e",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 248,
+    "line": 249,
     "decision": "contiguous",
     "conditions": 1,
     "vectors_required": 2,
@@ -11712,7 +11762,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_new_rowid_03a06396",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 265,
+    "line": 266,
     "decision": "is_autoincrement",
     "conditions": 1,
     "vectors_required": 2,
@@ -11722,7 +11772,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_3633baaa",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 293,
+    "line": 294,
     "decision": "schema.without_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -11732,7 +11782,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_fba11f37",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 331,
+    "line": 332,
     "decision": "match &insert.columns {\n        Some(names) => {\n            let mut out = Vec::with_capacity(names.len());\n            for name in names {\n                let idx = column_index(schema, name)\n                    .ok_or_else(|| CodegenError::UnknownColumn { name: name.clone() })?;\n                out.push(idx);\n            }\n            out\n        }\n        None => (0..schema.columns.len()).collect(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11742,7 +11792,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_815acf26",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 346,
+    "line": 347,
     "decision": "let (InsertSource::DefaultValues, Some(columns)) = (&insert.source, &insert.columns)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11752,7 +11802,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_18bda6d0",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 353,
+    "line": 354,
     "decision": "let InsertSource::Values(rows) = &insert.source",
     "conditions": 1,
     "vectors_required": 2,
@@ -11762,7 +11812,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_e9674d7a",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 355,
+    "line": 356,
     "decision": "!row.is_empty() && row.len() != target_columns.len()",
     "conditions": 2,
     "vectors_required": 3,
@@ -11772,7 +11822,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_26e6c6f9",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 368,
+    "line": 369,
     "decision": "let InsertSource::Select(select) = &insert.source",
     "conditions": 1,
     "vectors_required": 2,
@@ -11782,7 +11832,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_13fa7590",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 376,
+    "line": 377,
     "decision": "!select.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -11792,7 +11842,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_93a86832",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 383,
+    "line": 384,
     "decision": "match select_schemas {\n            Some([single]) => select_result_column_count(select, single),\n            Some(joined) if joined.len() > 1 => {\n                let Some(from) = &select.from else {\n                    return Err(CodegenError::NoFromClause);\n                };\n                let table_refs: Vec<&TableRef> = std::iter::once(&from.first)\n                    .chain(from.joins.iter().map(|j| &j.table))\n                    .collect();\n                select_result_column_count_joined(select, joined, &table_refs)?\n            }\n            Some(_) | None => {\n                return Err(CodegenError::Unsupported {\n                    reason: \"INSERT ... SELECT: the SELECT's FROM table schema(s) were not \\\n                             resolved\"\n                        .to_string(),\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11802,7 +11852,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_d15ccd91",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 385,
+    "line": 386,
     "decision": "joined.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -11812,7 +11862,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_3f3535a2",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 402,
+    "line": 403,
     "decision": "found != target_columns.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -11822,7 +11872,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_087c60c4",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 443,
+    "line": 444,
     "decision": "match &insert.source {\n        InsertSource::Values(rows) => {\n            for values in rows {\n                compile_row(\n                    &mut em,\n                    &mut reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| values.get(pos).cloned().map(ColumnSource::Expr),\n                    rowid_alias,\n                    action,\n                    is_autoincrement,\n                )?;\n            }\n        }\n        InsertSource::DefaultValues => {\n            compile_row(\n                &mut em,\n                &mut reg,\n                schema,\n                &check_schema,\n                &plans,\n                &table_checks,\n                &target_columns,\n                |_pos| None,\n                rowid_alias,\n                action,\n                is_autoincrement,\n            )?;\n        }\n        InsertSource::Select(select) => {\n            // Re-checked (rather than trusted from the validation above)\n            // so this arm never needs an infallible unwrap.\n            let Some(select_schemas) = select_schemas else {\n                return Err(CodegenError::Unsupported {\n                    reason: \"INSERT ... SELECT: the SELECT's FROM table schema(s) were not \\\n                             resolved\"\n                        .to_string(),\n                });\n            };\n            // The select's source-table scan needs cursor numbers of its\n            // own, distinct from this INSERT's target-table/index\n            // cursors above — offset above the last index cursor\n            // (`open_index_cursors` uses `FIRST_INDEX_CURSOR..\n            // FIRST_INDEX_CURSOR+schema.indexes.len()`).\n            let select_table_cursor =\n                FIRST_INDEX_CURSOR.saturating_add(i32::try_from(schema.indexes.len()).unwrap_or(0));\n            let end_label = em.new_label();\n            let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {\n                let count = usize::try_from(count).map_err(|_| CodegenError::Internal {\n                    reason: format!(\"INSERT ... SELECT produced a negative column count {count}\"),\n                })?;\n                compile_row(\n                    em,\n                    reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| {\n                        (pos < count)\n                            .then(|| first.saturating_add(i32::try_from(pos).unwrap_or(i32::MAX)))\n                            .map(ColumnSource::Reg)\n                    },\n                    rowid_alias,\n                    action,\n                    is_autoincrement,\n                )\n            };\n            if select_schemas.len() > 1 {\n                // #250: the SELECT's FROM clause has a JOIN — drive the\n                // same nested-loop join scan `compile_select_joined`\n                // uses, with cursor numbers offset above this INSERT's\n                // own cursors (`compile_select_joined_scan` opens every\n                // source-table cursor itself, unlike the single-table\n                // `compile_select_scan` path below, which expects its\n                // one cursor already open).\n                // `select_schemas` doubles as the full catalog for a\n                // subquery-in-FROM to resolve its own inner FROM table(s)\n                // against (#257) — narrower than `compile_select_joined`'s\n                // own full-database catalog, so `INSERT ... SELECT` with\n                // both a JOIN and a FROM-subquery whose own table isn't\n                // among the SELECT's joined tables isn't supported yet.\n                compile_select_joined_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    select_schemas,\n                    select_schemas,\n                    select_table_cursor,\n                    end_label,\n                    &std::collections::HashMap::new(),\n                    &mut sink,\n                )?;\n            } else {\n                let Some(select_schema) = select_schemas.first() else {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"INSERT ... SELECT: the SELECT's FROM table schema was not \\\n                                 resolved\"\n                            .to_string(),\n                    });\n                };\n                let select_cursors = ScanCursors {\n                    table: select_table_cursor,\n                    sort: select_table_cursor.saturating_add(1),\n                    pseudo: select_table_cursor.saturating_add(2),\n                    distinct: select_table_cursor.saturating_add(3),\n                };\n                let select_root_page = valid_table_root_page(select_schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    select_cursors.table,\n                    select_root_page,\n                    0,\n                ));\n                compile_select_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    &std::rc::Rc::new(select_schema.clone()),\n                    select_cursors,\n                    end_label,\n                    std::slice::from_ref(select_schema),\n                    &crate::codegen::row::planner::Stats::default(),\n                    &mut sink,\n                )?;\n            }\n            em.place(end_label);\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11832,7 +11882,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_297a1cc6",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 516,
+    "line": 517,
     "decision": "select_schemas.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -11842,7 +11892,7 @@
   {
     "id": "codegen_row_stmt_insert_column_plans_cbe41696",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 607,
+    "line": 608,
     "decision": "match constraint {\n                ColumnConstraint::NotNull => plan.not_null = true,\n                // NULL on the rowid-alias column means \"assign a fresh\n                // rowid\", not a constraint violation, so its implicit\n                // NOT NULL is deliberately not enforced.\n                ColumnConstraint::PrimaryKey { .. } => {\n                    if rowid_alias != Some(idx) {\n                        plan.not_null = true;\n                    }\n                }\n                ColumnConstraint::Default(\n                    DefaultValue::Literal(expr) | DefaultValue::Paren(expr),\n                ) => {\n                    plan.default = Some(expr.clone());\n                }\n                ColumnConstraint::Check { expr, name, body } => plan\n                    .checks\n                    .push((expr.clone(), check_label(schema, name.as_deref(), *body))),\n                ColumnConstraint::Unique | ColumnConstraint::Collate(_) => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11852,7 +11902,7 @@
   {
     "id": "codegen_row_stmt_insert_column_plans_6503ca7d",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 613,
+    "line": 614,
     "decision": "rowid_alias != Some(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11862,7 +11912,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_4b71b0ef",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 654,
+    "line": 655,
     "decision": "let (Some(source), Some(slot)) = (column_at(pos), value_sources.get_mut(col_idx))",
     "conditions": 1,
     "vectors_required": 2,
@@ -11872,7 +11922,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_fcbd603f",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 666,
+    "line": 667,
     "decision": "match rowid_alias {\n        Some(idx) => {\n            let explicit = value_source_at(idx)\n                .filter(|source| !matches!(source, ColumnSource::Expr(e) if is_null_literal(e)));\n            match explicit {\n                Some(source) => {\n                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                    let no_conflict = em.new_label();\n                    let seek_addr =\n                        em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                    em.patch_p2(seek_addr, no_conflict);\n                    emit_pk_conflict(em, reg, action, row_skip, schema, idx)?;\n                    em.place(no_conflict);\n                    r\n                }\n                None => {\n                    let r = reg.alloc();\n                    emit_new_rowid(em, r, schema, is_autoincrement);\n                    r\n                }\n            }\n        }\n        None => {\n            let r = reg.alloc();\n            emit_new_rowid(em, r, schema, is_autoincrement);\n            r\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11882,7 +11932,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_8d060817",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 670,
+    "line": 671,
     "decision": "match explicit {\n                Some(source) => {\n                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                    let no_conflict = em.new_label();\n                    let seek_addr =\n                        em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                    em.patch_p2(seek_addr, no_conflict);\n                    emit_pk_conflict(em, reg, action, row_skip, schema, idx)?;\n                    em.place(no_conflict);\n                    r\n                }\n                None => {\n                    let r = reg.alloc();\n                    emit_new_rowid(em, r, schema, is_autoincrement);\n                    r\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11892,7 +11942,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_c861879c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 699,
+    "line": 700,
     "decision": "Some(idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -11902,7 +11952,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_7150f6bf",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 715,
+    "line": 716,
     "decision": "use_default",
     "conditions": 1,
     "vectors_required": 2,
@@ -11912,7 +11962,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_d0939512",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 721,
+    "line": 722,
     "decision": "match &chosen {\n            Some(source) => compile_column_source(em, reg, schema, TABLE_CURSOR, source)?,\n            None => {\n                let r = reg.alloc();\n                em.emit(Instruction::new(Opcode::Null, 0, r, 0));\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11922,7 +11972,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_f476b28e",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 731,
+    "line": 732,
     "decision": "plan.not_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -11932,7 +11982,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_66f20021",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 777,
+    "line": 778,
     "decision": "needs_row_pseudo",
     "conditions": 1,
     "vectors_required": 2,
@@ -11942,7 +11992,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_d93931f7",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 795,
+    "line": 796,
     "decision": "has_checks",
     "conditions": 1,
     "vectors_required": 2,
@@ -11952,7 +12002,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_1af88378",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 859,
+    "line": 860,
     "decision": "!schema.indexes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -11962,7 +12012,7 @@
   {
     "id": "codegen_row_stmt_insert_table_check_constraints_cfdbd8dc",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 886,
+    "line": 887,
     "decision": "match c {\n            TableConstraint::Check { expr, name, body } => {\n                Some((expr.clone(), check_label(schema, name.as_deref(), *body)))\n            }\n            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11972,7 +12022,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_constraint_violation_f9999294",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 902,
+    "line": 903,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Abort\n        | ConflictAction::Fail\n        | ConflictAction::Rollback\n        | ConflictAction::Replace => {\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                code,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11982,7 +12032,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_pk_conflict_1a78c7f5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 928,
+    "line": 929,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // `SeekRowid` above landed the cursor on the row this\n            // INSERT is about to displace — its secondary-index\n            // entries must be removed before it's deleted, exactly\n            // like `delete.rs`'s ordinary `DELETE` path, or they go\n            // stale (`#196` follow-up: this conflict path predates\n            // index maintenance and wasn't updated when it landed).\n            emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\n                \"UNIQUE constraint failed: {}.{} (PRIMARY KEY)\",\n                schema.name,\n                schema.columns.get(idx).map_or(\"?\", String::as_str)\n            );\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_PRIMARYKEY,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11992,7 +12042,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_b7b491d5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 987,
+    "line": 989,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -12002,7 +12052,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_0b949c87",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1003,
+    "line": 1005,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12010,10 +12060,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_emit_unique_check_51467db7",
+    "id": "codegen_row_stmt_insert_emit_unique_check_27b0b374",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1029,
-    "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // The conflicting row's rowid was written into\n            // `conflict_rowid_reg` by `NoConflict` itself — seek the\n            // table cursor onto it, remove its index entries, then\n            // delete it, exactly like `emit_pk_conflict`'s `Replace`\n            // branch (which instead already had the cursor positioned\n            // via `SeekRowid`).\n            let seek_ok = em.new_label();\n            let seek_addr = em.emit(Instruction::new(\n                Opcode::SeekRowid,\n                TABLE_CURSOR,\n                0,\n                conflict_rowid_reg,\n            ));\n            em.patch_p2(seek_addr, seek_ok);\n            crate::codegen::row::index_maintenance::emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n            em.place(seek_ok);\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\"UNIQUE constraint failed: {}.{}\", schema.name, index.name);\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_UNIQUE,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
+    "line": 1042,
+    "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // The conflicting row's rowid was written into\n            // `conflict_rowid_reg` by `NoConflict` itself — seek the\n            // table cursor onto it, remove its index entries, then\n            // delete it, exactly like `emit_pk_conflict`'s `Replace`\n            // branch (which instead already had the cursor positioned\n            // via `SeekRowid`).\n            let seek_ok = em.new_label();\n            let seek_addr = em.emit(Instruction::new(\n                Opcode::SeekRowid,\n                TABLE_CURSOR,\n                0,\n                conflict_rowid_reg,\n            ));\n            em.patch_p2(seek_addr, seek_ok);\n            crate::codegen::row::index_maintenance::emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n            em.place(seek_ok);\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message =\n                crate::codegen::row::index_maintenance::unique_violation_message(schema, index);\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_UNIQUE,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -12022,7 +12072,7 @@
   {
     "id": "codegen_row_stmt_insert_insert_result_e7f78d1c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1139,
+    "line": 1153,
     "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(insert) => *insert,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12180,9 +12230,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_stmt_update_emit_update_row_body_72346b4e",
+    "file": "src/codegen/row/stmt/update.rs",
+    "line": 618,
+    "decision": "!index.unique",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_update_emit_update_row_body_b3e8a94c",
+    "file": "src/codegen/row/stmt/update.rs",
+    "line": 621,
+    "decision": "index_touched.get(position) != Some(&true)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_stmt_update_emit_update_row_body_6fe685c0",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 641,
+    "line": 665,
     "decision": "rowid_reassigned",
     "conditions": 1,
     "vectors_required": 2,
@@ -12192,8 +12262,38 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1af88378",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 660,
+    "line": 684,
     "decision": "!schema.indexes.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_update_emit_update_unique_check_d46bb603",
+    "file": "src/codegen/row/stmt/update.rs",
+    "line": 721,
+    "decision": "matches!(action, ConflictAction::Replace)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_update_emit_update_unique_check_b7b491d5",
+    "file": "src/codegen/row/stmt/update.rs",
+    "line": 732,
+    "decision": "col.desc",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_update_emit_update_unique_check_31c19786",
+    "file": "src/codegen/row/stmt/update.rs",
+    "line": 748,
+    "decision": "Some(col_idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -12202,7 +12302,7 @@
   {
     "id": "codegen_row_stmt_update_update_program_36cf9018",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 728,
+    "line": 866,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12212,7 +12312,7 @@
   {
     "id": "codegen_row_stmt_update_compile_36cf9018",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 796,
+    "line": 934,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16572,7 +16672,7 @@
   {
     "id": "engine_row_adapter_delete_master_row_8e51437e",
     "file": "src/engine/row/adapter.rs",
-    "line": 695,
+    "line": 715,
     "decision": "match e {\n                // The error carries no name (#658); this caller has it.\n                btree::BtreeError::MasterEntryNotFound => {\n                    SchemaStorageError(format!(\"no sqlite_master {kind} named {name}\"))\n                }\n                other => schema_err(other),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16582,7 +16682,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 758,
+    "line": 778,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -16592,7 +16692,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_15a637f2",
     "file": "src/engine/row/adapter.rs",
-    "line": 760,
+    "line": 780,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) =\n                    (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16602,7 +16702,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_892d9090",
     "file": "src/engine/row/adapter.rs",
-    "line": 763,
+    "line": 783,
     "decision": "&**n == table",
     "conditions": 1,
     "vectors_required": 2,
@@ -31250,9 +31350,19 @@
     "wildcard_risk": true
   },
   {
+    "id": "schema_key_term_column_5c46ebc2",
+    "file": "src/schema.rs",
+    "line": 115,
+    "decision": "match &expr.kind {\n            ExprKind::Paren(inner) => expr = inner,\n            ExprKind::Collate {\n                expr: inner,\n                collation: name,\n            } => {\n                collation.get_or_insert_with(|| name.clone());\n                expr = inner;\n            }\n            ExprKind::Column { name, .. } => return Some((name.clone(), collation)),\n            _ => return None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "schema_rowid_alias_from_sql_03b44294",
     "file": "src/schema.rs",
-    "line": 88,
+    "line": 135,
     "decision": "match crate::parser::row::parse_create_table(sql) {\n        ParseOutcome::Accepted(create) => *create,\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31262,7 +31372,7 @@
   {
     "id": "schema_rowid_alias_from_sql_8e9caab3",
     "file": "src/schema.rs",
-    "line": 92,
+    "line": 139,
     "decision": "create.without_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -31272,7 +31382,7 @@
   {
     "id": "schema_rowid_alias_from_sql_ebcc18a8",
     "file": "src/schema.rs",
-    "line": 105,
+    "line": 152,
     "decision": "inline_pk && is_integer(def)",
     "conditions": 2,
     "vectors_required": 3,
@@ -31280,54 +31390,104 @@
     "wildcard_risk": false
   },
   {
-    "id": "schema_rowid_alias_from_sql_c88c124d",
+    "id": "schema_rowid_alias_from_sql_c1469d29",
     "file": "src/schema.rs",
-    "line": 109,
-    "decision": "let [only] = create.columns.as_slice()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "schema_rowid_alias_from_sql_1660733a",
-    "file": "src/schema.rs",
-    "line": 110,
-    "decision": "is_integer(only)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "schema_rowid_alias_from_sql_111eda94",
-    "file": "src/schema.rs",
-    "line": 111,
-    "decision": "match c {\n                TableConstraint::PrimaryKey(cols) => match cols.as_slice() {\n                    [col] => matches!(&col.expr.kind, ExprKind::Column { name, .. } if name.eq_ignore_ascii_case(&only.name)),\n                    _ => false,\n                },\n                _ => false,\n            }",
+    "line": 156,
+    "decision": "match c {\n        TableConstraint::PrimaryKey(terms) => table_key_alias(&create, terms),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "schema_rowid_alias_from_sql_d4d5a2d1",
+    "id": "schema_autoindexes_33dc9b27",
     "file": "src/schema.rs",
-    "line": 112,
-    "decision": "match cols.as_slice() {\n                    [col] => matches!(&col.expr.kind, ExprKind::Column { name, .. } if name.eq_ignore_ascii_case(&only.name)),\n                    _ => false,\n                }",
+    "line": 195,
+    "decision": "name.eq_ignore_ascii_case(\"NOCASE\")",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "schema_autoindexes_5813f6cf",
+    "file": "src/schema.rs",
+    "line": 197,
+    "decision": "name.eq_ignore_ascii_case(\"RTRIM\")",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "schema_autoindexes_cba0b07a",
+    "file": "src/schema.rs",
+    "line": 209,
+    "decision": "match c {\n                ColumnConstraint::Collate(name) => Some(collation_named(name)),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "schema_rowid_alias_from_sql_5ddf74f9",
+    "id": "schema_autoindexes_221e376b",
     "file": "src/schema.rs",
-    "line": 118,
-    "decision": "named",
+    "line": 240,
+    "decision": "match constraint {\n                ColumnConstraint::PrimaryKey { desc, .. } => {\n                    let integer = def\n                        .type_name\n                        .as_deref()\n                        .is_some_and(|t| t.eq_ignore_ascii_case(\"INTEGER\"));\n                    // A rowid alias: the table's own b-tree is its key.\n                    if matches!(\n                        (integer, *desc, create.without_rowid),\n                        (true, None | Some(false), false)\n                    ) {\n                        continue;\n                    }\n                    constraints.push((true, column_key(def, *desc == Some(true))));\n                }\n                ColumnConstraint::Unique => constraints.push((false, column_key(def, false))),\n                _ => {}\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "schema_autoindexes_13f64a2c",
+    "file": "src/schema.rs",
+    "line": 247,
+    "decision": "matches!(\n                        (integer, *desc, create.without_rowid),\n                        (true, None | Some(false), false)\n                    )",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
+  },
+  {
+    "id": "schema_autoindexes_4302d56d",
+    "file": "src/schema.rs",
+    "line": 261,
+    "decision": "match constraint {\n            TableConstraint::PrimaryKey(terms) => {\n                if let (false, Some(_)) = (create.without_rowid, table_key_alias(create, terms)) {\n                    continue;\n                }\n                constraints.push((true, table_key(terms)));\n            }\n            TableConstraint::Unique(terms) => constraints.push((false, table_key(terms))),\n            TableConstraint::Check { .. } => {}\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "schema_autoindexes_8c7285d5",
+    "file": "src/schema.rs",
+    "line": 263,
+    "decision": "let (false, Some(_)) = (create.without_rowid, table_key_alias(create, terms))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "schema_autoindexes_5f0a85c1",
+    "file": "src/schema.rs",
+    "line": 281,
+    "decision": "let Some(existing) = indexes.iter_mut().find(|other| same(other))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "schema_autoindexes_from_sql_1ffcc869",
+    "file": "src/schema.rs",
+    "line": 299,
+    "decision": "match crate::parser::row::parse_create_table(sql) {\n        ParseOutcome::Accepted(create) => autoindexes(&create),\n        _ => Vec::new(),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
   },
   {
     "id": "storage_column_decode_annotation_11872427",
@@ -40162,7 +40322,7 @@
   {
     "id": "storage_row_btree_master_delete_master_row_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 145,
+    "line": 166,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40172,7 +40332,7 @@
   {
     "id": "storage_row_btree_master_delete_master_row_45957966",
     "file": "src/storage/row/btree/master.rs",
-    "line": 147,
+    "line": 168,
     "decision": "let (Some(Value::Text(t)), Some(Value::Text(n))) = (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -40182,7 +40342,7 @@
   {
     "id": "storage_row_btree_master_delete_master_row_1bc8ded5",
     "file": "src/storage/row/btree/master.rs",
-    "line": 148,
+    "line": 169,
     "decision": "t.as_ref() == kind && n.as_ref() == name",
     "conditions": 2,
     "vectors_required": 3,
@@ -40192,7 +40352,7 @@
   {
     "id": "storage_row_btree_master_ensure_sqlite_sequence_table_a37cbb58",
     "file": "src/storage/row/btree/master.rs",
-    "line": 172,
+    "line": 193,
     "decision": "let Some(existing) = find_master_rootpage(pager, header, \"sqlite_sequence\")?",
     "conditions": 1,
     "vectors_required": 2,
@@ -40202,7 +40362,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 207,
+    "line": 228,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40212,7 +40372,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_f65f29ce",
     "file": "src/storage/row/btree/master.rs",
-    "line": 209,
+    "line": 230,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(rp))) = (values.get(1), values.get(3))",
     "conditions": 1,
     "vectors_required": 2,
@@ -40222,7 +40382,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_eb9a2e58",
     "file": "src/storage/row/btree/master.rs",
-    "line": 210,
+    "line": 231,
     "decision": "n.as_ref() == name",
     "conditions": 1,
     "vectors_required": 2,
@@ -40232,7 +40392,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_93641e24",
     "file": "src/storage/row/btree/master.rs",
-    "line": 213,
+    "line": 234,
     "decision": "rootpage == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40242,7 +40402,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 242,
+    "line": 263,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40252,7 +40412,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_15a637f2",
     "file": "src/storage/row/btree/master.rs",
-    "line": 244,
+    "line": 265,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) = (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -40262,7 +40422,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_22c6e73d",
     "file": "src/storage/row/btree/master.rs",
-    "line": 245,
+    "line": 266,
     "decision": "n.as_ref() == table_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -40272,7 +40432,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_9298f737",
     "file": "src/storage/row/btree/master.rs",
-    "line": 253,
+    "line": 274,
     "decision": "match existing {\n        None => {\n            let next_rowid = max_rowid(pager, header, seq_root)?\n                .unwrap_or(0)\n                .saturating_add(1);\n            let values = [Value::Text(table_name.into()), Value::Integer(rowid)];\n            let payload = encode_record(&values, header.text_encoding);\n            super::insert_row(pager, header, seq_root, next_rowid, &payload)?;\n        }\n        Some((row_rowid, current_seq)) if rowid > current_seq => {\n            super::delete_row(pager, header, seq_root, row_rowid)?;\n            let values = [Value::Text(table_name.into()), Value::Integer(rowid)];\n            let payload = encode_record(&values, header.text_encoding);\n            super::insert_row(pager, header, seq_root, row_rowid, &payload)?;\n        }\n        Some(_) => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40282,7 +40442,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_6a26faef",
     "file": "src/storage/row/btree/master.rs",
-    "line": 262,
+    "line": 283,
     "decision": "rowid > current_seq",
     "conditions": 1,
     "vectors_required": 2,
@@ -40292,7 +40452,7 @@
   {
     "id": "storage_row_btree_master_ensure_sqlite_stat1_table_0357ec9d",
     "file": "src/storage/row/btree/master.rs",
-    "line": 288,
+    "line": 309,
     "decision": "let Some(existing) = find_master_rootpage(pager, header, \"sqlite_stat1\")?",
     "conditions": 1,
     "vectors_required": 2,
@@ -40302,7 +40462,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 326,
+    "line": 347,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -40312,7 +40472,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_1c9da291",
     "file": "src/storage/row/btree/master.rs",
-    "line": 328,
+    "line": 349,
     "decision": "let Some(Value::Text(tbl)) = values.first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40322,7 +40482,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_148523ba",
     "file": "src/storage/row/btree/master.rs",
-    "line": 329,
+    "line": 350,
     "decision": "tbl.as_ref() == table_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -40332,7 +40492,7 @@
   {
     "id": "storage_row_btree_master_insert_stat1_row_a968717c",
     "file": "src/storage/row/btree/master.rs",
-    "line": 354,
+    "line": 375,
     "decision": "match idx {\n        Some(name) => Value::Text(name.into()),\n        None => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42592,7 +42752,7 @@
   {
     "id": "storage_row_schema_ddl_reader_read_schema_and_views_c6c2d2df",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 101,
+    "line": 105,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -42602,7 +42762,7 @@
   {
     "id": "storage_row_schema_ddl_reader_read_schema_and_views_c9cb4097",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 103,
+    "line": 107,
     "decision": "values.len() != 5",
     "conditions": 1,
     "vectors_required": 2,
@@ -42610,19 +42770,39 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_schema_ddl_reader_read_schema_and_views_fbb54ba7",
+    "id": "storage_row_schema_ddl_reader_read_schema_and_views_dd9e1009",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 106,
-    "decision": "match text(values.first()) {\n            \"table\" => {\n                let schema = table_schema(&values);\n                table_pos.insert(schema.name.clone(), schemas.len());\n                schemas.push(schema);\n            }\n            \"index\" => pending_indexes.extend(index_schema(&values)),\n            \"view\" => views.push(ViewSchema {\n                name: text(values.get(1)).to_string(),\n                sql: text(values.get(4)).to_string(),\n            }),\n            _ => {}\n        }",
+    "line": 110,
+    "decision": "match text(values.first()) {\n            \"table\" => {\n                let schema = table_schema(&values);\n                table_pos.insert(schema.name.clone(), schemas.len());\n                schemas.push(schema);\n            }\n            \"index\" => match index_schema(&values) {\n                Some(index) => pending_indexes.push(index),\n                None => pending_autoindexes.extend(autoindex_row(&values)),\n            },\n            \"view\" => views.push(ViewSchema {\n                name: text(values.get(1)).to_string(),\n                sql: text(values.get(4)).to_string(),\n            }),\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
+    "id": "storage_row_schema_ddl_reader_read_schema_and_views_f77d0438",
+    "file": "src/storage/row/schema/ddl_reader.rs",
+    "line": 116,
+    "decision": "match index_schema(&values) {\n                Some(index) => pending_indexes.push(index),\n                None => pending_autoindexes.extend(autoindex_row(&values)),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_schema_ddl_reader_read_schema_and_views_dc92fb71",
+    "file": "src/storage/row/schema/ddl_reader.rs",
+    "line": 145,
+    "decision": "let Some(columns) = columns",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_schema_ddl_reader_read_schema_and_views_7e3515d1",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 122,
+    "line": 155,
     "decision": "let Some(schema) = table_pos\n            .get(&table_name)\n            .and_then(|&pos| schemas.get_mut(pos))",
     "conditions": 1,
     "vectors_required": 2,
@@ -42632,7 +42812,7 @@
   {
     "id": "storage_row_schema_ddl_reader_read_table_and_view_names_c6c2d2df",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 143,
+    "line": 176,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -42642,7 +42822,7 @@
   {
     "id": "storage_row_schema_ddl_reader_read_table_and_view_names_c9cb4097",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 145,
+    "line": 178,
     "decision": "values.len() != 5",
     "conditions": 1,
     "vectors_required": 2,
@@ -42652,7 +42832,7 @@
   {
     "id": "storage_row_schema_ddl_reader_read_table_and_view_names_ac98203e",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 148,
+    "line": 181,
     "decision": "matches!(text(values.first()), \"table\" | \"view\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -42662,7 +42842,7 @@
   {
     "id": "storage_row_schema_ddl_reader_read_views_c6c2d2df",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 167,
+    "line": 200,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -42672,7 +42852,7 @@
   {
     "id": "storage_row_schema_ddl_reader_read_views_c9cb4097",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 169,
+    "line": 202,
     "decision": "values.len() != 5",
     "conditions": 1,
     "vectors_required": 2,
@@ -42682,7 +42862,7 @@
   {
     "id": "storage_row_schema_ddl_reader_read_views_50b4bf41",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 172,
+    "line": 205,
     "decision": "text(values.first()) == \"view\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -42692,7 +42872,7 @@
   {
     "id": "storage_row_schema_ddl_reader_table_schema_a9464ed3",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 185,
+    "line": 218,
     "decision": "match values.get(3) {\n        // A root page outside `u32` is not a page; 0 is the existing\n        // \"no root\" value the callers already handle.\n        Some(Value::Integer(i)) => u32::try_from(*i).unwrap_or(0),\n        _ => 0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42702,7 +42882,7 @@
   {
     "id": "storage_row_schema_ddl_reader_table_schema_e04d8ff5",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 193,
+    "line": 226,
     "decision": "is_virtual_table(sql)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42710,9 +42890,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_schema_ddl_reader_autoindex_row_4ff3f675",
+    "file": "src/storage/row/schema/ddl_reader.rs",
+    "line": 268,
+    "decision": "match values.get(3) {\n        Some(Value::Integer(i)) => u32::try_from(*i).unwrap_or(0),\n        _ => 0,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "storage_row_schema_ddl_reader_index_schema_a9464ed3",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 234,
+    "line": 284,
     "decision": "match values.get(3) {\n        // A root page outside `u32` is not a page; 0 is the existing\n        // \"no root\" value the callers already handle.\n        Some(Value::Integer(i)) => u32::try_from(*i).unwrap_or(0),\n        _ => 0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42722,7 +42912,7 @@
   {
     "id": "storage_row_schema_ddl_reader_find_ignore_case_f1cee63c",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 285,
+    "line": 335,
     "decision": "needle.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42732,7 +42922,7 @@
   {
     "id": "storage_row_schema_ddl_reader_indexed_column_676b0a9f",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 308,
+    "line": 358,
     "decision": "let Some(split) = suffix_start_ignore_case(span, \" DESC\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -42742,7 +42932,7 @@
   {
     "id": "storage_row_schema_ddl_reader_indexed_column_34da0237",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 311,
+    "line": 361,
     "decision": "let Some(split) = suffix_start_ignore_case(span, \" ASC\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -42752,7 +42942,7 @@
   {
     "id": "storage_row_schema_ddl_reader_indexed_column_6840c55b",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 317,
+    "line": 367,
     "decision": "let Some(pos) = find_ignore_case(span, \" COLLATE \")",
     "conditions": 1,
     "vectors_required": 2,
@@ -42762,7 +42952,7 @@
   {
     "id": "storage_row_schema_ddl_reader_column_collation_33dc9b27",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 349,
+    "line": 399,
     "decision": "name.eq_ignore_ascii_case(\"NOCASE\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -42772,7 +42962,7 @@
   {
     "id": "storage_row_schema_ddl_reader_column_collation_5813f6cf",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 351,
+    "line": 401,
     "decision": "name.eq_ignore_ascii_case(\"RTRIM\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -42782,7 +42972,7 @@
   {
     "id": "storage_row_schema_ddl_reader_text_c9ddff13",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 359,
+    "line": 409,
     "decision": "match v {\n        Some(Value::Text(s)) => s,\n        _ => \"\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42792,7 +42982,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_e3a36d28",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 434,
+    "line": 484,
     "decision": "let Some(b) = out.get_mut(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42802,7 +42992,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_197c25fe",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 438,
+    "line": 488,
     "decision": "let Some(here) = at(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42812,7 +43002,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_1c0fa93a",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 439,
+    "line": 489,
     "decision": "match here {\n            b'\\'' | b'\"' => {\n                let quote = here;\n                blank(&mut out, i);\n                i = i.saturating_add(1);\n                while let Some(b) = at(i) {\n                    if b == quote {\n                        blank(&mut out, i);\n                        i = i.saturating_add(1);\n                        // A doubled quote (`''`/`\"\"`) is an escaped\n                        // literal quote character, not the closing one.\n                        if at(i) == Some(quote) {\n                            blank(&mut out, i);\n                            i = i.saturating_add(1);\n                            continue;\n                        }\n                        break;\n                    }\n                    blank(&mut out, i);\n                    i = i.saturating_add(1);\n                }\n            }\n            b'`' | b'[' => {\n                let close = if here == b'`' { b'`' } else { b']' };\n                blank(&mut out, i);\n                i = i.saturating_add(1);\n                while let Some(b) = at(i) {\n                    blank(&mut out, i);\n                    i = i.saturating_add(1);\n                    if b == close {\n                        break;\n                    }\n                }\n            }\n            b'-' if at(i.saturating_add(1)) == Some(b'-') => {\n                while let Some(b) = at(i) {\n                    if b == b'\\n' {\n                        break;\n                    }\n                    blank(&mut out, i);\n                    i = i.saturating_add(1);\n                }\n            }\n            b'/' if at(i.saturating_add(1)) == Some(b'*') => {\n                blank(&mut out, i);\n                blank(&mut out, i.saturating_add(1));\n                i = i.saturating_add(2);\n                while let Some(b) = at(i) {\n                    if b == b'*' && at(i.saturating_add(1)) == Some(b'/') {\n                        blank(&mut out, i);\n                        blank(&mut out, i.saturating_add(1));\n                        i = i.saturating_add(2);\n                        break;\n                    }\n                    blank(&mut out, i);\n                    i = i.saturating_add(1);\n                }\n            }\n            _ => i = i.saturating_add(1),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42822,7 +43012,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_e08b14a1",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 473,
+    "line": 523,
     "decision": "at(i.saturating_add(1)) == Some(b'-')",
     "conditions": 1,
     "vectors_required": 2,
@@ -42832,7 +43022,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_85aa5cd8",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 482,
+    "line": 532,
     "decision": "at(i.saturating_add(1)) == Some(b'*')",
     "conditions": 1,
     "vectors_required": 2,
@@ -42842,7 +43032,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_a2e32501",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 444,
+    "line": 494,
     "decision": "let Some(b) = at(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42852,7 +43042,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_1f735051",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 445,
+    "line": 495,
     "decision": "b == quote",
     "conditions": 1,
     "vectors_required": 2,
@@ -42862,7 +43052,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_9f8888be",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 450,
+    "line": 500,
     "decision": "at(i) == Some(quote)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42872,7 +43062,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_2761d62a",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 462,
+    "line": 512,
     "decision": "here == b'`'",
     "conditions": 1,
     "vectors_required": 2,
@@ -42882,7 +43072,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_a2e32501_2",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 465,
+    "line": 515,
     "decision": "let Some(b) = at(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42892,7 +43082,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_93877cd3",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 468,
+    "line": 518,
     "decision": "b == close",
     "conditions": 1,
     "vectors_required": 2,
@@ -42902,7 +43092,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_a2e32501_3",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 474,
+    "line": 524,
     "decision": "let Some(b) = at(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42912,7 +43102,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_e052cfd2",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 475,
+    "line": 525,
     "decision": "b == b'\\n'",
     "conditions": 1,
     "vectors_required": 2,
@@ -42922,7 +43112,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_a2e32501_4",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 486,
+    "line": 536,
     "decision": "let Some(b) = at(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42932,7 +43122,7 @@
   {
     "id": "storage_row_schema_ddl_reader_mask_quotes_and_comments_8c0bc292",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 487,
+    "line": 537,
     "decision": "b == b'*' && at(i.saturating_add(1)) == Some(b'/')",
     "conditions": 2,
     "vectors_required": 3,
@@ -42942,7 +43132,7 @@
   {
     "id": "storage_row_schema_ddl_reader_column_list_span_b8c6276e",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 513,
+    "line": 563,
     "decision": "match b {\n            b'(' => depth = depth.saturating_add(1),\n            b')' => {\n                depth = depth.saturating_sub(1);\n                if depth == 0 {\n                    return Some((start.saturating_add(1), start.saturating_add(offset)));\n                }\n            }\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42952,7 +43142,7 @@
   {
     "id": "storage_row_schema_ddl_reader_column_list_span_42bcd25d",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 517,
+    "line": 567,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42962,7 +43152,7 @@
   {
     "id": "storage_row_schema_ddl_reader_split_top_level_commas_0adede37",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 543,
+    "line": 593,
     "decision": "match b {\n            b'(' => depth = depth.saturating_add(1),\n            b')' => depth = depth.saturating_sub(1),\n            b',' if depth == 0 => {\n                parts.push(inner.get(part_start..i).unwrap_or(\"\").trim());\n                part_start = i.saturating_add(1);\n            }\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42972,7 +43162,7 @@
   {
     "id": "storage_row_schema_ddl_reader_split_top_level_commas_42bcd25d",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 546,
+    "line": 596,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42982,7 +43172,7 @@
   {
     "id": "storage_row_schema_ddl_reader_split_column_name_c8efb106",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 568,
+    "line": 618,
     "decision": "match chars.next() {\n        Some((_, '\"')) => '\"',\n        Some((_, '`')) => '`',\n        Some((_, '\\'')) => '\\'',\n        Some((_, '[')) => ']',\n        _ => {\n            let end = def.find(char::is_whitespace).unwrap_or(def.len());\n            let (name, rest) = def.split_at(end);\n            return (name.to_string(), rest);\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42992,7 +43182,7 @@
   {
     "id": "storage_row_schema_ddl_reader_split_column_name_72cf1821",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 580,
+    "line": 630,
     "decision": "let Some((i, c)) = chars.next()",
     "conditions": 1,
     "vectors_required": 2,
@@ -43002,7 +43192,7 @@
   {
     "id": "storage_row_schema_ddl_reader_split_column_name_458bb56b",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 581,
+    "line": 631,
     "decision": "c != close",
     "conditions": 1,
     "vectors_required": 2,
@@ -43012,7 +43202,7 @@
   {
     "id": "storage_row_schema_ddl_reader_split_column_name_50878681",
     "file": "src/storage/row/schema/ddl_reader.rs",
-    "line": 586,
+    "line": 636,
     "decision": "close != ']'\n            && def\n                .get(i.saturating_add(1)..)\n                .is_some_and(|r| r.starts_with(close))",
     "conditions": 2,
     "vectors_required": 3,
@@ -52340,10 +52530,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_explain_render_p4_88bb6dd4",
+    "id": "vm_row_explain_render_p4_d1bf36b9",
     "file": "src/vm/row/explain.rs",
     "line": 66,
-    "decision": "match p4 {\n        P4::None => String::new(),\n        P4::Int(i) => i.to_string(),\n        P4::Real(r) => crate::value::format_real(*r),\n        P4::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),\n        P4::Str(s) => s.clone(),\n        P4::CollSeq {\n            collation,\n            affinity,\n        } => {\n            format!(\"{}-{affinity}\", collation_name(*collation))\n        }\n        P4::AggFunc {\n            name,\n            arity,\n            collation,\n        } => format!(\"{name}({arity})-{}\", collation_name(*collation)),\n        P4::SortKey(cols) => render_sort_key(cols),\n        P4::GroupKey(cols) => render_group_key(cols),\n        P4::Affinity(bytes) => String::from_utf8_lossy(bytes).into_owned(),\n        P4::SeekKey(collations) => collations\n            .iter()\n            .map(|c| format!(\"{c:?}\").to_ascii_uppercase())\n            .collect::<Vec<_>>()\n            .join(\",\"),\n        P4::Bool(b) => i32::from(*b).to_string(),\n        P4::CreateTable { name, sql } => format!(\"{name}: {sql}\"),\n        P4::CreateView { name, sql } => format!(\"{name}: {sql}\"),\n        P4::DropView { name } => name.clone(),\n        P4::DropTable { name, .. } => name.clone(),\n        P4::CreateIndex { name, sql, .. } => format!(\"{name}: {sql}\"),\n        P4::DropIndex { name, .. } => name.clone(),\n        P4::Analyze { targets } => targets\n            .iter()\n            .map(|t| t.table_name.as_str())\n            .collect::<Vec<_>>()\n            .join(\",\"),\n    }",
+    "decision": "match p4 {\n        P4::None => String::new(),\n        P4::Int(i) => i.to_string(),\n        P4::Real(r) => crate::value::format_real(*r),\n        P4::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),\n        P4::Str(s) => s.clone(),\n        P4::CollSeq {\n            collation,\n            affinity,\n        } => {\n            format!(\"{}-{affinity}\", collation_name(*collation))\n        }\n        P4::AggFunc {\n            name,\n            arity,\n            collation,\n        } => format!(\"{name}({arity})-{}\", collation_name(*collation)),\n        P4::SortKey(cols) => render_sort_key(cols),\n        P4::GroupKey(cols) => render_group_key(cols),\n        P4::Affinity(bytes) => String::from_utf8_lossy(bytes).into_owned(),\n        P4::SeekKey(collations) => collations\n            .iter()\n            .map(|c| format!(\"{c:?}\").to_ascii_uppercase())\n            .collect::<Vec<_>>()\n            .join(\",\"),\n        P4::Bool(b) => i32::from(*b).to_string(),\n        P4::CreateTable { name, sql, .. } => format!(\"{name}: {sql}\"),\n        P4::CreateView { name, sql } => format!(\"{name}: {sql}\"),\n        P4::DropView { name } => name.clone(),\n        P4::DropTable { name, .. } => name.clone(),\n        P4::CreateIndex { name, sql, .. } => format!(\"{name}: {sql}\"),\n        P4::DropIndex { name, .. } => name.clone(),\n        P4::Analyze { targets } => targets\n            .iter()\n            .map(|t| t.table_name.as_str())\n            .collect::<Vec<_>>()\n            .join(\",\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -52462,7 +52652,7 @@
   {
     "id": "vm_row_program_register_operands_5a2e4aee",
     "file": "src/vm/row/program.rs",
-    "line": 790,
+    "line": 799,
     "decision": "match self {\n            // Control: jump targets, flags, modes -- no registers.\n            Opcode::Init\n            | Opcode::Goto\n            | Opcode::Once\n            | Opcode::BeginSubrtn\n            | Opcode::Halt\n            | Opcode::Transaction\n            | Opcode::AutoCommit\n            | Opcode::SetJournalMode\n            | Opcode::IntegrityCheck\n            | Opcode::Synchronous\n            | Opcode::AggReset => NONE,\n            Opcode::Gosub\n            | Opcode::Return\n            | Opcode::IfNot\n            | Opcode::IfNotZero\n            | Opcode::IfPos\n            | Opcode::DecrJumpZero\n            | Opcode::IsNull\n            | Opcode::NotNull\n            | Opcode::MustBeInt\n            | Opcode::RealAffinity\n            | Opcode::Cast => P1,\n            Opcode::OffsetLimit => P1_P2_P3,\n\n            // Cursors: `p1` is the slot; `p2` a root page / jump target /\n            // source slot unless noted.\n            Opcode::OpenRead\n            | Opcode::OpenWrite\n            | Opcode::OpenEphemeral\n            | Opcode::OpenDup\n            | Opcode::Rewind\n            | Opcode::Last\n            | Opcode::Next\n            | Opcode::NullRow\n            | Opcode::Delete\n            | Opcode::IdxRewind\n            | Opcode::IdxLast\n            | Opcode::IdxNext\n            | Opcode::IdxPrev\n            | Opcode::AutoIndexNext\n            | Opcode::SorterSort\n            | Opcode::SorterNext\n            | Opcode::Sort\n            | Opcode::HashAggOpen\n            | Opcode::HashAggRewind\n            | Opcode::HashAggNext\n            | Opcode::CreateTable\n            | Opcode::DropTable\n            | Opcode::CreateIndex\n            | Opcode::DropIndex\n            | Opcode::CreateView\n            | Opcode::DropView\n            | Opcode::Analyze => NONE,\n            Opcode::OpenPseudo\n            | Opcode::Rowid\n            | Opcode::Sequence\n            | Opcode::NewRowid\n            | Opcode::Count\n            | Opcode::IdxRowid\n            | Opcode::AutoIndexRowid\n            | Opcode::IdxInsert\n            | Opcode::IdxDelete\n            | Opcode::SorterInsert\n            | Opcode::SorterData\n            | Opcode::HashAggFind\n            | Opcode::HashAggData => P2,\n            // `SorterOpen`'s `p2` is the LIMIT register when `p5 != 0`;\n            // treating it as a register when `p5 == 0` (codegen emits 0\n            // there) over-reserves nothing.\n            Opcode::SorterOpen => P2,\n            Opcode::Column\n            | Opcode::SeekRowid\n            | Opcode::Found\n            | Opcode::Filter\n            | Opcode::FilterAdd\n            | Opcode::IdxLE\n            | Opcode::NoConflict\n            | Opcode::SeekIndexEq\n            | Opcode::SeekIndexGE\n            | Opcode::IdxCompareGT\n            | Opcode::IdxCompareGE\n            | Opcode::AutoIndexSeek\n            | Opcode::AggFinal => P3,\n            Opcode::Insert | Opcode::AutoIndexInsert | Opcode::Update => P2_P3,\n\n            // Compare: `r[p1] <op> r[p3]`, jump `p2`.\n            Opcode::Eq | Opcode::Ge | Opcode::Gt | Opcode::Le | Opcode::Lt => P1_P3,\n\n            // Arithmetic: two sources, one destination.\n            Opcode::Add\n            | Opcode::Subtract\n            | Opcode::Multiply\n            | Opcode::Divide\n            | Opcode::Remainder\n            | Opcode::BitAnd\n            | Opcode::BitOr\n            | Opcode::ShiftLeft\n            | Opcode::ShiftRight\n            | Opcode::Concat => P1_P2_P3,\n            Opcode::Not | Opcode::BitNot | Opcode::Copy => P1_P2,\n\n            // Functions/aggregates: `p2` is the first argument register;\n            // `AggStep`'s `p1` is an aggregate slot, `HashAggStep`'s `p3` a\n            // cursor slot.\n            Opcode::Function => P2_P3,\n            Opcode::AggStep | Opcode::HashAggStep => P2,\n\n            // Loads: `p1` is the literal for `Integer`, unused otherwise.\n            Opcode::Integer\n            | Opcode::Int64\n            | Opcode::Real\n            | Opcode::Blob\n            | Opcode::String8\n            | Opcode::Variable => P2,\n            Opcode::Null => P2_P3,\n            // `p1..p1+p2` source range, `p3` destination / `p2` count.\n            Opcode::MakeRecord => P1_P3,\n            Opcode::ResultRow => P1,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -52472,7 +52662,7 @@
   {
     "id": "vm_row_program_max_register_80558028",
     "file": "src/vm/row/program.rs",
-    "line": 928,
+    "line": 937,
     "decision": "ops.p1",
     "conditions": 1,
     "vectors_required": 2,
@@ -52482,7 +52672,7 @@
   {
     "id": "vm_row_program_max_register_80558651",
     "file": "src/vm/row/program.rs",
-    "line": 931,
+    "line": 940,
     "decision": "ops.p2",
     "conditions": 1,
     "vectors_required": 2,
@@ -52492,7 +52682,7 @@
   {
     "id": "vm_row_program_max_register_80558286",
     "file": "src/vm/row/program.rs",
-    "line": 934,
+    "line": 943,
     "decision": "ops.p3",
     "conditions": 1,
     "vectors_required": 2,
@@ -52502,7 +52692,7 @@
   {
     "id": "vm_row_program_max_register_a5a36431",
     "file": "src/vm/row/program.rs",
-    "line": 937,
+    "line": 946,
     "decision": "matches!(self.opcode, Opcode::ResultRow | Opcode::MakeRecord)",
     "conditions": 1,
     "vectors_required": 2,
@@ -52512,7 +52702,7 @@
   {
     "id": "vm_row_program_max_register_02cd45a2",
     "file": "src/vm/row/program.rs",
-    "line": 940,
+    "line": 949,
     "decision": "let Some(last) = self\n                .p2\n                .checked_sub(1)\n                .filter(|n| *n >= 0)\n                .and_then(|n| self.p1.checked_add(n))",
     "conditions": 1,
     "vectors_required": 2,
@@ -53970,10 +54160,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_vm_schema_step_schema_b5bdeff6",
+    "id": "vm_row_vm_schema_step_schema_f79b3ed3",
     "file": "src/vm/row/vm/schema.rs",
     "line": 11,
-    "decision": "match instr.opcode {\n        Opcode::Transaction => {\n            if !vm.autocommit {\n                return Err(ExecError::TransactionAlreadyActive);\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.begin(instr.p1).map_err(ExecError::TransactionFailed)?;\n            }\n            vm.autocommit = false;\n            Ok(Step::Next)\n        }\n        Opcode::AutoCommit => {\n            if vm.autocommit {\n                return Err(if instr.p2 == 0 {\n                    ExecError::NoActiveTransactionToRollback\n                } else {\n                    ExecError::NoActiveTransactionToCommit\n                });\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                if instr.p2 == 0 {\n                    hook.rollback().map_err(ExecError::TransactionFailed)?;\n                } else {\n                    hook.commit().map_err(ExecError::TransactionFailed)?;\n                }\n            }\n            vm.autocommit = true;\n            Ok(Step::Next)\n        }\n        Opcode::SetJournalMode => {\n            if !vm.autocommit {\n                return Err(ExecError::JournalModeChangeDuringTransaction);\n            }\n            // The attached pager (via the transaction hook) switches its\n            // on-disk journal mode; with no hook this is the no-op\n            // sqlite-rs itself falls back to for a read-only connection.\n            // sqlite3 answers the assignment with the resulting mode, one\n            // TEXT row (#561) -- only when a pager applied it.\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.set_journal_mode(instr.p1)\n                    .map_err(ExecError::TransactionFailed)?;\n                let mode = if instr.p1 == JOURNAL_MODE_WAL {\n                    \"wal\"\n                } else {\n                    \"delete\"\n                };\n                vm.emit_row(vec![Value::Text(mode.into())]);\n            }\n            Ok(Step::Next)\n        }\n        Opcode::Synchronous => {\n            // Query form reports the pager's level (FULL with no pager,\n            // sqlite-rs's no-writer fallback); otherwise sets it.\n            if instr.p1 == SYNCHRONOUS_QUERY {\n                let level = vm\n                    .transaction_hook\n                    .as_deref()\n                    .and_then(|h| h.synchronous())\n                    .unwrap_or(SYNCHRONOUS_FULL);\n                vm.emit_row(vec![Value::Integer(i64::from(level))]);\n                return Ok(Step::Next);\n            }\n            if !vm.autocommit {\n                return Err(ExecError::SynchronousChangeDuringTransaction);\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.set_synchronous(instr.p1)\n                    .map_err(ExecError::TransactionFailed)?;\n            }\n            Ok(Step::Next)\n        }\n        Opcode::IntegrityCheck => {\n            // `p1 != 0` is quick_check. One TEXT row per problem line\n            // (sqlite-rs `pragma::integrity_check`); without a hook that\n            // can read the file this stays Unimplemented.\n            let quick = instr.p1 != 0;\n            let Some(result) = vm\n                .transaction_hook\n                .as_mut()\n                .and_then(|h| h.integrity_check(quick))\n            else {\n                return Err(ExecError::Unimplemented {\n                    opcode: Opcode::IntegrityCheck,\n                });\n            };\n            for line in result.map_err(ExecError::TransactionFailed)? {\n                vm.emit_row(vec![Value::Text(line.into())]);\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::CreateTable => {\n            let P4::CreateTable { name, sql } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateTable\",\n                    reason: format!(\"expected a CreateTable P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, sql) = (name.clone(), sql.clone());\n            let storage = vm.schema_storage(\"CreateTable\")?;\n            let root = storage\n                .create_table_root()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .insert_master_row(\"table\", &name, &name, root, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::CreateView => {\n            // sqlite-rs `cursor::create_view`: a view has no b-tree — one\n            // sqlite_master row with rootpage 0, then the cookie bump.\n            let P4::CreateView { name, sql } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateView\",\n                    reason: format!(\"expected a CreateView P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, sql) = (name.clone(), sql.clone());\n            let storage = vm.schema_storage(\"CreateView\")?;\n            storage\n                .insert_master_row(\"view\", &name, &name, 0, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropView => {\n            // A view has no b-tree: its sqlite_master row, then the\n            // cookie bump (#552).\n            let P4::DropView { name } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropView\",\n                    reason: format!(\"expected a DropView P4, got {:?}\", instr.p4),\n                });\n            };\n            let name = name.clone();\n            let storage = vm.schema_storage(\"DropView\")?;\n            storage\n                .delete_master_row(\"view\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::CreateIndex => {\n            let P4::CreateIndex {\n                name,\n                table_name,\n                table_root_page,\n                sql,\n                column_indices,\n                ..\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateIndex\",\n                    reason: format!(\"expected a CreateIndex P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, table_name, table_root_page, sql, column_indices) = (\n                name.clone(),\n                table_name.clone(),\n                *table_root_page,\n                sql.clone(),\n                column_indices.clone(),\n            );\n            let storage = vm.schema_storage(\"CreateIndex\")?;\n            let root = storage\n                .create_index_root()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .populate_index(root, table_root_page, &column_indices)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .insert_master_row(\"index\", &name, &table_name, root, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropTable => {\n            let P4::DropTable {\n                name,\n                root_page,\n                indexes,\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropTable\",\n                    reason: format!(\"expected a DropTable P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());\n            let storage = vm.schema_storage(\"DropTable\")?;\n            // sqlite-rs order (page-image parity with the oracle): each\n            // index's pages then its row, then the table's pages, then\n            // its row.\n            for (index_name, index_root) in &indexes {\n                storage\n                    .free_root(*index_root)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n                storage\n                    .delete_master_row(\"index\", index_name)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            storage\n                .free_root(root_page)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .delete_master_row(\"table\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropIndex => {\n            let P4::DropIndex { name, root_page } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropIndex\",\n                    reason: format!(\"expected a DropIndex P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, root_page) = (name.clone(), *root_page);\n            let storage = vm.schema_storage(\"DropIndex\")?;\n            storage\n                .free_root(root_page)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .delete_master_row(\"index\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::Analyze => {\n            let P4::Analyze { targets } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Analyze\",\n                    reason: format!(\"expected an Analyze P4, got {:?}\", instr.p4),\n                });\n            };\n            let targets = targets.clone();\n            let storage = vm.schema_storage(\"Analyze\")?;\n            for target in &targets {\n                storage\n                    .write_stat1(target)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            Ok(Step::Next)\n        }\n\n        other => Err(ExecError::MalformedInstruction {\n            opcode: \"step\",\n            reason: format!(\"{other:?} dispatched to step_schema\"),\n        }),\n    }",
+    "decision": "match instr.opcode {\n        Opcode::Transaction => {\n            if !vm.autocommit {\n                return Err(ExecError::TransactionAlreadyActive);\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.begin(instr.p1).map_err(ExecError::TransactionFailed)?;\n            }\n            vm.autocommit = false;\n            Ok(Step::Next)\n        }\n        Opcode::AutoCommit => {\n            if vm.autocommit {\n                return Err(if instr.p2 == 0 {\n                    ExecError::NoActiveTransactionToRollback\n                } else {\n                    ExecError::NoActiveTransactionToCommit\n                });\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                if instr.p2 == 0 {\n                    hook.rollback().map_err(ExecError::TransactionFailed)?;\n                } else {\n                    hook.commit().map_err(ExecError::TransactionFailed)?;\n                }\n            }\n            vm.autocommit = true;\n            Ok(Step::Next)\n        }\n        Opcode::SetJournalMode => {\n            if !vm.autocommit {\n                return Err(ExecError::JournalModeChangeDuringTransaction);\n            }\n            // The attached pager (via the transaction hook) switches its\n            // on-disk journal mode; with no hook this is the no-op\n            // sqlite-rs itself falls back to for a read-only connection.\n            // sqlite3 answers the assignment with the resulting mode, one\n            // TEXT row (#561) -- only when a pager applied it.\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.set_journal_mode(instr.p1)\n                    .map_err(ExecError::TransactionFailed)?;\n                let mode = if instr.p1 == JOURNAL_MODE_WAL {\n                    \"wal\"\n                } else {\n                    \"delete\"\n                };\n                vm.emit_row(vec![Value::Text(mode.into())]);\n            }\n            Ok(Step::Next)\n        }\n        Opcode::Synchronous => {\n            // Query form reports the pager's level (FULL with no pager,\n            // sqlite-rs's no-writer fallback); otherwise sets it.\n            if instr.p1 == SYNCHRONOUS_QUERY {\n                let level = vm\n                    .transaction_hook\n                    .as_deref()\n                    .and_then(|h| h.synchronous())\n                    .unwrap_or(SYNCHRONOUS_FULL);\n                vm.emit_row(vec![Value::Integer(i64::from(level))]);\n                return Ok(Step::Next);\n            }\n            if !vm.autocommit {\n                return Err(ExecError::SynchronousChangeDuringTransaction);\n            }\n            if let Some(hook) = vm.transaction_hook.as_mut() {\n                hook.set_synchronous(instr.p1)\n                    .map_err(ExecError::TransactionFailed)?;\n            }\n            Ok(Step::Next)\n        }\n        Opcode::IntegrityCheck => {\n            // `p1 != 0` is quick_check. One TEXT row per problem line\n            // (sqlite-rs `pragma::integrity_check`); without a hook that\n            // can read the file this stays Unimplemented.\n            let quick = instr.p1 != 0;\n            let Some(result) = vm\n                .transaction_hook\n                .as_mut()\n                .and_then(|h| h.integrity_check(quick))\n            else {\n                return Err(ExecError::Unimplemented {\n                    opcode: Opcode::IntegrityCheck,\n                });\n            };\n            for line in result.map_err(ExecError::TransactionFailed)? {\n                vm.emit_row(vec![Value::Text(line.into())]);\n            }\n            Ok(Step::Next)\n        }\n\n        Opcode::CreateTable => {\n            let P4::CreateTable {\n                name,\n                sql,\n                without_rowid,\n                autoindexes,\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateTable\",\n                    reason: format!(\"expected a CreateTable P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, sql, without_rowid, autoindexes) = (\n                name.clone(),\n                sql.clone(),\n                *without_rowid,\n                autoindexes.clone(),\n            );\n            let storage = vm.schema_storage(\"CreateTable\")?;\n            // A WITHOUT ROWID table is an index b-tree keyed by its\n            // PRIMARY KEY.\n            let root = if without_rowid {\n                storage.create_index_root()\n            } else {\n                storage.create_table_root()\n            }\n            .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .insert_master_row(\"table\", &name, &name, root, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            // sqlite3's page order: the table, then each implicit index\n            // (an empty table needs no population).\n            for index_name in &autoindexes {\n                let index_root = storage\n                    .create_index_root()\n                    .map_err(ExecError::SchemaStorageFailed)?;\n                storage\n                    .insert_autoindex_row(index_name, &name, index_root)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::CreateView => {\n            // sqlite-rs `cursor::create_view`: a view has no b-tree — one\n            // sqlite_master row with rootpage 0, then the cookie bump.\n            let P4::CreateView { name, sql } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateView\",\n                    reason: format!(\"expected a CreateView P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, sql) = (name.clone(), sql.clone());\n            let storage = vm.schema_storage(\"CreateView\")?;\n            storage\n                .insert_master_row(\"view\", &name, &name, 0, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropView => {\n            // A view has no b-tree: its sqlite_master row, then the\n            // cookie bump (#552).\n            let P4::DropView { name } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropView\",\n                    reason: format!(\"expected a DropView P4, got {:?}\", instr.p4),\n                });\n            };\n            let name = name.clone();\n            let storage = vm.schema_storage(\"DropView\")?;\n            storage\n                .delete_master_row(\"view\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::CreateIndex => {\n            let P4::CreateIndex {\n                name,\n                table_name,\n                table_root_page,\n                sql,\n                column_indices,\n                ..\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"CreateIndex\",\n                    reason: format!(\"expected a CreateIndex P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, table_name, table_root_page, sql, column_indices) = (\n                name.clone(),\n                table_name.clone(),\n                *table_root_page,\n                sql.clone(),\n                column_indices.clone(),\n            );\n            let storage = vm.schema_storage(\"CreateIndex\")?;\n            let root = storage\n                .create_index_root()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .populate_index(root, table_root_page, &column_indices)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .insert_master_row(\"index\", &name, &table_name, root, &sql)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropTable => {\n            let P4::DropTable {\n                name,\n                root_page,\n                indexes,\n            } = &instr.p4\n            else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropTable\",\n                    reason: format!(\"expected a DropTable P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, root_page, indexes) = (name.clone(), *root_page, indexes.clone());\n            let storage = vm.schema_storage(\"DropTable\")?;\n            // sqlite-rs order (page-image parity with the oracle): each\n            // index's pages then its row, then the table's pages, then\n            // its row.\n            for (index_name, index_root) in &indexes {\n                storage\n                    .free_root(*index_root)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n                storage\n                    .delete_master_row(\"index\", index_name)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            storage\n                .free_root(root_page)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .delete_master_row(\"table\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::DropIndex => {\n            let P4::DropIndex { name, root_page } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"DropIndex\",\n                    reason: format!(\"expected a DropIndex P4, got {:?}\", instr.p4),\n                });\n            };\n            let (name, root_page) = (name.clone(), *root_page);\n            let storage = vm.schema_storage(\"DropIndex\")?;\n            storage\n                .free_root(root_page)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .delete_master_row(\"index\", &name)\n                .map_err(ExecError::SchemaStorageFailed)?;\n            storage\n                .bump_schema_cookie()\n                .map_err(ExecError::SchemaStorageFailed)?;\n            Ok(Step::Next)\n        }\n        Opcode::Analyze => {\n            let P4::Analyze { targets } = &instr.p4 else {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"Analyze\",\n                    reason: format!(\"expected an Analyze P4, got {:?}\", instr.p4),\n                });\n            };\n            let targets = targets.clone();\n            let storage = vm.schema_storage(\"Analyze\")?;\n            for target in &targets {\n                storage\n                    .write_stat1(target)\n                    .map_err(ExecError::SchemaStorageFailed)?;\n            }\n            Ok(Step::Next)\n        }\n\n        other => Err(ExecError::MalformedInstruction {\n            opcode: \"step\",\n            reason: format!(\"{other:?} dispatched to step_schema\"),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -54094,6 +54284,16 @@
     "file": "src/vm/row/vm/schema.rs",
     "line": 76,
     "decision": "let Some(hook) = vm.transaction_hook.as_mut()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_row_vm_schema_step_schema_2ab40194",
+    "file": "src/vm/row/vm/schema.rs",
+    "line": 124,
+    "decision": "without_rowid",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,

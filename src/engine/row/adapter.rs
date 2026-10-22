@@ -690,6 +690,26 @@ impl SchemaStorage for BtreeSchemaStorage {
         .map_err(schema_err)
     }
 
+    fn insert_autoindex_row(
+        &mut self,
+        name: &str,
+        tbl_name: &str,
+        root_page: u32,
+    ) -> Result<(), SchemaStorageError> {
+        btree::insert_autoindex_master_row(
+            &mut self.pager.borrow_mut(),
+            &self.header,
+            &btree::MasterEntry {
+                kind: "index".to_string(),
+                name: name.to_string(),
+                tbl_name: tbl_name.to_string(),
+                rootpage: root_page,
+                sql: String::new(),
+            },
+        )
+        .map_err(schema_err)
+    }
+
     fn delete_master_row(&mut self, kind: &str, name: &str) -> Result<(), SchemaStorageError> {
         btree::delete_master_row(&mut self.pager.borrow_mut(), &self.header, kind, name).map_err(
             |e| match e {
