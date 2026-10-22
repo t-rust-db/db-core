@@ -385,3 +385,72 @@ fn an_fse_description_with_too_many_symbols_is_refused() {
     let e = fse::Table::read(&[0x10, 0xFE, 0xFF, 0xFF], 5, 4).unwrap_err();
     assert!(e.to_string().contains("too many symbols"), "{e}");
 }
+
+#[test]
+fn a_corrupted_checksum_is_refused() {
+    let data = b"checksummed content checksummed content".to_vec();
+    let mut frame = cli(&data, &["-3"]);
+    assert_eq!(decompress(&frame, data.len()).unwrap(), data);
+    // The checksum is the frame's last 4 bytes.
+    let last = frame.len() - 1;
+    frame[last] ^= 0x01;
+    assert!(read_error(&frame, data.len()).contains("checksum mismatch"));
+}
+
+#[test]
+fn a_frame_whose_own_size_differs_from_the_page_is_a_size_mismatch() {
+    // A 1-byte content size of 7 for a page declared as 5.
+    let mut blocks = block(true, 1, 7).to_vec();
+    blocks.push(b'a');
+    assert!(matches!(
+        decompress(&frame(0, 7, &blocks), 5),
+        Err(ZstdError::SizeMismatch {
+            expected: 5,
+            actual: 7
+        })
+    ));
+    // A 2-byte content size counts from 256.
+    let mut two = vec![0x28, 0xB5, 0x2F, 0xFD, 0x60, 0x00, 0x00];
+    two.extend_from_slice(&block(true, 1, 256));
+    two.push(b'b');
+    assert_eq!(decompress(&two, 256).unwrap(), vec![b'b'; 256]);
+    assert!(matches!(
+        decompress(&two, 255),
+        Err(ZstdError::SizeMismatch {
+            expected: 255,
+            actual: 256
+        })
+    ));
+}
+
+#[test]
+fn oversized_blocks_literals_and_sequence_counts_are_refused() {
+    // A raw block over 128 KiB.
+    let big = 128 * 1024 + 1;
+    // Single segment with a 4-byte content size: no window byte.
+    let mut f = vec![0x28, 0xB5, 0x2F, 0xFD, 0xA0, 0x00, 0x00, 0x00, 0x00];
+    f[5..9].copy_from_slice(&(big as u32).to_le_bytes());
+    f.extend_from_slice(&block(true, 0, big as u32));
+    f.extend(std::iter::repeat_n(b'x', big));
+    assert!(read_error(&f, big).contains("block larger than 128 KiB"));
+    // RLE literals claiming more than a block regenerates: 20-bit size.
+    let regenerated = 128 * 1024 + 1;
+    let header = [
+        0b0000_1101 | ((regenerated & 0xF) << 4) as u8,
+        (regenerated >> 4) as u8,
+        (regenerated >> 12) as u8,
+        b'r',
+        0,
+    ];
+    let mut blocks = block(true, 2, header.len() as u32).to_vec();
+    blocks.extend_from_slice(&header);
+    assert!(read_error(&frame(0, 10, &blocks), 10).contains("literals larger than a block"));
+    // 100 sequences need at least 300 output bytes; the page holds 10.
+    assert!(matches!(
+        decompress(&frame(0, 10, &compressed(b"", &[100, 0])), 10),
+        Err(ZstdError::SizeMismatch {
+            expected: 10,
+            actual: 11
+        })
+    ));
+}

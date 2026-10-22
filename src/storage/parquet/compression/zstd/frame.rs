@@ -10,10 +10,15 @@
 use super::bits::Backward;
 use super::fse::{self, LL_DEFAULT, ML_DEFAULT, OF_DEFAULT};
 use super::huffman;
+use super::xxhash;
 use super::{corrupt, Result, ZstdError};
 
 /// Room past the output and the literals for 16-byte wild copies.
 const SLACK: usize = 32;
+
+/// The largest block, and the most literals a block can regenerate
+/// (RFC 8878 §3.1.1.2: `Block_Maximum_Size`).
+const MAX_BLOCK: usize = 128 * 1024;
 
 /// Literals-length code -> (baseline, extra bits).
 const LL_CODES: [(u32, u32); 36] = [
@@ -237,8 +242,28 @@ pub(super) fn decode(frame: &[u8], size: usize) -> Result<Vec<u8>> {
     let mut pos = 5usize
         .wrapping_add(usize::from(!single_segment))
         .wrapping_add(content_size_bytes);
-    if pos > frame.len() {
-        return Err(ZstdError::Frame("short frame header".to_string()));
+    let content_size = frame
+        .get(pos.saturating_sub(content_size_bytes)..pos)
+        .ok_or_else(|| ZstdError::Frame("short frame header".to_string()))?;
+    if !content_size.is_empty() {
+        // The frame's own size must be the page's: a frame that says
+        // otherwise is refused before any block is decoded.
+        let value = content_size
+            .iter()
+            .rev()
+            .fold(0u64, |acc, &b| acc.wrapping_shl(8) | u64::from(b));
+        let value = if content_size_bytes == 2 {
+            value.wrapping_add(256)
+        } else {
+            value
+        };
+        let value = usize::try_from(value).unwrap_or(usize::MAX);
+        if value != size {
+            return Err(ZstdError::SizeMismatch {
+                expected: size,
+                actual: value,
+            });
+        }
     }
     let mut out = Out {
         buf: vec![0; size.saturating_add(SLACK)],
@@ -265,6 +290,9 @@ pub(super) fn decode(frame: &[u8], size: usize) -> Result<Vec<u8>> {
         pos = pos.wrapping_add(3);
         let last = h & 1 != 0;
         let block_size = usize::try_from(h >> 3).unwrap_or(usize::MAX);
+        if block_size > MAX_BLOCK {
+            return Err(corrupt("block larger than 128 KiB"));
+        }
         match (h >> 1) & 3 {
             0 => {
                 let raw = frame
@@ -301,11 +329,6 @@ pub(super) fn decode(frame: &[u8], size: usize) -> Result<Vec<u8>> {
             break;
         }
     }
-    if checksum {
-        frame
-            .get(pos..pos.saturating_add(4))
-            .ok_or_else(|| corrupt("missing content checksum"))?;
-    }
     if out.op != size {
         return Err(ZstdError::SizeMismatch {
             expected: size,
@@ -313,6 +336,17 @@ pub(super) fn decode(frame: &[u8], size: usize) -> Result<Vec<u8>> {
         });
     }
     out.buf.truncate(size);
+    if checksum {
+        let stored = frame
+            .get(pos..pos.saturating_add(4))
+            .and_then(|c| <[u8; 4]>::try_from(c).ok())
+            .ok_or_else(|| corrupt("missing content checksum"))?;
+        // The low 32 bits of the content's XXH64.
+        let computed = xxhash::xxh64(&out.buf).to_le_bytes();
+        if computed.get(..4) != Some(&stored[..]) {
+            return Err(corrupt("content checksum mismatch"));
+        }
+    }
     Ok(out.buf)
 }
 
@@ -346,6 +380,9 @@ fn literals_section(block: &[u8], state: &mut State) -> Result<usize> {
             1 => (2, high | byte(1)? << 4),
             _ => (3, high | byte(1)? << 4 | byte(2)? << 12),
         };
+        if regenerated > MAX_BLOCK {
+            return Err(corrupt("literals larger than a block"));
+        }
         if kind == 0 {
             let raw = block
                 .get(header..header.saturating_add(regenerated))
@@ -376,6 +413,9 @@ fn literals_section(block: &[u8], state: &mut State) -> Result<usize> {
     let mask = (1u64 << bits).wrapping_sub(1);
     let regenerated = usize::try_from((h >> 4) & mask).unwrap_or(usize::MAX);
     let compressed = usize::try_from((h >> (4u32.wrapping_add(bits))) & mask).unwrap_or(usize::MAX);
+    if regenerated > MAX_BLOCK {
+        return Err(corrupt("literals larger than a block"));
+    }
     let mut body = block
         .get(header..header.saturating_add(compressed))
         .ok_or_else(|| corrupt("short compressed literals"))?;
@@ -480,6 +520,10 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
         128..=254 => ((usize::from(b0).wrapping_sub(128) << 8) | byte(1)?, 2),
         255 => ((byte(1)? | byte(2)? << 8).wrapping_add(0x7F00), 3),
     };
+    // Every sequence makes at least 3 bytes (a match is at least 3 long),
+    // so a count the output cannot hold is refused before decoding, as
+    // more output than declared.
+    out.room(count.saturating_mul(3))?;
     let modes = byte(pos)?;
     pos = pos.wrapping_add(1);
     let modes = u8::try_from(modes).unwrap_or(0);

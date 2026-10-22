@@ -23,6 +23,7 @@ mod decoder_tests;
 mod frame;
 mod fse;
 mod huffman;
+mod xxhash;
 
 use std::fmt;
 

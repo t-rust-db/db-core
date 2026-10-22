@@ -371,3 +371,70 @@ fn mutated_delta_streams_never_panic() {
         let _outcome = decode_delta_binary_packed(input, 1 << 16);
     });
 }
+
+/// `data` compressed by the `zstd` CLI with `args` (libzstd).
+fn zstd_cli(data: &[u8], args: &[&str]) -> Vec<u8> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("zstd")
+        .args(["-q", "-c"])
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("zstd CLI must be available for this test");
+    child.stdin.take().unwrap().write_all(data).unwrap();
+    child.wait_with_output().unwrap().stdout
+}
+
+/// #700: the zstd decoder on mutants of libzstd frames, which between them
+/// use every literals and sequence mode, so a mutation can land in any
+/// table description. Half the mutants change only the first 64 bytes:
+/// the frame and first block headers, the literals header and the
+/// Huffman/FSE table descriptions, where a corrupt value redirects
+/// everything read after it. A decode that succeeds must be exactly the
+/// declared size. `ZSTD_FUZZ_MUTANTS` sets the mutants per seed (2,000
+/// by default) for a longer local run.
+#[test]
+fn mutated_libzstd_frames_never_panic() {
+    let mutants: usize = std::env::var("ZSTD_FUZZ_MUTANTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(2_000);
+    let text: Vec<u8> = (0..4_000u32)
+        .flat_map(|i| format!("event {} from host {} ", i % 97, i % 13).into_bytes())
+        .collect();
+    let digits: Vec<u8> = (0..3_000u32)
+        .map(|i| b'0' + (i.wrapping_mul(7) % 10) as u8)
+        .collect();
+    let ints: Vec<u8> = (0..2_000u32).flat_map(|i| (i * i).to_le_bytes()).collect();
+    let mut seeds = Vec::new();
+    for data in [&text, &digits, &ints] {
+        for args in [&["-1"][..], &["-3"], &["-19"], &["-19", "--no-check"]] {
+            seeds.push((zstd_cli(data, args), data.len()));
+        }
+    }
+    let mut rng = Rng(0x0700_7a5d_0000_0001);
+    for (seed, size) in &seeds {
+        assert_eq!(&decompress(Codec::Zstd, seed, *size).unwrap().len(), size);
+        for i in 0..mutants {
+            let input = if i % 2 == 0 {
+                mutate(&mut rng, seed)
+            } else {
+                let head = seed.len().min(64);
+                let mut v = mutate(&mut rng, &seed[..head]);
+                v.extend_from_slice(&seed[head..]);
+                v
+            };
+            let outcome = catch_unwind(AssertUnwindSafe(|| decompress(Codec::Zstd, &input, *size)));
+            match outcome {
+                Err(_) => panic!(
+                    "zstd panicked on a {}-byte mutant starting {:02x?}",
+                    input.len(),
+                    &input[..input.len().min(64)]
+                ),
+                Ok(Ok(out)) => assert_eq!(out.len(), *size),
+                Ok(Err(_)) => {}
+            }
+        }
+    }
+}
