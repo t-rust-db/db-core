@@ -1113,6 +1113,125 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         )
     }
 
+    /// [`Self::read_string_column_dictionary_indices`] gathered at
+    /// `positions` (#699): the codes at `positions`, remapped onto a
+    /// dictionary of only the entries they use, so `k` wanted rows build
+    /// at most `k` strings however large the chunk's dictionary is. `None`
+    /// when the chunk has no dictionary page.
+    pub fn read_string_column_dictionary_at(
+        &self,
+        column_index: usize,
+        positions: &[u32],
+    ) -> Result<Option<DictionaryIndices<String>>> {
+        let mut pages = self.pages(column_index)?;
+        let max_def_level = self.file.max_definition_level(column_index);
+
+        // The dictionary page's body and entry count, decoded only once
+        // the wanted entries are known.
+        let mut dictionary: Option<(_, usize)> = None;
+        // #671: values of `PLAIN` pages after the dictionary, numbered
+        // after its entries.
+        let mut fallback: Vec<String> = Vec::new();
+        let mut indices: Vec<Option<u32>> = Vec::new();
+
+        while let Some((header, compressed)) = pages.next()? {
+            match header.page_type {
+                PageType::Data(data_page_header) => {
+                    let Some((_, entries)) = dictionary.as_ref() else {
+                        return Ok(None);
+                    };
+                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;
+                    if matches!(
+                        data_page_header.encoding,
+                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary
+                    ) {
+                        indices.extend(reader::read_dictionary_index_column(
+                            &page_body,
+                            &data_page_header,
+                            max_def_level,
+                        )?);
+                        continue;
+                    }
+                    for value in
+                        reader::read_string_column(&page_body, &data_page_header, max_def_level)?
+                    {
+                        let Some(value) = value else {
+                            indices.push(None);
+                            continue;
+                        };
+                        let next = entries.saturating_add(fallback.len());
+                        let index =
+                            u32::try_from(next).map_err(|_| FileError::InvalidMetadata {
+                                field: "dictionary entries",
+                                value: i64::try_from(next).unwrap_or(i64::MAX),
+                            })?;
+                        fallback.push(value);
+                        indices.push(Some(index));
+                    }
+                }
+                PageType::Dictionary(dictionary_page_header) => {
+                    if dictionary.is_some() {
+                        return Err(FileError::UnexpectedDictionaryPage);
+                    }
+                    let entries =
+                        usize::try_from(dictionary_page_header.num_values).map_err(|_| {
+                            FileError::InvalidMetadata {
+                                field: "dictionary_page.num_values",
+                                value: i64::from(dictionary_page_header.num_values),
+                            }
+                        })?;
+                    let body = pages.body(compressed, header.uncompressed_page_size)?;
+                    dictionary = Some((body, entries));
+                }
+            }
+        }
+        let Some((body, entries)) = dictionary else {
+            return Ok(None);
+        };
+
+        let picked = positions
+            .iter()
+            .map(|&p| {
+                usize::try_from(p)
+                    .ok()
+                    .and_then(|i| indices.get(i).copied())
+                    .ok_or(FileError::RowPositionOutOfRange(p))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // Each used code's id in the output dictionary, ascending.
+        let mut remap: Vec<Option<u32>> = vec![None; entries.saturating_add(fallback.len())];
+        for &code in picked.iter().flatten() {
+            *usize::try_from(code)
+                .ok()
+                .and_then(|i| remap.get_mut(i))
+                .ok_or(ReadError::DictionaryIndexOutOfRange(code))? = Some(0);
+        }
+        let mut next = 0u32;
+        for id in remap.iter_mut().flatten() {
+            *id = next;
+            next = next.saturating_add(1);
+        }
+
+        let mut dict = reader::decode_dictionary_string_picked(
+            &body,
+            remap.iter().take(entries).map(Option::is_some),
+        )?;
+        dict.extend(
+            fallback
+                .into_iter()
+                .zip(remap.iter().skip(entries))
+                .filter_map(|(value, id)| id.map(|_| value)),
+        );
+        let codes = picked
+            .iter()
+            .map(|code| {
+                code.and_then(|c| usize::try_from(c).ok())
+                    .and_then(|i| remap.get(i).copied().flatten())
+            })
+            .collect();
+        Ok(Some((dict, codes)))
+    }
+
     /// A column chunk's dictionary, decoded without reading its data pages,
     /// when every data page is dictionary-encoded; `None` otherwise. Each
     /// row's value is then one of the dictionary's: a value missing from it
@@ -2419,6 +2538,20 @@ mod tests {
             .map(|c| c.map(|i| dict[i as usize].clone()))
             .collect();
         assert_eq!(resolved, rg.read_string_column(0).unwrap());
+        // #699: gathered at positions, only the used dictionary and
+        // fallback entries remain, renumbered in their original order.
+        let (dict, codes) = rg
+            .read_string_column_dictionary_at(0, &[3, 0, 2])
+            .unwrap()
+            .unwrap();
+        assert_eq!(dict, ["west", "north", "east"]);
+        assert_eq!(codes, [Some(2), Some(0), Some(1)]);
+        let (dict, codes) = rg
+            .read_string_column_dictionary_at(0, &[1])
+            .unwrap()
+            .unwrap();
+        assert_eq!(dict, ["east"]);
+        assert_eq!(codes, [Some(0)]);
         // Other types keep falling back: their callers have no plain path.
         assert_eq!(
             rg.read_int64_column_dictionary_indices(0).ok().flatten(),
