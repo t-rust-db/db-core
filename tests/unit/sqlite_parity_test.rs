@@ -520,8 +520,7 @@ fn rowid_engine(db: &TempDb) -> RowEngine {
         "CREATE TABLE p(a TEXT, b INT); INSERT INTO p VALUES('x',3),('y',1),('z',2); \
          CREATE TABLE k(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO k VALUES(10,'p'),(20,'q'); \
          CREATE TABLE s(rowid TEXT, v INT); INSERT INTO s VALUES('r1',5); \
-         CREATE TABLE s2(rowid INT, v TEXT); INSERT INTO s2 VALUES(5,'a'),(1,'b'); \
-         CREATE TABLE w(a INT PRIMARY KEY, b) WITHOUT ROWID",
+         CREATE TABLE s2(rowid INT, v TEXT); INSERT INTO s2 VALUES(5,'a'),(1,'b')",
     )
     .unwrap();
     e
@@ -626,13 +625,20 @@ fn rowid_references_match_sqlite3() {
     );
     // sqlite3: "no such column: rowid".
     for sql in [
-        "SELECT rowid FROM w",
         "SELECT rowid FROM (SELECT a FROM p) AS q",
         "SELECT rowid FROM (SELECT a FROM p)",
     ] {
         let err = e.run_query(sql).unwrap_err();
         assert!(err.to_string().contains("rowid"), "{sql}: {err}");
     }
+    // The same for a WITHOUT ROWID table, which only a sqlite3-written
+    // file can hold (#696).
+    let wdb = TempDb::new("without-rowid");
+    std::fs::copy("tests/fixtures/btrees/without_rowid.db", wdb.path())
+        .expect("copy sqlite3 fixture");
+    let mut w = RowEngine::open(wdb.path()).expect("open fixture copy");
+    let err = w.run_query("SELECT rowid FROM t").unwrap_err();
+    assert!(err.to_string().contains("rowid"), "{err}");
 }
 
 /// #605: rowid in UPDATE and DELETE WHERE clauses (sqlite3:

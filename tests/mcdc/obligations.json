@@ -2952,7 +2952,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_92e9fd71",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 139,
+    "line": 145,
     "decision": "create.strict",
     "conditions": 1,
     "vectors_required": 2,
@@ -2962,7 +2962,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_231e75c1",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 141,
+    "line": 147,
     "decision": "match column.type_name.as_deref() {\n                None => {\n                    return reject(format!(\n                        \"missing datatype for {}.{}\",\n                        create.name, column.name\n                    ))\n                }\n                Some(t)\n                    if ![\"INT\", \"INTEGER\", \"REAL\", \"TEXT\", \"BLOB\", \"ANY\"]\n                        .iter()\n                        .any(|ok| t.eq_ignore_ascii_case(ok)) =>\n                {\n                    return reject(format!(\n                        \"unknown datatype for {}.{}: \\\"{t}\\\"\",\n                        create.name, column.name\n                    ))\n                }\n                Some(_) => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2972,7 +2972,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_fc349794",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 149,
+    "line": 155,
     "decision": "![\"INT\", \"INTEGER\", \"REAL\", \"TEXT\", \"BLOB\", \"ANY\"]\n                        .iter()\n                        .any(|ok| t.eq_ignore_ascii_case(ok))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2982,7 +2982,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_63403704",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 168,
+    "line": 174,
     "decision": "any_node(&term.expr, &mut is_subquery)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2992,7 +2992,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_fa68ffac",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 174,
+    "line": 180,
     "decision": "let ExprKind::Paren(inner) | ExprKind::Collate { expr: inner, .. } = &expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -3002,7 +3002,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_0458d5e0",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 182,
+    "line": 188,
     "decision": "!create\n        .columns\n        .iter()\n        .any(|c| c.name.eq_ignore_ascii_case(name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -3012,7 +3012,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_47cea21b",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 195,
+    "line": 201,
     "decision": "any_node(expr, &mut is_subquery)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3022,7 +3022,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_b606406f",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 202,
+    "line": 208,
     "decision": "let ExprKind::Column { name, .. } = &e.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -3032,7 +3032,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_5ce8b048",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 218,
+    "line": 224,
     "decision": "match args {\n            FunctionArgs::Star => 0,\n            FunctionArgs::List(list) => list.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3042,7 +3042,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_31493ac7",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 222,
+    "line": 228,
     "decision": "is_aggregate_call(name, args)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3052,7 +3052,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_e1839695",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 245,
+    "line": 251,
     "decision": "pred(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3062,7 +3062,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_9c4e044b",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 248,
+    "line": 254,
     "decision": "match &expr.kind {\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        }\n        | ExprKind::In { list, .. } => {\n            let head = match &expr.kind {\n                ExprKind::In { expr: e, .. } => any_node(e, pred),\n                _ => false,\n            };\n            head || list.iter().any(|a| any_node(a, pred))\n        }\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e)\n        | ExprKind::InSubquery { expr: e, .. } => any_node(e, pred),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            any_node(lhs, pred) || any_node(rhs, pred)\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => any_node(e, pred) || any_node(lo, pred) || any_node(hi, pred),\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            any_node(e, pred)\n                || any_node(pattern, pred)\n                || escape.as_deref().is_some_and(|x| any_node(x, pred))\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            operand.as_deref().is_some_and(|x| any_node(x, pred))\n                || whens\n                    .iter()\n                    .any(|(w, t)| any_node(w, pred) || any_node(t, pred))\n                || else_.as_deref().is_some_and(|x| any_node(x, pred))\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().any(|a| any_node(a, pred)),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3072,7 +3072,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_5e97f93d",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 254,
+    "line": 260,
     "decision": "match &expr.kind {\n                ExprKind::In { expr: e, .. } => any_node(e, pred),\n                _ => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3082,7 +3082,7 @@
   {
     "id": "codegen_row_ddl_create_table_rejected_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 305,
+    "line": 311,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3092,7 +3092,7 @@
   {
     "id": "codegen_row_ddl_create_table_rejected_4dbd060c",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 309,
+    "line": 315,
     "decision": "match compile_create_table(&create, sql) {\n            Ok(_) => None,\n            Err(CodegenError::Rejected(m)) => Some(m),\n            Err(other) => panic!(\"{sql}: {other}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3102,7 +3102,7 @@
   {
     "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 356,
+    "line": 362,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3112,7 +3112,7 @@
   {
     "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_3dc50051",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 367,
+    "line": 373,
     "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable {\n                name,\n                sql: got_sql,\n                without_rowid,\n                autoindexes,\n            } => {\n                assert_eq!(name, \"t\");\n                assert_eq!(got_sql, sql);\n                assert!(!without_rowid);\n                assert!(autoindexes.is_empty());\n            }\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3122,7 +3122,7 @@
   {
     "id": "codegen_row_ddl_create_table_autoindex_names_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 384,
+    "line": 390,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3132,7 +3132,7 @@
   {
     "id": "codegen_row_ddl_create_table_autoindex_names_e668f035",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 389,
+    "line": 395,
     "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable { autoindexes, .. } => autoindexes.clone(),\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
