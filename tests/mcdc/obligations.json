@@ -2952,7 +2952,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_92e9fd71",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 139,
+    "line": 145,
     "decision": "create.strict",
     "conditions": 1,
     "vectors_required": 2,
@@ -2962,7 +2962,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_231e75c1",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 141,
+    "line": 147,
     "decision": "match column.type_name.as_deref() {\n                None => {\n                    return reject(format!(\n                        \"missing datatype for {}.{}\",\n                        create.name, column.name\n                    ))\n                }\n                Some(t)\n                    if ![\"INT\", \"INTEGER\", \"REAL\", \"TEXT\", \"BLOB\", \"ANY\"]\n                        .iter()\n                        .any(|ok| t.eq_ignore_ascii_case(ok)) =>\n                {\n                    return reject(format!(\n                        \"unknown datatype for {}.{}: \\\"{t}\\\"\",\n                        create.name, column.name\n                    ))\n                }\n                Some(_) => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2972,7 +2972,7 @@
   {
     "id": "codegen_row_ddl_create_table_validate_create_table_fc349794",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 149,
+    "line": 155,
     "decision": "![\"INT\", \"INTEGER\", \"REAL\", \"TEXT\", \"BLOB\", \"ANY\"]\n                        .iter()\n                        .any(|ok| t.eq_ignore_ascii_case(ok))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2982,7 +2982,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_63403704",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 168,
+    "line": 174,
     "decision": "any_node(&term.expr, &mut is_subquery)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2992,7 +2992,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_fa68ffac",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 174,
+    "line": 180,
     "decision": "let ExprKind::Paren(inner) | ExprKind::Collate { expr: inner, .. } = &expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -3002,7 +3002,7 @@
   {
     "id": "codegen_row_ddl_create_table_key_term_0458d5e0",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 182,
+    "line": 188,
     "decision": "!create\n        .columns\n        .iter()\n        .any(|c| c.name.eq_ignore_ascii_case(name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -3012,7 +3012,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_47cea21b",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 195,
+    "line": 201,
     "decision": "any_node(expr, &mut is_subquery)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3022,7 +3022,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_b606406f",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 202,
+    "line": 208,
     "decision": "let ExprKind::Column { name, .. } = &e.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -3032,7 +3032,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_5ce8b048",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 218,
+    "line": 224,
     "decision": "match args {\n            FunctionArgs::Star => 0,\n            FunctionArgs::List(list) => list.len(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3042,7 +3042,7 @@
   {
     "id": "codegen_row_ddl_create_table_check_constraint_31493ac7",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 222,
+    "line": 228,
     "decision": "is_aggregate_call(name, args)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3052,7 +3052,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_e1839695",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 245,
+    "line": 251,
     "decision": "pred(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -3062,7 +3062,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_9c4e044b",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 248,
+    "line": 254,
     "decision": "match &expr.kind {\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        }\n        | ExprKind::In { list, .. } => {\n            let head = match &expr.kind {\n                ExprKind::In { expr: e, .. } => any_node(e, pred),\n                _ => false,\n            };\n            head || list.iter().any(|a| any_node(a, pred))\n        }\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e)\n        | ExprKind::InSubquery { expr: e, .. } => any_node(e, pred),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            any_node(lhs, pred) || any_node(rhs, pred)\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => any_node(e, pred) || any_node(lo, pred) || any_node(hi, pred),\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            any_node(e, pred)\n                || any_node(pattern, pred)\n                || escape.as_deref().is_some_and(|x| any_node(x, pred))\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            operand.as_deref().is_some_and(|x| any_node(x, pred))\n                || whens\n                    .iter()\n                    .any(|(w, t)| any_node(w, pred) || any_node(t, pred))\n                || else_.as_deref().is_some_and(|x| any_node(x, pred))\n        }\n        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().any(|a| any_node(a, pred)),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3072,7 +3072,7 @@
   {
     "id": "codegen_row_ddl_create_table_any_node_5e97f93d",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 254,
+    "line": 260,
     "decision": "match &expr.kind {\n                ExprKind::In { expr: e, .. } => any_node(e, pred),\n                _ => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3082,7 +3082,7 @@
   {
     "id": "codegen_row_ddl_create_table_rejected_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 305,
+    "line": 311,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3092,7 +3092,7 @@
   {
     "id": "codegen_row_ddl_create_table_rejected_4dbd060c",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 309,
+    "line": 315,
     "decision": "match compile_create_table(&create, sql) {\n            Ok(_) => None,\n            Err(CodegenError::Rejected(m)) => Some(m),\n            Err(other) => panic!(\"{sql}: {other}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3102,7 +3102,7 @@
   {
     "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 356,
+    "line": 362,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3112,7 +3112,7 @@
   {
     "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_3dc50051",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 367,
+    "line": 373,
     "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable {\n                name,\n                sql: got_sql,\n                without_rowid,\n                autoindexes,\n            } => {\n                assert_eq!(name, \"t\");\n                assert_eq!(got_sql, sql);\n                assert!(!without_rowid);\n                assert!(autoindexes.is_empty());\n            }\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3122,7 +3122,7 @@
   {
     "id": "codegen_row_ddl_create_table_autoindex_names_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 384,
+    "line": 390,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3132,7 +3132,7 @@
   {
     "id": "codegen_row_ddl_create_table_autoindex_names_e668f035",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 389,
+    "line": 395,
     "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable { autoindexes, .. } => autoindexes.clone(),\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11870,10 +11870,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_compile_insert_f8125852",
+    "id": "codegen_row_stmt_insert_compile_insert_717ccc58",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 445,
-    "decision": "match &insert.source {\n        InsertSource::Values(rows) => {\n            for values in rows {\n                compile_row(\n                    &mut em,\n                    &mut reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| values.get(pos).cloned().map(ColumnSource::Expr),\n                    rowid_alias,\n                    action,\n                    &skipped,\n                    is_autoincrement,\n                )?;\n            }\n        }\n        InsertSource::DefaultValues => {\n            compile_row(\n                &mut em,\n                &mut reg,\n                schema,\n                &check_schema,\n                &plans,\n                &table_checks,\n                &target_columns,\n                |_pos| None,\n                rowid_alias,\n                action,\n                &skipped,\n                is_autoincrement,\n            )?;\n        }\n        InsertSource::Select(select) => {\n            // Re-checked (rather than trusted from the validation above)\n            // so this arm never needs an infallible unwrap.\n            let Some(select_schemas) = select_schemas else {\n                return Err(CodegenError::Unsupported {\n                    reason: \"INSERT ... SELECT: the SELECT's FROM table schema(s) were not \\\n                             resolved\"\n                        .to_string(),\n                });\n            };\n            // The select's source-table scan needs cursor numbers of its\n            // own, distinct from this INSERT's target-table/index\n            // cursors above — offset above the last index cursor\n            // (`open_index_cursors` uses `FIRST_INDEX_CURSOR..\n            // FIRST_INDEX_CURSOR+schema.indexes.len()`).\n            let select_table_cursor =\n                FIRST_INDEX_CURSOR.saturating_add(i32::try_from(schema.indexes.len()).unwrap_or(0));\n            let end_label = em.new_label();\n            let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {\n                let count = usize::try_from(count).map_err(|_| CodegenError::Internal {\n                    reason: format!(\"INSERT ... SELECT produced a negative column count {count}\"),\n                })?;\n                compile_row(\n                    em,\n                    reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| {\n                        (pos < count)\n                            .then(|| first.saturating_add(i32::try_from(pos).unwrap_or(i32::MAX)))\n                            .map(ColumnSource::Reg)\n                    },\n                    rowid_alias,\n                    action,\n                    &skipped,\n                    is_autoincrement,\n                )\n            };\n            if select_schemas.len() > 1 {\n                // #250: the SELECT's FROM clause has a JOIN — drive the\n                // same nested-loop join scan `compile_select_joined`\n                // uses, with cursor numbers offset above this INSERT's\n                // own cursors (`compile_select_joined_scan` opens every\n                // source-table cursor itself, unlike the single-table\n                // `compile_select_scan` path below, which expects its\n                // one cursor already open).\n                // `select_schemas` doubles as the full catalog for a\n                // subquery-in-FROM to resolve its own inner FROM table(s)\n                // against (#257) — narrower than `compile_select_joined`'s\n                // own full-database catalog, so `INSERT ... SELECT` with\n                // both a JOIN and a FROM-subquery whose own table isn't\n                // among the SELECT's joined tables isn't supported yet.\n                compile_select_joined_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    select_schemas,\n                    select_schemas,\n                    select_table_cursor,\n                    end_label,\n                    &std::collections::HashMap::new(),\n                    &mut sink,\n                )?;\n            } else {\n                let Some(select_schema) = select_schemas.first() else {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"INSERT ... SELECT: the SELECT's FROM table schema was not \\\n                                 resolved\"\n                            .to_string(),\n                    });\n                };\n                let select_cursors = ScanCursors {\n                    table: select_table_cursor,\n                    sort: select_table_cursor.saturating_add(1),\n                    pseudo: select_table_cursor.saturating_add(2),\n                    distinct: select_table_cursor.saturating_add(3),\n                };\n                let select_root_page = valid_table_root_page(select_schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    select_cursors.table,\n                    select_root_page,\n                    0,\n                ));\n                compile_select_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    &std::rc::Rc::new(select_schema.clone()),\n                    select_cursors,\n                    end_label,\n                    std::slice::from_ref(select_schema),\n                    &crate::codegen::row::planner::Stats::default(),\n                    &mut sink,\n                )?;\n            }\n            em.place(end_label);\n        }\n    }",
+    "line": 446,
+    "decision": "match &insert.source {\n        InsertSource::Values(rows) => {\n            for values in rows {\n                compile_row(\n                    &mut em,\n                    &mut reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| values.get(pos).cloned().map(ColumnSource::Expr),\n                    rowid_alias,\n                    action,\n                    &handlers,\n                    &updates,\n                    is_autoincrement,\n                )?;\n            }\n        }\n        InsertSource::DefaultValues => {\n            compile_row(\n                &mut em,\n                &mut reg,\n                schema,\n                &check_schema,\n                &plans,\n                &table_checks,\n                &target_columns,\n                |_pos| None,\n                rowid_alias,\n                action,\n                &handlers,\n                &updates,\n                is_autoincrement,\n            )?;\n        }\n        InsertSource::Select(select) => {\n            // Re-checked (rather than trusted from the validation above)\n            // so this arm never needs an infallible unwrap.\n            let Some(select_schemas) = select_schemas else {\n                return Err(CodegenError::Unsupported {\n                    reason: \"INSERT ... SELECT: the SELECT's FROM table schema(s) were not \\\n                             resolved\"\n                        .to_string(),\n                });\n            };\n            // The select's source-table scan needs cursor numbers of its\n            // own, distinct from this INSERT's target-table/index\n            // cursors above — offset above the last index cursor\n            // (`open_index_cursors` uses `FIRST_INDEX_CURSOR..\n            // FIRST_INDEX_CURSOR+schema.indexes.len()`).\n            let select_table_cursor =\n                FIRST_INDEX_CURSOR.saturating_add(i32::try_from(schema.indexes.len()).unwrap_or(0));\n            let end_label = em.new_label();\n            let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {\n                let count = usize::try_from(count).map_err(|_| CodegenError::Internal {\n                    reason: format!(\"INSERT ... SELECT produced a negative column count {count}\"),\n                })?;\n                compile_row(\n                    em,\n                    reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| {\n                        (pos < count)\n                            .then(|| first.saturating_add(i32::try_from(pos).unwrap_or(i32::MAX)))\n                            .map(ColumnSource::Reg)\n                    },\n                    rowid_alias,\n                    action,\n                    &handlers,\n                    &updates,\n                    is_autoincrement,\n                )\n            };\n            if select_schemas.len() > 1 {\n                // #250: the SELECT's FROM clause has a JOIN — drive the\n                // same nested-loop join scan `compile_select_joined`\n                // uses, with cursor numbers offset above this INSERT's\n                // own cursors (`compile_select_joined_scan` opens every\n                // source-table cursor itself, unlike the single-table\n                // `compile_select_scan` path below, which expects its\n                // one cursor already open).\n                // `select_schemas` doubles as the full catalog for a\n                // subquery-in-FROM to resolve its own inner FROM table(s)\n                // against (#257) — narrower than `compile_select_joined`'s\n                // own full-database catalog, so `INSERT ... SELECT` with\n                // both a JOIN and a FROM-subquery whose own table isn't\n                // among the SELECT's joined tables isn't supported yet.\n                compile_select_joined_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    select_schemas,\n                    select_schemas,\n                    select_table_cursor,\n                    end_label,\n                    &std::collections::HashMap::new(),\n                    &mut sink,\n                )?;\n            } else {\n                let Some(select_schema) = select_schemas.first() else {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"INSERT ... SELECT: the SELECT's FROM table schema was not \\\n                                 resolved\"\n                            .to_string(),\n                    });\n                };\n                let select_cursors = ScanCursors {\n                    table: select_table_cursor,\n                    sort: select_table_cursor.saturating_add(1),\n                    pseudo: select_table_cursor.saturating_add(2),\n                    distinct: select_table_cursor.saturating_add(3),\n                };\n                let select_root_page = valid_table_root_page(select_schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    select_cursors.table,\n                    select_root_page,\n                    0,\n                ));\n                compile_select_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    &std::rc::Rc::new(select_schema.clone()),\n                    select_cursors,\n                    end_label,\n                    std::slice::from_ref(select_schema),\n                    &crate::codegen::row::planner::Stats::default(),\n                    &mut sink,\n                )?;\n            }\n            em.place(end_label);\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -11882,7 +11882,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_insert_297a1cc6",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 521,
+    "line": 525,
     "decision": "select_schemas.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -11892,7 +11892,7 @@
   {
     "id": "codegen_row_stmt_insert_column_plans_cbe41696",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 612,
+    "line": 616,
     "decision": "match constraint {\n                ColumnConstraint::NotNull => plan.not_null = true,\n                // NULL on the rowid-alias column means \"assign a fresh\n                // rowid\", not a constraint violation, so its implicit\n                // NOT NULL is deliberately not enforced.\n                ColumnConstraint::PrimaryKey { .. } => {\n                    if rowid_alias != Some(idx) {\n                        plan.not_null = true;\n                    }\n                }\n                ColumnConstraint::Default(\n                    DefaultValue::Literal(expr) | DefaultValue::Paren(expr),\n                ) => {\n                    plan.default = Some(expr.clone());\n                }\n                ColumnConstraint::Check { expr, name, body } => plan\n                    .checks\n                    .push((expr.clone(), check_label(schema, name.as_deref(), *body))),\n                ColumnConstraint::Unique | ColumnConstraint::Collate(_) => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11902,7 +11902,7 @@
   {
     "id": "codegen_row_stmt_insert_column_plans_6503ca7d",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 618,
+    "line": 622,
     "decision": "rowid_alias != Some(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11912,7 +11912,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_4b71b0ef",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 660,
+    "line": 665,
     "decision": "let (Some(source), Some(slot)) = (column_at(pos), value_sources.get_mut(col_idx))",
     "conditions": 1,
     "vectors_required": 2,
@@ -11920,30 +11920,40 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_compile_row_76dd586e",
+    "id": "codegen_row_stmt_insert_compile_row_db00a846",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 672,
-    "decision": "match rowid_alias {\n        Some(idx) => {\n            let explicit = value_source_at(idx)\n                .filter(|source| !matches!(source, ColumnSource::Expr(e) if is_null_literal(e)));\n            match explicit {\n                Some(source) => {\n                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                    let no_conflict = em.new_label();\n                    let seek_addr =\n                        em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                    em.patch_p2(seek_addr, no_conflict);\n                    let pk_action = if skipped.rowid {\n                        ConflictAction::Ignore\n                    } else {\n                        action\n                    };\n                    emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;\n                    em.place(no_conflict);\n                    r\n                }\n                None => {\n                    let r = reg.alloc();\n                    emit_new_rowid(em, r, schema, is_autoincrement);\n                    r\n                }\n            }\n        }\n        None => {\n            let r = reg.alloc();\n            emit_new_rowid(em, r, schema, is_autoincrement);\n            r\n        }\n    }",
+    "line": 679,
+    "decision": "match rowid_alias {\n        Some(idx) => {\n            let explicit = value_source_at(idx)\n                .filter(|source| !matches!(source, ColumnSource::Expr(e) if is_null_literal(e)));\n            match explicit {\n                Some(source) => {\n                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                    // `DO UPDATE` needs the new row's other values (for\n                    // `excluded`), so its probe waits until they exist.\n                    if let Some(Handler::Update(_)) = handlers.rowid {\n                        rowid_probe_deferred = true;\n                    } else {\n                        let no_conflict = em.new_label();\n                        let seek_addr =\n                            em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                        em.patch_p2(seek_addr, no_conflict);\n                        let pk_action = if let Some(Handler::Skip) = handlers.rowid {\n                            ConflictAction::Ignore\n                        } else {\n                            action\n                        };\n                        emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;\n                        em.place(no_conflict);\n                    }\n                    r\n                }\n                None => {\n                    let r = reg.alloc();\n                    emit_new_rowid(em, r, schema, is_autoincrement);\n                    r\n                }\n            }\n        }\n        None => {\n            let r = reg.alloc();\n            emit_new_rowid(em, r, schema, is_autoincrement);\n            r\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_compile_row_94b94ead",
-    "file": "src/codegen/row/stmt/insert.rs",
-    "line": 676,
-    "decision": "match explicit {\n                Some(source) => {\n                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                    let no_conflict = em.new_label();\n                    let seek_addr =\n                        em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                    em.patch_p2(seek_addr, no_conflict);\n                    let pk_action = if skipped.rowid {\n                        ConflictAction::Ignore\n                    } else {\n                        action\n                    };\n                    emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;\n                    em.place(no_conflict);\n                    r\n                }\n                None => {\n                    let r = reg.alloc();\n                    emit_new_rowid(em, r, schema, is_autoincrement);\n                    r\n                }\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_stmt_insert_compile_row_51b13bdd",
+    "id": "codegen_row_stmt_insert_compile_row_ee6707af",
     "file": "src/codegen/row/stmt/insert.rs",
     "line": 683,
-    "decision": "skipped.rowid",
+    "decision": "match explicit {\n                Some(source) => {\n                    let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                    // `DO UPDATE` needs the new row's other values (for\n                    // `excluded`), so its probe waits until they exist.\n                    if let Some(Handler::Update(_)) = handlers.rowid {\n                        rowid_probe_deferred = true;\n                    } else {\n                        let no_conflict = em.new_label();\n                        let seek_addr =\n                            em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                        em.patch_p2(seek_addr, no_conflict);\n                        let pk_action = if let Some(Handler::Skip) = handlers.rowid {\n                            ConflictAction::Ignore\n                        } else {\n                            action\n                        };\n                        emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;\n                        em.place(no_conflict);\n                    }\n                    r\n                }\n                None => {\n                    let r = reg.alloc();\n                    emit_new_rowid(em, r, schema, is_autoincrement);\n                    r\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_insert_compile_row_69459eec",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 688,
+    "decision": "let Some(Handler::Update(_)) = handlers.rowid",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_insert_compile_row_01fd4094",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 695,
+    "decision": "let Some(Handler::Skip) = handlers.rowid",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -11952,7 +11962,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_c861879c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 710,
+    "line": 723,
     "decision": "Some(idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -11962,7 +11972,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_7150f6bf",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 726,
+    "line": 739,
     "decision": "use_default",
     "conditions": 1,
     "vectors_required": 2,
@@ -11972,7 +11982,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_d0939512",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 732,
+    "line": 745,
     "decision": "match &chosen {\n            Some(source) => compile_column_source(em, reg, schema, TABLE_CURSOR, source)?,\n            None => {\n                let r = reg.alloc();\n                em.emit(Instruction::new(Opcode::Null, 0, r, 0));\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11982,7 +11992,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_f476b28e",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 742,
+    "line": 755,
     "decision": "plan.not_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -11992,7 +12002,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_66f20021",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 788,
+    "line": 801,
     "decision": "needs_row_pseudo",
     "conditions": 1,
     "vectors_required": 2,
@@ -12002,7 +12012,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_d93931f7",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 806,
+    "line": 819,
     "decision": "has_checks",
     "conditions": 1,
     "vectors_required": 2,
@@ -12010,10 +12020,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_compile_row_5a4dbb61",
+    "id": "codegen_row_stmt_insert_compile_row_0d8bde4a",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 838,
-    "decision": "skipped.indexes.contains(&index.name)",
+    "line": 853,
+    "decision": "let (true, Some(Handler::Update(clause))) = (rowid_probe_deferred, handlers.rowid)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_insert_compile_row_51ad3a4d",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 879,
+    "decision": "match handlers.index(&index.name) {\n            Some(Handler::Update(clause)) => {\n                let (conflict_rowid_reg, no_conflict) =\n                    emit_unique_probe(em, reg, schema, check_schema, *index_cursor, index)?;\n                // The existing row, to update; gone already means no\n                // conflict to answer.\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    TABLE_CURSOR,\n                    0,\n                    conflict_rowid_reg,\n                ));\n                em.patch_p2(seek_addr, no_conflict);\n                let update = upsert_update_at(updates, clause)?;\n                emit_upsert_update(\n                    em,\n                    reg,\n                    schema,\n                    check_schema,\n                    plans,\n                    table_checks,\n                    update,\n                    &col_regs,\n                    rowid_reg,\n                    row_skip,\n                )?;\n                em.place(no_conflict);\n            }\n            other => {\n                let index_action = if let Some(Handler::Skip) = other {\n                    ConflictAction::Ignore\n                } else {\n                    action\n                };\n                emit_unique_check(\n                    em,\n                    reg,\n                    schema,\n                    check_schema,\n                    *index_cursor,\n                    index,\n                    index_action,\n                    row_skip,\n                )?;\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_insert_compile_row_8c26fae3",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 908,
+    "decision": "let Some(Handler::Skip) = other",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -12022,7 +12052,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_1af88378",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 875,
+    "line": 947,
     "decision": "!schema.indexes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12032,7 +12062,7 @@
   {
     "id": "codegen_row_stmt_insert_table_check_constraints_cfdbd8dc",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 902,
+    "line": 974,
     "decision": "match c {\n            TableConstraint::Check { expr, name, body } => {\n                Some((expr.clone(), check_label(schema, name.as_deref(), *body)))\n            }\n            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12042,7 +12072,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_constraint_violation_f9999294",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 918,
+    "line": 990,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Abort\n        | ConflictAction::Fail\n        | ConflictAction::Rollback\n        | ConflictAction::Replace => {\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                code,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12052,7 +12082,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_pk_conflict_1a78c7f5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 944,
+    "line": 1016,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // `SeekRowid` above landed the cursor on the row this\n            // INSERT is about to displace — its secondary-index\n            // entries must be removed before it's deleted, exactly\n            // like `delete.rs`'s ordinary `DELETE` path, or they go\n            // stale (`#196` follow-up: this conflict path predates\n            // index maintenance and wasn't updated when it landed).\n            emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\n                \"UNIQUE constraint failed: {}.{} (PRIMARY KEY)\",\n                schema.name,\n                schema.columns.get(idx).map_or(\"?\", String::as_str)\n            );\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_PRIMARYKEY,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12060,19 +12090,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_skipped_conflicts_9acfa044",
+    "id": "codegen_row_stmt_insert_add_index_72a4a620",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1010,
-    "decision": "matches!(clause.action, UpsertAction::DoUpdate { .. })",
+    "line": 1087,
+    "decision": "self.index(name).is_none()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_skipped_conflicts_fa68ffac",
+    "id": "codegen_row_stmt_insert_conflict_handlers_1e7dbdc0",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1029,
+    "line": 1110,
+    "decision": "match clause.action {\n            UpsertAction::DoNothing => Handler::Skip,\n            UpsertAction::DoUpdate { .. } => Handler::Update(position),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_insert_conflict_handlers_fa68ffac",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 1124,
     "decision": "let ExprKind::Paren(inner) | ExprKind::Collate { expr: inner, .. } = &expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -12080,9 +12120,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_skipped_conflicts_518f73e6",
+    "id": "codegen_row_stmt_insert_conflict_handlers_518f73e6",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1046,
+    "line": 1141,
     "decision": "let (false, false) = (is_column, is_rowid_keyword)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12090,9 +12130,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_skipped_conflicts_eefe4dbe",
+    "id": "codegen_row_stmt_insert_conflict_handlers_eefe4dbe",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1051,
+    "line": 1146,
     "decision": "match (names.as_slice(), schema.rowid_alias) {\n            ([(only, is_rowid_keyword)], alias) => {\n                let named_alias = alias\n                    .and_then(|idx| schema.columns.get(idx))\n                    .is_some_and(|col| col.eq_ignore_ascii_case(only));\n                named_alias || *is_rowid_keyword\n            }\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12100,9 +12140,9 @@
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_stmt_insert_skipped_conflicts_37c0f699",
+    "id": "codegen_row_stmt_insert_conflict_handlers_37c0f699",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1071,
+    "line": 1166,
     "decision": "target.where_clause.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12110,9 +12150,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_skipped_conflicts_23b23bf6",
+    "id": "codegen_row_stmt_insert_conflict_handlers_23b23bf6",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1074,
+    "line": 1169,
     "decision": "is_rowid_target",
     "conditions": 1,
     "vectors_required": 2,
@@ -12120,9 +12160,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_skipped_conflicts_54dcd778",
+    "id": "codegen_row_stmt_insert_conflict_handlers_54dcd778",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1076,
+    "line": 1171,
     "decision": "let Some(index) = matching_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -12130,9 +12170,39 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_emit_unique_check_b7b491d5",
+    "id": "codegen_row_stmt_insert_upsert_updates_b410d928",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1107,
+    "line": 1212,
+    "decision": "let Some(slot) = assigned.get_mut(idx)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_insert_emit_upsert_update_195e8ba5",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 1269,
+    "decision": "Some(idx) == schema.rowid_alias",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_insert_emit_upsert_update_94649435",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 1309,
+    "decision": "let Some(where_clause) = &update.where_clause",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_stmt_insert_emit_unique_probe_b7b491d5",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 1358,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -12140,9 +12210,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_emit_unique_check_0b949c87",
+    "id": "codegen_row_stmt_insert_emit_unique_probe_0b949c87",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1123,
+    "line": 1374,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12152,7 +12222,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_27b0b374",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1160,
+    "line": 1429,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // The conflicting row's rowid was written into\n            // `conflict_rowid_reg` by `NoConflict` itself — seek the\n            // table cursor onto it, remove its index entries, then\n            // delete it, exactly like `emit_pk_conflict`'s `Replace`\n            // branch (which instead already had the cursor positioned\n            // via `SeekRowid`).\n            let seek_ok = em.new_label();\n            let seek_addr = em.emit(Instruction::new(\n                Opcode::SeekRowid,\n                TABLE_CURSOR,\n                0,\n                conflict_rowid_reg,\n            ));\n            em.patch_p2(seek_addr, seek_ok);\n            crate::codegen::row::index_maintenance::emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n            em.place(seek_ok);\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message =\n                crate::codegen::row::index_maintenance::unique_violation_message(schema, index);\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_UNIQUE,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12162,7 +12232,7 @@
   {
     "id": "codegen_row_stmt_insert_insert_result_e7f78d1c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1271,
+    "line": 1540,
     "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(insert) => *insert,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12192,7 +12262,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_b5ba86aa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 166,
+    "line": 156,
     "decision": "is_rowid_reference(schema, lhs)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12202,7 +12272,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_4ccc9dd6",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 168,
+    "line": 158,
     "decision": "is_rowid_reference(schema, rhs)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12212,7 +12282,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_87d7bd20",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 187,
+    "line": 177,
     "decision": "let Some(operand) = rowid_seek_operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -12222,7 +12292,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_10a1f5f2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 262,
+    "line": 252,
     "decision": "let Some(where_expr) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -12232,7 +12302,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_4baed9e2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 263,
+    "line": 253,
     "decision": "range_seek_touches_scanned_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -12242,7 +12312,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_8d819a73",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 374,
+    "line": 364,
     "decision": "used_range_seek && range_seek_touches_scanned_index",
     "conditions": 2,
     "vectors_required": 3,
@@ -12252,7 +12322,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_1128723f",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 410,
+    "line": 400,
     "decision": "!used_range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -12262,7 +12332,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_10a1f5f2_2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 417,
+    "line": 407,
     "decision": "let Some(where_expr) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -12272,7 +12342,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_c1433547",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 482,
+    "line": 495,
     "decision": "match rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten()) {\n        Some(expr) => compile_value(em, reg, scope, expr)?,\n        None => {\n            let r = reg.alloc();\n            em.emit(Instruction::new(Opcode::Rowid, TABLE_CURSOR, r, 0));\n            r\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12282,7 +12352,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_c861879c",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 493,
+    "line": 506,
     "decision": "Some(idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -12292,7 +12362,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1812a01d",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 499,
+    "line": 512,
     "decision": "match expr {\n            Some(expr) => compile_value(em, reg, scope, expr)?,\n            None => {\n                let r = reg.alloc();\n                emit_column_read(em, schema, TABLE_CURSOR, idx, r)?;\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12302,7 +12372,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_3c6999fa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 533,
+    "line": 546,
     "decision": "!plan.not_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -12312,7 +12382,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_d93931f7",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 567,
+    "line": 580,
     "decision": "has_checks",
     "conditions": 1,
     "vectors_required": 2,
@@ -12322,7 +12392,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_72346b4e",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 618,
+    "line": 631,
     "decision": "!index.unique",
     "conditions": 1,
     "vectors_required": 2,
@@ -12332,7 +12402,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_b3e8a94c",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 621,
+    "line": 634,
     "decision": "index_touched.get(position) != Some(&true)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12342,7 +12412,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_6fe685c0",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 665,
+    "line": 678,
     "decision": "rowid_reassigned",
     "conditions": 1,
     "vectors_required": 2,
@@ -12352,7 +12422,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1af88378",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 684,
+    "line": 697,
     "decision": "!schema.indexes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12362,7 +12432,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_unique_check_d46bb603",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 721,
+    "line": 734,
     "decision": "matches!(action, ConflictAction::Replace)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12372,7 +12442,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_unique_check_b7b491d5",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 732,
+    "line": 745,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -12382,7 +12452,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_unique_check_31c19786",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 748,
+    "line": 761,
     "decision": "Some(col_idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -12392,7 +12462,7 @@
   {
     "id": "codegen_row_stmt_update_update_program_36cf9018",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 866,
+    "line": 879,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12402,7 +12472,7 @@
   {
     "id": "codegen_row_stmt_update_compile_36cf9018",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 934,
+    "line": 947,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

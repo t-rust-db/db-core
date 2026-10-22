@@ -62,3 +62,18 @@ caller's key conversion rather than in `sql-join` itself" (see
 - [0028](0028-time-tiered-layout-and-compaction.md) — Time-tiered layout (hot → hour → day) partitioned by arrival time, hours sorted by a sort key into row groups, per-table choice next to the flat layout; secondary access paths (sort key, bloom filters, projections)
 - [0029](0029-ingest-packaging.md) — Packaging the write path: `storage-column-write`/`ingest-read`/`ingest` features, `column-ingest` binary, readers in the `tools` workspace
 - [0030](0030-column-dialect-follows-duckdb.md) — The column dialect follows DuckDB where DuckDB and sqlite3 differ (amends 0011)
+
+Row storage (`storage::row`), moved from sqlite-rs's `.openspec/adr/` (#575); each file names its original sqlite-rs number:
+
+- [0031](0031-shm-access-pread-not-mmap.md) — `-shm` access via `pread`/`pwrite`, not `mmap`
+- [0032](0032-hot-journal-auto-recovery.md) — Hot-journal recovery is automatic in `Pager::open`, not a separate opt-in call
+- [0033](0033-pager-has-no-page-cache.md) — `Pager` has no page cache — repeated-seek workloads pay full I/O every row
+- [0034](0034-leaf-cell-splice.md) — In-place leaf/index cell splice with real freeblock bookkeeping
+- [0035](0035-hot-journal-recovery-reserved-probe-single-fd.md) — Hot-journal recovery probes RESERVED and shares one fd with `Pager`
+- [0036](0036-passive-only-checkpoint-linear-frame-scan.md) — PASSIVE-only checkpoint, single non-blocking lock, linear frame scan
+- [0037](0037-wal-writer-reopens-and-rescans-per-flush.md) — WAL writer reopens and rescans the `-wal` file on every flush
+- [0038](0038-pager-page-cache-landed.md) — `Pager` page cache landed — supersedes ADR-0033's problem statement
+- [0039](0039-vendor-nix-subset.md) — Vendor a `nix` subset: reintroduce a single, narrow `unsafe` boundary
+- [0040](0040-wal-resume-hint-cache-supersedes-0037.md) — `Pager`-cached WAL resume hint supersedes ADR-0037's per-flush rescan
+- [0041](0041-pragma-synchronous-fsync-policy.md) — `PRAGMA synchronous` fsync-skip policy, and why `SynchronousMode` lives in `header.rs`
+- [0042](0042-macos-plain-fsync-not-fullfsync.md) — On macOS, `Vfs::sync` calls plain `fsync(2)`, not `std`'s `F_FULLFSYNC`

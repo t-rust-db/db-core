@@ -98,11 +98,12 @@ fn update_with_a_literal_rowid_equality_that_matches_nothing_is_a_no_op() {
 
 #[test]
 fn without_rowid_table_is_rejected_at_update_compile_time() {
+    // A file sqlite3 wrote: this engine no longer creates such tables.
     let db = TempDb::new("without-rowid-update");
+    std::fs::copy("tests/fixtures/btrees/without_rowid.db", db.path())
+        .expect("copy sqlite3 fixture");
     let mut e = open(&db);
-    e.run_query("CREATE TABLE wru(a INTEGER PRIMARY KEY) WITHOUT ROWID")
-        .unwrap();
-    let err = e.run_query("UPDATE wru SET a = 1").unwrap_err();
+    let err = e.run_query("UPDATE t SET v = 'x'").unwrap_err();
     assert_eq!(err.kind, ErrorKind::Compile);
     assert!(err.message.contains("WITHOUT ROWID"), "{}", err.message);
 }

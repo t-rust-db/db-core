@@ -4,21 +4,29 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [0.165.0] - 2026-10-22
+## [0.167.0] - 2026-10-22
 
 ### Added
 
 - **`BETWEEN` and `NOT BETWEEN` in the column and stream engines** (#717, second of milestone 2 of #678). The lowering pass of #716 now also rewrites `x BETWEEN lo AND hi` to `x >= lo AND x <= hi` and `x NOT BETWEEN lo AND hi` to `x < lo OR x > hi`, before validation, so the planner and the VM are unchanged. It applies in WHERE, HAVING, the select list and aggregate and function arguments. Bounds and subject may be expressions, and a quoted number against a number column converts as DuckDB does (#679). The three-valued logic of #679 gives DuckDB's NULL behaviour: a NULL subject or bound makes `BETWEEN` NULL, and `NOT BETWEEN` is TRUE when the other bound already decides (`5 NOT BETWEEN NULL AND 3`). Reversed bounds match nothing. The subject is repeated once per comparison, which changes no answer while every scalar function the subset allows is deterministic; a function like `random()` or `now()` would need its subject refused. A new sqllogictest file (`tests/sqllogictest/column/between_717.test`, 25 queries) and seven `check_column_oracle.sh` cases agree with DuckDB.
 
-## [0.164.0] - 2026-10-22
+## [0.166.0] - 2026-10-22
 
 ### Added
 
 - **`IN (list)` and `NOT IN (list)` in the column and stream engines** (#716, first of milestone 2 of #678). The parser lowers `x IN (a, b, c)` to `x = a OR x = b OR x = c` and `x NOT IN (a, b, c)` to `x <> a AND x <> b AND x <> c` before it validates the query, so the planner and the VM are unchanged. It applies in WHERE, HAVING, the select list, an aggregate's argument and a function's argument. The list items may be expressions (`id IN (3, 1 + 1)`), and a quoted number against a number column converts as DuckDB does (#679). The three-valued `OR` and `AND` of #679 give DuckDB's NULL behaviour: `x IN (1, NULL)` is TRUE or NULL, `x NOT IN (1, NULL)` is never TRUE, and a NULL `x` is NULL. An empty list is refused, as DuckDB does, and `IN (SELECT ...)` is unchanged. The cost is a comparison per item per row; a hash-set opcode waits for a benchmark that needs it. A new sqllogictest file (`tests/sqllogictest/column/in_list_716.test`) and six `check_column_oracle.sh` cases agree with DuckDB.
 
-### Fixed
+## [0.165.0] - 2026-10-22
 
-- **`tests/unit/upsert_test.rs` no longer fails under load.** Its temporary database was named from the clock's nanoseconds, so two parallel tests could share and delete one file.
+### Added
+
+- **`INSERT ... ON CONFLICT ... DO UPDATE`** (#696, second of three steps). A row that conflicts on the constraint a clause names, or on any constraint a target-less last clause answers, updates the existing row instead of being inserted: `DO UPDATE SET column = expr, ... [WHERE expr]`. A bare column in the `SET` or `WHERE` is the existing row's; `excluded.<column>` is the row that would have been inserted, with the column's affinity applied and its real rowid in an `INTEGER PRIMARY KEY` column. A `WHERE` that is false leaves the row alone and inserts nothing. The update goes through `UPDATE`'s own row body, so the new values meet the same `NOT NULL`, `CHECK` and `UNIQUE` checks (a key set to a value another row holds fails with `UNIQUE constraint failed`, setting a key to what it already is does not) and every index stays in step; a `SET` that reassigns the rowid moves the row. Clauses chain by target as in sqlite3, the first one that matches a constraint answering it, and a new row's own `NOT NULL`/`CHECK` violation still aborts before any conflict is looked at. Works over `VALUES` and `INSERT ... SELECT`, a row at a time. `WITHOUT ROWID` writes are still refused (the next step).
+
+## [0.164.0] - 2026-10-22
+
+### Changed
+
+- **`CREATE TABLE ... WITHOUT ROWID` is refused** (#696). The statement was accepted but no `INSERT`, `UPDATE` or `DELETE` could write the table, so it could only be created and never filled. It now fails with `unsupported: WITHOUT ROWID tables are not supported yet`, after sqlite3's own definition errors (`PRIMARY KEY missing`, `AUTOINCREMENT not allowed`) so those messages are unchanged. A `WITHOUT ROWID` table in a file sqlite3 wrote still opens and reads; writes to it keep failing at compile time. Writing to such tables is tracked separately.
 
 ## [0.163.0] - 2026-10-22
 
