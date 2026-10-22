@@ -67,7 +67,12 @@ pub fn decompress<'a>(
     match codec {
         Codec::Uncompressed => Ok(Cow::Borrowed(compressed)),
         Codec::Snappy => Ok(Cow::Owned(snappy::decompress(compressed)?)),
-        Codec::Zstd => Ok(Cow::Owned(zstd::decompress(compressed, uncompressed_size)?)),
+        // SPIKE #697: the prototype decoder, falling back to ruzstd on any
+        // frame it refuses.
+        Codec::Zstd => match zstd_spike::decompress(compressed, uncompressed_size) {
+            Ok(body) => Ok(Cow::Owned(body)),
+            Err(_) => Ok(Cow::Owned(zstd::decompress(compressed, uncompressed_size)?)),
+        },
         Codec::Other(c) => Err(CompressionError::UnsupportedCodec(c)),
     }
 }
