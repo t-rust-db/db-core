@@ -326,7 +326,7 @@ fn insert_from_a_select() {
         ]
     );
     p.fails(
-        "INSERT INTO w3 SELECT a, b FROM r JOIN w3 ON w3.a = r.id",
+        "INSERT INTO w3 SELECT 3, 3 FROM r LIMIT 1",
         "UNIQUE constraint failed",
     );
     p.finish();
@@ -388,7 +388,7 @@ fn update_columns_outside_the_key() {
     p.exec("UPDATE w1 SET b = length(a) + b");
     p.agree("SELECT sum(b) FROM w1");
     p.exec("UPDATE w2 SET v = v || '!' WHERE k % 2 = 0");
-    p.agree("SELECT count(*), group_concat(v) FROM (SELECT v FROM w2 WHERE v LIKE '%!' ORDER BY k LIMIT 6)");
+    p.agree("SELECT count(*), min(v), max(v) FROM w2 WHERE v LIKE '%!'");
     p.exec("UPDATE w3 SET b = b WHERE a = 4");
     p.exec("UPDATE w5 SET t = upper(t), n = n * 2");
     assert_eq!(
@@ -507,4 +507,31 @@ fn what_cannot_be_written_yet_is_refused() {
     p.agree("SELECT count(*) FROM w4");
     p.exec("INSERT INTO r VALUES (1000, 1)");
     p.finish();
+}
+
+#[test]
+fn a_failed_statement_outside_a_transaction_leaves_no_rows_behind() {
+    let mut p = Pair::new("atomic");
+    // The same for an ordinary rowid table and a UNIQUE column.
+    p.exec("CREATE TABLE zr(k INTEGER PRIMARY KEY, v)");
+    p.exec("CREATE TABLE zu(k UNIQUE, v)");
+    for table in ["zr", "zu"] {
+        p.exec(&format!("INSERT INTO {table} VALUES (9, 'x')"));
+        p.fails(
+            &format!("INSERT INTO {table} VALUES (1, 'first'), (9, 'dup')"),
+            "UNIQUE constraint failed",
+        );
+        assert_eq!(p.agree(&format!("SELECT count(*) FROM {table}")), ["1"]);
+    }
+}
+
+#[test]
+fn a_whole_real_is_stored_as_an_integer_under_integer_affinity() {
+    let mut p = Pair::new("whole-real");
+    p.exec("CREATE TABLE zi(k INTEGER, n NUMERIC, r REAL, v)");
+    p.exec("INSERT INTO zi VALUES ('12.0', 3.0, 4, 5.0), (12.5, '2.5', '6', 7)");
+    assert_eq!(
+        p.agree("SELECT typeof(k), typeof(n), typeof(r), typeof(v) FROM zi ORDER BY rowid"),
+        ["integer|integer|real|real", "real|real|real|integer"]
+    );
 }

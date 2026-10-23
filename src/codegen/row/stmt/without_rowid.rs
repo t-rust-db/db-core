@@ -228,6 +228,9 @@ pub(crate) fn emit_row_rewrite(
     Ok(())
 }
 
+/// The cursor `DELETE` and `UPDATE` open a `WITHOUT ROWID` table on.
+pub(crate) const TABLE_CURSOR: i32 = 0;
+
 /// The scan every `DELETE` and `UPDATE` of a `WITHOUT ROWID` table makes
 /// (#722), in two passes. The first walks the table and collects the key of
 /// every row `where_clause` keeps into an ephemeral table; the second
@@ -245,12 +248,12 @@ pub(crate) fn emit_two_pass<F>(
     scope: &Scope,
     where_clause: Option<&Expr>,
     key: &[usize],
-    table_cursor: i32,
     mut per_row: F,
 ) -> Result<(), CodegenError>
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, Label) -> Result<(), CodegenError>,
 {
+    let table_cursor = TABLE_CURSOR;
     let keys_cursor = reg.alloc_cursor();
     em.emit(Instruction {
         opcode: Opcode::OpenEphemeral,

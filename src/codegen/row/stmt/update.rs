@@ -503,7 +503,6 @@ fn compile_update_without_rowid(
         &scope,
         update.where_clause.as_ref(),
         &key,
-        TABLE_CURSOR,
         |em, reg, row_skip| {
             emit_update_row_body(
                 em,

@@ -194,7 +194,6 @@ fn compile_delete_without_rowid(
         &scope,
         delete.where_clause.as_ref(),
         &key,
-        TABLE_CURSOR,
         |em, _reg, _skip| {
             em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0).with_p5(OPFLAG_NCHANGE));
             Ok(())

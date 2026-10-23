@@ -276,15 +276,10 @@ fn on_conflict_replace_overwrites_the_conflicting_row() {
 }
 
 #[test]
-fn default_insert_conflict_action_reports_the_error_but_keeps_prior_rows_in_the_statement() {
-    // Real SQLite's default (`ABORT`) conflict action rolls back the
-    // *whole statement*, undoing (2, 200) too. db-core's own doc
-    // comment on this module says why that isn't true here yet: "no
-    // per-transaction/per-statement partial-rollback machinery at the
-    // VDBE layer" -- `ROLLBACK`/`FAIL`/`ABORT` all compile to the same
-    // single `Halt`, which stops the scan but doesn't undo writes
-    // already made earlier in the same statement. This test pins the
-    // current (documented-gap) behavior rather than the ideal one.
+fn default_insert_conflict_action_undoes_the_whole_statement() {
+    // `ABORT` rolls back the whole statement, (2, 200) too, as SQLite
+    // does: a statement that fails outside a transaction leaves nothing
+    // behind.
     let db = TempDb::new("abort");
     let mut e = open(&db);
     e.run_query("CREATE TABLE ab(id INTEGER PRIMARY KEY, v INTEGER)")
@@ -295,7 +290,7 @@ fn default_insert_conflict_action_reports_the_error_but_keeps_prior_rows_in_the_
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Execute);
     let rows = e.run_query("SELECT v FROM ab ORDER BY id").unwrap().rows;
-    assert_eq!(ints(&rows), vec![100, 200]);
+    assert_eq!(ints(&rows), vec![100]);
 }
 
 #[test]
@@ -378,15 +373,17 @@ fn insert_select_from_a_joined_source() {
 }
 
 #[test]
-fn without_rowid_table_is_rejected_at_insert_compile_time() {
-    // A file sqlite3 wrote: this engine no longer creates such tables.
+fn a_without_rowid_table_sqlite3_wrote_takes_an_insert() {
+    // A file sqlite3 wrote: this engine does not create such tables yet
+    // (`create_table_without_rowid_is_refused`), but it writes them.
     let db = TempDb::new("without-rowid");
     std::fs::copy("tests/fixtures/btrees/without_rowid.db", db.path())
         .expect("copy sqlite3 fixture");
     let mut e = open(&db);
-    let err = e.run_query("INSERT INTO t VALUES ('a', 'b')").unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Compile);
-    assert!(err.message.contains("WITHOUT ROWID"), "{}", err.message);
+    e.run_query("INSERT INTO t VALUES ('a', 'b')").unwrap();
+    let err = e.run_query("INSERT INTO t VALUES ('a', 'c')").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Execute);
+    assert!(err.message.contains("UNIQUE"), "{}", err.message);
 }
 
 #[test]
