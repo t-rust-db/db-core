@@ -35870,6 +35870,26 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_compression_zstd_bits_new_a171b6a9_2",
+    "file": "src/storage/parquet/compression/zstd/bits.rs",
+    "line": 136,
+    "decision": "last == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_bits_reload_a265ec2c",
+    "file": "src/storage/parquet/compression/zstd/bits.rs",
+    "line": 155,
+    "decision": "self.ptr >= bytes",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_compression_zstd_decoder_tests_inputs_b3f7b1a9",
     "file": "src/storage/parquet/compression/zstd/decoder_tests.rs",
     "line": 62,
@@ -35940,9 +35960,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_zstd_frame_wild_copy_2ac4c692",
+    "id": "storage_parquet_compression_zstd_frame_wild_copy_3f925096",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 147,
+    "line": 155,
+    "decision": "n > 16",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_frame_wild_copy_rest_2ac4c692",
+    "file": "src/storage/parquet/compression/zstd/frame.rs",
+    "line": 166,
     "decision": "i < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -35950,19 +35980,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_zstd_frame_copy_match_f4c4ef25",
+    "id": "storage_parquet_compression_zstd_frame_copy_match_c703174b",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 169,
-    "decision": "offset >= 16",
+    "line": 186,
+    "decision": "offset < 16",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_zstd_frame_copy_match_2ac4c692",
+    "id": "storage_parquet_compression_zstd_frame_copy_match_3f925096",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 172,
+    "line": 200,
+    "decision": "n > 16",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_frame_copy_match_rest_2ac4c692",
+    "file": "src/storage/parquet/compression/zstd/frame.rs",
+    "line": 212,
     "decision": "i < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -35970,9 +36010,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_zstd_frame_copy_match_45d8ecd1",
+    "id": "storage_parquet_compression_zstd_frame_copy_overlapping_45d8ecd1",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 196,
+    "line": 241,
     "decision": "let Some(slot) = window.get_mut(i.wrapping_add(offset))",
     "conditions": 1,
     "vectors_required": 2,
@@ -35982,7 +36022,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_1c4df617",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 221,
+    "line": 265,
     "decision": "frame.get(..4) != Some(&[0x28, 0xB5, 0x2F, 0xFD])",
     "conditions": 1,
     "vectors_required": 2,
@@ -35992,7 +36032,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_7580c8e4",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 229,
+    "line": 273,
     "decision": "descriptor & 0x03 != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36002,7 +36042,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_daba81b6",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 234,
+    "line": 278,
     "decision": "descriptor & 0x08 != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36012,7 +36052,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_c0a08cdb",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 239,
+    "line": 283,
     "decision": "match descriptor >> 6 {\n        0 => usize::from(single_segment),\n        1 => 2,\n        2 => 4,\n        _ => 8,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36022,7 +36062,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_191b710f",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 251,
+    "line": 295,
     "decision": "!content_size.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36032,7 +36072,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_11913b8c",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 258,
+    "line": 302,
     "decision": "content_size_bytes == 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -36042,7 +36082,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_56233ec5",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 264,
+    "line": 308,
     "decision": "value != size",
     "conditions": 1,
     "vectors_required": 2,
@@ -36052,7 +36092,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_edb75145",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 296,
+    "line": 340,
     "decision": "block_size > MAX_BLOCK",
     "conditions": 1,
     "vectors_required": 2,
@@ -36062,7 +36102,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_00462b19",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 299,
+    "line": 343,
     "decision": "match (h >> 1) & 3 {\n            0 => {\n                let raw = frame\n                    .get(pos..pos.saturating_add(block_size))\n                    .ok_or_else(|| corrupt(\"short raw block\"))?;\n                out.room(block_size)?;\n                out.buf\n                    .get_mut(out.op..out.op.wrapping_add(block_size))\n                    .ok_or_else(|| corrupt(\"output overrun\"))?\n                    .copy_from_slice(raw);\n                out.op = out.op.wrapping_add(block_size);\n                pos = pos.wrapping_add(block_size);\n            }\n            1 => {\n                let b = *frame.get(pos).ok_or_else(|| corrupt(\"short RLE block\"))?;\n                out.room(block_size)?;\n                out.buf\n                    .get_mut(out.op..out.op.wrapping_add(block_size))\n                    .ok_or_else(|| corrupt(\"output overrun\"))?\n                    .fill(b);\n                out.op = out.op.wrapping_add(block_size);\n                pos = pos.wrapping_add(1);\n            }\n            2 => {\n                let block = frame\n                    .get(pos..pos.saturating_add(block_size))\n                    .ok_or_else(|| corrupt(\"short compressed block\"))?;\n                compressed_block(block, &mut state, &mut out)?;\n                pos = pos.wrapping_add(block_size);\n            }\n            _ => return Err(corrupt(\"reserved block type\")),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36072,7 +36112,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_940e9574",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 331,
+    "line": 375,
     "decision": "last",
     "conditions": 1,
     "vectors_required": 2,
@@ -36082,7 +36122,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_2fbc9abc",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 335,
+    "line": 379,
     "decision": "out.op != size",
     "conditions": 1,
     "vectors_required": 2,
@@ -36092,7 +36132,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_536ddc3b",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 342,
+    "line": 386,
     "decision": "checksum",
     "conditions": 1,
     "vectors_required": 2,
@@ -36102,7 +36142,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_decode_12c30bd8",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 349,
+    "line": 393,
     "decision": "computed.get(..4) != Some(&stored[..])",
     "conditions": 1,
     "vectors_required": 2,
@@ -36112,7 +36152,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_e35548ae",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 379,
+    "line": 423,
     "decision": "kind < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -36122,7 +36162,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_0a4a08d4",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 381,
+    "line": 425,
     "decision": "match size_format {\n            0 | 2 => (1, usize::from(b0 >> 3)),\n            1 => (2, high | byte(1)? << 4),\n            _ => (3, high | byte(1)? << 4 | byte(2)? << 12),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36132,7 +36172,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_10e91ddf",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 386,
+    "line": 430,
     "decision": "regenerated > MAX_BLOCK",
     "conditions": 1,
     "vectors_required": 2,
@@ -36142,7 +36182,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_7fb7b375",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 389,
+    "line": 433,
     "decision": "kind == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36152,7 +36192,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_3e51b752",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 404,
+    "line": 448,
     "decision": "match size_format {\n        0 => (3, 10, 1),\n        1 => (3, 10, 4),\n        2 => (4, 14, 4),\n        _ => (5, 18, 4),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36162,7 +36202,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_10e91ddf_2",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 419,
+    "line": 463,
     "decision": "regenerated > MAX_BLOCK",
     "conditions": 1,
     "vectors_required": 2,
@@ -36172,7 +36212,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_7fb7b60f",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 425,
+    "line": 469,
     "decision": "kind == 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -36182,7 +36222,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_literals_section_0acabcba",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 437,
+    "line": 481,
     "decision": "streams == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -36190,9 +36230,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_zstd_frame_read_table_39b026fa",
+    "id": "storage_parquet_compression_zstd_frame_read_table_679dd434",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 480,
+    "line": 523,
+    "decision": "mode != 3",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_frame_read_entries_39b026fa",
+    "file": "src/storage/parquet/compression/zstd/frame.rs",
+    "line": 540,
     "decision": "match mode {\n        0 => {\n            *slot = Some(fse::Table::build(default, default_log)?);\n            Ok(0)\n        }\n        1 => {\n            let symbol = *data.first().ok_or_else(|| corrupt(\"short RLE table\"))?;\n            if usize::from(symbol) >= default.len() {\n                return Err(corrupt(\"RLE symbol out of range\"));\n            }\n            *slot = Some(fse::Table::rle(symbol));\n            Ok(1)\n        }\n        2 => {\n            let (table, used) = fse::Table::read(data, max_log, default.len().saturating_sub(1))?;\n            *slot = Some(table);\n            Ok(used)\n        }\n        _ => {\n            if slot.is_none() {\n                return Err(corrupt(\"repeated sequence table without a previous one\"));\n            }\n            Ok(0)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36200,9 +36250,9 @@
     "wildcard_risk": true
   },
   {
-    "id": "storage_parquet_compression_zstd_frame_read_table_e47b2e20",
+    "id": "storage_parquet_compression_zstd_frame_read_entries_e47b2e20",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 487,
+    "line": 547,
     "decision": "usize::from(symbol) >= default.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36210,9 +36260,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_zstd_frame_read_table_4536ab16",
+    "id": "storage_parquet_compression_zstd_frame_read_entries_4536ab16",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 499,
+    "line": 559,
     "decision": "slot.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36222,7 +36272,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_e6071482",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 517,
+    "line": 577,
     "decision": "match b0 {\n        0 => {\n            out.room(state.literals_len)?;\n            return out.wild_copy(&state.literals, 0, state.literals_len);\n        }\n        1..=127 => (usize::from(b0), 1),\n        128..=254 => ((usize::from(b0).wrapping_sub(128) << 8) | byte(1)?, 2),\n        255 => ((byte(1)? | byte(2)? << 8).wrapping_add(0x7F00), 3),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36230,9 +36280,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_compression_zstd_frame_sequences_section_f02b271f",
+    "file": "src/storage/parquet/compression/zstd/frame.rs",
+    "line": 652,
+    "decision": "of_code\n            .wrapping_add(ml_bits)\n            .wrapping_add(ll_bits)\n            .wrapping_add(updates)\n            > 56",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_38cc1dbc",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 591,
+    "line": 662,
     "decision": "lit_len > literals_len.saturating_sub(lit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36242,7 +36302,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_cfb935c3",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 598,
+    "line": 669,
     "decision": "offset.wrapping_sub(1) >= out.op",
     "conditions": 1,
     "vectors_required": 2,
@@ -36252,7 +36312,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_7aa3dce4",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 602,
+    "line": 673,
     "decision": "i.wrapping_add(1) < count",
     "conditions": 1,
     "vectors_required": 2,
@@ -36262,7 +36322,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_sequences_section_9942ad92",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 612,
+    "line": 680,
     "decision": "!br.finished()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36272,7 +36332,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_1457a876",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 625,
+    "line": 693,
     "decision": "value > 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -36282,7 +36342,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_61296e5a",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 630,
+    "line": 698,
     "decision": "lit_len == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36292,7 +36352,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_4b284295",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 635,
+    "line": 703,
     "decision": "match index {\n        0 => return Ok(reps[0]),\n        1 => reps[1],\n        2 => reps[2],\n        _ => reps[0]\n            .checked_sub(1)\n            .ok_or_else(|| corrupt(\"repeat offset underflow\"))?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36302,7 +36362,7 @@
   {
     "id": "storage_parquet_compression_zstd_frame_resolve_offset_c3207d60",
     "file": "src/storage/parquet/compression/zstd/frame.rs",
-    "line": 643,
+    "line": 711,
     "decision": "index == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -36310,9 +36370,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_compression_zstd_fse_assign_values_91067b34",
+    "file": "src/storage/parquet/compression/zstd/fse.rs",
+    "line": 54,
+    "decision": "match codes {\n                Some(codes) => *codes\n                    .get(symbol)\n                    .ok_or_else(|| corrupt(\"sequence code too large\"))?,\n                None => (0, u32::from(entry.symbol)),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_compression_zstd_fse_build_8cec341e",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 56,
+    "line": 77,
     "decision": "count == -1",
     "conditions": 1,
     "vectors_required": 2,
@@ -36322,7 +36392,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_build_3630827a",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 80,
+    "line": 101,
     "decision": "i64::try_from(position).unwrap_or(i64::MAX) < high",
     "conditions": 1,
     "vectors_required": 2,
@@ -36332,7 +36402,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_build_46901326",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 86,
+    "line": 107,
     "decision": "position != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36342,7 +36412,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_build_cfacbd33",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 95,
+    "line": 116,
     "decision": "state == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36352,7 +36422,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_290dc2dd",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 119,
+    "line": 140,
     "decision": "log > max_log",
     "conditions": 1,
     "vectors_required": 2,
@@ -36362,7 +36432,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_36eb13bc",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 126,
+    "line": 147,
     "decision": "remaining > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -36372,7 +36442,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_45353679",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 127,
+    "line": 148,
     "decision": "norm.len() > max_symbol",
     "conditions": 1,
     "vectors_required": 2,
@@ -36382,7 +36452,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_b590ffb0",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 136,
+    "line": 157,
     "decision": "(value & threshold.wrapping_sub(1)) < max",
     "conditions": 1,
     "vectors_required": 2,
@@ -36392,7 +36462,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_5bc1d6bd",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 141,
+    "line": 162,
     "decision": "count >= threshold",
     "conditions": 1,
     "vectors_required": 2,
@@ -36402,7 +36472,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_faaf46ac",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 149,
+    "line": 170,
     "decision": "count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36412,7 +36482,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_b7180ac2",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 156,
+    "line": 177,
     "decision": "repeat != 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -36422,7 +36492,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_45353679_2",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 159,
+    "line": 180,
     "decision": "norm.len() > max_symbol",
     "conditions": 1,
     "vectors_required": 2,
@@ -36432,7 +36502,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_fd3b368d",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 166,
+    "line": 187,
     "decision": "remaining < threshold",
     "conditions": 1,
     "vectors_required": 2,
@@ -36442,7 +36512,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_d90800b3",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 173,
+    "line": 194,
     "decision": "remaining != 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -36452,7 +36522,7 @@
   {
     "id": "storage_parquet_compression_zstd_fse_read_951a057b",
     "file": "src/storage/parquet/compression/zstd/fse.rs",
-    "line": 176,
+    "line": 197,
     "decision": "br.bytes_used() > data.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36500,9 +36570,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_compression_zstd_huffman_decode_9942ad92",
+    "id": "storage_parquet_compression_zstd_huffman_finish_9942ad92",
     "file": "src/storage/parquet/compression/zstd/huffman.rs",
-    "line": 96,
+    "line": 161,
     "decision": "!br.finished()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36512,7 +36582,7 @@
   {
     "id": "storage_parquet_compression_zstd_huffman_fse_weights_af45fbca",
     "file": "src/storage/parquet/compression/zstd/huffman.rs",
-    "line": 122,
+    "line": 186,
     "decision": "br.overflowed()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36522,7 +36592,7 @@
   {
     "id": "storage_parquet_compression_zstd_huffman_fse_weights_af45fbca_2",
     "file": "src/storage/parquet/compression/zstd/huffman.rs",
-    "line": 130,
+    "line": 194,
     "decision": "br.overflowed()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36532,7 +36602,7 @@
   {
     "id": "storage_parquet_compression_zstd_huffman_fse_weights_541ad844",
     "file": "src/storage/parquet/compression/zstd/huffman.rs",
-    "line": 134,
+    "line": 198,
     "decision": "weights.len() > 255",
     "conditions": 1,
     "vectors_required": 2,
@@ -36542,7 +36612,7 @@
   {
     "id": "storage_parquet_compression_zstd_huffman_fse_weights_541ad844_2",
     "file": "src/storage/parquet/compression/zstd/huffman.rs",
-    "line": 140,
+    "line": 204,
     "decision": "weights.len() > 255",
     "conditions": 1,
     "vectors_required": 2,
