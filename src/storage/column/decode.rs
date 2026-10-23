@@ -178,14 +178,24 @@ pub fn decode_column_full(
         // consume. A column with no dictionary page, or one that falls
         // back to `PLAIN` partway through (`Ok(None)`), decodes into
         // `Column::Str` directly instead (#461).
-        _ => rg.read_string_column_dictionary_indices(index).and_then(
-            |maybe_dict| match maybe_dict {
-                Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),
+        _ => match rg.read_string_column_dictionary_indices(index)? {
+            Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),
+            // #731: an all-`PLAIN` chunk lands in `Column::Str`'s buffer
+            // with no `String` per row.
+            None => match rg.read_plain_string_column(index)? {
+                Some((offsets, data, present)) => {
+                    let valid = validity(&present, offsets.len().saturating_sub(1));
+                    Ok(Decoded::Column(Column::Str {
+                        offsets,
+                        data,
+                        valid,
+                    }))
+                }
                 None => rg
                     .read_string_column(index)
                     .map(|col| Decoded::Column(str_column(col))),
             },
-        ),
+        },
     }
 }
 
@@ -364,6 +374,62 @@ mod tests {
     fn hex_is_lowercase_two_digits_per_byte() {
         assert_eq!(hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
         assert_eq!(hex(&[]), "");
+    }
+
+    #[test]
+    fn a_plain_string_chunk_decodes_into_str_matching_the_value_fallback() {
+        // #731: nullable and REQUIRED chunks, empty strings, a NULL-only
+        // chunk, several row groups, a non-ASCII value.
+        use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+        use crate::storage::parquet::writer::{ParquetWriter, WriterOptions};
+        let cases: Vec<(bool, Vec<Option<String>>)> = vec![
+            (
+                true,
+                (0..50)
+                    .map(|i| match i % 4 {
+                        0 => None,
+                        1 => Some(String::new()),
+                        2 => Some(format!("wést {i}")),
+                        _ => Some(format!("note {i}")),
+                    })
+                    .collect(),
+            ),
+            (false, (0..50).map(|i| Some(format!("v{i}"))).collect()),
+            (true, vec![None; 7]),
+        ];
+        for (nullable, rows) in cases {
+            let options = WriterOptions {
+                dictionary: false,
+                row_group_rows: 8,
+                ..WriterOptions::default()
+            };
+            let mut w = ParquetWriter::new(
+                Vec::new(),
+                vec![ColumnSpec::new("s", ColumnType::Utf8, nullable)],
+                options,
+            )
+            .unwrap();
+            w.write_columns(vec![ColumnValues::Utf8(rows.clone())])
+                .unwrap();
+            let (bytes, _) = w.finish().unwrap();
+            let file = crate::storage::ParquetFile::open(&bytes).unwrap();
+            let mut at = 0;
+            for g in 0..file.num_row_groups() {
+                let rg = file.row_group(g).unwrap();
+                let Decoded::Column(typed) =
+                    decode_column_full(&rg, 0, PhysicalType::ByteArray).unwrap();
+                assert!(matches!(typed, Column::Str { .. }));
+                let fallback = str_column(rg.read_string_column(0).unwrap());
+                let n = rg.read_string_column(0).unwrap().len();
+                for i in 0..n {
+                    assert_eq!(typed.get(i), fallback.get(i));
+                    assert_eq!(typed.is_null(i), fallback.is_null(i));
+                    assert_eq!(typed.is_null(i), rows[at + i].is_none());
+                }
+                at += n;
+            }
+            assert_eq!(at, rows.len());
+        }
     }
 
     #[test]

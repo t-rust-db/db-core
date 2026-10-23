@@ -227,6 +227,7 @@ const READERS: &[Reader] = &[
     |rg, c, _| drop(rg.read_plain_fixed_column::<i32, 4>(c, i32::from_le_bytes)), // 22
     |rg, c, p| drop(rg.read_plain_fixed_column_at::<i64, 8>(c, i64::from_le_bytes, p)), // 23
     |rg, c, p| drop(rg.read_plain_fixed_column_at::<f32, 4>(c, f32::from_le_bytes, p)), // 24
+    |rg, c, _| drop(rg.read_plain_string_column(c)),         // 25
 ];
 
 /// The readers a caller would use for a column of `physical_type`
@@ -238,7 +239,7 @@ fn readers_for(physical_type: PhysicalType) -> &'static [usize] {
         PhysicalType::Double => &[2, 12, 17, 21, 23],
         PhysicalType::Float => &[3, 18, 22, 24],
         PhysicalType::Boolean => &[4, 13, 19],
-        PhysicalType::ByteArray => &[5, 6, 14, 20],
+        PhysicalType::ByteArray => &[5, 6, 14, 20, 25],
         PhysicalType::FixedLenByteArray => &[7, 10],
         PhysicalType::Int96 => &[8, 9],
         PhysicalType::Unknown(_) => &[],

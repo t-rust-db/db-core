@@ -182,6 +182,9 @@ impl From<CompressionError> for FileError {
 /// Result of reading a Parquet file.
 pub type Result<T> = std::result::Result<T, FileError>;
 
+/// A `PLAIN` string chunk as `Column::Str`'s `(offsets, data, present)` (#731).
+pub type PlainStrings = (Vec<u32>, String, Vec<bool>);
+
 /// A dictionary-encoded column's dictionary plus one raw index per row
 /// (`None` for nulls) -- see `read_*_column_dictionary_indices`.
 pub type DictionaryIndices<T> = (Vec<T>, Vec<Option<u32>>);
@@ -722,6 +725,45 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             )?;
         }
         Ok(Some((values, present)))
+    }
+
+    /// Decodes a string column chunk straight into `Column::Str`'s
+    /// layout (#731): `Ok(Some((offsets, data, present)))` with one offset
+    /// per row plus the leading `0`, every value's bytes in one `data`
+    /// buffer, and `present` as in [`Self::read_plain_fixed_column`]. Only
+    /// for chunks whose every data page is `PLAIN`-encoded (`Ok(None)` at a
+    /// dictionary page or another encoding, for the caller to fall back to
+    /// [`Self::read_string_column`]). UTF-8 is validated once over the
+    /// whole buffer; see [`reader::read_plain_strings`].
+    pub fn read_plain_string_column(&self, column_index: usize) -> Result<Option<PlainStrings>> {
+        let mut pages = self.pages(column_index)?;
+        let max_def_level = self.file.max_definition_level(column_index);
+
+        let mut data = Vec::new();
+        let mut offsets = vec![0u32];
+        let mut present = Vec::new();
+        while let Some((header, compressed)) = pages.next()? {
+            let PageType::Data(data_page_header) = header.page_type else {
+                return Ok(None);
+            };
+            if data_page_header.encoding != page::Encoding::Plain {
+                return Ok(None);
+            }
+            let page_body = pages.body(compressed, header.uncompressed_page_size)?;
+            reader::read_plain_strings(
+                &page_body,
+                &data_page_header,
+                max_def_level,
+                &mut data,
+                &mut offsets,
+                &mut present,
+            )?;
+        }
+        if u32::try_from(data.len()).is_err() {
+            return Err(FileError::ChunkOutOfBounds);
+        }
+        let data = String::from_utf8(data).map_err(|_| ReadError::InvalidUtf8)?;
+        Ok(Some((offsets, data, present)))
     }
 
     /// The named positions of a fixed-width primitive column chunk,
