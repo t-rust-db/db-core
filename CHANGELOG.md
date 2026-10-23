@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.168.1] - 2026-10-23
+
+### Changed
+
+- **A `PLAIN` string column chunk decodes straight into `Column::Str`** (#731). A chunk with no dictionary (or one an encoder wrote as `PLAIN`, such as a high-cardinality `note`) used to allocate one `String` per row and then copy it into the column's buffer. The values now go into one buffer as they are read, and UTF-8 is validated once over the whole buffer plus a check that no value starts mid-character, which together make each value valid on its own. A value that splits a multi-byte character is still `InvalidUtf8`, a truncated prefix or value `UnexpectedEof`. A chunk with a dictionary page, or any other encoding, takes the earlier path. The positional reader is unchanged.
+
 ## [0.168.0] - 2026-10-23
 
 ### Added
