@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.168.0] - 2026-10-23
+
+### Added
+
+- **`INSERT`, `UPDATE` and `DELETE` on `WITHOUT ROWID` tables that have no secondary index** (#722, part of #696). A table made by sqlite3 can now be written, not only read: rows go into its index b-tree in key order, the `PRIMARY KEY` columns are `NOT NULL`, a repeated key fails with `UNIQUE constraint failed: t.a, t.b` (and `INSERT OR IGNORE`/`OR REPLACE` behave as in sqlite3), a key is probed with the column's affinity, and an `UPDATE` that changes a key deletes and re-inserts the row. The differential tests check both files with `PRAGMA integrity_check` and read each one back with the other engine. A table with a secondary index, an upsert, `INSERT ... SELECT` from the table being written, a `DESC` or non-`BINARY` key, and `CREATE TABLE ... WITHOUT ROWID` are still refused, each with its own message; they land in the next pull requests.
+
+### Fixed
+
+- **A statement that failed outside a transaction kept the rows it had already written.** `INSERT INTO t VALUES (1, 'a'), (9, 'dup')` over an existing key 9 failed, but row 1 stayed and was flushed with the next statement; sqlite3 undoes the whole statement. The pager's pending writes are now discarded when a statement fails in autocommit mode.
+- **A whole-number REAL was stored as a REAL under INTEGER or NUMERIC affinity.** `INSERT INTO t(k INTEGER) VALUES ('12.0')` stored `12.0` where sqlite3 stores the integer `12`, so the key differed in a `PRIMARY KEY` and in the file. Affinity now narrows a REAL that is a whole number and fits an `i64`.
+
 ## [0.167.2] - 2026-10-22
 
 ### Fixed
