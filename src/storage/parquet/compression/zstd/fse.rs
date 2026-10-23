@@ -10,6 +10,9 @@ pub(super) struct Entry {
     pub(super) symbol: u8,
     pub(super) bits: u8,
     pub(super) base: u16,
+    /// A sequence table's value: its extra-bit count in the top byte, its
+    /// baseline below ([`Table::assign_values`]); zero in other tables.
+    pub(super) value: u32,
 }
 
 /// A decoding table of `1 << log` states.
@@ -37,8 +40,26 @@ impl Table {
                 symbol,
                 bits: 0,
                 base: 0,
+                value: 0,
             }],
         }
+    }
+
+    /// Sets each entry's value from its symbol's `(baseline, extra bits)`
+    /// in `codes`; with none, the symbol is an offset code, whose baseline
+    /// is added as `1 << code` by the reader.
+    pub(super) fn assign_values(&mut self, codes: Option<&[(u32, u32)]>) -> Result<()> {
+        for entry in &mut self.entries {
+            let symbol = usize::from(entry.symbol);
+            let (base, bits) = match codes {
+                Some(codes) => *codes
+                    .get(symbol)
+                    .ok_or_else(|| corrupt("sequence code too large"))?,
+                None => (0, u32::from(entry.symbol)),
+            };
+            entry.value = bits.wrapping_shl(24) | base;
+        }
+        Ok(())
     }
 
     /// The decoding table of normalized counts `norm` at accuracy `log`

@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.169.0] - 2026-10-23
+
+### Changed
+
+- **The ZSTD decoder is about 30% faster** (#733). The sequence loop reads bits from a 64-bit container reloaded once per sequence instead of a checked load per read, each sequence table entry carries its value baseline and extra-bit count so no code-table lookup follows, the first 16 bytes of a literal run or match are copied unconditionally with longer ones out of line, and the four Huffman literal streams decode in alternating groups of five symbols so their dependency chains overlap. On a 1 MB text page (level 3) 905 -> 1155 MB/s against libzstd's 1920; on an 8 MB log file 800 -> 1060 MB/s. No `unsafe`, no new dependencies.
+
 ## [0.168.1] - 2026-10-23
 
 ### Changed

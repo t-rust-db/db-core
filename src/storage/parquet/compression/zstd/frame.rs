@@ -7,7 +7,7 @@
 //! ever takes the over-write of a copy's last chunk; every copy is checked
 //! against the declared size first.
 
-use super::bits::Backward;
+use super::bits::Stream;
 use super::fse::{self, LL_DEFAULT, ML_DEFAULT, OF_DEFAULT};
 use super::huffman;
 use super::xxhash;
@@ -143,7 +143,26 @@ impl Out {
     /// [`Self::room`].
     #[inline(always)]
     fn wild_copy(&mut self, src: &[u8], from: usize, n: usize) -> Result<()> {
-        let mut i = 0usize;
+        // Most runs fit the first chunk.
+        let chunk = src
+            .get(from..from.saturating_add(16))
+            .and_then(|c| <[u8; 16]>::try_from(c).ok())
+            .ok_or_else(|| corrupt("literals overrun"))?;
+        self.buf
+            .get_mut(self.op..self.op.saturating_add(16))
+            .ok_or_else(|| corrupt("output overrun"))?
+            .copy_from_slice(&chunk);
+        if n > 16 {
+            self.wild_copy_rest(src, from, n)?;
+        }
+        self.op = self.op.wrapping_add(n);
+        Ok(())
+    }
+
+    /// [`Self::wild_copy`]'s chunks past the first.
+    #[inline(never)]
+    fn wild_copy_rest(&mut self, src: &[u8], from: usize, n: usize) -> Result<()> {
+        let mut i = 16usize;
         while i < n {
             let s = from.wrapping_add(i);
             let d = self.op.wrapping_add(i);
@@ -157,7 +176,6 @@ impl Out {
                 .copy_from_slice(&chunk);
             i = i.wrapping_add(16);
         }
-        self.op = self.op.wrapping_add(n);
         Ok(())
     }
 
@@ -165,40 +183,66 @@ impl Out {
     /// checked with [`Self::room`].
     #[inline(always)]
     fn copy_match(&mut self, offset: usize, n: usize) -> Result<()> {
-        let src = self.op.wrapping_sub(offset);
-        if offset >= 16 {
-            // Each chunk reads only bytes written before it.
-            let mut i = 0usize;
-            while i < n {
-                let s = src.wrapping_add(i);
-                let d = self.op.wrapping_add(i);
-                let chunk = self
-                    .buf
-                    .get(s..s.wrapping_add(16))
-                    .and_then(|c| <[u8; 16]>::try_from(c).ok())
-                    .ok_or_else(|| corrupt("match overrun"))?;
-                self.buf
-                    .get_mut(d..d.wrapping_add(16))
-                    .ok_or_else(|| corrupt("output overrun"))?
-                    .copy_from_slice(&chunk);
-                i = i.wrapping_add(16);
-            }
-            self.op = self.op.wrapping_add(n);
-        } else {
-            // Overlapping: the match repeats its own output, byte by byte,
-            // inside one window checked once (`offset + n` long).
-            let window = self
-                .buf
-                .get_mut(src..self.op.saturating_add(n))
-                .ok_or_else(|| corrupt("match overrun"))?;
-            for i in 0..n {
-                let b = window.get(i).copied().unwrap_or(0);
-                if let Some(slot) = window.get_mut(i.wrapping_add(offset)) {
-                    *slot = b;
-                }
-            }
-            self.op = self.op.wrapping_add(n);
+        if offset < 16 {
+            return self.copy_overlapping(offset, n);
         }
+        // Each chunk reads only bytes written before it.
+        let src = self.op.wrapping_sub(offset);
+        let chunk = self
+            .buf
+            .get(src..src.wrapping_add(16))
+            .and_then(|c| <[u8; 16]>::try_from(c).ok())
+            .ok_or_else(|| corrupt("match overrun"))?;
+        self.buf
+            .get_mut(self.op..self.op.saturating_add(16))
+            .ok_or_else(|| corrupt("output overrun"))?
+            .copy_from_slice(&chunk);
+        if n > 16 {
+            self.copy_match_rest(offset, n)?;
+        }
+        self.op = self.op.wrapping_add(n);
+        Ok(())
+    }
+
+    /// [`Self::copy_match`]'s chunks past the first, `offset` >= 16.
+    #[inline(never)]
+    fn copy_match_rest(&mut self, offset: usize, n: usize) -> Result<()> {
+        let src = self.op.wrapping_sub(offset);
+        let mut i = 16usize;
+        while i < n {
+            let s = src.wrapping_add(i);
+            let d = self.op.wrapping_add(i);
+            let chunk = self
+                .buf
+                .get(s..s.wrapping_add(16))
+                .and_then(|c| <[u8; 16]>::try_from(c).ok())
+                .ok_or_else(|| corrupt("match overrun"))?;
+            self.buf
+                .get_mut(d..d.wrapping_add(16))
+                .ok_or_else(|| corrupt("output overrun"))?
+                .copy_from_slice(&chunk);
+            i = i.wrapping_add(16);
+        }
+        Ok(())
+    }
+
+    /// A match that overlaps itself (`offset` < 16): it repeats its own
+    /// output, byte by byte, inside one window checked once (`offset + n`
+    /// long).
+    #[inline(never)]
+    fn copy_overlapping(&mut self, offset: usize, n: usize) -> Result<()> {
+        let src = self.op.wrapping_sub(offset);
+        let window = self
+            .buf
+            .get_mut(src..self.op.saturating_add(n))
+            .ok_or_else(|| corrupt("match overrun"))?;
+        for i in 0..n {
+            let b = window.get(i).copied().unwrap_or(0);
+            if let Some(slot) = window.get_mut(i.wrapping_add(offset)) {
+                *slot = b;
+            }
+        }
+        self.op = self.op.wrapping_add(n);
         Ok(())
     }
 }
@@ -459,10 +503,7 @@ fn literals_section(block: &[u8], state: &mut State) -> Result<usize> {
         let (o1, o) = state.literals.split_at_mut(per.min(regenerated));
         let (o2, o) = o.split_at_mut(per.min(o.len()));
         let (o3, o4) = o.split_at_mut(per.min(o.len()));
-        table.decode(a, o1)?;
-        table.decode(b, o2)?;
-        table.decode(c, o3)?;
-        table.decode(d, o4)?;
+        table.decode4([a, b, c, d], [o1, o2, o3, o4])?;
     }
     Ok(header.saturating_add(compressed))
 }
@@ -470,6 +511,25 @@ fn literals_section(block: &[u8], state: &mut State) -> Result<usize> {
 /// One of the three sequence tables, per its compression mode; returns
 /// the bytes its description took.
 fn read_table(
+    mode: u8,
+    data: &[u8],
+    slot: &mut Option<fse::Table>,
+    default: &[i16],
+    default_log: u32,
+    max_log: u32,
+    codes: Option<&[(u32, u32)]>,
+) -> Result<usize> {
+    let used = read_entries(mode, data, slot, default, default_log, max_log)?;
+    if mode != 3 {
+        slot.as_mut()
+            .ok_or_else(|| corrupt("missing sequence table"))?
+            .assign_values(codes)?;
+    }
+    Ok(used)
+}
+
+/// [`read_table`] before the table's values are assigned.
+fn read_entries(
     mode: u8,
     data: &[u8],
     slot: &mut Option<fse::Table>,
@@ -538,6 +598,7 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
         &LL_DEFAULT,
         6,
         9,
+        Some(&LL_CODES),
     )?);
     pos = pos.wrapping_add(read_table(
         (modes >> 4) & 3,
@@ -546,6 +607,7 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
         &OF_DEFAULT,
         5,
         8,
+        None,
     )?);
     pos = pos.wrapping_add(read_table(
         (modes >> 2) & 3,
@@ -554,16 +616,17 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
         &ML_DEFAULT,
         6,
         9,
+        Some(&ML_CODES),
     )?);
     let (Some(ll), Some(of), Some(ml)) = (&state.ll, &state.of, &state.ml) else {
         return Err(corrupt("missing sequence tables"));
     };
     let stream = data.get(pos..).ok_or_else(|| corrupt("short sequences"))?;
-    let mut br = Backward::new(stream).ok_or_else(|| corrupt("bad sequence stream"))?;
+    let mut br = Stream::new(stream).ok_or_else(|| corrupt("bad sequence stream"))?;
     let state_of = |v: u64| usize::try_from(v).unwrap_or(usize::MAX);
-    let mut ll_state = state_of(br.read(stream, ll.log));
-    let mut of_state = state_of(br.read(stream, of.log));
-    let mut ml_state = state_of(br.read(stream, ml.log));
+    let mut ll_state = state_of(br.read(ll.log));
+    let mut of_state = state_of(br.read(of.log));
+    let mut ml_state = state_of(br.read(ml.log));
     let literals = &state.literals;
     let literals_len = state.literals_len;
     let reps = &mut state.reps;
@@ -572,21 +635,29 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
         let lle = ll.entry(ll_state)?;
         let mle = ml.entry(ml_state)?;
         let ofe = of.entry(of_state)?;
-        // Extra bits come in this order: offset, match length, literals.
-        // An offset code is at most 28: tables are read with that bound.
-        let of_code = u32::from(ofe.symbol);
-        let offset_value = state_of(
-            1u64.wrapping_shl(of_code)
-                .wrapping_add(br.read(stream, of_code)),
-        );
-        let &(ml_base, ml_bits) = ML_CODES
-            .get(usize::from(mle.symbol))
-            .ok_or_else(|| corrupt("match-length code too large"))?;
-        let match_len = state_of(u64::from(ml_base).wrapping_add(br.read(stream, ml_bits)));
-        let &(ll_base, ll_bits) = LL_CODES
-            .get(usize::from(lle.symbol))
-            .ok_or_else(|| corrupt("literals-length code too large"))?;
-        let lit_len = state_of(u64::from(ll_base).wrapping_add(br.read(stream, ll_bits)));
+        // Extra bits come in this order: offset, match length, literals,
+        // then the three state updates. An offset code is at most 28:
+        // tables are read with that bound.
+        let of_code = ofe.value >> 24;
+        let ml_bits = mle.value >> 24;
+        let ll_bits = lle.value >> 24;
+        let updates = u32::from(lle.bits)
+            .wrapping_add(u32::from(mle.bits))
+            .wrapping_add(u32::from(ofe.bits));
+        br.reload(stream);
+        let offset_value = state_of(1u64.wrapping_shl(of_code).wrapping_add(br.read(of_code)));
+        let match_len = state_of(u64::from(mle.value & 0xFF_FFFF).wrapping_add(br.read(ml_bits)));
+        // The reload holds 56 bits: the rest, at most 16 + 26, may need
+        // another.
+        if of_code
+            .wrapping_add(ml_bits)
+            .wrapping_add(ll_bits)
+            .wrapping_add(updates)
+            > 56
+        {
+            br.reload(stream);
+        }
+        let lit_len = state_of(u64::from(lle.value & 0xFF_FFFF).wrapping_add(br.read(ll_bits)));
         let offset = resolve_offset(reps, offset_value, lit_len)?;
         if lit_len > literals_len.saturating_sub(lit) {
             return Err(corrupt("sequence past the literals"));
@@ -601,12 +672,9 @@ fn sequences_section(data: &[u8], state: &mut State, out: &mut Out) -> Result<()
         out.copy_match(offset, match_len)?;
         if i.wrapping_add(1) < count {
             // States update in this order: literals, match length, offset.
-            ll_state =
-                usize::from(lle.base).wrapping_add(state_of(br.read(stream, u32::from(lle.bits))));
-            ml_state =
-                usize::from(mle.base).wrapping_add(state_of(br.read(stream, u32::from(mle.bits))));
-            of_state =
-                usize::from(ofe.base).wrapping_add(state_of(br.read(stream, u32::from(ofe.bits))));
+            ll_state = usize::from(lle.base).wrapping_add(state_of(br.read(u32::from(lle.bits))));
+            ml_state = usize::from(mle.base).wrapping_add(state_of(br.read(u32::from(mle.bits))));
+            of_state = usize::from(ofe.base).wrapping_add(state_of(br.read(u32::from(ofe.bits))));
         }
     }
     if !br.finished() {
