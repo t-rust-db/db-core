@@ -52750,9 +52750,79 @@
     "wildcard_risk": false
   },
   {
+    "id": "vm_like_new_3366051e",
+    "file": "src/vm/like.rs",
+    "line": 127,
+    "decision": "i > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_like_new_2730a306",
+    "file": "src/vm/like.rs",
+    "line": 128,
+    "decision": "k > 0 && n.get(k) != Some(b)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_like_new_22d76c85",
+    "file": "src/vm/like.rs",
+    "line": 131,
+    "decision": "n.get(k) == Some(b)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_like_find_8db66b46",
+    "file": "src/vm/like.rs",
+    "line": 150,
+    "decision": "k == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_like_find_b69b4ae3",
+    "file": "src/vm/like.rs",
+    "line": 156,
+    "decision": "n.get(k) == Some(&b)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_like_find_32a3fc1c",
+    "file": "src/vm/like.rs",
+    "line": 159,
+    "decision": "k == n.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_like_find_fbf5f7a2",
+    "file": "src/vm/like.rs",
+    "line": 162,
+    "decision": "k > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "vm_like_segments_match_c210b42f",
     "file": "src/vm/like.rs",
-    "line": 118,
+    "line": 180,
     "decision": "anchored_start && anchored_end && rest.is_empty()",
     "conditions": 3,
     "vectors_required": 4,
@@ -52762,7 +52832,7 @@
   {
     "id": "vm_like_segments_match_cf6bf953",
     "file": "src/vm/like.rs",
-    "line": 121,
+    "line": 183,
     "decision": "anchored_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -52770,30 +52840,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_like_segments_match_d6a8db1f",
+    "id": "vm_like_segments_match_c0b4c575",
     "file": "src/vm/like.rs",
-    "line": 122,
-    "decision": "!text.starts_with(first.as_str())",
+    "line": 184,
+    "decision": "!text.starts_with(first.needle.as_str())",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "vm_like_segments_match_f2e8e484",
+    "id": "vm_like_segments_match_f9635de2",
     "file": "src/vm/like.rs",
-    "line": 129,
-    "decision": "match (anchored_end, middle.split_last()) {\n        (true, Some((last, middle))) => {\n            if !text.ends_with(last.as_str()) {\n                return false;\n            }\n            let end = text.len().saturating_sub(last.len());\n            if end < pos {\n                return false;\n            }\n            (end, middle)\n        }\n        _ => (text.len(), middle),\n    }",
+    "line": 191,
+    "decision": "match (anchored_end, middle.split_last()) {\n        (true, Some((last, middle))) => {\n            if !text.ends_with(last.needle.as_str()) {\n                return false;\n            }\n            let end = text.len().saturating_sub(last.needle.len());\n            if end < pos {\n                return false;\n            }\n            (end, middle)\n        }\n        _ => (text.len(), middle),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "vm_like_segments_match_7bb13847",
+    "id": "vm_like_segments_match_887b10ca",
     "file": "src/vm/like.rs",
-    "line": 131,
-    "decision": "!text.ends_with(last.as_str())",
+    "line": 193,
+    "decision": "!text.ends_with(last.needle.as_str())",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -52802,7 +52872,7 @@
   {
     "id": "vm_like_segments_match_eefe74b5",
     "file": "src/vm/like.rs",
-    "line": 135,
+    "line": 197,
     "decision": "end < pos",
     "conditions": 1,
     "vectors_required": 2,

@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.169.2] - 2026-10-24
+
+### Changed
+
+- **`LIKE`/`ILIKE`/`GLOB` build each literal segment's search table once per pattern, not once per row** (#732). `str::find` rebuilt its searcher on every call, which a profile of `WHERE note LIKE '%host 42%'` over 20M rows put at about 17% of all CPU. Each segment now keeps a linear-time search table built in `Matcher::new`, so an adversarial pattern such as `a…ab` against `aaaa…` stays linear. Results are unchanged.
+
 ## [0.169.1] - 2026-10-24
 
 ### Fixed

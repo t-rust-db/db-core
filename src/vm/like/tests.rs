@@ -116,3 +116,45 @@ fn mcdc__vm_like_segments_match_c210b42f__v3_the_empty_pattern_matches_the_empty
 fn mcdc__vm_like_segments_match_c210b42f__v4_the_empty_pattern_refuses_other_text() {
     assert!(!segments_match("x", &[], true, true));
 }
+
+// vm_like_new_2730a306: the failure-table build's fallback loop,
+// `k > 0 && n.get(k) != Some(b)`.
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__vm_like_new_2730a306__v1_no_border_yet_skips_the_fallback() {
+    assert_eq!(Finder::new("ab").fail, [0, 0]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__vm_like_new_2730a306__v2_a_mismatch_after_a_border_falls_back() {
+    assert_eq!(Finder::new("aab").fail, [0, 1, 0]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__vm_like_new_2730a306__v3_a_match_after_a_border_extends_it() {
+    assert_eq!(Finder::new("aaa").fail, [0, 1, 2]);
+}
+
+#[test]
+fn finder_handles_overlap_edges_and_adversarial_input() {
+    for (pattern, text, want) in [
+        ("%aa%aa%", "aaaa", true),
+        ("%aa%aa%", "aaa", false),
+        ("%abc", "xxabc", true),
+        ("%abcd%", "abc", false),
+        ("%日本%", "x日本y", true),
+        ("%日本%", "x日y本", false),
+        ("%aab%", "aaaab", true),
+    ] {
+        assert_eq!(like(pattern, text), want, "{text:?} LIKE {pattern:?}");
+        assert_eq!(like_match_exact(text, pattern), want, "reference");
+    }
+    let m = Matcher::new("%HÉ%", Dialect::Like, true);
+    assert!(m.matches("xhÉy", &mut String::new()));
+    // `a…ab` in `aaaa…`: linear, so this finishes instantly.
+    let pattern = format!("%{}b%", "a".repeat(5_000));
+    let text = "a".repeat(2_000_000);
+    assert!(!like(&pattern, &text));
+}
