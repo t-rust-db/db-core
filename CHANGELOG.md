@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.169.4] - 2026-10-24
+
+### Changed
+
+- **`LIKE`/`GLOB` over a typed string column yields a typed `Bool` column, not one `Value` a row** (#743). The result of `typed_like` is a `Column::Bool` register, one byte a row plus the validity bitmap, which `Filter` reads directly; anything else converts it lazily, as it does for `LoadColumn`. NULL rows stay NULL. Measured end to end on column-rs (20M rows, ZSTD) the change is within noise on wall time, CPU and peak RSS; the per-row `Value` was about 2% of the CPU, and the rest is ZSTD decode and the matcher.
+
 ## [0.169.3] - 2026-10-24
 
 ### Changed
