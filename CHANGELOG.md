@@ -4,11 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [0.171.1] - 2026-10-24
+## [0.171.2] - 2026-10-24
 
 ### Changed
 
 - **`=`, `<>`, `<`, `<=`, `>`, `>=`, `AND` and `OR` over typed `Int`/`Float`/`Bool` columns run on the buffers, not one `Value` a row** (#748). `Vm::typed_compare` takes an `Int`/`Float` column against a numeric literal (either side) or another column and yields a typed `Bool` column, as `typed_like` does (#743); `Vm::typed_bool_op` combines two typed `Bool` columns with SQL's three-valued logic (`three_valued`'s answers, now shared through `kleene`). So `x BETWEEN a AND b` is three typed passes that `Filter` reads without materializing. The answers are `apply_map_op`'s: both sides compare as `f64` as `compare_values` does (an `Int` past 2^53 rounds, a NaN is unequal to everything), and a NULL operand is a NULL row. A string, NULL or decimal literal, or two literals, still take the general path. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(*) WHERE amount >= 100` 60 -> 28 ms wall (CPU 430 -> 173 ms); `WHERE amount BETWEEN 100 AND 200` 113 -> 32 ms (CPU 874 -> 232 ms); `WHERE id BETWEEN 100 AND 2000000` 121 -> 37 ms (CPU 927 -> 271 ms), peak RSS 167 -> 125 MB; the `count(amount)` control is unchanged at 41 ms.
+
+## [0.171.1] - 2026-10-24
+
+### Changed
+
+- **`col IN (literal, ...)` is one set probe per row, not a comparison and an `OR` per item** (#737). The column parser still lowers an `IN` list to `col = a OR col = b ...` (`col <> a AND ...` for `NOT IN`), so validation, pruning and the stream engine are unchanged; batch codegen recognizes that chain over one column and literals, also written out by hand, and emits a new `Opcode::InList`. A typed string or dictionary column probes a hash set of the list's strings in the column's own buffer (a dictionary once per distinct value) and yields a typed `Bool` column; any other column or list folds the same comparisons in one pass, so conversions, NULLs and errors match the chain exactly. On a 2M-row tiered table (UUID strings, ZSTD, best of 5, A/B/A against main): `IN (100 ids)` 1 140 ms → 21 ms, the same behind `ts >= now - 2 days` 80 ms → 4 ms, `NOT IN (100)` 1 150 ms → 44 ms; a single `=` is unchanged at 30 ms. File pruning already handled the lowered chain; a test now pins it for `IN`.
 
 ## [0.171.0] - 2026-10-24
 

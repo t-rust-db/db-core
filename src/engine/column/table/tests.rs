@@ -990,6 +990,17 @@ fn a_sort_key_filter_opens_only_the_files_whose_range_matches() {
         opened("SELECT i FROM logs WHERE kind > 'c' AND kind < 'x'"),
         1
     );
+    // #737: an `IN` list, lowered by the column dialect to the `OR` chain
+    // above, prunes the same way.
+    let opened_in = |sql: &str| {
+        let select = crate::parser::column::parse(sql).unwrap();
+        snapshot
+            .files()
+            .filter(|(entry, _)| may_match(entry, &schema, select.where_clause.as_ref()))
+            .count()
+    };
+    assert_eq!(opened_in("SELECT i FROM logs WHERE kind IN ('a', 'x')"), 3);
+    assert_eq!(opened_in("SELECT i FROM logs WHERE kind IN ('zz', 'e')"), 0);
     assert_eq!(opened("SELECT i FROM logs WHERE kind = 'c' OR i = 1"), 4);
     assert_eq!(opened("SELECT i FROM logs WHERE kind <> 'a'"), 4);
     assert_eq!(opened("SELECT i FROM logs"), 4);
