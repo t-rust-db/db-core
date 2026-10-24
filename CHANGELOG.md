@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.169.5] - 2026-10-24
+
+### Changed
+
+- **`count`/`min`/`max` over a `Str` or `Dict` column reduce on the typed column, not one `Value` a row** (#750). `typed_reduce_values` now counts from the validity bitmap and orders strings in place, byte-wise as `agg_cmp` does; a dictionary column marks the codes in use and orders only those entries. `sum`/`avg` stay NULL, as before. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(kind)` 86 -> 14 ms wall (CPU 862 -> 81 ms); `min(user_name), max(user_name), count(note)` 222 -> 81 ms (CPU 2325 -> 779 ms); the `count(amount)` control is unchanged at 32 ms. Results equal `reduce_values`' for NULLs, empty strings, all-NULL and zero-length columns, and unused dictionary entries.
+
 ## [0.169.4] - 2026-10-24
 
 ### Changed

@@ -3396,6 +3396,20 @@ impl RunningAgg {
         keep_extreme(&mut self.max, &value, std::cmp::Ordering::Greater);
     }
 
+    /// Counts one non-`Null` text row whose ordering the caller tracks
+    /// itself ([`Self::set_text_extremes`], #750).
+    fn count_text(&mut self) {
+        self.row_count = self.row_count.saturating_add(1);
+        self.non_null_count = self.non_null_count.saturating_add(1);
+    }
+
+    /// Sets the text extremes a typed column's caller found (#750).
+    fn set_text_extremes(&mut self, min: Option<String>, max: Option<String>) {
+        let owned = |text: String| Value::Str(Cow::Owned(text));
+        self.min = min.map(owned);
+        self.max = max.map(owned);
+    }
+
     /// Folds one more row whose value is absent -- either no source
     /// column at all (`COUNT(*)`) or a typed column's NULL bit (#477),
     /// equivalent to `push(None)` / `push(Some(&Value::Null))`.
@@ -5814,9 +5828,66 @@ fn typed_reduce_values(func: AggFunc, column: &Column) -> Option<Result<Value>> 
                 }
             }
         }
+        Column::Str {
+            offsets,
+            data,
+            valid,
+        } => {
+            // #750: count and extremes straight off the buffer; the
+            // smallest and largest row are cloned once, not one `Value` a row.
+            let (mut min, mut max) = (None, None);
+            for i in 0..valid.len() {
+                let text = offsets
+                    .get(i)
+                    .zip(offsets.get(i.saturating_add(1)))
+                    .and_then(|(&lo, &hi)| data.get(lo as usize..hi as usize));
+                match text {
+                    Some(text) if valid.get(i) => {
+                        acc.count_text();
+                        keep_str_extremes(&mut min, &mut max, text);
+                    }
+                    _ => acc.push_null(),
+                }
+            }
+            acc.set_text_extremes(min, max);
+        }
+        Column::Dict {
+            dict,
+            indices,
+            valid,
+        } => {
+            // #750: mark the codes in use, then order only those entries.
+            let mut used = vec![false; dict.len()];
+            for (i, &code) in indices.iter().enumerate() {
+                let slot = valid.get(i).then(|| used.get_mut(code as usize)).flatten();
+                match slot {
+                    Some(slot) => {
+                        *slot = true;
+                        acc.count_text();
+                    }
+                    None => acc.push_null(),
+                }
+            }
+            let (mut min, mut max) = (None, None);
+            for (entry, _) in dict.iter().zip(&used).filter(|(_, &in_use)| in_use) {
+                keep_str_extremes(&mut min, &mut max, entry);
+            }
+            acc.set_text_extremes(min, max);
+        }
         _ => return None,
     }
     Some(acc.finalize(func, false, "Reduce"))
+}
+
+/// Narrows `min`/`max` to take in `text`, byte-wise as [`agg_cmp`] orders
+/// text; a string is copied only when it becomes an extreme (#750).
+fn keep_str_extremes(min: &mut Option<String>, max: &mut Option<String>, text: &str) {
+    if min.as_deref().is_none_or(|m| text < m) {
+        *min = Some(text.to_string());
+    }
+    if max.as_deref().is_none_or(|m| text > m) {
+        *max = Some(text.to_string());
+    }
 }
 
 /// One aggregate over `values` (`Null`s included, as a register holds
@@ -8283,6 +8354,74 @@ mod tests {
             )
             .unwrap();
             assert_eq!(vm.register(1).unwrap(), &[expected], "{func:?}");
+        }
+    }
+
+    /// #750: `Str` and `Dict` columns reduce to exactly what the `Value`
+    /// path gives, for every aggregate -- NULLs, empty strings, all-NULL,
+    /// zero-length, and dictionary entries no row uses.
+    #[test]
+    fn reduce_over_typed_str_and_dict_columns_matches_the_value_path() {
+        let text = |s: &str| Value::Str(s.to_string().into());
+        let cases: [Vec<Option<&str>>; 6] = [
+            vec![Some("pear"), None, Some("apple"), Some(""), Some("zed")],
+            vec![Some("b"), Some("b")],
+            vec![None, None],
+            vec![],
+            vec![Some("")],
+            vec![Some("é"), Some("z"), Some("Z")],
+        ];
+        for rows in cases {
+            let values: Vec<Value> = rows.iter().map(|r| r.map_or(Value::Null, text)).collect();
+            let valid = || Bitmap::from_bools(rows.iter().map(Option::is_some));
+            let mut offsets = vec![0_u32];
+            let mut data = String::new();
+            for r in &rows {
+                data.push_str(r.unwrap_or(""));
+                offsets.push(u32::try_from(data.len()).unwrap());
+            }
+            // Entries 0 and 1 are used by no row.
+            let mut dict: Vec<Arc<str>> = vec!["\u{10ffff}".into(), "".into()];
+            let mut indices = Vec::new();
+            for r in &rows {
+                match r {
+                    Some(s) => {
+                        let at = dict.iter().position(|d| &**d == *s).filter(|&at| at > 1);
+                        let at = at.unwrap_or_else(|| {
+                            dict.push((*s).into());
+                            dict.len() - 1
+                        });
+                        indices.push(u32::try_from(at).unwrap());
+                    }
+                    None => indices.push(0),
+                }
+            }
+            let columns = [
+                Column::Str {
+                    offsets,
+                    data,
+                    valid: valid(),
+                },
+                Column::Dict {
+                    dict,
+                    indices,
+                    valid: valid(),
+                },
+            ];
+            for column in &columns {
+                for func in [
+                    AggFunc::Count,
+                    AggFunc::Sum,
+                    AggFunc::Avg,
+                    AggFunc::AvgSum,
+                    AggFunc::Min,
+                    AggFunc::Max,
+                ] {
+                    let typed = typed_reduce_values(func, column).unwrap().unwrap();
+                    let general = reduce_values(func, &values).unwrap();
+                    assert_eq!(typed, general, "{func:?} over {rows:?}");
+                }
+            }
         }
     }
 
