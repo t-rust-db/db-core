@@ -1,0 +1,87 @@
+# #752: ORDER BY <ordinal> names a select item, 1-based: grouped with an
+# aggregate, on a plain projection, mixed with names and aliases. Out of
+# range, or naming `*` or an unaliased computed expression, is refused.
+
+query TI nosort
+SELECT region, count(*) FROM production GROUP BY region ORDER BY 2 DESC, 1 LIMIT 3
+----
+east
+1250
+north
+1250
+south
+1250
+
+query IT nosort
+SELECT id, region FROM production WHERE id > 4990 ORDER BY 2, 1 DESC
+----
+5000
+east
+4996
+east
+4992
+east
+4998
+north
+4994
+north
+4999
+south
+4995
+south
+4991
+south
+4997
+west
+4993
+west
+
+query TR nosort
+SELECT region, sum(amount) AS total FROM production GROUP BY region ORDER BY 2
+----
+west
+7809375.0
+north
+7812500.0
+south
+7815625.0
+east
+7818750.0
+
+query IR nosort
+SELECT id, amount * 2 AS twice FROM production WHERE id < 6 ORDER BY 2 DESC
+----
+5
+25.0
+4
+20.0
+3
+15.0
+2
+10.0
+1
+5.0
+
+query TR nosort
+SELECT region, max(amount) FROM production GROUP BY region ORDER BY region DESC, 2
+----
+west
+12492.5
+south
+12497.5
+north
+12495.0
+east
+12500.0
+
+statement error
+SELECT id, region FROM production ORDER BY 0
+
+statement error
+SELECT id, region FROM production ORDER BY 3
+
+statement error
+SELECT id, amount * 2 FROM production ORDER BY 2
+
+statement error
+SELECT * FROM production ORDER BY 1 LIMIT 1

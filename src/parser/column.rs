@@ -18,7 +18,7 @@
 //! amendment) actually happens: a `Select` outside this subset (a real
 //! JOIN condition shape, `WITH`, `UNION`, non-integer `LIMIT`, ...) is
 //! rejected here with
-//! [`ParseError::Unexpected`], not silently miscompiled -- and, as a side
+//! [`ParseError::Unsupported`], not silently miscompiled -- and, as a side
 //! effect, table aliases (`FROM orders o`) are resolved in place, rewriting
 //! every alias-qualified column reference to the real table name, so
 //! `codegen::batch` never has to know aliases existed.
@@ -66,13 +66,24 @@ pub enum ParseError {
         /// Where the offending token is.
         span: Span,
     },
+    /// The query parsed, but uses a construct outside column-rs's
+    /// analytics subset, or one that is semantically invalid (#752): a
+    /// validation rejection, not a syntax error.
+    Unsupported {
+        /// What is rejected and why.
+        message: String,
+        /// Where the rejected construct is.
+        span: Span,
+    },
 }
 
 impl ParseError {
     /// The location this error points at.
     pub fn span(&self) -> Span {
         match self {
-            ParseError::UnexpectedEof { span } | ParseError::Unexpected { span, .. } => *span,
+            ParseError::UnexpectedEof { span }
+            | ParseError::Unexpected { span, .. }
+            | ParseError::Unsupported { span, .. } => *span,
         }
     }
 }
@@ -94,6 +105,9 @@ impl fmt::Display for ParseError {
                     span.line, span.column
                 )
             }
+            ParseError::Unsupported { message, span } => {
+                write!(f, "unsupported at {}:{}: {message}", span.line, span.column)
+            }
         }
     }
 }
@@ -104,7 +118,7 @@ impl std::error::Error for ParseError {}
 pub type Result<T> = std::result::Result<T, ParseError>;
 
 fn unsupported(span: Span, message: String) -> ParseError {
-    ParseError::Unexpected { message, span }
+    ParseError::Unsupported { message, span }
 }
 
 /// A (possibly qualified) column reference: `col` or `table.col`. Aliases
@@ -1128,6 +1142,8 @@ fn validate_select(select: &mut Select) -> Result<()> {
         column_name(e)?;
     }
 
+    resolve_order_by_ordinals(select)?;
+
     // Each term (#645: any number, most significant first) is a column
     // or an aggregate.
     for term in &select.order_by {
@@ -1249,6 +1265,70 @@ fn validate_select(select: &mut Select) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Rewrites each integer `ORDER BY k` term (#752) to the `k`-th select
+/// item, 1-based as in SQLite: its alias when it has one -- the form the
+/// planner already sorts on by label -- otherwise its expression, which the
+/// term check below then admits only as a column or an aggregate. `k`
+/// outside `1..=N` is sqlite3's "out of range" error.
+fn resolve_order_by_ordinals(select: &mut Select) -> Result<()> {
+    let count = select.columns.len();
+    for (i, term) in select.order_by.iter_mut().enumerate() {
+        let ExprKind::Literal(AstLiteral::Integer(k)) = term.expr.kind else {
+            continue;
+        };
+        let item = usize::try_from(k)
+            .ok()
+            .and_then(|k| k.checked_sub(1))
+            .and_then(|k| select.columns.get(k))
+            .ok_or_else(|| {
+                unsupported(
+                    term.expr.span,
+                    format!(
+                        "{} ORDER BY term out of range - should be between 1 and {count}",
+                        ordinal(i.saturating_add(1))
+                    ),
+                )
+            })?;
+        let kind = match item {
+            crate::parser::ast::ResultColumn::Expr {
+                alias: Some(alias), ..
+            } => ExprKind::Column {
+                table: None,
+                catalog: None,
+                name: alias.clone(),
+            },
+            crate::parser::ast::ResultColumn::Expr { expr, alias: None } => match &expr.kind {
+                ExprKind::Column { .. } | ExprKind::FunctionCall { .. } => expr.kind.clone(),
+                _ => {
+                    return Err(unsupported(
+                        term.expr.span,
+                        format!("ORDER BY {k} refers to a computed expression; give it an alias"),
+                    ))
+                }
+            },
+            _ => {
+                return Err(unsupported(
+                    term.expr.span,
+                    format!("ORDER BY {k} refers to `*`; name the column instead"),
+                ))
+            }
+        };
+        term.expr.kind = kind;
+    }
+    Ok(())
+}
+
+/// `1st`, `2nd`, `3rd`, `4th`, ... as sqlite3 numbers a clause's terms.
+fn ordinal(n: usize) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (1, r) if r != 11 => "st",
+        (2, r) if r != 12 => "nd",
+        (3, r) if r != 13 => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
 }
 
 /// Validates `HAVING` (#644): an expression over the groups, so the same
@@ -1764,7 +1844,7 @@ mod tests {
     #[test]
     fn bare_column_with_aggregate_and_no_group_by_is_rejected() {
         let err = parse("SELECT active, MAX(id) FROM t").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+        assert!(matches!(err, ParseError::Unsupported { .. }));
     }
 
     #[test]
@@ -1776,7 +1856,7 @@ mod tests {
     #[test]
     fn bare_column_not_a_group_by_key_is_rejected() {
         let err = parse("SELECT active, SUM(amount) FROM t GROUP BY region").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+        assert!(matches!(err, ParseError::Unsupported { .. }));
     }
 
     /// #623: the select list may name the keys in any order, and compute
@@ -1876,13 +1956,13 @@ mod tests {
     #[test]
     fn computed_select_expression_alongside_aggregate_without_group_by_is_rejected() {
         let err = parse("SELECT x * 2, SUM(amount) FROM t").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+        assert!(matches!(err, ParseError::Unsupported { .. }));
     }
 
     #[test]
     fn computed_select_expression_alongside_window_function_is_rejected() {
         let err = parse("SELECT x * 2, ROW_NUMBER() OVER (ORDER BY id) FROM t").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+        assert!(matches!(err, ParseError::Unsupported { .. }));
     }
 
     #[test]
@@ -1970,6 +2050,78 @@ mod tests {
         ));
     }
 
+    /// #752: `ORDER BY k` is the `k`-th select item -- its alias, or a
+    /// column or aggregate expression as written.
+    #[test]
+    fn order_by_ordinal_resolves_to_the_select_item() {
+        let q = parse(
+            "SELECT user_name, count(*) FROM t GROUP BY user_name ORDER BY 2 DESC, 1 LIMIT 5",
+        )
+        .unwrap();
+        assert!(matches!(
+            &q.order_by[0].expr.kind,
+            ExprKind::FunctionCall {
+                args: FunctionArgs::Star,
+                ..
+            }
+        ));
+        assert_eq!(q.order_by[0].desc, Some(true));
+        assert!(matches!(
+            &q.order_by[1].expr.kind,
+            ExprKind::Column { name, .. } if name == "user_name"
+        ));
+
+        let q = parse("SELECT id, amount * 2 AS twice FROM t ORDER BY 2").unwrap();
+        assert!(matches!(
+            &q.order_by[0].expr.kind,
+            ExprKind::Column { table: None, name, .. } if name == "twice"
+        ));
+    }
+
+    #[test]
+    fn order_by_ordinal_out_of_range_or_unsortable_is_unsupported() {
+        for (sql, message) in [
+            (
+                "SELECT id, amount FROM t ORDER BY 0",
+                "1st ORDER BY term out of range - should be between 1 and 2",
+            ),
+            (
+                "SELECT id, amount FROM t ORDER BY id, 3",
+                "2nd ORDER BY term out of range - should be between 1 and 2",
+            ),
+            (
+                "SELECT id, amount * 2 FROM t ORDER BY 2",
+                "ORDER BY 2 refers to a computed expression; give it an alias",
+            ),
+            (
+                "SELECT * FROM t ORDER BY 1",
+                "ORDER BY 1 refers to `*`; name the column instead",
+            ),
+        ] {
+            let err = parse(sql).unwrap_err();
+            assert!(
+                matches!(err, ParseError::Unsupported { .. }),
+                "{sql}: {err:?}"
+            );
+            assert!(err.to_string().ends_with(message), "{sql}: {err}");
+        }
+    }
+
+    #[test]
+    fn ordinal_names_terms_like_sqlite3() {
+        let names: Vec<String> = [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111]
+            .into_iter()
+            .map(ordinal)
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd",
+                "101st", "111th"
+            ]
+        );
+    }
+
     #[test]
     fn order_by_rejects_non_aggregate_expression() {
         let err = parse("SELECT id FROM t ORDER BY id + 1").unwrap_err();
@@ -2040,7 +2192,7 @@ mod tests {
     #[test]
     fn row_number_rejects_arguments() {
         let err = parse("SELECT ROW_NUMBER(id) OVER (ORDER BY id) FROM t").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+        assert!(matches!(err, ParseError::Unsupported { .. }));
     }
 
     #[test]
@@ -2252,7 +2404,7 @@ mod tests {
     #[test]
     fn cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+        assert!(matches!(err, ParseError::Unsupported { .. }));
     }
 
     /// MC/DC vector (obligation `parser_column_validate_select_4cae2899`, the CROSS JOIN LIMIT rule
@@ -2262,7 +2414,7 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__parser_column_validate_select_4cae2899__v1_cross_join_without_limit_is_rejected() {
         let err = parse("SELECT id FROM a CROSS JOIN b").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+        assert!(matches!(err, ParseError::Unsupported { .. }));
     }
 
     /// MC/DC vector (obligation `parser_column_validate_select_4cae2899`): leaf B (`limit.is_none()`)
@@ -2304,7 +2456,7 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__parser_column_validate_expr_a300f79e__v2_aggregate_in_where_is_rejected() {
         let err = parse("SELECT id FROM t WHERE SUM(amount) * 2 > 10").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }), "{err:?}");
+        assert!(matches!(err, ParseError::Unsupported { .. }), "{err:?}");
     }
 
     /// MC/DC vector (obligation `parser_column_validate_expr_a300f79e`): leaf B
@@ -2327,7 +2479,7 @@ mod tests {
     fn mcdc__parser_column_validate_select_8e763e04__v1_agg_without_window_validates_group_by_keys()
     {
         let err = parse("SELECT foo, SUM(amount) FROM t").unwrap_err();
-        assert!(matches!(err, ParseError::Unexpected { .. }));
+        assert!(matches!(err, ParseError::Unsupported { .. }));
     }
 
     #[test]
@@ -2585,7 +2737,7 @@ mod tests {
     // --- ParseError / column_name / ast_binop_allowed ----------------------
 
     #[test]
-    fn parse_error_span_and_display_cover_both_variants() {
+    fn parse_error_span_and_display_cover_every_variant() {
         // A truncated query surfaces as `Unexpected` ("found Eof"), not
         // `UnexpectedEof`: `parse()` maps every shared-grammar outcome
         // through `from_outcome`, which only ever builds `Unexpected`.
@@ -2598,8 +2750,11 @@ mod tests {
         let rejected = parse("SELECT id FROM orders WHERE amount % 2 = 0").unwrap_err();
         let span = rejected.span();
         assert!(!span.is_unknown());
+        // #752: a query that parsed but falls outside the subset says so,
+        // not "unexpected token".
+        assert!(matches!(rejected, ParseError::Unsupported { .. }));
         assert!(
-            rejected.to_string().starts_with("unexpected token at"),
+            rejected.to_string().starts_with("unsupported at"),
             "{rejected}"
         );
 

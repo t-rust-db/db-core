@@ -354,6 +354,19 @@ pub fn decode_dictionary_float(dictionary_body: &[u8], num_values: i32) -> Resul
     (0..num_values).map(|_| read_plain_f32(&mut buf)).collect()
 }
 
+/// Decode a fixed-width dictionary page (`N` little-endian bytes per
+/// entry) through `decode` (#753), so a widening such as INT32 to `i64`
+/// happens once per entry rather than once per row.
+pub fn decode_dictionary_fixed<T, const N: usize>(
+    dictionary_body: &[u8],
+    num_values: i32,
+    decode: impl Fn([u8; N]) -> T,
+) -> Result<Vec<T>> {
+    let mut out = Vec::new();
+    push_plain(dictionary_body, value_count(num_values)?, decode, &mut out)?;
+    Ok(out)
+}
+
 /// Decode a PLAIN-encoded FIXED_LEN_BYTE_ARRAY dictionary page body into its `num_values` entries.
 pub fn decode_dictionary_fixed_len_byte_array(
     dictionary_body: &[u8],
@@ -554,6 +567,60 @@ pub fn read_plain_fixed<T: Copy + Default, const N: usize>(
         if level == max_def_level {
             let chunk = chunks.next().ok_or(ReadError::UnexpectedEof)?;
             values.push(decode(*chunk));
+            present.push(true);
+        } else {
+            values.push(T::default());
+            present.push(false);
+        }
+    }
+    Ok(())
+}
+
+/// Decodes one `PLAIN_DICTIONARY`/`RLE_DICTIONARY` data page of a
+/// fixed-width primitive straight into typed storage (#753): each present
+/// row's code is looked up in `dictionary` and the value lands in
+/// `values`, in [`read_plain_fixed`]'s `(values, present)` convention. A
+/// code past the dictionary is [`ReadError::DictionaryIndexOutOfRange`].
+pub fn read_dictionary_fixed<T: Copy + Default>(
+    page_body: &[u8],
+    header: &DataPageHeader,
+    max_def_level: u32,
+    dictionary: &[T],
+    values: &mut Vec<T>,
+    present: &mut Vec<bool>,
+) -> Result<()> {
+    let num_values = value_count(header.num_values)?;
+    if num_values == 0 {
+        return Ok(());
+    }
+    let (levels, index_bytes) = split_definition_levels(page_body, header, max_def_level)?;
+    let codes =
+        read_dictionary_indices(index_bytes, present_count(header, &levels, max_def_level))?;
+    let lookup = |code: u32| {
+        usize::try_from(code)
+            .ok()
+            .and_then(|i| dictionary.get(i))
+            .copied()
+            .ok_or(ReadError::DictionaryIndexOutOfRange(code))
+    };
+    if levels.is_empty() || levels.iter().all(|&level| level == max_def_level) {
+        let codes = codes.get(..num_values).ok_or(ReadError::UnexpectedEof)?;
+        values.reserve(num_values);
+        for &code in codes {
+            values.push(lookup(code)?);
+        }
+        if !levels.is_empty() {
+            present.resize(present.len().saturating_add(num_values), true);
+        }
+        return Ok(());
+    }
+    values.reserve(levels.len());
+    present.reserve(levels.len());
+    let mut codes = codes.into_iter();
+    for &level in &levels {
+        if level == max_def_level {
+            let code = codes.next().ok_or(ReadError::UnexpectedEof)?;
+            values.push(lookup(code)?);
             present.push(true);
         } else {
             values.push(T::default());
@@ -1558,6 +1625,92 @@ mod tests {
         page.extend_from_slice(&encode_dictionary_indices(&[2, 0, 1], 2));
         let result = read_dictionary_index_column(&page, &h, 1).unwrap();
         assert_eq!(result, vec![Some(2), None, Some(0), Some(1)]);
+    }
+
+    // storage_parquet_reader_read_dictionary_fixed_944bcff7 (#753): `levels.is_empty() || levels.iter().all(|&level| level == max_def_level)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_reader_read_dictionary_fixed_944bcff7__v3_nullable_page_with_a_null_takes_the_row_loop(
+    ) {
+        let dictionary = [10i64, 20, 30];
+        let mut page = encode_def_levels(&[1, 0, 1, 1, 0]);
+        page.extend_from_slice(&encode_dictionary_indices(&[2, 0, 1], 2));
+        let (mut values, mut present) = (Vec::new(), Vec::new());
+        read_dictionary_fixed(&page, &header(5), 1, &dictionary, &mut values, &mut present)
+            .unwrap();
+        assert_eq!(values, [30, 0, 10, 20, 0]);
+        assert_eq!(present, [true, false, true, true, false]);
+        assert_eq!(
+            read_int64_column_dictionary(&page, &header(5), 1, &dictionary).unwrap(),
+            [Some(30), None, Some(10), Some(20), None]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_reader_read_dictionary_fixed_944bcff7__v2_nullable_page_without_nulls_gathers_in_one_pass(
+    ) {
+        let mut page = encode_def_levels(&[1, 1]);
+        page.extend_from_slice(&encode_dictionary_indices(&[1, 1], 2));
+        let (mut values, mut present) = (vec![5i64], vec![true]);
+        read_dictionary_fixed(
+            &page,
+            &header(2),
+            1,
+            &[10, 20, 30],
+            &mut values,
+            &mut present,
+        )
+        .unwrap();
+        assert_eq!(values, [5, 20, 20]);
+        assert_eq!(present, [true, true, true]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_reader_read_dictionary_fixed_944bcff7__v1_required_page_has_no_levels_and_appends_no_flags(
+    ) {
+        let page = encode_dictionary_indices(&[0, 2], 2);
+        let (mut values, mut present) = (Vec::new(), Vec::new());
+        read_dictionary_fixed(
+            &page,
+            &header(2),
+            0,
+            &[10i64, 20, 30],
+            &mut values,
+            &mut present,
+        )
+        .unwrap();
+        assert_eq!(values, [10, 30]);
+        assert!(present.is_empty());
+    }
+
+    /// #753: a code past the dictionary is an error on the one-pass and the
+    /// row-loop path alike.
+    #[test]
+    fn read_dictionary_fixed_rejects_a_code_past_the_dictionary() {
+        let dictionary = [10i64, 20, 30];
+        for max_def_level in [0, 1] {
+            let mut page = if max_def_level == 0 {
+                Vec::new()
+            } else {
+                encode_def_levels(&[1, 0, 1])
+            };
+            let rows = if max_def_level == 0 { 2 } else { 3 };
+            page.extend_from_slice(&encode_dictionary_indices(&[0, 3], 2));
+            let result = read_dictionary_fixed(
+                &page,
+                &header(rows),
+                max_def_level,
+                &dictionary,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            );
+            assert!(
+                matches!(result, Err(ReadError::DictionaryIndexOutOfRange(3))),
+                "{result:?}"
+            );
+        }
     }
 
     #[test]

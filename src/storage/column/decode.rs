@@ -115,6 +115,24 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     out
 }
 
+/// A fixed-width chunk's values and per-row presence (`present` empty for
+/// a `REQUIRED` column), as the typed readers return them.
+type Typed<T> = (Vec<T>, Vec<bool>);
+
+/// A fixed-width primitive chunk as typed `(values, present)`: the `PLAIN`
+/// reader (#495), else the dictionary reader (#753); `None` for any other
+/// encoding.
+fn fixed_column<T: Copy + Default, const N: usize>(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    decode: impl Fn([u8; N]) -> T,
+) -> Result<Option<Typed<T>>, FileError> {
+    match rg.read_plain_fixed_column(index, &decode)? {
+        Some(typed) => Ok(Some(typed)),
+        None => rg.read_dictionary_fixed_column(index, decode),
+    }
+}
+
 /// Decodes one column for every row of `rg` -- the whole-row-group path
 /// shared by the eager load and the predicate phase of the two-phase load
 /// (ADR-0026). Every physical type decodes straight into a typed [`Column`]
@@ -126,23 +144,23 @@ pub fn decode_column_full(
     index: usize,
     physical_type: PhysicalType,
 ) -> Result<Decoded, FileError> {
-    // #495: the fixed-width primitives try the typed `PLAIN` chunk reader
-    // first -- values land in the `Column`'s own `Vec<T>` and the
-    // definition levels become its `Bitmap` with no `Vec<Option<T>>` in
-    // between. `None` means the chunk has a dictionary or other encoding,
-    // and the `Vec<Option<T>>` readers below handle it as before.
+    // #495: the fixed-width primitives try the typed chunk readers first
+    // (`fixed_column`) -- values land in the `Column`'s own `Vec<T>` and
+    // the definition levels become its `Bitmap` with no `Vec<Option<T>>`
+    // in between. `None` means the chunk has another encoding, and the
+    // `Vec<Option<T>>` readers below handle it as before.
     if let Some(column) = decode_annotated(rg, index, physical_type)? {
         return Ok(Decoded::Column(column));
     }
     match physical_type {
-        PhysicalType::Int64 => match rg.read_plain_fixed_column(index, i64::from_le_bytes)? {
+        PhysicalType::Int64 => match fixed_column(rg, index, i64::from_le_bytes)? {
             Some(typed) => Ok(Decoded::Column(typed_int(typed))),
             None => rg
                 .read_int64_column(index)
                 .map(|col| Decoded::Column(int_column(col))),
         },
         PhysicalType::Int32 => {
-            match rg.read_plain_fixed_column(index, |b| i64::from(i32::from_le_bytes(b)))? {
+            match fixed_column(rg, index, |b| i64::from(i32::from_le_bytes(b)))? {
                 Some(typed) => Ok(Decoded::Column(typed_int(typed))),
                 None => rg.read_int32_column(index).map(|col| {
                     Decoded::Column(int_column(
@@ -151,14 +169,14 @@ pub fn decode_column_full(
                 }),
             }
         }
-        PhysicalType::Double => match rg.read_plain_fixed_column(index, f64::from_le_bytes)? {
+        PhysicalType::Double => match fixed_column(rg, index, f64::from_le_bytes)? {
             Some(typed) => Ok(Decoded::Column(typed_float(typed))),
             None => rg
                 .read_double_column(index)
                 .map(|col| Decoded::Column(float_column(col))),
         },
         PhysicalType::Float => {
-            match rg.read_plain_fixed_column(index, |b| f64::from(f32::from_le_bytes(b)))? {
+            match fixed_column(rg, index, |b| f64::from(f32::from_le_bytes(b)))? {
                 Some(typed) => Ok(Decoded::Column(typed_float(typed))),
                 None => rg.read_float_column(index).map(|col| {
                     Decoded::Column(float_column(
@@ -429,6 +447,81 @@ mod tests {
                 at += n;
             }
             assert_eq!(at, rows.len());
+        }
+    }
+
+    #[test]
+    fn a_dictionary_integer_chunk_decodes_typed_matching_the_value_fallback() {
+        // #753: nullable (NULLs mixed in, and a NULL-only group) and
+        // REQUIRED INT32/INT64 dictionary chunks over several row groups
+        // take the typed dictionary reader and agree with the
+        // `Vec<Option<T>>` fallback row for row.
+        use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+        use crate::storage::parquet::writer::{ParquetWriter, WriterOptions};
+        let nullable: Vec<Option<i64>> = (0..50)
+            .map(|i| (i % 5 != 0 && !(40..48).contains(&i)).then_some(i % 4 - 2))
+            .collect();
+        let required: Vec<Option<i64>> = (0..50).map(|i| Some(i % 3 * 1000)).collect();
+        for (nullable, rows) in [(true, nullable), (false, required)] {
+            for (column_type, physical_type) in [
+                (ColumnType::Int64, PhysicalType::Int64),
+                (ColumnType::Int32, PhysicalType::Int32),
+            ] {
+                let values = match column_type {
+                    ColumnType::Int32 => ColumnValues::Int32(
+                        rows.iter()
+                            .map(|v| v.map(|x| i32::try_from(x).unwrap()))
+                            .collect(),
+                    ),
+                    _ => ColumnValues::Int64(rows.clone()),
+                };
+                let options = WriterOptions {
+                    row_group_rows: 8,
+                    ..WriterOptions::default()
+                };
+                let mut w = ParquetWriter::new(
+                    Vec::new(),
+                    vec![ColumnSpec::new("n", column_type, nullable)],
+                    options,
+                )
+                .unwrap();
+                w.write_columns(vec![values]).unwrap();
+                let (bytes, _) = w.finish().unwrap();
+                let file = crate::storage::ParquetFile::open(&bytes).unwrap();
+                let mut at = 0;
+                for g in 0..file.num_row_groups() {
+                    let rg = file.row_group(g).unwrap();
+                    let fallback = match physical_type {
+                        PhysicalType::Int32 => rg
+                            .read_int32_column(0)
+                            .unwrap()
+                            .into_iter()
+                            .map(|v| v.map(i64::from))
+                            .collect(),
+                        _ => rg.read_int64_column(0).unwrap(),
+                    };
+                    let dictionary = match physical_type {
+                        PhysicalType::Int32 => {
+                            rg.read_dictionary_fixed_column(0, |b| i64::from(i32::from_le_bytes(b)))
+                        }
+                        _ => rg.read_dictionary_fixed_column(0, i64::from_le_bytes),
+                    }
+                    .unwrap();
+                    // A NULL-only chunk has no dictionary to take.
+                    assert_eq!(dictionary.is_some(), fallback.iter().any(Option::is_some));
+                    let Decoded::Column(typed) = decode_column_full(&rg, 0, physical_type).unwrap();
+                    assert!(matches!(typed, Column::Int { .. }));
+                    for (i, want) in fallback.iter().enumerate() {
+                        assert_eq!(typed.is_null(i), want.is_none());
+                        if let Some(v) = want {
+                            assert_eq!(typed.get(i), Value::Int(*v));
+                        }
+                        assert_eq!(*want, rows[at + i]);
+                    }
+                    at += fallback.len();
+                }
+                assert_eq!(at, rows.len());
+            }
         }
     }
 

@@ -271,7 +271,9 @@ fn span_reads_back_line_and_column_and_parse_error_carries_one() {
     let span: Span = err.span();
     assert!(span.line >= 1);
     match err {
-        ParseError::UnexpectedEof { .. } | ParseError::Unexpected { .. } => {}
+        ParseError::UnexpectedEof { .. }
+        | ParseError::Unexpected { .. }
+        | ParseError::Unsupported { .. } => {}
     }
 }
 
