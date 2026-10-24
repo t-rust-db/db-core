@@ -6,11 +6,15 @@ on:
     paths-ignore:
       - "**/*.md"
       - ".openspec/**"
+  # No `paths-ignore` here: main's merge queue (#764) waits on these checks,
+  # and a check that never runs never reports, which would hold a docs-only
+  # PR in the queue forever.
   pull_request:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - ".openspec/**"
+  # The merge queue builds each entry on top of the ones ahead of it and
+  # waits for these same checks to pass on that merge commit.
+  merge_group:
+    types: [checks_requested]
 
 # A push to a PR branch supersedes the run still going for its previous
 # commit; main's runs are never cancelled.
@@ -23,6 +27,11 @@ env:
   # gate builds it from source at this pinned rev. Bumping it is a reviewed
   # change, like any other pinned tool version.
   MVL_RUST_REV: "5a5ffd5a8e79298271a65649b3f586ebce2ffb31"
+  # cargo-public-api is not in install-action's prebuilt list, so it was
+  # compiled from source on every run (72 s). Pinned and cached instead;
+  # bumping it is a reviewed change, and a new version can change the
+  # snapshot's rendering.
+  PUBLIC_API_VERSION: "0.52.0"
 
 jobs:
   # Formatting and lint. Fails fast, cheap, no dependency-graph work needed.
@@ -210,9 +219,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: public-api
-      - uses: taiki-e/install-action@v2
+      - name: Cache cargo-public-api
+        id: cache-public-api
+        uses: actions/cache@v4
         with:
-          tool: cargo-public-api
+          path: ~/.cargo/bin/cargo-public-api
+          key: cargo-public-api-${{ runner.os }}-${{ env.PUBLIC_API_VERSION }}
+      - name: Build cargo-public-api
+        if: steps.cache-public-api.outputs.cache-hit != 'true'
+        run: cargo install cargo-public-api --version "$PUBLIC_API_VERSION" --locked
       - run: make check-public-api-fresh
 
   test:
@@ -254,8 +269,8 @@ jobs:
         working-directory: db-core
         env:
           EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           # A breaking change to the query-output surface needs a companion
