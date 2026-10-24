@@ -543,3 +543,127 @@ mod mcdc_vectors {
         assert!(reopen(&t, TableOptions::default()).is_ok());
     }
 }
+
+/// `schema()` plus a nullable `note` (#740).
+fn evolved() -> TableOptions {
+    let mut schema = schema();
+    schema.push(ColumnSpec::new("note", ColumnType::Utf8, true));
+    TableOptions {
+        schema: Some(schema),
+        ..tiered()
+    }
+}
+
+/// The `note` of every row the table holds, files then pages, sorted;
+/// `None` for a NULL or a file that lacks the column.
+fn notes(w: &TableWriter) -> Vec<Option<String>> {
+    let s = w.snapshot().unwrap();
+    let mut out = Vec::new();
+    fn add(out: &mut Vec<Option<String>>, c: &ColumnValues) {
+        let ColumnValues::Utf8(v) = c else {
+            panic!("note is not TEXT: {c:?}");
+        };
+        out.extend(v.iter().cloned());
+    }
+    for (_, bytes) in s.files() {
+        let file = ParquetFile::open(bytes).unwrap();
+        let fields = file.fields();
+        let field = fields.iter().find(|f| f.name == "note");
+        for rg in file.row_groups() {
+            match field {
+                Some(f) => add(&mut out, &read_column(&rg, f, ColumnType::Utf8).unwrap()),
+                None => out.extend((0..rg.num_rows()).map(|_| None)),
+            }
+        }
+    }
+    for page in s.pages() {
+        let PageBody::Rows(rows) = &page.body else {
+            panic!("a lines page in a record table");
+        };
+        add(&mut out, &rows.columns()[8]);
+    }
+    out.sort();
+    out
+}
+
+fn with_note(i: u64, note: &str) -> Vec<RecordValue> {
+    let mut r = row(i);
+    r.push(RecordValue::Str(note.to_string()));
+    r
+}
+
+#[test]
+fn a_nullable_column_can_be_appended_to_the_schema() {
+    set_clock(0, 10);
+    let t = TempTable::new();
+    let mut w = TableWriter::open(&t.0, tiered()).unwrap();
+    append(&mut w, 0..4);
+    set_clock(0, 11);
+    append(&mut w, 4..6);
+    w.flush().unwrap(); // an hour-10 file without the column
+    append(&mut w, 6..8); // WAL rows of the old arity
+    drop(w);
+
+    // Not an older reader's schema, and a manifest it refuses.
+    let mut w = TableWriter::open(&t.0, evolved()).unwrap();
+    let text = fs::read_to_string(t.0.join("manifest.json")).unwrap();
+    assert!(text.starts_with(r#"{"version":5,"#), "{text}");
+    assert_eq!(Manifest::parse(&text).unwrap(), *w.manifest());
+    assert_eq!(Snapshot::open(&t.0).unwrap().schema().unwrap().len(), 9);
+
+    for i in 8..10 {
+        w.append_row(with_note(i, "new"), Ack::Durable).unwrap();
+    }
+    let check = |w: &TableWriter| {
+        let n = notes(w);
+        assert_eq!(n.len(), 10);
+        assert_eq!(n.iter().filter(|v| v.is_none()).count(), 8);
+        assert_eq!(n.iter().flatten().filter(|v| *v == "new").count(), 2);
+    };
+    check(&w);
+    w.flush().unwrap();
+    check(&w);
+    set_clock(2, 0);
+    w.append_row(with_note(10, "new"), Ack::Durable).unwrap();
+    w.flush().unwrap();
+    w.compact().unwrap();
+    assert!(w.manifest().files.iter().any(|f| f.area == Area::Archive));
+    let n = notes(&w);
+    assert_eq!(n.iter().filter(|v| v.is_none()).count(), 8);
+    assert_eq!(n.iter().flatten().count(), 3);
+
+    // Reopened unchanged (the evolved schema) still works.
+    w.close().unwrap();
+    TableWriter::open(&t.0, evolved()).unwrap();
+}
+
+#[test]
+fn only_nullable_columns_at_the_end_extend_the_schema() {
+    let t = TempTable::new();
+    TableWriter::open(&t.0, flat()).unwrap().close().unwrap();
+    let with = |f: &dyn Fn(&mut Vec<ColumnSpec>)| {
+        let mut s = schema();
+        f(&mut s);
+        TableOptions {
+            schema: Some(s),
+            ..flat()
+        }
+    };
+    let cases = [
+        with(&|s| s.push(ColumnSpec::new("c", ColumnType::Utf8, false))),
+        with(&|s| {
+            s.pop();
+        }),
+        with(&|s| s[3].column_type = ColumnType::Binary),
+        with(&|s| s.insert(0, ColumnSpec::new("c", ColumnType::Utf8, true))),
+        with(&|s| s.swap(3, 4)),
+        with(&|s| s[3].name = "other".to_string()),
+    ];
+    for options in cases {
+        let err = TableWriter::open(&t.0, options).unwrap_err();
+        assert!(matches!(err, IngestError::SchemaMismatch), "{err}");
+    }
+    // The refusals left the manifest as it was.
+    let text = fs::read_to_string(t.0.join("manifest.json")).unwrap();
+    assert!(text.starts_with(r#"{"version":3,"#), "{text}");
+}

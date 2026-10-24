@@ -51,7 +51,8 @@ use super::lock::{LockError, TableLock};
 use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, encode_record, invalid_line, HeadPage, Page};
 use super::record::{
-    check_row, decode_row, encode_row, invalid_schema, join_repeated_keys, RecordValue,
+    check_row, decode_row, encode_row, extends_schema, invalid_schema, join_repeated_keys, pad_row,
+    RecordValue,
 };
 use super::snapshot::Snapshot;
 use super::tier::{self, Output};
@@ -152,7 +153,7 @@ impl TableWriter {
                 }
             }
         }
-        let manifest = match Manifest::read(table)? {
+        let mut manifest = match Manifest::read(table)? {
             Some(m) => m,
             None => {
                 let mut m = Manifest::new(options.format, options.layout.kind());
@@ -162,7 +163,18 @@ impl TableWriter {
             }
         };
         if manifest.schema != options.schema {
-            return Err(IngestError::SchemaMismatch);
+            // Only columns appended at the end, all nullable, are accepted
+            // (#740); the new schema is committed before anything is
+            // appended, so a crash leaves a table that opens either way.
+            let (Some(stored), Some(requested)) = (&manifest.schema, &options.schema) else {
+                return Err(IngestError::SchemaMismatch);
+            };
+            if !extends_schema(stored, requested) {
+                return Err(IngestError::SchemaMismatch);
+            }
+            manifest.schema.clone_from(&options.schema);
+            manifest.evolved = true;
+            manifest.write(table)?;
         }
         if manifest.schema.is_none() && manifest.format != options.format {
             return Err(IngestError::FormatMismatch {
@@ -204,6 +216,7 @@ impl TableWriter {
             match writer.manifest.schema.as_deref() {
                 Some(schema) => {
                     let row = decode_row(body)
+                        .map(|row| pad_row(schema, row))
                         .filter(|row| check_row(schema, row).is_none())
                         .ok_or_else(corrupt)?;
                     writer.push(observed, |head| head.push_row(lsn, observed, row))?;

@@ -3961,6 +3961,7 @@ pub fn db_core::storage::ingest::manifest::KeyRange::fmt(&self, &mut core::fmt::
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::manifest::KeyRange
 pub struct db_core::storage::ingest::manifest::Manifest
 pub db_core::storage::ingest::manifest::Manifest::dropped_lsn: u64
+pub db_core::storage::ingest::manifest::Manifest::evolved: bool
 pub db_core::storage::ingest::manifest::Manifest::files: alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>
 pub db_core::storage::ingest::manifest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::manifest::Manifest::format: db_core::storage::stream::detect::Format
@@ -4398,6 +4399,7 @@ pub fn db_core::storage::ingest::manifest::KeyRange::fmt(&self, &mut core::fmt::
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::manifest::KeyRange
 pub struct db_core::storage::ingest::Manifest
 pub db_core::storage::ingest::Manifest::dropped_lsn: u64
+pub db_core::storage::ingest::Manifest::evolved: bool
 pub db_core::storage::ingest::Manifest::files: alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>
 pub db_core::storage::ingest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::Manifest::format: db_core::storage::stream::detect::Format
