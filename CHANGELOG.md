@@ -12,6 +12,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 - **A quoted time is parsed without reading the clock** unless it is `'now'`. The TIMESTAMP literal rewrite called `unixepoch` through the clock-reading path, which panics on `wasm32-unknown-unknown` (no `SystemTime`).
 - **Batch queries run on a host without threads.** The morsel pools (`run_morsels`, `run_morsels_fold`, `run_morsels_ordered`) run on the calling thread when they would get one worker, instead of spawning one. `wasm32-unknown-unknown` reports no parallelism and cannot spawn, so a query there panicked (`unwrap_failed` in `Scope::spawn`); a one-core host also skips the spawn.
 
+||||||| parent of a4926286 (perf(vm): Reduce over Str/Dict columns counts and orders in place (#750))
+## [0.170.1] - 2026-10-24
+
+### Changed
+
+- **`count`/`min`/`max` over a `Str` or `Dict` column reduce on the typed column, not one `Value` a row** (#750). `typed_reduce_values` now counts from the validity bitmap and orders strings in place, byte-wise as `agg_cmp` does; a dictionary column marks the codes in use and orders only those entries. `sum`/`avg` stay NULL, as before. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(kind)` 86 -> 14 ms wall (CPU 862 -> 81 ms); `min(user_name), max(user_name), count(note)` 222 -> 81 ms (CPU 2325 -> 779 ms); the `count(amount)` control is unchanged at 32 ms. Results equal `reduce_values`' for NULLs, empty strings, all-NULL and zero-length columns, and unused dictionary entries.
+
 ## [0.169.4] - 2026-10-24
 
 ### Changed
