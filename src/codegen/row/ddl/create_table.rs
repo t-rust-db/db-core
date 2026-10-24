@@ -319,6 +319,35 @@ mod tests {
         }
     }
 
+    // codegen_row_ddl_create_table_validate_create_table_c4322884: `*auto && !integer`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_ddl_create_table_validate_create_table_c4322884__v1_autoincrement_on_text_is_rejected(
+    ) {
+        let message = rejected("CREATE TABLE t (a TEXT PRIMARY KEY AUTOINCREMENT)");
+        assert_eq!(
+            message.as_deref(),
+            Some("AUTOINCREMENT is only allowed on an INTEGER PRIMARY KEY")
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_ddl_create_table_validate_create_table_c4322884__v2_plain_text_primary_key_is_accepted(
+    ) {
+        assert_eq!(rejected("CREATE TABLE t (a TEXT PRIMARY KEY)"), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_ddl_create_table_validate_create_table_c4322884__v3_autoincrement_on_integer_is_accepted(
+    ) {
+        assert_eq!(
+            rejected("CREATE TABLE t (a INTEGER PRIMARY KEY AUTOINCREMENT)"),
+            None
+        );
+    }
+
     /// #562: a subquery anywhere in a CHECK body is found, under every
     /// kind of node, and a CHECK using all of them is otherwise fine.
     #[test]

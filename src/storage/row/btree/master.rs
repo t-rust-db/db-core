@@ -580,4 +580,74 @@ mod tests {
         let values2 = decode_record(&row2.payload, header.text_encoding).unwrap();
         assert_eq!(values2[1], Value::Integer(9));
     }
+
+    // storage_row_btree_master_delete_master_row_1bc8ded5: t.as_ref() == kind && n.as_ref() == name
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_btree_master_delete_master_row_1bc8ded5__v1_kind_differs() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        insert_master_row(
+            &mut pager,
+            &header,
+            &MasterEntry {
+                kind: "table".to_string(),
+                name: "x".to_string(),
+                tbl_name: "x".to_string(),
+                rootpage: 0,
+                sql: "CREATE TABLE x(a)".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            delete_master_row(&mut pager, &header, "view", "x"),
+            Err(BtreeError::MasterEntryNotFound)
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_btree_master_delete_master_row_1bc8ded5__v2_name_differs() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        insert_master_row(
+            &mut pager,
+            &header,
+            &MasterEntry {
+                kind: "table".to_string(),
+                name: "x".to_string(),
+                tbl_name: "x".to_string(),
+                rootpage: 0,
+                sql: "CREATE TABLE x(a)".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            delete_master_row(&mut pager, &header, "table", "y"),
+            Err(BtreeError::MasterEntryNotFound)
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_btree_master_delete_master_row_1bc8ded5__v3_kind_and_name_match() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        insert_master_row(
+            &mut pager,
+            &header,
+            &MasterEntry {
+                kind: "table".to_string(),
+                name: "x".to_string(),
+                tbl_name: "x".to_string(),
+                rootpage: 0,
+                sql: "CREATE TABLE x(a)".to_string(),
+            },
+        )
+        .unwrap();
+        delete_master_row(&mut pager, &header, "table", "x").unwrap();
+    }
 }

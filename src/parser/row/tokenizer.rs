@@ -1942,4 +1942,51 @@ mod mcdc_subscript_vectors {
             TokenKind::Identifier("k".into())
         );
     }
+
+    // parser_row_tokenizer_tokenize_mode_4d0617f3: subscripts && matches!(.. "ilike")
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_tokenize_mode_4d0617f3__v1_sqlite_dialect_keeps_the_identifier() {
+        let kind = |toks: Vec<Token>| {
+            toks.into_iter()
+                .next()
+                .map(|t| t.kind)
+                .unwrap_or(TokenKind::Eof)
+        };
+        assert_eq!(
+            kind(Tokenizer::tokenize("ILIKE")),
+            TokenKind::Identifier("ILIKE".into())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_tokenize_mode_4d0617f3__v2_other_identifier_stays_an_identifier()
+    {
+        let kind = |toks: Vec<Token>| {
+            toks.into_iter()
+                .next()
+                .map(|t| t.kind)
+                .unwrap_or(TokenKind::Eof)
+        };
+        assert_eq!(
+            kind(Tokenizer::tokenize_with_subscripts("abc")),
+            TokenKind::Identifier("abc".into())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_tokenize_mode_4d0617f3__v3_ilike_becomes_the_operator() {
+        let kind = |toks: Vec<Token>| {
+            toks.into_iter()
+                .next()
+                .map(|t| t.kind)
+                .unwrap_or(TokenKind::Eof)
+        };
+        assert_eq!(
+            kind(Tokenizer::tokenize_with_subscripts("ILIKE")),
+            TokenKind::Ilike
+        );
+    }
 }

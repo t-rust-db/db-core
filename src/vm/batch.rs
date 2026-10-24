@@ -10851,6 +10851,111 @@ mod tests {
         vm.register(2).unwrap().to_vec()
     }
 
+    // vm_batch_typed_arithmetic_d24069b7 (`typed_arithmetic`):
+    // `x_valid.get(i) && y_valid.get(i)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_typed_arithmetic_d24069b7__v1_both_valid_computes() {
+        let out = typed_map(vec![Value::Int(2)], vec![Value::Int(3)]);
+        assert_eq!(out, vec![Value::Int(5)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_typed_arithmetic_d24069b7__v2_null_lhs_gives_null() {
+        let out = typed_map(
+            vec![Value::Null, Value::Int(2)],
+            vec![Value::Int(3), Value::Int(3)],
+        );
+        assert_eq!(out, vec![Value::Null, Value::Int(5)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_typed_arithmetic_d24069b7__v3_null_rhs_gives_null() {
+        let out = typed_map(
+            vec![Value::Int(2), Value::Int(2)],
+            vec![Value::Null, Value::Int(3)],
+        );
+        assert_eq!(out, vec![Value::Null, Value::Int(5)]);
+    }
+
+    fn slice_starts(num_rows: usize, program: &[Opcode]) -> Vec<usize> {
+        let values: Vec<Value> = (0..num_rows).map(|i| Value::Int(i as i64)).collect();
+        let batch = Batch::new(num_rows)
+            .with_column("a", values.clone())
+            .with_column("b", values);
+        let mut starts = Vec::new();
+        execute_in_slices(&batch, program, |start, _| {
+            starts.push(start);
+            Ok(())
+        })
+        .unwrap();
+        starts
+    }
+
+    fn sliceable_program() -> Vec<Opcode> {
+        vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "a".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "b".into(),
+            },
+            Opcode::Map {
+                dst: 2,
+                op: MapOp::Add,
+                a: 0,
+                b: 1,
+            },
+            Opcode::Emit {
+                registers: vec![2].into(),
+            },
+        ]
+    }
+
+    fn pure_projection_program() -> Vec<Opcode> {
+        vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "a".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ]
+    }
+
+    // vm_batch_execute_in_slices_130fb5ee (`execute_in_slices`):
+    // `batch.num_rows <= SLICE_ROWS || !sliceable(program)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_execute_in_slices_130fb5ee__v1_a_small_batch_runs_whole() {
+        assert_eq!(slice_starts(10, &sliceable_program()), vec![0]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_execute_in_slices_130fb5ee__v2_a_big_batch_of_a_non_sliceable_program_runs_whole(
+    ) {
+        assert_eq!(
+            slice_starts(SLICE_ROWS + 1, &pure_projection_program()),
+            vec![0]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_execute_in_slices_130fb5ee__v3_a_big_batch_of_a_sliceable_program_is_sliced()
+    {
+        assert_eq!(
+            slice_starts(SLICE_ROWS + 1, &sliceable_program()),
+            vec![0, SLICE_ROWS]
+        );
+    }
+
     // vm_batch_typed_arithmetic_b747ddc4 (`typed_arithmetic`):
     // `!matches!(a_col, Int | Float) || !matches!(b_col, Int | Float)`
     #[test]

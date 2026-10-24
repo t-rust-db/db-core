@@ -1957,4 +1957,847 @@ mod tests {
             Value::Null
         );
     }
+
+    // functions_datetime_get_digits_884ad082: val.0 < min || val.0 > max || (next != 0 && next != at(z, 0))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_get_digits_884ad082__v1_all_false_accepts() {
+        assert_eq!(get_digits(b"12", &[(2, 5, 50, 0)]), vec![12]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_get_digits_884ad082__v2_below_min() {
+        assert!(get_digits(b"03", &[(2, 5, 50, 0)]).is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_get_digits_884ad082__v3_above_max() {
+        assert!(get_digits(b"11", &[(2, 0, 10, 0)]).is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_get_digits_884ad082__v4_separator_matches() {
+        assert_eq!(get_digits(b"12:", &[(2, 0, 99, b':')]), vec![12]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_get_digits_884ad082__v5_separator_mismatch() {
+        assert!(get_digits(b"12;", &[(2, 0, 99, b':')]).is_empty());
+    }
+
+    // functions_datetime_compute_jd_1393f1d2: !(-4713..=9999).contains(&y) || p.raw_s
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_jd_1393f1d2__v1_in_range_not_raw() {
+        let mut p = DateTime {
+            valid_ymd: true,
+            y: 2000,
+            mo: 1,
+            d: 1,
+            ..DateTime::default()
+        };
+        compute_jd(&mut p);
+        assert!(p.valid_jd);
+        assert!(!p.is_error);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_jd_1393f1d2__v2_year_out_of_range() {
+        let mut p = DateTime {
+            valid_ymd: true,
+            y: 10000,
+            mo: 1,
+            d: 1,
+            ..DateTime::default()
+        };
+        compute_jd(&mut p);
+        assert!(p.is_error);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_jd_1393f1d2__v3_raw_seconds() {
+        let mut p = DateTime {
+            raw_s: true,
+            ..DateTime::default()
+        };
+        compute_jd(&mut p);
+        assert!(p.is_error);
+    }
+
+    // functions_datetime_compute_floor_0c55f755: p.d <= 28 || matches!(p.mo, 1 | 3 | 5 | 7 | 8 | 10 | 12)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_floor_0c55f755__v1_day_at_most_28() {
+        let mut p = DateTime {
+            y: 2024,
+            mo: 4,
+            d: 1,
+            ..DateTime::default()
+        };
+        compute_floor(&mut p);
+        assert_eq!(p.n_floor, 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_floor_0c55f755__v2_long_month() {
+        let mut p = DateTime {
+            y: 2024,
+            mo: 1,
+            d: 31,
+            ..DateTime::default()
+        };
+        compute_floor(&mut p);
+        assert_eq!(p.n_floor, 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_floor_0c55f755__v3_short_month_day_31() {
+        let mut p = DateTime {
+            y: 2024,
+            mo: 4,
+            d: 31,
+            ..DateTime::default()
+        };
+        compute_floor(&mut p);
+        assert_eq!(p.n_floor, 1);
+    }
+
+    // functions_datetime_compute_floor_88967cd4: p.y % 4 != 0 || (p.y % 100 == 0 && p.y % 400 != 0)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_floor_88967cd4__v1_not_multiple_of_4() {
+        let mut p = DateTime {
+            y: 2023,
+            mo: 2,
+            d: 30,
+            ..DateTime::default()
+        };
+        compute_floor(&mut p);
+        assert_eq!(p.n_floor, 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_floor_88967cd4__v2_plain_leap_year() {
+        let mut p = DateTime {
+            y: 2024,
+            mo: 2,
+            d: 30,
+            ..DateTime::default()
+        };
+        compute_floor(&mut p);
+        assert_eq!(p.n_floor, 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_floor_88967cd4__v3_century_not_leap() {
+        let mut p = DateTime {
+            y: 1900,
+            mo: 2,
+            d: 30,
+            ..DateTime::default()
+        };
+        compute_floor(&mut p);
+        assert_eq!(p.n_floor, 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_floor_88967cd4__v4_century_400_leap() {
+        let mut p = DateTime {
+            y: 2000,
+            mo: 2,
+            d: 30,
+            ..DateTime::default()
+        };
+        compute_floor(&mut p);
+        assert_eq!(p.n_floor, 1);
+    }
+
+    // functions_datetime_parse_hhmmss_00a2f70e: at(z, 0) == b'.' && at(z, 1).is_ascii_digit()
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_hhmmss_00a2f70e__v1_no_dot() {
+        let mut p = DateTime::default();
+        assert!(!parse_hhmmss(b"12:30:45", &mut p));
+        assert_eq!(p.s, 45.0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_hhmmss_00a2f70e__v2_dot_without_digit() {
+        let mut p = DateTime::default();
+        assert!(parse_hhmmss(b"12:30:45.x", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_hhmmss_00a2f70e__v3_dot_with_digit() {
+        let mut p = DateTime::default();
+        assert!(!parse_hhmmss(b"12:30:45.5", &mut p));
+        assert_eq!(p.s, 45.5);
+    }
+
+    // functions_datetime_parse_yyyymmdd_5a15ed2a: is_space(at(z, 0)) || at(z, 0) == b'T'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_yyyymmdd_5a15ed2a__v1_neither_space_nor_t() {
+        let mut p = DateTime::default();
+        assert!(parse_yyyymmdd(b"2024-03-15x10:00", &mut p));
+        assert!(!p.valid_hms);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_yyyymmdd_5a15ed2a__v2_space_separator() {
+        let mut p = DateTime::default();
+        assert!(!parse_yyyymmdd(b"2024-03-15 10:00", &mut p));
+        assert!(p.valid_hms);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_yyyymmdd_5a15ed2a__v3_t_separator() {
+        let mut p = DateTime::default();
+        assert!(!parse_yyyymmdd(b"2024-03-15T10:00", &mut p));
+        assert!(p.valid_hms);
+    }
+
+    // functions_datetime_parse_date_or_time_bf598f61: !parse_yyyymmdd(z, p) || !parse_hhmmss(z, p)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_date_or_time_bf598f61__v1_date_parses() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(p.valid_ymd);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_date_or_time_bf598f61__v2_time_only_parses() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"10:30", &mut p, 0));
+        assert!(!p.valid_ymd);
+        assert!(p.valid_hms);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_date_or_time_bf598f61__v3_neither_parses() {
+        let mut p = DateTime::default();
+        assert!(parse_date_or_time(b"bogus", &mut p, 0));
+    }
+
+    // functions_datetime_parse_date_or_time_022df7ff: z.eq_ignore_ascii_case(b"subsec") || z.eq_ignore_ascii_case(b"subsecond")
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_date_or_time_022df7ff__v1_neither() {
+        let mut p = DateTime::default();
+        assert!(parse_date_or_time(b"bogus", &mut p, 0));
+        assert!(!p.use_subsec);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_date_or_time_022df7ff__v2_subsec() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"subsec", &mut p, 0));
+        assert!(p.use_subsec);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_date_or_time_022df7ff__v3_subsecond() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"subsecond", &mut p, 0));
+        assert!(p.use_subsec);
+    }
+
+    // functions_datetime_modifier_start_of_022df7ff: z.eq_ignore_ascii_case(b"subsec") || z.eq_ignore_ascii_case(b"subsecond")
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_start_of_022df7ff__v1_neither() {
+        let mut p = DateTime::default();
+        assert!(modifier_start_of(b"bogus", &mut p));
+        assert!(!p.use_subsec);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_start_of_022df7ff__v2_subsec() {
+        let mut p = DateTime::default();
+        assert!(!modifier_start_of(b"subsec", &mut p));
+        assert!(p.use_subsec);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_start_of_022df7ff__v3_subsecond() {
+        let mut p = DateTime::default();
+        assert!(!modifier_start_of(b"subsecond", &mut p));
+        assert!(p.use_subsec);
+    }
+
+    // functions_datetime_auto_adjust_date_11585db7: !p.raw_s || p.valid_jd
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_auto_adjust_date_11585db7__v1_raw_unix_seconds_adjusted() {
+        let mut p = DateTime {
+            raw_s: true,
+            s: 0.0,
+            ..DateTime::default()
+        };
+        auto_adjust_date(&mut p);
+        assert!(p.valid_jd);
+        assert!(!p.raw_s);
+        assert_eq!(p.ijd, UNIX_EPOCH_JD_MS);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_auto_adjust_date_11585db7__v2_not_raw() {
+        let mut p = DateTime::default();
+        auto_adjust_date(&mut p);
+        assert!(!p.valid_jd);
+        assert!(!p.raw_s);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_auto_adjust_date_11585db7__v3_raw_julian_day() {
+        let mut p = DateTime {
+            raw_s: true,
+            valid_jd: true,
+            ijd: 5,
+            ..DateTime::default()
+        };
+        auto_adjust_date(&mut p);
+        assert_eq!(p.ijd, 5);
+        assert!(!p.raw_s);
+    }
+
+    // functions_datetime_parse_modifier_a3c1b99d: z.eq_ignore_ascii_case(b"unixepoch") && p.raw_s
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_modifier_a3c1b99d__v1_not_unixepoch() {
+        let mut p = DateTime::default();
+        assert!(!parse_modifier(b"utc", &mut p, 1));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_modifier_a3c1b99d__v2_unixepoch_without_raw() {
+        let mut p = DateTime::default();
+        assert!(parse_modifier(b"unixepoch", &mut p, 1));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_modifier_a3c1b99d__v3_unixepoch_with_raw() {
+        let mut p = DateTime {
+            raw_s: true,
+            s: 0.0,
+            ..DateTime::default()
+        };
+        assert!(!parse_modifier(b"unixepoch", &mut p, 1));
+        assert!(p.valid_jd);
+        assert_eq!(p.ijd, UNIX_EPOCH_JD_MS);
+    }
+
+    // functions_datetime_parse_modifier_99eb0071: p.valid_jd && p.raw_s
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_modifier_99eb0071__v1_no_julian_day() {
+        let mut p = DateTime {
+            raw_s: true,
+            ..DateTime::default()
+        };
+        assert!(parse_modifier(b"julianday", &mut p, 1));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_modifier_99eb0071__v2_not_raw() {
+        let mut p = DateTime {
+            valid_jd: true,
+            ..DateTime::default()
+        };
+        assert!(parse_modifier(b"julianday", &mut p, 1));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_modifier_99eb0071__v3_raw_julian_day() {
+        let mut p = DateTime {
+            valid_jd: true,
+            raw_s: true,
+            ..DateTime::default()
+        };
+        assert!(!parse_modifier(b"julianday", &mut p, 1));
+        assert!(!p.raw_s);
+    }
+
+    // functions_datetime_modifier_weekday_8f1c5994: !(0.0..7.0).contains(&r) || r.fract() != 0.0
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_weekday_8f1c5994__v1_whole_in_range() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_weekday(b"weekday 1", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_weekday_8f1c5994__v2_out_of_range() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_weekday(b"weekday 9", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_weekday_8f1c5994__v3_fractional() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_weekday(b"weekday 1.5", &mut p));
+    }
+
+    // functions_datetime_modifier_start_of_7dc9be9f: !p.valid_jd && !p.valid_ymd && !p.valid_hms
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_start_of_7dc9be9f__v1_nothing_valid() {
+        let mut p = DateTime {
+            ..DateTime::default()
+        };
+        assert!(modifier_start_of(b"start of day", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_start_of_7dc9be9f__v2_julian_day_valid() {
+        let mut p = DateTime {
+            valid_jd: true,
+            ..DateTime::default()
+        };
+        assert!(!modifier_start_of(b"start of day", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_start_of_7dc9be9f__v3_ymd_valid() {
+        let mut p = DateTime {
+            valid_ymd: true,
+            y: 2024,
+            mo: 3,
+            d: 15,
+            ..DateTime::default()
+        };
+        assert!(!modifier_start_of(b"start of day", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_start_of_7dc9be9f__v4_hms_valid() {
+        let mut p = DateTime {
+            valid_hms: true,
+            ..DateTime::default()
+        };
+        assert!(!modifier_start_of(b"start of day", &mut p));
+    }
+
+    // functions_datetime_modifier_numeric_37daa820: c == 0 || c == b':' || is_space(c)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_37daa820__v1_ordinary_char_continues() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+10 days", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_37daa820__v2_end_of_text() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+5", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_37daa820__v3_colon() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+10:30", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_37daa820__v4_space() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+1 day", &mut p));
+    }
+
+    // functions_datetime_modifier_numeric_01236e48: c == b'-' && ((n == 5 && get_digits(adv(z, 1), &[(4, 0, 14712, 0)]).len() == 1)     || (n == 6 && get_digits(adv(z, 1), &[(5, 0, 14712, 0)]).len() == 1))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_01236e48__v1_not_a_dash() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+1 day", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_01236e48__v2_dash_at_other_position() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+1-2", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_01236e48__v3_dash_at_5_year_not_digits() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+12a4-01", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_01236e48__v4_dash_at_5_year_digits() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+2024-01-15", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_01236e48__v5_dash_at_6_year_not_digits() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+12a45-01", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_01236e48__v6_dash_at_6_year_digits() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+12345-01-15", &mut p));
+    }
+
+    // functions_datetime_modifier_numeric_a61d4831: z0 != b'+' && z0 != b'-'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_a61d4831__v1_plus_sign() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+2024-01-15", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_a61d4831__v2_minus_sign() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"-2024-01-15", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_a61d4831__v3_digit_first() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"92024-01-01", &mut p));
+    }
+
+    // functions_datetime_modifier_numeric_150cb5de: m >= 12 || d >= 31
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_150cb5de__v1_month_and_day_in_range() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+2024-01-15", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_150cb5de__v2_month_12() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+2024-12-01", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_150cb5de__v3_day_31() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+2024-01-31", &mut p));
+    }
+
+    // functions_datetime_modifier_numeric_0b40fe1c: is_space(at(z, 11)) && get_digits(adv(z, 12), &HH_MM).len() == 2
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_0b40fe1c__v1_space_and_time() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+2024-01-15 10:30", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_0b40fe1c__v2_no_space() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+2024-01-15x", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_0b40fe1c__v3_space_without_time() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+2024-01-15 xx", &mut p));
+    }
+
+    // functions_datetime_modifier_numeric_da9dc157: unit.eq_ignore_ascii_case(name) && r > -limit && r < limit
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_da9dc157__v1_unit_and_range_match() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(!modifier_numeric(b"+1 day", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_da9dc157__v2_unit_unknown() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+1 foo", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_da9dc157__v3_below_negative_limit() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"-6000000 days", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_da9dc157__v4_above_limit() {
+        let mut p = DateTime::default();
+        assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
+        assert!(modifier_numeric(b"+6000000 days", &mut p));
+    }
+
+    // functions_datetime_modifier_numeric_1063a50b: i == 4 || i == 5
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_1063a50b__v1_day_unit() {
+        assert_eq!(
+            call("date", &[t("2024-03-15"), t("+1 day")]),
+            t("2024-03-16")
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_1063a50b__v2_month_unit() {
+        assert_eq!(
+            call("date", &[t("2024-03-15"), t("+1 month")]),
+            t("2024-04-15")
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_numeric_1063a50b__v3_year_unit() {
+        assert_eq!(
+            call("date", &[t("2024-03-15"), t("+1 year")]),
+            t("2025-03-15")
+        );
+    }
+
+    // functions_datetime_is_date_7e7af6e2: p.is_error || !valid_julian_day(p.ijd)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_is_date_7e7af6e2__v1_valid_day() {
+        assert!(is_date(&[t("2024-03-15")], 0).is_some());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_is_date_7e7af6e2__v2_error_state() {
+        assert!(is_date(&[Value::Real(-1.0)], 0).is_none());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_is_date_7e7af6e2__v3_julian_day_out_of_range() {
+        assert!(is_date(&[t("9999-12-31"), t("+1 day")], 0).is_none());
+    }
+
+    // functions_datetime_is_date_d595070a: args.len() == 1 && p.valid_ymd && p.d > 28
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_is_date_d595070a__v1_day_over_28_normalised() {
+        let p = is_date(&[t("2024-03-31")], 0).expect("valid");
+        assert!(!p.valid_ymd);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_is_date_d595070a__v2_two_args() {
+        let p = is_date(&[t("2024-03-31"), t("subsec")], 0).expect("valid");
+        assert!(p.valid_ymd);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_is_date_d595070a__v3_no_ymd() {
+        let p = is_date(&[Value::Real(2_460_000.5)], 0).expect("valid");
+        assert!(!p.valid_ymd);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_is_date_d595070a__v4_day_28_or_less() {
+        let p = is_date(&[t("2024-03-15")], 0).expect("valid");
+        assert!(p.valid_ymd);
+    }
+
+    // functions_datetime_fmt_fixed_c176eb0e: x == 0.0 || d.iter().all(|&c| c == b'0')
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_fmt_fixed_c176eb0e__v1_nonzero_digits() {
+        assert_eq!(fmt_fixed(1.5, 2), "1.50");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_fmt_fixed_c176eb0e__v2_zero() {
+        assert_eq!(fmt_fixed(0.0, 2), "0.00");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_fmt_fixed_c176eb0e__v3_rounds_to_zero() {
+        assert_eq!(fmt_fixed(0.0001, 2), "0.00");
+    }
+
+    // functions_datetime_fmt_fixed_722ebf45: x < 0.0 && (int_part.bytes().chain(frac.bytes())).any(|c| c != b'0')
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_fmt_fixed_722ebf45__v1_positive() {
+        assert_eq!(fmt_fixed(1.5, 2), "1.50");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_fmt_fixed_722ebf45__v2_negative_nonzero() {
+        assert_eq!(fmt_fixed(-1.5, 2), "-1.50");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_fmt_fixed_722ebf45__v3_negative_rounds_to_zero() {
+        assert_eq!(fmt_fixed(-0.0001, 2), "0.00");
+    }
+
+    // functions_datetime_modifier_utc_c5789e7f: err == 0 || cnt >= 3
+    // A julian day outside the valid range never round-trips through
+    // `to_localtime`, so every guess has a non-zero error.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_utc_c5789e7f__v1_first_guess_exact() {
+        let mut p = DateTime {
+            ijd: UNIX_EPOCH_JD_MS,
+            valid_jd: true,
+            ..DateTime::default()
+        };
+        modifier_utc(&mut p);
+        assert!(p.is_utc);
+        assert_eq!(p.ijd, UNIX_EPOCH_JD_MS);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_utc_c5789e7f__v2_error_and_guesses_remain() {
+        let mut p = DateTime {
+            ijd: -1,
+            valid_jd: true,
+            ..DateTime::default()
+        };
+        modifier_utc(&mut p);
+        assert!(p.is_utc);
+        assert!(p.valid_jd);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_utc_c5789e7f__v3_error_and_guesses_exhausted() {
+        let mut p = DateTime {
+            ijd: MAX_JD_MS + 1,
+            valid_jd: true,
+            ..DateTime::default()
+        };
+        modifier_utc(&mut p);
+        assert!(p.is_utc);
+        assert!(p.valid_jd);
+    }
+
+    // functions_datetime_timediff_af54b5d0: d1.ijd < d2.ijd && !d2.is_error
+    // (the second leaf cannot be false while the first is true: an errored
+    // `d2` has `ijd == 0`, never above a valid `d1.ijd`.)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_timediff_af54b5d0__v1_d1_not_before_d2() {
+        assert_eq!(
+            call("timediff", &[t("2024-03-15"), t("2024-03-10")]),
+            t("+0000-00-05 00:00:00.000")
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_timediff_af54b5d0__v2_d1_before_d2_no_error() {
+        assert_eq!(
+            call("timediff", &[t("2024-03-10"), t("2024-02-15")]),
+            t("+0000-00-24 00:00:00.000")
+        );
+    }
+
+    // functions_datetime_timediff_be8b89ec: d1.ijd > d2.ijd && !d2.is_error
+    // (same: the leaf `!d2.is_error` cannot flip the outcome.)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_timediff_be8b89ec__v1_d1_not_after_d2() {
+        assert_eq!(
+            call("timediff", &[t("2024-03-10"), t("2024-03-15")]),
+            t("-0000-00-05 00:00:00.000")
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_timediff_be8b89ec__v2_d1_after_d2_no_error() {
+        assert_eq!(
+            call("timediff", &[t("2024-02-15"), t("2024-03-10")]),
+            t("-0000-00-24 00:00:00.000")
+        );
+    }
 }

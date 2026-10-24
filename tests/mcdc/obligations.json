@@ -2250,6 +2250,16 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_batch_call_names_a5e14629",
+    "file": "src/codegen/batch.rs",
+    "line": 5607,
+    "decision": "match &i.opcode {\n                Opcode::Call { name, .. } => Some(name.to_string()),\n                _ => None,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "codegen_batch_emit_fmt_2bee677b",
     "file": "src/codegen/batch/emit.rs",
     "line": 78,
@@ -3102,7 +3112,7 @@
   {
     "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 362,
+    "line": 391,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3112,7 +3122,7 @@
   {
     "id": "codegen_row_ddl_create_table_compiles_to_init_create_table_halt_3dc50051",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 373,
+    "line": 402,
     "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable {\n                name,\n                sql: got_sql,\n                without_rowid,\n                autoindexes,\n            } => {\n                assert_eq!(name, \"t\");\n                assert_eq!(got_sql, sql);\n                assert!(!without_rowid);\n                assert!(autoindexes.is_empty());\n            }\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3122,7 +3132,7 @@
   {
     "id": "codegen_row_ddl_create_table_autoindex_names_61144a02",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 390,
+    "line": 419,
     "decision": "match crate::parser::row::error::parse_create_table(sql) {\n            ParseOutcome::Accepted(c) => c,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3132,7 +3142,7 @@
   {
     "id": "codegen_row_ddl_create_table_autoindex_names_e668f035",
     "file": "src/codegen/row/ddl/create_table.rs",
-    "line": 395,
+    "line": 424,
     "decision": "match &program.instructions[1].p4 {\n            P4::CreateTable { autoindexes, .. } => autoindexes.clone(),\n            other => panic!(\"expected P4::CreateTable, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24042,7 +24052,7 @@
   {
     "id": "functions_json_marked_f105c3c0",
     "file": "src/functions/json.rs",
-    "line": 2647,
+    "line": 2648,
     "decision": "match super::call_marked(name, args, json) {\n            Some(Ok(Value::Text(s))) => s.to_string(),\n            other => panic!(\"{name}: expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24052,7 +24062,7 @@
   {
     "id": "functions_json_text_c5855546",
     "file": "src/functions/json.rs",
-    "line": 2655,
+    "line": 2656,
     "decision": "match ok(name, args) {\n            Value::Text(s) => s.to_string(),\n            other => panic!(\"{name}: expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -24062,7 +24072,7 @@
   {
     "id": "functions_json_err_d41c02e1",
     "file": "src/functions/json.rs",
-    "line": 2663,
+    "line": 2664,
     "decision": "match call(name, args) {\n            Err(FunctionError::Sql(m)) => m,\n            other => panic!(\"{name}: expected an SQL error, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51272,7 +51282,7 @@
   {
     "id": "vm_batch_group_reduce_typed_int_key_matches_the_value_key_path_5216460c",
     "file": "src/vm/batch.rs",
-    "line": 10893,
+    "line": 10998,
     "decision": "match i % 7 {\n                0 => None,\n                1 => Some(-(i % 13)),\n                2 => Some((i % 11) << 40),\n                _ => Some(i % 17),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51282,7 +51292,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_98a22246",
     "file": "src/vm/batch.rs",
-    "line": 11055,
+    "line": 11160,
     "decision": "i % 11 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51292,7 +51302,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_35425997",
     "file": "src/vm/batch.rs",
-    "line": 11063,
+    "line": 11168,
     "decision": "match i % 5 {\n                0 => Value::Null,\n                r => Value::Str(format!(\"s{r}\").into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51302,7 +51312,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_a209a191",
     "file": "src/vm/batch.rs",
-    "line": 11070,
+    "line": 11175,
     "decision": "i % 13 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51312,7 +51322,7 @@
   {
     "id": "vm_batch_group_reduce_dict_plus_int_composite_key_matches_the_value_key_path_bde636e8",
     "file": "src/vm/batch.rs",
-    "line": 11155,
+    "line": 11260,
     "decision": "ok",
     "conditions": 1,
     "vectors_required": 2,
@@ -52042,7 +52052,7 @@
   {
     "id": "vm_combine_typed_partials_merge_as_untyped_chunks_do_e238f981",
     "file": "src/vm/combine.rs",
-    "line": 1168,
+    "line": 1270,
     "decision": "match next(25) {\n                    0 => Value::Null,\n                    // One late chunk has a float key: the column demotes.\n                    1 if segment == 9 => Value::Float(0.5),\n                    k => Value::Int(i64::try_from(k).unwrap_or(0)),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -52052,7 +52062,7 @@
   {
     "id": "vm_combine_typed_partials_merge_as_untyped_chunks_do_29c94cfe",
     "file": "src/vm/combine.rs",
-    "line": 1171,
+    "line": 1273,
     "decision": "segment == 9",
     "conditions": 1,
     "vectors_required": 2,
@@ -52062,7 +52072,7 @@
   {
     "id": "vm_combine_typed_partials_merge_as_untyped_chunks_do_c4bf3a26",
     "file": "src/vm/combine.rs",
-    "line": 1176,
+    "line": 1278,
     "decision": "match next(6) {\n                    0 => Value::Null,\n                    k => s(&format!(\"name{k}\")),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -52482,7 +52492,7 @@
   {
     "id": "vm_engine_scan_program_f8be12f4",
     "file": "src/vm/engine.rs",
-    "line": 1136,
+    "line": 1206,
     "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -52492,7 +52502,7 @@
   {
     "id": "vm_engine_count_program_0ac42f8a",
     "file": "src/vm/engine.rs",
-    "line": 1703,
+    "line": 1825,
     "decision": "grouped",
     "conditions": 1,
     "vectors_required": 2,
