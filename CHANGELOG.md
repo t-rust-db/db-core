@@ -4,11 +4,23 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.171.1] - 2026-10-24
+
+### Changed
+
+- **`col IN (literal, ...)` is one set probe per row, not a comparison and an `OR` per item** (#737). The column parser still lowers an `IN` list to `col = a OR col = b ...` (`col <> a AND ...` for `NOT IN`), so validation, pruning and the stream engine are unchanged; batch codegen recognizes that chain over one column and literals, also written out by hand, and emits a new `Opcode::InList`. A typed string or dictionary column probes a hash set of the list's strings in the column's own buffer (a dictionary once per distinct value) and yields a typed `Bool` column; any other column or list folds the same comparisons in one pass, so conversions, NULLs and errors match the chain exactly. On a 2M-row tiered table (UUID strings, ZSTD, best of 5, A/B/A against main): `IN (100 ids)` 1 140 ms → 21 ms, the same behind `ts >= now - 2 days` 80 ms → 4 ms, `NOT IN (100)` 1 150 ms → 44 ms; a single `=` is unchanged at 30 ms. File pruning already handled the lowered chain; a test now pins it for `IN`.
+
 ## [0.171.0] - 2026-10-24
 
 ### Added
 
 - **A record table's schema can gain nullable columns at the end** (#740). `TableWriter::open` accepts a requested schema that is the stored one plus nullable columns and commits it to the manifest before anything is appended; a dropped, renamed, retyped, reordered or non-nullable column still fails with `SchemaMismatch`. Rows that predate the change read NULL in the new columns: WAL rows of the old arity are padded on replay (writer and `Snapshot`), and a day merge reads a nullable column an older hour file lacks as NULL instead of `Corrupt("has no column ...")`. A manifest whose schema evolved is written as version 5 (`Manifest::evolved`), so a reader that predates it refuses the table rather than reading files and rows that lack the columns.
+
+## [0.170.1] - 2026-10-24
+
+### Changed
+
+- **`count`/`min`/`max` over a `Str` or `Dict` column reduce on the typed column, not one `Value` a row** (#750). `typed_reduce_values` now counts from the validity bitmap and orders strings in place, byte-wise as `agg_cmp` does; a dictionary column marks the codes in use and orders only those entries. `sum`/`avg` stay NULL, as before. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(kind)` 86 -> 14 ms wall (CPU 862 -> 81 ms); `min(user_name), max(user_name), count(note)` 222 -> 81 ms (CPU 2325 -> 779 ms); the `count(amount)` control is unchanged at 32 ms. Results equal `reduce_values`' for NULLs, empty strings, all-NULL and zero-length columns, and unused dictionary entries.
 
 ## [0.170.0] - 2026-10-24
 
@@ -19,12 +31,6 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 - **Batch queries run on a host without threads.** The morsel pools (`run_morsels`, `run_morsels_fold`, `run_morsels_ordered`) run on the calling thread when they would get one worker, instead of spawning one. `wasm32-unknown-unknown` reports no parallelism and cannot spawn, so a query there panicked (`unwrap_failed` in `Scope::spawn`); a one-core host also skips the spawn.
 
 ||||||| parent of a4926286 (perf(vm): Reduce over Str/Dict columns counts and orders in place (#750))
-## [0.170.1] - 2026-10-24
-
-### Changed
-
-- **`count`/`min`/`max` over a `Str` or `Dict` column reduce on the typed column, not one `Value` a row** (#750). `typed_reduce_values` now counts from the validity bitmap and orders strings in place, byte-wise as `agg_cmp` does; a dictionary column marks the codes in use and orders only those entries. `sum`/`avg` stay NULL, as before. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(kind)` 86 -> 14 ms wall (CPU 862 -> 81 ms); `min(user_name), max(user_name), count(note)` 222 -> 81 ms (CPU 2325 -> 779 ms); the `count(amount)` control is unchanged at 32 ms. Results equal `reduce_values`' for NULLs, empty strings, all-NULL and zero-length columns, and unused dictionary entries.
-
 ## [0.169.4] - 2026-10-24
 
 ### Changed

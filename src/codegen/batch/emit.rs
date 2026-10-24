@@ -970,6 +970,18 @@ fn render_opcode(op: &Opcode) -> String {
             )
         }
         Opcode::Limit { n, offset } => format!("Opcode::Limit {{ n: {n}, offset: {offset} }}"),
+        Opcode::InList {
+            dst,
+            src,
+            list,
+            negated,
+        } => {
+            let list: Vec<String> = list.iter().map(render_value).collect();
+            format!(
+                "Opcode::InList {{ dst: {dst}, src: {src}, list: std::borrow::Cow::Borrowed(&[{}]), negated: {negated} }}",
+                list.join(", ")
+            )
+        }
         // No caller-side planner emits these three yet -- the join/semi-
         // join/window bypass shapes ([`render_joined`]/
         // [`render_semi_join`]/[`render_windowed`]) still reconstruct a
@@ -1419,6 +1431,20 @@ mod tests {
             let rendered = render_opcode(&op);
             assert!(!rendered.is_empty());
         }
+    }
+
+    #[test]
+    fn render_opcode_renders_an_in_list_with_its_literals() {
+        let op = Opcode::InList {
+            dst: 1,
+            src: 0,
+            list: vec![Value::Str("a".into()), Value::Null].into(),
+            negated: true,
+        };
+        assert_eq!(
+            render_opcode(&op),
+            "Opcode::InList { dst: 1, src: 0, list: std::borrow::Cow::Borrowed(&[Value::Str(std::borrow::Cow::Borrowed(\"a\")), Value::Null]), negated: true }"
+        );
     }
 
     #[test]
