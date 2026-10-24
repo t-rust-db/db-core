@@ -1055,6 +1055,84 @@ mod tests {
         let folded = combine_chunks(agg_parts, *num_group_keys, folded.chunks()).unwrap();
         assert_eq!(folded.into_rows(), expected);
     }
+
+    #[test]
+    fn dict_keyed_segments_fold_their_slices_and_merge_in_first_seen_order() {
+        // #751: `GROUP BY` a dictionary column over several sliced
+        // segments, each folding its slices by code, merges to exactly
+        // one row per key, in first-seen order across the segments.
+        use crate::vm::batch::SLICE_ROWS;
+        use crate::vm::column::{Bitmap, Column};
+        let schema = ["k".to_string(), "v".to_string()];
+        let select = crate::codegen::batch::expand_star(
+            &crate::parser::parse("SELECT k, COUNT(*), SUM(v) FROM t GROUP BY k").unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let program = crate::codegen::batch::compile(&select).unwrap();
+        let (body, combine, _, _) = program.split_finalize();
+        let Some(Opcode::Combine {
+            agg_parts,
+            num_group_keys,
+            ..
+        }) = combine
+        else {
+            panic!("no Combine");
+        };
+        let n = SLICE_ROWS * 2 + 500;
+        // Segment `s` sees key `(i + s) % 40` at row `i`: every segment
+        // folds to 40 groups, and segment 1's first key (`k1`) is also
+        // segment 0's second, so first-seen order is `k0, k1, ..., k39`.
+        let key = |s: usize, i: usize| (i + s) % 40;
+        let segment = |s: usize| {
+            let dict: Vec<Arc<str>> = (0..40).map(|i| format!("k{i}").into()).collect();
+            InMemorySegment(
+                Batch::new(n)
+                    .with_typed_column(
+                        "k",
+                        Column::Dict {
+                            dict,
+                            indices: (0..n).map(|i| key(s, i) as u32).collect(),
+                            valid: Bitmap::from_bools((0..n).map(|_| true)),
+                        },
+                    )
+                    .with_column("v", (0..n).map(|i| Value::Int(i as i64)).collect()),
+            )
+        };
+        let segments = [segment(0), segment(1)];
+        let mut expected: Vec<Vec<Value>> = (0..40)
+            .map(|k| {
+                vec![
+                    Value::Str(format!("k{k}").into()),
+                    Value::Int(0),
+                    Value::Int(0),
+                ]
+            })
+            .collect();
+        for s in 0..2 {
+            for i in 0..n {
+                let row = &mut expected[key(s, i)];
+                let (Value::Int(c), Value::Int(t)) = (&row[1], &row[2]) else {
+                    panic!("ints");
+                };
+                (row[1], row[2]) = (Value::Int(c + 1), Value::Int(t + i as i64));
+            }
+        }
+        let body: Vec<Opcode> = body.to_vec();
+        assert!(crate::vm::batch::folds_dict_groups(&body), "{body:?}");
+        let pre = combine_partials(
+            agg_parts,
+            *num_group_keys,
+            run_parallel_preaggregate(&segments, &body, agg_parts, *num_group_keys).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(pre.into_rows(), expected);
+        let per_segment =
+            run_parallel_segment_partials(&segments, &body, agg_parts, *num_group_keys).unwrap();
+        let merged = combine_chunks(agg_parts, *num_group_keys, per_segment.chunks()).unwrap();
+        assert_eq!(merged.into_rows(), expected);
+    }
+
     fn two_key_segment(n: usize) -> InMemorySegment {
         InMemorySegment(
             Batch::new(n)
