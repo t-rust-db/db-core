@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.173.1] - 2026-10-24
+
+### Changed
+
+- **`RunningAgg` keeps `MIN`/`MAX` as primitives for integer and float input** (#763). `push_i64`/`push_f64` boxed a `Value` and ran `keep_extreme` -> `agg_cmp` -> `numeric_cmp` twice per row for every aggregate, `COUNT` and `SUM` included (about half the CPU of `count(amount)`). The extremes are now an `Extremes` enum: a plain `i64` / `f64` (`total_cmp`) pair while the input is all integers or all floats, boxed values from the first input of another type on, with the primitives carried over, so results are those of the old sequential fold, first-seen ties (`MIN(1, 1.0)`) and precision-loss ties past 2^53 included. The accumulator stays the same size. A/B/A against main through column-rs, wall / CPU ms: 20M rows with nullable INT64 dictionary `amount`, `count(amount)` 33 / 267 -> 25 / 172, `sum(amount)` 33 / 267 -> 25 / 171, `GROUP BY kind` with `count(*), sum(amount)` 49 / 428 -> 37 / 320; parity `large` (DOUBLE `amount`), `SUM` 23 / 145 -> 15 / 97, `GROUP BY region` 230 -> 169 ms CPU, `GROUP BY customer_id` (high cardinality) unchanged at 130 / 950, same peak RSS.
+
 ## [0.173.0] - 2026-10-24
 
 ### Added

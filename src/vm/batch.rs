@@ -3544,8 +3544,24 @@ struct RunningAgg {
     dec_float: f64,
     /// The smallest and largest non-`Null` input, in [`agg_cmp`]'s order:
     /// integers stay exact and text compares byte-wise (#631).
-    min: Option<Value>,
-    max: Option<Value>,
+    extremes: Extremes,
+}
+
+/// `MIN`/`MAX`'s running pair (#763): primitives while every input so
+/// far is an integer, or every one a float -- the typed-column case, a
+/// plain comparison per row -- and boxed values from the first input of
+/// another type on, folded by [`keep_extreme`]. The switch carries the
+/// primitives over as values, so the result is that of one sequential
+/// [`agg_cmp`] fold either way, first-seen on ties (`MIN(1, 1.0)` is
+/// `1`).
+#[derive(Debug, Clone, Default)]
+enum Extremes {
+    #[default]
+    Empty,
+    Int(i64, i64),
+    /// Ordered by `total_cmp`, as [`numeric_cmp`] orders floats.
+    Float(f64, f64),
+    Boxed(Value, Value),
 }
 
 impl RunningAgg {
@@ -3562,10 +3578,23 @@ impl RunningAgg {
             Some(other) => {
                 self.row_count = self.row_count.saturating_add(1);
                 self.non_null_count = self.non_null_count.saturating_add(1);
-                keep_extreme(&mut self.min, other, std::cmp::Ordering::Less);
-                keep_extreme(&mut self.max, other, std::cmp::Ordering::Greater);
+                self.push_extreme(other);
             }
         }
+    }
+
+    /// Folds `value` into [`Self::extremes`] as a boxed value, boxing the
+    /// primitives seen so far first.
+    fn push_extreme(&mut self, value: &Value) {
+        let (mut min, mut max) = match std::mem::take(&mut self.extremes) {
+            Extremes::Empty => (value.clone(), value.clone()),
+            Extremes::Int(min, max) => (Value::Int(min), Value::Int(max)),
+            Extremes::Float(min, max) => (Value::Float(min), Value::Float(max)),
+            Extremes::Boxed(min, max) => (min, max),
+        };
+        keep_extreme(&mut min, value, std::cmp::Ordering::Less);
+        keep_extreme(&mut max, value, std::cmp::Ordering::Greater);
+        self.extremes = Extremes::Boxed(min, max);
     }
 
     /// Folds one more non-`Null` integer, read straight from a typed
@@ -3575,9 +3604,14 @@ impl RunningAgg {
         self.non_null_count = self.non_null_count.saturating_add(1);
         self.numeric_count = self.numeric_count.saturating_add(1);
         self.int_sum = self.int_sum.saturating_add(i128::from(x));
-        let value = Value::Int(x);
-        keep_extreme(&mut self.min, &value, std::cmp::Ordering::Less);
-        keep_extreme(&mut self.max, &value, std::cmp::Ordering::Greater);
+        match &mut self.extremes {
+            Extremes::Int(min, max) => {
+                *min = (*min).min(x);
+                *max = (*max).max(x);
+            }
+            Extremes::Empty => self.extremes = Extremes::Int(x, x),
+            _ => self.push_extreme(&Value::Int(x)),
+        }
     }
 
     /// Folds one more non-`Null` float, read straight from a typed
@@ -3588,9 +3622,19 @@ impl RunningAgg {
         self.numeric_count = self.numeric_count.saturating_add(1);
         self.float_sum += x;
         self.saw_float = true;
-        let value = Value::Float(x);
-        keep_extreme(&mut self.min, &value, std::cmp::Ordering::Less);
-        keep_extreme(&mut self.max, &value, std::cmp::Ordering::Greater);
+        match &mut self.extremes {
+            // `total_cmp` equal is bit-identical, so first-seen is moot.
+            Extremes::Float(min, max) => {
+                if x.total_cmp(min).is_lt() {
+                    *min = x;
+                }
+                if x.total_cmp(max).is_gt() {
+                    *max = x;
+                }
+            }
+            Extremes::Empty => self.extremes = Extremes::Float(x, x),
+            _ => self.push_extreme(&Value::Float(x)),
+        }
     }
 
     /// Folds one more non-`Null` decimal, exactly (#632): the running
@@ -3614,9 +3658,7 @@ impl RunningAgg {
             _ => self.dec_overflow = true,
         }
         self.dec_scale = Some(total_scale);
-        let value = Value::Decimal { unscaled, scale };
-        keep_extreme(&mut self.min, &value, std::cmp::Ordering::Less);
-        keep_extreme(&mut self.max, &value, std::cmp::Ordering::Greater);
+        self.push_extreme(&Value::Decimal { unscaled, scale });
     }
 
     /// Counts one non-`Null` text row whose ordering the caller tracks
@@ -3629,8 +3671,10 @@ impl RunningAgg {
     /// Sets the text extremes a typed column's caller found (#750).
     fn set_text_extremes(&mut self, min: Option<String>, max: Option<String>) {
         let owned = |text: String| Value::Str(Cow::Owned(text));
-        self.min = min.map(owned);
-        self.max = max.map(owned);
+        self.extremes = match (min, max) {
+            (Some(min), Some(max)) => Extremes::Boxed(owned(min), owned(max)),
+            _ => Extremes::Empty,
+        };
     }
 
     /// Folds one more row whose value is absent -- either no source
@@ -3687,8 +3731,18 @@ impl RunningAgg {
                 let count = self.numeric_count as f64;
                 Value::Float(self.total() / count)
             }
-            AggFunc::Min => self.min.clone().unwrap_or(Value::Null),
-            AggFunc::Max => self.max.clone().unwrap_or(Value::Null),
+            AggFunc::Min => match &self.extremes {
+                Extremes::Empty => Value::Null,
+                Extremes::Int(min, _) => Value::Int(*min),
+                Extremes::Float(min, _) => Value::Float(*min),
+                Extremes::Boxed(min, _) => min.clone(),
+            },
+            AggFunc::Max => match &self.extremes {
+                Extremes::Empty => Value::Null,
+                Extremes::Int(_, max) => Value::Int(*max),
+                Extremes::Float(_, max) => Value::Float(*max),
+                Extremes::Boxed(_, max) => max.clone(),
+            },
         })
     }
 
@@ -3706,13 +3760,9 @@ impl RunningAgg {
 /// Replaces `slot` with `value` if `value` is further in direction `want`
 /// ([`agg_cmp`]) -- cloning only when it does, so a run of text values
 /// costs no allocation per row.
-fn keep_extreme(slot: &mut Option<Value>, value: &Value, want: std::cmp::Ordering) {
-    let replace = match slot {
-        None => true,
-        Some(current) => agg_cmp(value, current) == want,
-    };
-    if replace {
-        *slot = Some(value.clone());
+fn keep_extreme(slot: &mut Value, value: &Value, want: std::cmp::Ordering) {
+    if agg_cmp(value, slot) == want {
+        *slot = value.clone();
     }
 }
 
@@ -12693,6 +12743,62 @@ mod tests {
         rescaled.push(Some(&dec(i128::MAX / 2, 0)));
         rescaled.push(Some(&dec(1, 1)));
         assert!(rescaled.finalize(AggFunc::Sum, false, "Test").is_err());
+    }
+
+    /// #763: typed integer/float extremes give what one sequential
+    /// `agg_cmp` fold over boxed values gives -- the first seen of an
+    /// equal pair, NaN and -0.0 where `total_cmp` puts them, and text
+    /// above every number.
+    #[test]
+    fn running_agg_typed_extremes_match_a_sequential_fold() {
+        use std::cmp::Ordering::{Greater, Less};
+        let fold = |values: &[Value], want| {
+            values
+                .iter()
+                .filter(|v| !matches!(v, Value::Null))
+                .fold(None::<Value>, |best, v| match best {
+                    Some(b) if agg_cmp(v, &b) != want => Some(b),
+                    _ => Some(v.clone()),
+                })
+                .unwrap_or(Value::Null)
+        };
+        let (int, float) = (Value::Int, Value::Float);
+        let cases: Vec<Vec<Value>> = vec![
+            vec![],
+            vec![Value::Null, Value::Null],
+            vec![int(3), int(-1), int(7), Value::Null, int(-1)],
+            vec![int(i64::MIN), int(i64::MAX), int(0)],
+            vec![float(2.5), float(-0.0), float(0.0), float(-3.0)],
+            vec![float(1.0), float(f64::NAN), float(-1.0)],
+            vec![float(f64::NAN), float(f64::NAN)],
+            vec![float(-f64::NAN), float(0.0), float(f64::INFINITY)],
+            vec![int(1), float(1.0)],
+            // Equal as floats past 2^53, unequal as integers.
+            vec![
+                int((1 << 53) + 1),
+                float(9_007_199_254_740_992.0),
+                int(1 << 53),
+            ],
+            vec![float(1.0), int(1)],
+            vec![int(2), float(1.5), int(1), float(2.0)],
+            vec![float(2.0), int(2), float(0.5), int(0)],
+            vec![int(1), dec(10, 1), float(1.0)],
+            vec![dec(10, 1), int(1), float(1.0)],
+            vec![int(5), Value::Str("a".into()), float(9.5)],
+            vec![Value::Bool(true), int(0), Value::Str("b".into())],
+        ];
+        let show = |v: &Value| format!("{v:?}");
+        for case in &cases {
+            let mut acc = RunningAgg::default();
+            for v in case {
+                acc.push(Some(v));
+            }
+            for (func, want) in [(AggFunc::Min, Less), (AggFunc::Max, Greater)] {
+                let got = acc.finalize(func, false, "Test").unwrap();
+                // Debug, so NaN and -0.0 compare by their spelling.
+                assert_eq!(show(&got), show(&fold(case, want)), "{func:?} of {case:?}");
+            }
+        }
     }
 
     /// #479: the inline per-value hash keeps the variant separation the
