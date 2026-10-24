@@ -1086,3 +1086,92 @@ fn a_key_range_of_a_widened_column_never_skips_a_file() {
         vec![vec![Cell::Int(1)]]
     );
 }
+
+/// #740: a table that gained a TEXT and a MAP column answers over the old
+/// files (which lack both) and the new ones alike: NULL for the old rows,
+/// and a sort key on the new column never skips a file that has no range
+/// for it. Before and after a day merge.
+#[test]
+fn queries_see_null_for_columns_added_after_a_file_was_written() {
+    crate::test_clock::set(20_737 * DAY_NS);
+    let tiered = |key: &str| {
+        Layout::Tiered(TierOptions {
+            sort_key: vec![key.to_string()],
+            row_group_max_rows: 10,
+            delete_grace_ns: 0,
+            ..TierOptions::default()
+        })
+    };
+    let old = vec![
+        ColumnSpec::new("id", ColumnType::UInt64, false),
+        ColumnSpec::new("kind", ColumnType::Utf8, true),
+    ];
+    let mut evolved = old.clone();
+    evolved.push(ColumnSpec::new("note", ColumnType::Utf8, true));
+    evolved.push(ColumnSpec::new("h", ColumnType::MapUtf8, true));
+
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        layout: tiered("kind"),
+        schema: Some(old),
+        clock,
+        ..TableOptions::default()
+    });
+    for i in 0..30u64 {
+        let kind = RecordValue::Str(["a", "b", "c"][(i % 3) as usize].to_string());
+        w.append_row(vec![RecordValue::UInt(i), kind], Ack::Memory)
+            .unwrap();
+    }
+    advance_clock(HOUR_NS);
+    w.flush().unwrap();
+    w.close().unwrap();
+
+    let mut w = t.writer_with(TableOptions {
+        layout: tiered("note"),
+        schema: Some(evolved),
+        clock,
+        ..TableOptions::default()
+    });
+    for i in 30..60u64 {
+        let map = RecordValue::Map(vec![("k".to_string(), Some(format!("v{}", i % 2)))]);
+        w.append_row(
+            vec![
+                RecordValue::UInt(i),
+                RecordValue::Str("a".to_string()),
+                RecordValue::Str("x".to_string()),
+                map,
+            ],
+            Ack::Memory,
+        )
+        .unwrap();
+    }
+    advance_clock(HOUR_NS);
+    w.flush().unwrap();
+
+    let count = |w: &TableWriter, filter: &str| {
+        rows(w, &format!("SELECT COUNT(*) FROM logs WHERE {filter}"))
+    };
+    let check = |w: &TableWriter| {
+        assert_eq!(count(w, "note IS NULL"), vec![vec![Cell::Int(30)]]);
+        assert_eq!(count(w, "note = 'x'"), vec![vec![Cell::Int(30)]]);
+        assert_eq!(count(w, "note = 'zzz'"), vec![vec![Cell::Int(0)]]);
+        assert_eq!(count(w, "note < 'zzz'"), vec![vec![Cell::Int(30)]]);
+        assert_eq!(count(w, "h['k'] = 'v1'"), vec![vec![Cell::Int(15)]]);
+        assert_eq!(count(w, "h['k'] IS NULL"), vec![vec![Cell::Int(30)]]);
+        assert_eq!(
+            rows(w, "SELECT COUNT(*) FROM logs"),
+            vec![vec![Cell::Int(60)]]
+        );
+    };
+    check(&w);
+    // The two hours' day is merged into the archive under the new schema.
+    advance_clock(2 * DAY_NS);
+    w.flush().unwrap();
+    w.compact().unwrap();
+    assert!(w
+        .manifest()
+        .files
+        .iter()
+        .any(|f| f.area == crate::storage::ingest::Area::Archive));
+    check(&w);
+}

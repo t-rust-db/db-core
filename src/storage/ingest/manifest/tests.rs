@@ -341,6 +341,32 @@ fn key_ranges_round_trip_as_version_4() {
 }
 
 #[test]
+fn an_evolved_schema_is_version_5_so_older_readers_refuse_it() {
+    use crate::storage::parquet::schema::ColumnType;
+    // A reader that stops at the key-range version (4) refuses what it
+    // does not know, which is how an older binary refuses this table.
+    const { assert!(EVOLVED_VERSION > KEYS_VERSION) };
+    let schema = vec![
+        ColumnSpec::new("kind", ColumnType::Utf8, true),
+        ColumnSpec::new("note", ColumnType::Utf8, true),
+    ];
+    for mut m in [two_files(), with_keys()] {
+        m.schema = Some(schema.clone());
+        m.evolved = true;
+        let text = m.to_json();
+        assert!(text.contains("\"version\":5"), "{text}");
+        assert_eq!(Manifest::parse(&text).unwrap(), m);
+        // Without the flag the same manifest is written as before.
+        m.evolved = false;
+        assert!(!m.to_json().contains("\"version\":5"));
+    }
+    let future = two_files()
+        .to_json()
+        .replace("\"version\":2", "\"version\":6");
+    assert!(Manifest::parse(&future).is_err());
+}
+
+#[test]
 fn a_string_bound_that_needs_escaping_is_left_out() {
     let mut m = with_keys();
     m.files[0].keys[0].max = KeyBound::Str("a\"b".to_string());
