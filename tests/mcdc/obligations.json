@@ -25342,7 +25342,7 @@
   {
     "id": "json_path_unescape_427a91e8",
     "file": "src/json_path.rs",
-    "line": 158,
+    "line": 161,
     "decision": "!s.contains('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -25352,7 +25352,7 @@
   {
     "id": "json_path_unescape_b7f9c1cf",
     "file": "src/json_path.rs",
-    "line": 163,
+    "line": 166,
     "decision": "let Some(at) = rest.find('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -25362,7 +25362,7 @@
   {
     "id": "json_path_decode_escape_fc5b3d71",
     "file": "src/json_path.rs",
-    "line": 179,
+    "line": 185,
     "decision": "match tail.as_bytes().get(1)? {\n        b'\"' => '\"',\n        b'\\\\' => '\\\\',\n        b'/' => '/',\n        b'b' => '\\u{8}',\n        b'f' => '\\u{c}',\n        b'n' => '\\n',\n        b'r' => '\\r',\n        b't' => '\\t',\n        b'u' => return decode_unicode_escape(tail),\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25372,7 +25372,7 @@
   {
     "id": "json_path_decode_unicode_escape_f6fac079",
     "file": "src/json_path.rs",
-    "line": 198,
+    "line": 207,
     "decision": "!(0xD800..=0xDFFF).contains(&unit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25382,7 +25382,7 @@
   {
     "id": "json_path_decode_unicode_escape_362ded33",
     "file": "src/json_path.rs",
-    "line": 206,
+    "line": 215,
     "decision": "match low {\n        Some(low) if unit < 0xDC00 => {\n            let high = unit.checked_sub(0xD800)?;\n            let low = low.checked_sub(0xDC00)?;\n            let code = 0x10000u32.checked_add(high.checked_mul(0x400)?.checked_add(low)?)?;\n            char::from_u32(code).map(|c| (c, 12))\n        }\n        _ => Some((char::REPLACEMENT_CHARACTER, 6)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25392,7 +25392,7 @@
   {
     "id": "json_path_decode_unicode_escape_b50e816c",
     "file": "src/json_path.rs",
-    "line": 207,
+    "line": 216,
     "decision": "unit < 0xDC00",
     "conditions": 1,
     "vectors_required": 2,
@@ -25402,7 +25402,7 @@
   {
     "id": "json_path_hex4_b1420117",
     "file": "src/json_path.rs",
-    "line": 221,
+    "line": 233,
     "decision": "!digits.bytes().all(|b| b.is_ascii_hexdigit())",
     "conditions": 1,
     "vectors_required": 2,
@@ -25412,7 +25412,7 @@
   {
     "id": "json_path_parse_number_f4a2e4b7",
     "file": "src/json_path.rs",
-    "line": 231,
+    "line": 243,
     "decision": "bytes.first() == Some(&b'-')",
     "conditions": 1,
     "vectors_required": 2,
@@ -25422,7 +25422,7 @@
   {
     "id": "json_path_parse_number_75ec1a7a",
     "file": "src/json_path.rs",
-    "line": 235,
+    "line": 247,
     "decision": "bytes.get(i).is_some_and(u8::is_ascii_digit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25432,7 +25432,7 @@
   {
     "id": "json_path_parse_number_a218b299",
     "file": "src/json_path.rs",
-    "line": 238,
+    "line": 250,
     "decision": "i == start_digits",
     "conditions": 1,
     "vectors_required": 2,
@@ -25442,7 +25442,7 @@
   {
     "id": "json_path_parse_number_bb0be0d3",
     "file": "src/json_path.rs",
-    "line": 242,
+    "line": 254,
     "decision": "bytes.get(i) == Some(&b'.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -25452,7 +25452,7 @@
   {
     "id": "json_path_parse_number_75ec1a7a_2",
     "file": "src/json_path.rs",
-    "line": 245,
+    "line": 257,
     "decision": "bytes.get(i).is_some_and(u8::is_ascii_digit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25462,7 +25462,7 @@
   {
     "id": "json_path_parse_number_fdc2d075",
     "file": "src/json_path.rs",
-    "line": 249,
+    "line": 261,
     "decision": "matches!(bytes.get(i), Some(b'e' | b'E'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -25472,7 +25472,7 @@
   {
     "id": "json_path_parse_number_7490d896",
     "file": "src/json_path.rs",
-    "line": 252,
+    "line": 264,
     "decision": "matches!(bytes.get(i), Some(b'+' | b'-'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -25482,7 +25482,7 @@
   {
     "id": "json_path_parse_number_75ec1a7a_3",
     "file": "src/json_path.rs",
-    "line": 255,
+    "line": 267,
     "decision": "bytes.get(i).is_some_and(u8::is_ascii_digit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -25492,7 +25492,7 @@
   {
     "id": "json_path_parse_number_87048e4f",
     "file": "src/json_path.rs",
-    "line": 261,
+    "line": 273,
     "decision": "is_float",
     "conditions": 1,
     "vectors_required": 2,
@@ -25502,7 +25502,7 @@
   {
     "id": "json_path_parse_number_0e9d6c64",
     "file": "src/json_path.rs",
-    "line": 266,
+    "line": 278,
     "decision": "match text.parse::<i64>() {\n            Ok(v) => Some((JsonValue::Int(v), rest)),\n            Err(_) => text\n                .parse::<f64>()\n                .ok()\n                .map(|v| (JsonValue::Float(v), rest)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25512,7 +25512,7 @@
   {
     "id": "logfmt_scan_quoted_values_31b38026",
     "file": "src/logfmt_scan.rs",
-    "line": 21,
+    "line": 24,
     "decision": "match value {\n        Some((text, true)) => Some(text),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -25522,7 +25522,7 @@
   {
     "id": "logfmt_scan_tokens_c6513307",
     "file": "src/logfmt_scan.rs",
-    "line": 32,
+    "line": 35,
     "decision": "rest.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25532,7 +25532,7 @@
   {
     "id": "logfmt_scan_tokens_14a89b03",
     "file": "src/logfmt_scan.rs",
-    "line": 39,
+    "line": 42,
     "decision": "key.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -25542,7 +25542,7 @@
   {
     "id": "logfmt_scan_tokens_da989de3",
     "file": "src/logfmt_scan.rs",
-    "line": 50,
+    "line": 53,
     "decision": "let Some(after_quote) = after_eq.strip_prefix('\"')",
     "conditions": 1,
     "vectors_required": 2,
@@ -25552,7 +25552,7 @@
   {
     "id": "logfmt_scan_tokens_5dd4da66",
     "file": "src/logfmt_scan.rs",
-    "line": 53,
+    "line": 56,
     "decision": "escaped",
     "conditions": 1,
     "vectors_required": 2,
@@ -25562,7 +25562,7 @@
   {
     "id": "logfmt_scan_tokens_e1f54dec",
     "file": "src/logfmt_scan.rs",
-    "line": 55,
+    "line": 58,
     "decision": "b == b'\\\\'",
     "conditions": 1,
     "vectors_required": 2,
@@ -25572,7 +25572,7 @@
   {
     "id": "logfmt_scan_tokens_b3e1fbc8",
     "file": "src/logfmt_scan.rs",
-    "line": 57,
+    "line": 60,
     "decision": "b == b'\"'",
     "conditions": 1,
     "vectors_required": 2,
@@ -45162,7 +45162,7 @@
   {
     "id": "storage_stream_adapter_column_values_6eed3f6b",
     "file": "src/storage/stream/adapter.rs",
-    "line": 115,
+    "line": 118,
     "decision": "match name {\n        \"timestamp\" => ints(segment.event_ts_ns()),\n        \"observed_ts\" => ints(segment.observed_ts_ns()),\n        \"severity\" => segment\n            .severity()\n            .iter()\n            .map(|s| s.map_or(Value::Null, |s| Value::Int(i64::from(s as u8))))\n            .collect(),\n        \"severity_text\" => segment\n            .severity()\n            .iter()\n            .map(|s| s.map_or(Value::Null, |s| Value::Str(s.as_str().into())))\n            .collect(),\n        \"facility\" => segment\n            .facility()\n            .iter()\n            .map(|f| f.map_or(Value::Null, |f| Value::Str(f.as_str().into())))\n            .collect(),\n        \"message\" => (0..n)\n            .map(|i| {\n                segment\n                    .message(i)\n                    .map_or(Value::Null, |m| Value::Str(m.to_string().into()))\n            })\n            .collect(),\n        \"raw\" => (0..n)\n            .map(|i| {\n                Value::Str(\n                    String::from_utf8_lossy(segment.raw_line(i))\n                        .into_owned()\n                        .into(),\n                )\n            })\n            .collect(),\n        other => match segment.field(other)? {\n            OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => (0..n)\n                .map(|i| {\n                    segment\n                        .field_str(other, i)\n                        .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                })\n                .collect(),\n            OwnedColumn::Int(v) => ints(v),\n            OwnedColumn::Float(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Float))\n                .collect(),\n            OwnedColumn::Bool(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Bool))\n                .collect(),\n            // Conflicting types read as strings (ADR 0018), each typed\n            // value rendered the way a flush renders it into a string\n            // column, so a record reads the same before and after (#584).\n            OwnedColumn::Mixed(values) => values\n                .iter()\n                .enumerate()\n                .map(|(i, value)| {\n                    let typed = match value {\n                        None => return Value::Null,\n                        Some(MixedValue::Str(_)) => {\n                            return segment\n                                .field_str(other, i)\n                                .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                        }\n                        Some(MixedValue::Int(x)) => Value::Int(*x),\n                        Some(MixedValue::Float(x)) => Value::Float(*x),\n                        Some(MixedValue::Bool(x)) => Value::Bool(*x),\n                    };\n                    Value::Str(typed.to_string().into())\n                })\n                .collect(),\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45172,7 +45172,7 @@
   {
     "id": "storage_stream_adapter_column_values_3be7273d",
     "file": "src/storage/stream/adapter.rs",
-    "line": 149,
+    "line": 152,
     "decision": "match segment.field(other)? {\n            OwnedColumn::Dict { .. } | OwnedColumn::Str(_) => (0..n)\n                .map(|i| {\n                    segment\n                        .field_str(other, i)\n                        .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                })\n                .collect(),\n            OwnedColumn::Int(v) => ints(v),\n            OwnedColumn::Float(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Float))\n                .collect(),\n            OwnedColumn::Bool(v) => v\n                .iter()\n                .map(|x| x.map_or(Value::Null, Value::Bool))\n                .collect(),\n            // Conflicting types read as strings (ADR 0018), each typed\n            // value rendered the way a flush renders it into a string\n            // column, so a record reads the same before and after (#584).\n            OwnedColumn::Mixed(values) => values\n                .iter()\n                .enumerate()\n                .map(|(i, value)| {\n                    let typed = match value {\n                        None => return Value::Null,\n                        Some(MixedValue::Str(_)) => {\n                            return segment\n                                .field_str(other, i)\n                                .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                        }\n                        Some(MixedValue::Int(x)) => Value::Int(*x),\n                        Some(MixedValue::Float(x)) => Value::Float(*x),\n                        Some(MixedValue::Bool(x)) => Value::Bool(*x),\n                    };\n                    Value::Str(typed.to_string().into())\n                })\n                .collect(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45182,7 +45182,7 @@
   {
     "id": "storage_stream_adapter_column_values_1e7b7d68",
     "file": "src/storage/stream/adapter.rs",
-    "line": 173,
+    "line": 176,
     "decision": "match value {\n                        None => return Value::Null,\n                        Some(MixedValue::Str(_)) => {\n                            return segment\n                                .field_str(other, i)\n                                .map_or(Value::Null, |s| Value::Str(s.to_string().into()))\n                        }\n                        Some(MixedValue::Int(x)) => Value::Int(*x),\n                        Some(MixedValue::Float(x)) => Value::Float(*x),\n                        Some(MixedValue::Bool(x)) => Value::Bool(*x),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45192,7 +45192,7 @@
   {
     "id": "storage_stream_adapter_stored_column_values_96d2fbbf",
     "file": "src/storage/stream/adapter.rs",
-    "line": 214,
+    "line": 220,
     "decision": "name == \"raw\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -45202,7 +45202,7 @@
   {
     "id": "storage_stream_adapter_stored_column_values_a84a5f9b",
     "file": "src/storage/stream/adapter.rs",
-    "line": 221,
+    "line": 227,
     "decision": "match format {\n            Format::Jsonl => decode_json(segment, i, name, text),\n            Format::Logfmt => decode_logfmt(segment, i, text),\n            Format::Clf => super::clf::unescape(text),\n            Format::Syslog | Format::Freeform => continue,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45212,7 +45212,7 @@
   {
     "id": "storage_stream_adapter_stored_column_values_844a7962",
     "file": "src/storage/stream/adapter.rs",
-    "line": 227,
+    "line": 233,
     "decision": "let std::borrow::Cow::Owned(decoded) = decoded",
     "conditions": 1,
     "vectors_required": 2,
@@ -45222,7 +45222,7 @@
   {
     "id": "storage_stream_adapter_decode_json_029cef6d",
     "file": "src/storage/stream/adapter.rs",
-    "line": 242,
+    "line": 251,
     "decision": "name == \"message\" && is_whole_line(segment, i, text)",
     "conditions": 2,
     "vectors_required": 3,
@@ -45232,7 +45232,7 @@
   {
     "id": "storage_stream_adapter_decode_logfmt_8cb9e733",
     "file": "src/storage/stream/adapter.rs",
-    "line": 251,
+    "line": 263,
     "decision": "!text.contains('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -45242,7 +45242,7 @@
   {
     "id": "storage_stream_adapter_decode_logfmt_8b2db62e",
     "file": "src/storage/stream/adapter.rs",
-    "line": 257,
+    "line": 269,
     "decision": "crate::logfmt_scan::quoted_values(line).any(|quoted| quoted == text)",
     "conditions": 1,
     "vectors_required": 2,
@@ -45252,7 +45252,7 @@
   {
     "id": "storage_stream_adapter_next_batch_188f1078",
     "file": "src/storage/stream/adapter.rs",
-    "line": 352,
+    "line": 367,
     "decision": "match self.file.refresh() {\n                Ok(Refresh::New(blocks)) => {\n                    let observed = now_ns();\n                    let mut sealed: Vec<Arc<Segment>> = Vec::new();\n                    for b in &blocks {\n                        for s in Segment::seal_block(b, &self.source, &self.parser, observed) {\n                            sealed.push(Arc::new(s));\n                        }\n                    }\n                    // One batch per call: concatenate the sealed segments.\n                    let total: usize = sealed.iter().map(|s| s.len()).sum();\n                    let mut merged = Batch::new(total);\n                    for req in &self.columns {\n                        let mut values: Vec<Value> = Vec::with_capacity(total);\n                        for s in &sealed {\n                            values.extend(column_values(s, &req.name)?);\n                        }\n                        merged = merged.with_column(req.key.clone(), values);\n                    }\n                    self.last_sealed = sealed;\n                    return Some(merged);\n                }\n                Ok(Refresh::Truncated) => {\n                    // Rotation: keep following the new file from its end.\n                    idle = 0;\n                }\n                Ok(Refresh::NoNew) => {\n                    if let Some(max) = self.max_idle_polls {\n                        if idle >= max {\n                            return None;\n                        }\n                    }\n                    idle = idle.saturating_add(1);\n                    std::thread::sleep(self.poll);\n                }\n                Err(_) => return None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45262,7 +45262,7 @@
   {
     "id": "storage_stream_adapter_next_batch_0f0f4c88",
     "file": "src/storage/stream/adapter.rs",
-    "line": 379,
+    "line": 394,
     "decision": "let Some(max) = self.max_idle_polls",
     "conditions": 1,
     "vectors_required": 2,
@@ -45272,7 +45272,7 @@
   {
     "id": "storage_stream_adapter_next_batch_478e8fd5",
     "file": "src/storage/stream/adapter.rs",
-    "line": 380,
+    "line": 395,
     "decision": "idle >= max",
     "conditions": 1,
     "vectors_required": 2,
@@ -45282,7 +45282,7 @@
   {
     "id": "storage_stream_adapter_a_mixed_type_field_reads_as_strings_without_losing_values_cf1a8876",
     "file": "src/storage/stream/adapter.rs",
-    "line": 591,
+    "line": 606,
     "decision": "match *s {\n                    \"NULL\" => Value::Null,\n                    s => Value::Str(s.to_string().into()),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45922,7 +45922,7 @@
   {
     "id": "storage_stream_clf_unescape_427a91e8",
     "file": "src/storage/stream/clf.rs",
-    "line": 339,
+    "line": 342,
     "decision": "!s.contains('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -45932,7 +45932,7 @@
   {
     "id": "storage_stream_clf_unescape_5eae6dca",
     "file": "src/storage/stream/clf.rs",
-    "line": 345,
+    "line": 348,
     "decision": "let Some(&b) = bytes.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -45942,7 +45942,7 @@
   {
     "id": "storage_stream_clf_unescape_e1f54dec",
     "file": "src/storage/stream/clf.rs",
-    "line": 346,
+    "line": 349,
     "decision": "b == b'\\\\'",
     "conditions": 1,
     "vectors_required": 2,
@@ -45952,7 +45952,7 @@
   {
     "id": "storage_stream_clf_decode_escape_9aed186d",
     "file": "src/storage/stream/clf.rs",
-    "line": 360,
+    "line": 366,
     "decision": "match tail.get(1)? {\n        b'\"' => b'\"',\n        b'\\\\' => b'\\\\',\n        b'b' => 0x08,\n        b'n' => b'\\n',\n        b'r' => b'\\r',\n        b't' => b'\\t',\n        b'v' => 0x0b,\n        b'x' => {\n            let hex = std::str::from_utf8(tail.get(2..4)?).ok()?;\n            if !hex.bytes().all(|h| h.is_ascii_hexdigit()) {\n                return None;\n            }\n            return Some((u8::from_str_radix(hex, 16).ok()?, 4));\n        }\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45962,7 +45962,7 @@
   {
     "id": "storage_stream_clf_decode_escape_3eba840b",
     "file": "src/storage/stream/clf.rs",
-    "line": 370,
+    "line": 376,
     "decision": "!hex.bytes().all(|h| h.is_ascii_hexdigit())",
     "conditions": 1,
     "vectors_required": 2,
@@ -45972,7 +45972,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_f5d7610b",
     "file": "src/storage/stream/clf.rs",
-    "line": 405,
+    "line": 411,
     "decision": "match batch.fields.get(\"status\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(500)]),\n            other => panic!(\"expected Int status, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45982,7 +45982,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_16fe556f",
     "file": "src/storage/stream/clf.rs",
-    "line": 409,
+    "line": 415,
     "decision": "match batch.fields.get(\"bytes\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(1834)]),\n            other => panic!(\"expected Int bytes, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45992,7 +45992,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_f4a42f69",
     "file": "src/storage/stream/clf.rs",
-    "line": 413,
+    "line": 419,
     "decision": "match batch.fields.get(\"method\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"GET\"]),\n            other => panic!(\"expected Dict method, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46002,7 +46002,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_05a59703",
     "file": "src/storage/stream/clf.rs",
-    "line": 418,
+    "line": 424,
     "decision": "match batch.fields.get(\"ip\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"10.0.0.1\"]),\n            other => panic!(\"expected Dict ip, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46012,7 +46012,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_62645b81",
     "file": "src/storage/stream/clf.rs",
-    "line": 422,
+    "line": 428,
     "decision": "match batch.fields.get(\"user\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"alice\"]),\n            other => panic!(\"expected Dict user, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46022,7 +46022,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_5761bd0c",
     "file": "src/storage/stream/clf.rs",
-    "line": 426,
+    "line": 432,
     "decision": "match batch.fields.get(\"referer\") {\n            Some(FieldColumn::Dict { dict, .. }) => {\n                assert_eq!(dict.as_slice(), [\"https://example.com\"]);\n            }\n            other => panic!(\"expected Dict referer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46032,7 +46032,7 @@
   {
     "id": "storage_stream_clf_an_escaped_quote_does_not_end_the_request_field_2e6baeb8",
     "file": "src/storage/stream/clf.rs",
-    "line": 441,
+    "line": 447,
     "decision": "match batch.fields.get(\"status\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(404)]),\n            other => panic!(\"expected Int status, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46042,7 +46042,7 @@
   {
     "id": "storage_stream_clf_an_escaped_quote_does_not_end_the_request_field_0636ad87",
     "file": "src/storage/stream/clf.rs",
-    "line": 445,
+    "line": 451,
     "decision": "match batch.fields.get(\"bytes\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(12)]),\n            other => panic!(\"expected Int bytes, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46052,7 +46052,7 @@
   {
     "id": "storage_stream_clf_an_escaped_quote_does_not_end_the_request_field_57f4f00d",
     "file": "src/storage/stream/clf.rs",
-    "line": 449,
+    "line": 455,
     "decision": "match batch.fields.get(\"referer\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [r\"r\\\\\"]),\n            other => panic!(\"expected Dict referer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46062,7 +46062,7 @@
   {
     "id": "storage_stream_clf_an_escaped_quote_does_not_end_the_request_field_a521dfe1",
     "file": "src/storage/stream/clf.rs",
-    "line": 453,
+    "line": 459,
     "decision": "match batch.fields.get(\"ua\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"ua\"]),\n            other => panic!(\"expected Dict ua, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46072,7 +46072,7 @@
   {
     "id": "storage_stream_clf_dash_placeholders_are_not_recorded_as_fields_5a0f38c8",
     "file": "src/storage/stream/clf.rs",
-    "line": 490,
+    "line": 496,
     "decision": "match batch.fields.get(\"status\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(200)]),\n            other => panic!(\"expected Int status, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46082,7 +46082,7 @@
   {
     "id": "storage_stream_clf_status_ge_500_and_method_eq_post_selects_expected_rows_aa2fdc4c",
     "file": "src/storage/stream/clf.rs",
-    "line": 518,
+    "line": 524,
     "decision": "match batch.fields.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => v.clone(),\n            other => panic!(\"expected Int, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46092,7 +46092,7 @@
   {
     "id": "storage_stream_clf_status_ge_500_and_method_eq_post_selects_expected_rows_6d0faed0",
     "file": "src/storage/stream/clf.rs",
-    "line": 522,
+    "line": 528,
     "decision": "match batch.fields.get(\"method\").unwrap() {\n            FieldColumn::Dict { dict, indices } => indices\n                .iter()\n                .map(|i| i.map(|i| dict[usize::from(i)]))\n                .collect::<Vec<_>>(),\n            other => panic!(\"expected Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46102,7 +46102,7 @@
   {
     "id": "storage_stream_clf_high_cardinality_path_degrades_dict_to_str_365991f5",
     "file": "src/storage/stream/clf.rs",
-    "line": 550,
+    "line": 556,
     "decision": "match batch.fields.get(\"path\") {\n            Some(FieldColumn::Str(v)) => assert_eq!(v.len(), 300),\n            other => panic!(\"expected Dict->Str degrade for high-cardinality path, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46112,7 +46112,7 @@
   {
     "id": "storage_stream_clf_high_cardinality_path_degrades_dict_to_str_f6c68aff",
     "file": "src/storage/stream/clf.rs",
-    "line": 555,
+    "line": 561,
     "decision": "match batch.fields.get(\"method\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"GET\"]),\n            other => panic!(\"expected method to stay Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

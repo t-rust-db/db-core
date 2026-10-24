@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.169.1] - 2026-10-24
+
+### Fixed
+
+- **`engine-column` with `ingest-read` did not compile** (#738). The decoders `engine::column::table` uses to read a stored string column (`stored_column_values` and the JSON, logfmt and CLF helpers behind it) were gated on `ingest` alone, so the feature set column-rs enables failed with an unresolved import. They now build under `ingest`, or under `ingest-read` with `engine-column`. `make check-features` also builds that combination and column-rs's full feature set, so a helper gated on one feature but used under another can no longer pass the per-feature check.
+
 ## [0.169.0] - 2026-10-23
 
 ### Changed
