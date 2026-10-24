@@ -31,7 +31,7 @@ use super::error::IngestError;
 use super::fields::{add_field, add_page_fields, predefined_specs};
 use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, HeadPage, Page};
-use super::record::{check_row, decode_row};
+use super::record::{check_row, decode_row, pad_row};
 use super::recover::read_tail;
 use super::wal::{Record, WAL_DIR};
 use crate::storage::column::{MmapRegion, Vfs, VfsFile};
@@ -204,6 +204,7 @@ pub(crate) fn pages_from_records(
         match schema {
             Some(schema) => {
                 let row = decode_row(body)
+                    .map(|row| pad_row(schema, row))
                     .filter(|row| check_row(schema, row).is_none())
                     .ok_or_else(corrupt)?;
                 head.push_row(lsn, observed, row);

@@ -511,9 +511,16 @@ fn row_group(
         let field = fields.iter().find(|f| f.name == spec.name);
         if typed {
             // A record table's file has every column, as declared (a MAP
-            // is a field of two leaves).
-            let field =
-                field.ok_or_else(|| corrupt(path, format!("has no column {}", spec.name)))?;
+            // is a field of two leaves), except a nullable one added after
+            // it was written (#740), which is NULL.
+            let Some(field) = field else {
+                if !spec.nullable {
+                    return Err(corrupt(path, format!("has no column {}", spec.name)));
+                }
+                let nulls = vec![Value::Null; usize::try_from(rows).unwrap_or(0)];
+                columns.push(convert(nulls, spec.column_type));
+                continue;
+            };
             columns.push(
                 read_column(&rg, field, spec.column_type)
                     .map_err(|e| corrupt(path, e.to_string()))?,

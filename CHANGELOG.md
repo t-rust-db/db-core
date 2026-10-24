@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.171.0] - 2026-10-24
+
+### Added
+
+- **A record table's schema can gain nullable columns at the end** (#740). `TableWriter::open` accepts a requested schema that is the stored one plus nullable columns and commits it to the manifest before anything is appended; a dropped, renamed, retyped, reordered or non-nullable column still fails with `SchemaMismatch`. Rows that predate the change read NULL in the new columns: WAL rows of the old arity are padded on replay (writer and `Snapshot`), and a day merge reads a nullable column an older hour file lacks as NULL instead of `Corrupt("has no column ...")`. A manifest whose schema evolved is written as version 5 (`Manifest::evolved`), so a reader that predates it refuses the table rather than reading files and rows that lack the columns.
+
 ## [0.170.0] - 2026-10-24
 
 ### Fixed
