@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.169.3] - 2026-10-24
+
+### Changed
+
+- **`timediff` drops a redundant loop guard and keeps the other as a plain check** (#744). The `<` loop tested `d1.ijd < d2.ijd && !d2.is_error`, but an errored date has `ijd == 0`, so the second test could never change the result; the loop is now `while d1.ijd < d2.ijd`, as in sqlite3. The `>` loop keeps its stop against an endless loop on an errored `d2` as an `if d2.is_error { break; }` in the body. Results are unchanged; the `MC/DC` dashboard has no outstanding obligations left in `src/functions/datetime.rs`.
+
 ## [0.169.2] - 2026-10-24
 
 ### Changed

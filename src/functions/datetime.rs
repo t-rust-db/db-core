@@ -1308,7 +1308,7 @@ fn timediff(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
             d2.valid_jd = false;
             compute_jd(&mut d2);
         }
-        while d1.ijd < d2.ijd && !d2.is_error {
+        while d1.ijd < d2.ijd {
             m = (W(m) - W(1)).0;
             if m < 0 {
                 m = 11;
@@ -1341,7 +1341,11 @@ fn timediff(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
             d2.valid_jd = false;
             compute_jd(&mut d2);
         }
-        while d1.ijd > d2.ijd && !d2.is_error {
+        while d1.ijd > d2.ijd {
+            // An errored `d2` has `ijd == 0`, so this loop would never end.
+            if d2.is_error {
+                break;
+            }
             m = (W(m) - W(1)).0;
             if m < 0 {
                 m = 11;
@@ -2760,12 +2764,8 @@ mod tests {
         assert!(p.valid_jd);
     }
 
-    // functions_datetime_timediff_af54b5d0: d1.ijd < d2.ijd && !d2.is_error
-    // (the second leaf cannot be false while the first is true: an errored
-    // `d2` has `ijd == 0`, never above a valid `d1.ijd`.)
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_timediff_af54b5d0__v1_d1_not_before_d2() {
+    fn timediff_d1_after_d2_is_positive() {
         assert_eq!(
             call("timediff", &[t("2024-03-15"), t("2024-03-10")]),
             t("+0000-00-05 00:00:00.000")
@@ -2773,19 +2773,15 @@ mod tests {
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_timediff_af54b5d0__v2_d1_before_d2_no_error() {
+    fn timediff_d1_after_d2_borrows_a_month() {
         assert_eq!(
             call("timediff", &[t("2024-03-10"), t("2024-02-15")]),
             t("+0000-00-24 00:00:00.000")
         );
     }
 
-    // functions_datetime_timediff_be8b89ec: d1.ijd > d2.ijd && !d2.is_error
-    // (same: the leaf `!d2.is_error` cannot flip the outcome.)
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_timediff_be8b89ec__v1_d1_not_after_d2() {
+    fn timediff_d1_before_d2_is_negative() {
         assert_eq!(
             call("timediff", &[t("2024-03-10"), t("2024-03-15")]),
             t("-0000-00-05 00:00:00.000")
@@ -2793,8 +2789,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_timediff_be8b89ec__v2_d1_after_d2_no_error() {
+    fn timediff_d1_before_d2_borrows_a_month() {
         assert_eq!(
             call("timediff", &[t("2024-02-15"), t("2024-03-10")]),
             t("-0000-00-24 00:00:00.000")

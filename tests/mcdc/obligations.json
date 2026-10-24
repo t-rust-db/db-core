@@ -20250,12 +20250,12 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_datetime_timediff_af54b5d0",
+    "id": "functions_datetime_timediff_bf667cf5",
     "file": "src/functions/datetime.rs",
     "line": 1311,
-    "decision": "d1.ijd < d2.ijd && !d2.is_error",
-    "conditions": 2,
-    "vectors_required": 3,
+    "decision": "d1.ijd < d2.ijd",
+    "conditions": 1,
+    "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
@@ -20310,19 +20310,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_datetime_timediff_be8b89ec",
+    "id": "functions_datetime_timediff_ad71a79c",
     "file": "src/functions/datetime.rs",
     "line": 1344,
-    "decision": "d1.ijd > d2.ijd && !d2.is_error",
-    "conditions": 2,
-    "vectors_required": 3,
+    "decision": "d1.ijd > d2.ijd",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_timediff_1917efe6",
+    "file": "src/functions/datetime.rs",
+    "line": 1346,
+    "decision": "d2.is_error",
+    "conditions": 1,
+    "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "functions_datetime_timediff_5912441e_4",
     "file": "src/functions/datetime.rs",
-    "line": 1346,
+    "line": 1350,
     "decision": "m < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -20332,7 +20342,7 @@
   {
     "id": "functions_datetime_timediff_3b5fb5e7",
     "file": "src/functions/datetime.rs",
-    "line": 1351,
+    "line": 1355,
     "decision": "d2.mo > 12",
     "conditions": 1,
     "vectors_required": 2,
