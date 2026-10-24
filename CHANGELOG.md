@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.172.1] - 2026-10-24
+
+### Changed
+
+- **A high-cardinality `GROUP BY` on a dictionary column folds a segment's slices by code** (#751). Since #643 a segment runs in `SLICE_ROWS` slices, and each slice's `GroupReduce` emitted its own partial groups with a freshly allocated key string, so `Combine` merged about eight times segments × groups partial rows. `execute_in_slices` now carries the groups of a single-key `GroupReduce` → `Emit` body across the slices of a segment as dictionary codes, with one set of accumulators, and the segment emits one partial row per group in first-seen order. A slice whose key is not codes under the same dictionary (a short last slice decodes a large dictionary to `Str`) hands on the fold first and runs as before, so results and group order are unchanged. `Combine`'s generic key index slots by the Murmur `SlotState` (#514) instead of SipHash. On column-rs (20M rows, 163 row groups, hyperfine mean of 20, A/B against main): `SELECT user_name, count(*) … GROUP BY user_name ORDER BY n DESC, user_name LIMIT 5` (10,007 groups) 134 → 54 ms wall, CPU 1352 → 457 ms (2.9× DuckDB's 158 ms, was 8.6×); `GROUP BY kind` with `sum(amount)` unchanged at 44 ms; peak RSS unchanged. New bench `engine::run Dict GroupReduce+Combine` 109 → 26 ms.
+
 ## [0.172.0] - 2026-10-24
 
 ### Changed
