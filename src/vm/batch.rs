@@ -4115,7 +4115,7 @@ impl Vm {
         a: usize,
         b: usize,
         opcode: &'static str,
-    ) -> Result<Option<Vec<Value>>> {
+    ) -> Result<Option<Column>> {
         use crate::vm::like::{Dialect, Matcher};
         let (dialect, negated, nocase) = match op {
             MapOp::Like { negated, nocase } => (Dialect::Like, negated, nocase),
@@ -4148,43 +4148,53 @@ impl Vm {
         };
         let matcher = Matcher::new(&pattern, dialect, nocase);
         let mut buf = String::new();
-        let result = match column.as_ref() {
+        // #743: a typed `Bool` column (1 byte a row plus the validity
+        // bitmap) rather than one `Value` a row; NULL rows stay invalid,
+        // with `false` in `data`.
+        let len = column.len();
+        let mut data = Vec::with_capacity(len);
+        let mut valid = Bitmap::new(len, true);
+        match column.as_ref() {
             Column::Str {
                 offsets,
-                data,
-                valid,
-            } => (0..column.len())
-                .map(|i| {
+                data: text_data,
+                valid: text_valid,
+            } => {
+                for i in 0..len {
                     let text = offsets
                         .get(i)
                         .zip(offsets.get(i.saturating_add(1)))
-                        .and_then(|(&lo, &hi)| data.get(lo as usize..hi as usize));
+                        .and_then(|(&lo, &hi)| text_data.get(lo as usize..hi as usize));
                     match text {
-                        Some(text) if valid.get(i) => {
-                            Value::Bool(matcher.matches(text, &mut buf) != negated)
+                        Some(text) if text_valid.get(i) => {
+                            data.push(matcher.matches(text, &mut buf) != negated);
                         }
-                        _ => Value::Null,
+                        _ => {
+                            data.push(false);
+                            valid.set(i, false);
+                        }
                     }
-                })
-                .collect(),
+                }
+            }
             Column::Dict {
                 dict,
                 indices,
-                valid,
+                valid: code_valid,
             } => {
                 let hits: Vec<bool> = dict.iter().map(|s| matcher.matches(s, &mut buf)).collect();
-                indices
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &code)| match hits.get(code as usize) {
-                        Some(&hit) if valid.get(i) => Value::Bool(hit != negated),
-                        _ => Value::Null,
-                    })
-                    .collect()
+                for (i, &code) in indices.iter().enumerate() {
+                    match hits.get(code as usize) {
+                        Some(&hit) if code_valid.get(i) => data.push(hit != negated),
+                        _ => {
+                            data.push(false);
+                            valid.set(i, false);
+                        }
+                    }
+                }
             }
             _ => return Ok(None),
-        };
-        Ok(Some(result))
+        }
+        Ok(Some(Column::Bool { data, valid }))
     }
 
     /// Fast path for [`Opcode::Map`]'s `Add`/`Sub`/`Mul`/`Div` when
@@ -4384,9 +4394,13 @@ impl Vm {
                 if let Some(result) = self.dict_literal_compare(*op, *a, *b, opcode)? {
                     self.registers.insert(*dst, Arc::new(result));
                     self.typed_registers.remove(dst);
-                } else if let Some(result) = self.typed_like(*op, *a, *b, opcode)? {
-                    self.registers.insert(*dst, Arc::new(result));
-                    self.typed_registers.remove(dst);
+                } else if let Some(column) = self.typed_like(*op, *a, *b, opcode)? {
+                    // #743: typed-only, like `LoadColumn` (#482) --
+                    // `Filter` reads the `Bool` buffer directly, and
+                    // `ensure_materialized` builds the `Value`s only
+                    // for a reader that needs them.
+                    self.registers.remove(dst);
+                    self.typed_registers.insert(*dst, Arc::new(column));
                 } else if let Some(column) = self.typed_arithmetic(*op, *a, *b, opcode)? {
                     // #431: a genuine typed Column result -- also
                     // materialize into `registers` (same pattern as
@@ -6795,6 +6809,72 @@ mod tests {
                 Value::Bool(true),
                 Value::Bool(true)
             ]
+        );
+    }
+
+    #[test]
+    fn like_over_a_typed_column_yields_a_typed_bool_register_that_filter_reads() {
+        // #743: the result is a typed `Bool` column (NULL rows invalid),
+        // never materialized as `Value`s on the way into `Filter`.
+        let values = vec![
+            Value::Str("host 42 up".into()),
+            Value::Null,
+            Value::Str("host 7 up".into()),
+            Value::Str("host 42 down".into()),
+        ];
+        let batch = Batch::new(4)
+            .with_typed_column("text", Column::from(values))
+            .with_column(
+                "id",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            );
+        let load_and_like = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "text".into(),
+            },
+            Opcode::LoadConst {
+                reg: 1,
+                value: Value::Str("%host 42%".into()),
+            },
+            Opcode::Map {
+                dst: 2,
+                op: MapOp::Like {
+                    negated: false,
+                    nocase: false,
+                },
+                a: 0,
+                b: 1,
+            },
+        ];
+        let mut vm = Vm::new();
+        vm.execute(&batch, &load_and_like).unwrap();
+        assert!(!vm.registers.contains_key(&2));
+        let Some(Column::Bool { data, valid }) = vm.typed_register(2) else {
+            panic!("expected a typed Bool register");
+        };
+        assert_eq!(data, &[true, false, false, true]);
+        assert_eq!(
+            (0..4).map(|i| valid.get(i)).collect::<Vec<_>>(),
+            [true, false, true, true]
+        );
+
+        let mut program = load_and_like.to_vec();
+        program.extend([
+            Opcode::LoadColumn {
+                reg: 3,
+                column: "id".into(),
+            },
+            Opcode::Filter { predicate: 2 },
+            Opcode::Emit {
+                registers: vec![3].into(),
+            },
+        ]);
+        let mut vm = Vm::new();
+        vm.execute(&batch, &program).unwrap();
+        assert_eq!(
+            vm.take_output(),
+            vec![vec![Value::Int(1)], vec![Value::Int(4)]]
         );
     }
 
