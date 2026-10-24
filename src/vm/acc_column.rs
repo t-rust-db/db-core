@@ -401,4 +401,131 @@ mod tests {
             AccColumn::Values(_)
         ));
     }
+
+    // vm_acc_column_for_values_186e7984: (key || count) && all(|v| matches!(v, Value::Int(_)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_for_values_186e7984__v1_neither_key_nor_count() {
+        assert!(matches!(
+            AccColumn::for_values(false, false, &[Value::Int(1)], 0),
+            AccColumn::Values(_)
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_for_values_186e7984__v2_count_of_ints() {
+        assert!(matches!(
+            AccColumn::for_values(false, true, &[Value::Int(1)], 0),
+            AccColumn::Ints { .. }
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_for_values_186e7984__v3_key_of_ints() {
+        assert!(matches!(
+            AccColumn::for_values(true, false, &[Value::Int(1)], 0),
+            AccColumn::Ints { .. }
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_for_values_186e7984__v4_count_of_non_ints() {
+        assert!(matches!(
+            AccColumn::for_values(false, true, &[Value::Float(0.5)], 0),
+            AccColumn::Values(_)
+        ));
+    }
+
+    // vm_acc_column_for_values_e7c80017: key && all(|v| matches!(v, Value::Str(_)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_for_values_e7c80017__v1_not_a_key() {
+        assert!(matches!(
+            AccColumn::for_values(false, false, &[s("a")], 0),
+            AccColumn::Values(_)
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_for_values_e7c80017__v2_key_of_strings() {
+        assert!(matches!(
+            AccColumn::for_values(true, false, &[s("a")], 0),
+            AccColumn::Strs { .. }
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_for_values_e7c80017__v3_key_of_non_strings() {
+        assert!(matches!(
+            AccColumn::for_values(true, false, &[Value::Float(0.5)], 0),
+            AccColumn::Values(_)
+        ));
+    }
+
+    // vm_acc_column_eq_entry_f297de86: a != NULL_CODE && b != NULL_CODE
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_eq_entry_f297de86__v1_left_is_null() {
+        let mut a = AccColumn::for_values(true, false, &[s("x")], 0);
+        let mut b = AccColumn::for_values(true, false, &[s("x")], 0);
+        a.push_value(&Value::Null);
+        b.push_value(&s("x"));
+        assert!(!a.eq_entry(0, &b, 0));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_eq_entry_f297de86__v2_right_is_null() {
+        let mut a = AccColumn::for_values(true, false, &[s("x")], 0);
+        let mut b = AccColumn::for_values(true, false, &[s("x")], 0);
+        a.push_value(&s("x"));
+        b.push_value(&Value::Null);
+        assert!(!a.eq_entry(0, &b, 0));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_eq_entry_f297de86__v3_both_present() {
+        let mut a = AccColumn::for_values(true, false, &[s("x")], 0);
+        let mut b = AccColumn::for_values(true, false, &[s("x")], 0);
+        a.push_value(&s("x"));
+        b.push_value(&s("x"));
+        assert!(a.eq_entry(0, &b, 0));
+    }
+
+    // vm_acc_column_swap_c0405141: i >= n || j >= n
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_swap_c0405141__v1_both_in_range() {
+        let mut c = AccColumn::for_values(false, false, &[], 0);
+        c.push_value(&Value::Int(1));
+        c.push_value(&Value::Int(2));
+        c.swap(0, 1);
+        assert_eq!(c.into_values(), vec![Value::Int(2), Value::Int(1)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_swap_c0405141__v2_i_out_of_range() {
+        let mut c = AccColumn::for_values(false, false, &[], 0);
+        c.push_value(&Value::Int(1));
+        c.push_value(&Value::Int(2));
+        c.swap(5, 0);
+        assert_eq!(c.into_values(), vec![Value::Int(1), Value::Int(2)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_acc_column_swap_c0405141__v3_j_out_of_range() {
+        let mut c = AccColumn::for_values(false, false, &[], 0);
+        c.push_value(&Value::Int(1));
+        c.push_value(&Value::Int(2));
+        c.swap(0, 5);
+        assert_eq!(c.into_values(), vec![Value::Int(1), Value::Int(2)]);
+    }
 }

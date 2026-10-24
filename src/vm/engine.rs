@@ -1055,6 +1055,76 @@ mod tests {
         let folded = combine_chunks(agg_parts, *num_group_keys, folded.chunks()).unwrap();
         assert_eq!(folded.into_rows(), expected);
     }
+    fn two_key_segment(n: usize) -> InMemorySegment {
+        InMemorySegment(
+            Batch::new(n)
+                .with_column("k", (0..n).map(|i| Value::Int((i % 2) as i64)).collect())
+                .with_column("v", (0..n).map(|_| Value::Int(1)).collect()),
+        )
+    }
+
+    fn group_sum_body() -> Vec<Opcode> {
+        vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "v".into(),
+            },
+            Opcode::GroupReduce {
+                group_by: vec![0].into(),
+                aggs: vec![(AggFunc::Sum, Some(1))].into(),
+                agg_dst: vec![2].into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 2].into(),
+            },
+        ]
+    }
+
+    fn segment_partial_rows(n: usize, body: &[Opcode]) -> usize {
+        let parts = [AggPart::GroupKey, AggPart::Sum];
+        run_parallel_segment_partials(&[two_key_segment(n)], body, &parts, 1)
+            .unwrap()
+            .num_rows()
+    }
+
+    // vm_engine_run_parallel_segment_partials_d80b3ca6
+    // (`run_parallel_segment_partials`):
+    // `batch.num_rows <= SLICE_ROWS || !sliceable(body)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_parallel_segment_partials_d80b3ca6__v1_a_small_segment_runs_whole() {
+        assert_eq!(segment_partial_rows(4, &group_sum_body()), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_parallel_segment_partials_d80b3ca6__v2_a_big_non_sliceable_segment_runs_whole(
+    ) {
+        use crate::vm::batch::SLICE_ROWS;
+        let body = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ];
+        assert_eq!(segment_partial_rows(SLICE_ROWS + 1, &body), SLICE_ROWS + 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_parallel_segment_partials_d80b3ca6__v3_a_big_sliceable_segment_folds_its_slices(
+    ) {
+        use crate::vm::batch::SLICE_ROWS;
+        assert_eq!(segment_partial_rows(SLICE_ROWS + 1, &group_sum_body()), 2);
+    }
+
     use crate::vm::batch::AggFunc;
     use crate::vm::batch::Instruction;
 
@@ -1582,6 +1652,58 @@ mod tests {
         )
         .unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    fn first_row_width(hidden: usize) -> usize {
+        let segments = vec![seg(&[(2, 10), (1, 5)]), seg(&[(3, 3)])];
+        let mut instructions = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "v".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 1].into(),
+            },
+            Opcode::Combine {
+                agg_parts: Vec::new().into(),
+                num_group_keys: 0,
+                distinct: false,
+                output_order: Vec::new().into(),
+                project: Vec::new().into(),
+            },
+            Opcode::Sort {
+                keys: vec![(0, false)].into(),
+                hidden,
+            },
+        ];
+        let program = Program::new(instructions.drain(..).map(Instruction::new).collect());
+        let rows = run(&segments, &program).unwrap().into_rows();
+        assert_eq!(rows.len(), 3);
+        rows[0].len()
+    }
+
+    // vm_engine_run_page_1c741d3f (`run_page`, hidden sort columns):
+    // `hidden == 0 || keep.is_empty()`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_page_1c741d3f__v1_no_hidden_columns_returns_the_output_whole() {
+        assert_eq!(first_row_width(0), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_page_1c741d3f__v2_hidden_columns_are_projected_away() {
+        assert_eq!(first_row_width(1), 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_page_1c741d3f__v3_all_columns_hidden_returns_the_output_whole() {
+        assert_eq!(first_row_width(2), 2);
     }
 }
 

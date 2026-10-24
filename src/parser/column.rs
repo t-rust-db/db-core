@@ -2657,4 +2657,29 @@ mod tests {
     fn aggregate_composed_with_arithmetic_in_where_is_still_rejected() {
         assert!(parse("SELECT id FROM t WHERE SUM(amount) * 2 > 10").is_err());
     }
+
+    // parser_column_validate_having_8d3dd7da: group_by.is_empty() && !has_agg && !expr_contains_agg(having)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_having_8d3dd7da__v1_group_by_present() {
+        assert!(parse("SELECT a FROM t GROUP BY a HAVING a > 1").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_having_8d3dd7da__v2_select_has_an_aggregate() {
+        assert!(parse("SELECT COUNT(*) FROM t HAVING COUNT(*) > 1").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_having_8d3dd7da__v3_only_having_has_an_aggregate() {
+        assert!(parse("SELECT a FROM t HAVING SUM(b) > 1").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_having_8d3dd7da__v4_nothing_to_group_on() {
+        assert!(parse("SELECT a FROM t HAVING a > 1").is_err());
+    }
 }

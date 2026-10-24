@@ -1121,6 +1121,108 @@ mod tests {
         Value::Str(v.to_string().into())
     }
 
+    fn int_acc(value: i64) -> AccColumn {
+        let values = [Value::Int(value)];
+        let mut column = AccColumn::for_values(true, false, &values, 1);
+        column.push_value(&values[0]);
+        column
+    }
+
+    // vm_combine_merge_entry_f3bef4a0 (`merge_entry`):
+    // `op == SlotOp::Count && matches!(column, AccColumn::Ints { .. })`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_merge_entry_f3bef4a0__v1_a_typed_count_column_adds_in_place() {
+        let mut column = int_acc(1);
+        merge_entry(SlotOp::Count, &mut column, 0, &Value::Int(2)).unwrap();
+        assert_eq!(column.into_values(), vec![Value::Int(3)]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_merge_entry_f3bef4a0__v2_another_op_on_a_typed_column_is_malformed() {
+        let mut column = int_acc(1);
+        let err = merge_entry(SlotOp::Sum, &mut column, 0, &Value::Int(2)).unwrap_err();
+        assert!(err.to_string().contains("typed key column"), "{err}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_merge_entry_f3bef4a0__v3_a_count_over_a_values_column_goes_through_merge_slot(
+    ) {
+        let mut column = AccColumn::Values(vec![Value::Int(1)]);
+        merge_entry(SlotOp::Count, &mut column, 0, &Value::Int(2)).unwrap();
+        assert_eq!(column.into_values(), vec![Value::Int(3)]);
+    }
+
+    fn pushed_partials(partials: Vec<Partial>) -> Result<QueryOutput> {
+        let parts = [AggPart::GroupKey, AggPart::Count];
+        combine_partials(&parts, 1, partials)
+    }
+
+    fn two_col_partial(rows: usize, first_seen: Vec<u64>) -> Partial {
+        let keys: Vec<Value> = (0..rows).map(|i| Value::Int(i as i64)).collect();
+        let counts: Vec<Value> = (0..rows).map(|_| Value::Int(1)).collect();
+        partial(chunk(vec![keys, counts]), first_seen)
+    }
+
+    // vm_combine_push_partial_cab084bc (`push_partial`):
+    // `partial.columns.len() != num_slots
+    //  || partial.columns.iter().any(|column| column.len() != n)
+    //  || partial.first_seen.len() != n`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_push_partial_cab084bc__v1_a_well_formed_partial_merges() {
+        let out = pushed_partials(vec![
+            two_col_partial(2, vec![0, 1]),
+            two_col_partial(1, vec![5]),
+        ])
+        .unwrap();
+        assert_eq!(
+            out.into_rows(),
+            vec![
+                vec![Value::Int(0), Value::Int(2)],
+                vec![Value::Int(1), Value::Int(1)]
+            ]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_push_partial_cab084bc__v2_a_wider_partial_is_malformed() {
+        let wide = partial(
+            chunk(vec![
+                vec![Value::Int(0)],
+                vec![Value::Int(1)],
+                vec![Value::Int(1)],
+            ]),
+            vec![0],
+        );
+        let err = pushed_partials(vec![two_col_partial(1, vec![0]), wide]).unwrap_err();
+        assert!(err.to_string().contains("does not fit"), "{err}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_push_partial_cab084bc__v3_a_ragged_column_is_malformed() {
+        let ragged = partial(
+            chunk(vec![
+                vec![Value::Int(0), Value::Int(1)],
+                vec![Value::Int(1)],
+            ]),
+            vec![0, 1],
+        );
+        let err = pushed_partials(vec![ragged]).unwrap_err();
+        assert!(err.to_string().contains("does not fit"), "{err}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_push_partial_cab084bc__v4_a_first_seen_length_mismatch_is_malformed() {
+        let err = pushed_partials(vec![two_col_partial(1, vec![0, 1])]).unwrap_err();
+        assert!(err.to_string().contains("does not fit"), "{err}");
+    }
+
     // vm_combine_finish_distinct_f71d60b5 (`finish_distinct`):
     // `keys > 0 || regroup.num_slots.is_some()`
     #[test]

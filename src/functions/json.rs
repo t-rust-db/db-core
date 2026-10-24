@@ -2623,6 +2623,7 @@ mod tests {
 
     use std::rc::Rc;
 
+    use super::{Edit, Lk};
     use crate::functions::{call, FunctionError};
     use crate::value::Value;
 
@@ -3125,5 +3126,1251 @@ mod tests {
         assert_eq!(text("json", &[blob(b"[1,2]")]), "[1,2]");
         assert_eq!(text("json", &[blob(b"{}")]), "{}");
         assert_eq!(err("json", &[blob(&[0x3b, 0x13])]), "malformed JSON");
+    }
+    // ---- MC/DC discharge vectors ------------------------------------------
+
+    /// `json5_ws(z, 0)`.
+    fn ws(z: &[u8]) -> usize {
+        super::json5_ws(z, 0)
+    }
+
+    /// Whether `z` parses as JSON/JSON5 text.
+    fn pj(z: &[u8]) -> bool {
+        super::parse_text(z).is_ok()
+    }
+
+    /// The end offset of the unquoted label at the start of `z`.
+    fn label_end(z: &[u8]) -> usize {
+        super::parse_ident_label(z, 0).map_or(0, |(_, end)| end)
+    }
+
+    /// `validity_check` of the whole of `z` as one JSONB element.
+    fn vc(z: &[u8]) -> usize {
+        super::validity_check(z, 0, z.len(), 1)
+    }
+
+    /// `push_string` of `z` into a fresh buffer.
+    fn pushed(z: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        super::push_string(&mut out, z);
+        out
+    }
+
+    /// `render_float5` of `z` into a fresh buffer.
+    fn float5(z: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        super::render_float5(&mut out, z);
+        out
+    }
+
+    /// `render_text5` of `z` into a fresh buffer.
+    fn text5(z: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        super::render_text5(&mut out, z);
+        out
+    }
+
+    /// Walk `path` through the parsed `json` with `edit`, returning the
+    /// JSONB type of what was found.
+    fn look(json: &[u8], path: &[u8], edit: Edit) -> Result<u8, Lk> {
+        let (mut node, _) = super::parse_text(json).unwrap();
+        let walk = super::Walk {
+            path: path.to_vec(),
+            edit,
+            value: super::Node::Null,
+            extracted: std::cell::Cell::new(None),
+        };
+        super::step(&mut node, &walk, 0, 0).map(|f| f.jtype)
+    }
+
+    // functions_json_json5_ws_8d398173: at(z, add(n, 1)) == 0x9a && at(z, add(n, 2)) == 0x80
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_8d398173__v1_both_continuation_bytes() {
+        assert_eq!(ws(&[0xe1, 0x9a, 0x80]), 3);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_8d398173__v2_second_byte_wrong() {
+        assert_eq!(ws(&[0xe1, 0x00, 0x80]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_8d398173__v3_third_byte_wrong() {
+        assert_eq!(ws(&[0xe1, 0x9a, 0x00]), 0);
+    }
+
+    // functions_json_json5_ws_08a7f489: at(z, add(n, 1)) == 0x80 && at(z, add(n, 2)) == 0x80
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_08a7f489__v1_both_continuation_bytes() {
+        assert_eq!(ws(&[0xe3, 0x80, 0x80]), 3);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_08a7f489__v2_second_byte_wrong() {
+        assert_eq!(ws(&[0xe3, 0x00, 0x80]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_08a7f489__v3_third_byte_wrong() {
+        assert_eq!(ws(&[0xe3, 0x80, 0x00]), 0);
+    }
+
+    // functions_json_json5_ws_84bd24bc: at(z, add(n, 1)) == 0xbb && at(z, add(n, 2)) == 0xbf
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_84bd24bc__v1_bom() {
+        assert_eq!(ws(&[0xef, 0xbb, 0xbf]), 3);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_84bd24bc__v2_second_byte_wrong() {
+        assert_eq!(ws(&[0xef, 0x00, 0xbf]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_84bd24bc__v3_third_byte_wrong() {
+        assert_eq!(ws(&[0xef, 0xbb, 0x00]), 0);
+    }
+
+    // functions_json_json5_ws_b24907b6: at(z, add(n, 1)) == b'*' && at(z, add(n, 2)) != 0
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_b24907b6__v1_block_comment() {
+        assert_eq!(ws(b"/*x*/"), 5);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_b24907b6__v2_not_a_star() {
+        assert_eq!(ws(b"/x"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_b24907b6__v3_star_then_end() {
+        assert_eq!(ws(b"/*"), 0);
+    }
+
+    // functions_json_json5_ws_f496ad0d: at(z, j) == b'/' && at(z, j.saturating_sub(1)) == b'*'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_f496ad0d__v1_slash_after_star() {
+        assert_eq!(ws(b"/*x*/"), 5);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_f496ad0d__v2_not_a_slash() {
+        assert_eq!(ws(b"/*xy"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_f496ad0d__v3_slash_without_star() {
+        assert_eq!(ws(b"/*x//"), 0);
+    }
+
+    // functions_json_json5_ws_c12da1dc: c == 0 || c == b'\n' || c == b'\r'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_c12da1dc__v1_ordinary_char_then_newline() {
+        assert_eq!(ws(b"//x\n"), 4);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_c12da1dc__v2_end_of_input() {
+        assert_eq!(ws(b"//"), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_c12da1dc__v3_newline() {
+        assert_eq!(ws(b"//\n"), 3);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_c12da1dc__v4_carriage_return() {
+        assert_eq!(ws(b"//\r"), 3);
+    }
+
+    // functions_json_json5_ws_d6dbf879: c == 0xe2 && at(z, add(j, 1)) == 0x80 && matches!(at(z, add(j, 2)), 0xa8 | 0xa9)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_d6dbf879__v1_line_separator() {
+        assert_eq!(ws(&[b'/', b'/', 0xe2, 0x80, 0xa8, b'x']), 5);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_d6dbf879__v2_not_e2() {
+        assert_eq!(ws(b"//x"), 3);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_d6dbf879__v3_second_byte_wrong() {
+        assert_eq!(ws(&[b'/', b'/', 0xe2, 0x01]), 4);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_d6dbf879__v4_third_byte_wrong() {
+        assert_eq!(ws(&[b'/', b'/', 0xe2, 0x80, 0x00]), 4);
+    }
+
+    // functions_json_json5_ws_a1df777b: space || (c1 == 0x81 && c2 == 0x9f)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_a1df777b__v1_space_range() {
+        assert_eq!(ws(&[0xe2, 0x80, 0x80]), 3);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_a1df777b__v2_neither() {
+        assert_eq!(ws(&[0xe2, 0x00, 0x00]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_a1df777b__v3_medium_math_space_bad_c2() {
+        assert_eq!(ws(&[0xe2, 0x81, 0x00]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_json5_ws_a1df777b__v4_medium_math_space() {
+        assert_eq!(ws(&[0xe2, 0x81, 0x9f]), 3);
+    }
+
+    // functions_json_translate_d7a10f8a: starts_with_at(z, i, b"null") && !is_alnum(at(z, add(i, 4)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_d7a10f8a__v1_keyword_delimited() {
+        assert!(pj(b"null"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_d7a10f8a__v2_prefix_mismatch() {
+        assert!(!pj(b"nulx"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_d7a10f8a__v3_followed_by_alnum() {
+        assert!(!pj(b"nullx"));
+    }
+
+    // functions_json_translate_9f33e363: starts_with_at(z, i, b"true") && !is_alnum(at(z, add(i, 4)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_9f33e363__v1_keyword_delimited() {
+        assert!(pj(b"true"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_9f33e363__v2_prefix_mismatch() {
+        assert!(!pj(b"tru"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_9f33e363__v3_followed_by_alnum() {
+        assert!(!pj(b"truex"));
+    }
+
+    // functions_json_translate_7f38803e: starts_with_at(z, i, b"false") && !is_alnum(at(z, add(i, 5)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_7f38803e__v1_keyword_delimited() {
+        assert!(pj(b"false"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_7f38803e__v2_prefix_mismatch() {
+        assert!(!pj(b"fals"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_translate_7f38803e__v3_followed_by_alnum() {
+        assert!(!pj(b"falsex"));
+    }
+
+    // functions_json_nan_inf_87b4ed32: !starts_nocase(z, i, name) || is_alnum(at(z, add(i, name.len())))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_nan_inf_87b4ed32__v1_name_delimited() {
+        assert!(pj(b"inf"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_nan_inf_87b4ed32__v2_no_name_matches() {
+        assert!(!pj(b"xyz"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_nan_inf_87b4ed32__v3_name_followed_by_alnum() {
+        assert!(!pj(b"infx"));
+    }
+
+    // functions_json_parse_number_19e52fad: matches!(at(z, add(i, 1)), b'x' | b'X') && is_xdigit(at(z, add(i, 2)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_19e52fad__v1_hex_literal() {
+        assert!(pj(b"0x1f"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_19e52fad__v2_not_x() {
+        assert!(!pj(b"0y"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_19e52fad__v3_x_without_hex_digit() {
+        assert!(!pj(b"0xg"));
+    }
+
+    // functions_json_parse_number_0ee8e2c7: matches!(at(z, add(i, 1)), b'I' | b'i') && starts_nocase(z, add(i, 1), b"inf")
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_0ee8e2c7__v1_signed_infinity() {
+        assert!(pj(b"-Infinity"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_0ee8e2c7__v2_not_i() {
+        assert!(!pj(b"-x"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_0ee8e2c7__v3_i_without_inf() {
+        assert!(!pj(b"-Ixx"));
+    }
+
+    // functions_json_parse_number_81362fff: matches!(at(z, add(i, 2)), b'x' | b'X') && is_xdigit(at(z, add(i, 3)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_81362fff__v1_signed_hex() {
+        assert!(pj(b"-0x1f"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_81362fff__v2_not_x() {
+        assert!(!pj(b"-0y"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_81362fff__v3_x_without_hex_digit() {
+        assert!(!pj(b"-0xg"));
+    }
+
+    // functions_json_parse_number_tail_28d97a5d: c == b'e' || c == b'E'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_tail_28d97a5d__v1_neither_e() {
+        assert!(pj(b"1"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_tail_28d97a5d__v2_lowercase_e() {
+        assert!(pj(b"1e5"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_tail_28d97a5d__v3_uppercase_e() {
+        assert!(pj(b"1E5"));
+    }
+
+    // functions_json_parse_number_tail_23f90f3f: c == b'+' || c == b'-'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_tail_23f90f3f__v1_no_sign() {
+        assert!(pj(b"1e5"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_tail_23f90f3f__v2_plus_sign() {
+        assert!(pj(b"1e+5"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_number_tail_23f90f3f__v3_minus_sign() {
+        assert!(pj(b"1e-5"));
+    }
+
+    // functions_json_parse_string_ee6d3ed9: matches!(c, b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') || (c == b'u' && is_4hex(z, add(j, 1)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_ee6d3ed9__v1_simple_escape() {
+        assert!(pj(b"\"\\n\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_ee6d3ed9__v2_unknown_escape() {
+        assert!(!pj(b"\"\\q\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_ee6d3ed9__v3_u_without_four_hex() {
+        assert!(!pj(b"\"\\u00\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_ee6d3ed9__v4_unicode_escape() {
+        assert!(pj(b"\"\\u0041\""));
+    }
+
+    // functions_json_parse_string_82b8f8f0: c == b'\'' || c == b'v' || c == b'\n' || (c == b'0' && !is_digit(at(z, add(j, 1)))) || (c == 0xe2 && at(z, add(j, 1)) == 0x80 && matches!(at(z, add(j, 2)), 0xa8 | 0xa9)) || (c == b'x' && is_2hex(z, add(j, 1)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v1_unknown_escape_all_false() {
+        assert!(!pj(b"\"\\q\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v2_escaped_single_quote() {
+        assert!(pj(b"\"\\'\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v3_escaped_v() {
+        assert!(pj(b"\"\\v\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v4_escaped_newline() {
+        assert!(pj(b"\"\\\n\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v5_nul_escape() {
+        assert!(pj(b"\"\\0\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v6_zero_followed_by_digit() {
+        assert!(!pj(b"\"\\01\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v7_escaped_line_separator() {
+        assert!(pj(&[b'"', b'\\', 0xe2, 0x80, 0xa8, b'"']));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v8_e2_second_byte_wrong() {
+        assert!(!pj(&[b'"', b'\\', 0xe2, b'x', b'"']));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v9_e2_third_byte_wrong() {
+        assert!(!pj(&[b'"', b'\\', 0xe2, 0x80, b'x', b'"']));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v10_hex_escape() {
+        assert!(pj(b"\"\\x41\""));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_string_82b8f8f0__v11_hex_escape_bad_digits() {
+        assert!(!pj(b"\"\\xzz\""));
+    }
+
+    // functions_json_parse_ident_label_c37ce1c4: !is_id1(at(z, j)) && !is_esc(j)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_ident_label_c37ce1c4__v1_id_start_byte() {
+        assert!(super::parse_ident_label(b"a", 0).is_some());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_ident_label_c37ce1c4__v2_unicode_escape_start() {
+        assert!(super::parse_ident_label(b"\\u0041", 0).is_some());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_ident_label_c37ce1c4__v3_neither() {
+        assert!(super::parse_ident_label(b"1", 0).is_none());
+    }
+
+    // functions_json_parse_ident_label_69cc3110: is_id2(at(z, k)) && json5_ws(z, k) == 0
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_ident_label_69cc3110__v1_id_continuation() {
+        assert_eq!(label_end(b"ab"), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_ident_label_69cc3110__v2_not_id_continuation() {
+        assert_eq!(label_end(b"a:"), 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_parse_ident_label_69cc3110__v3_id_byte_that_is_whitespace() {
+        assert_eq!(label_end(&[b'a', 0xc2, 0xa0]), 1);
+    }
+
+    // functions_json_payload_size_0acbad50: add(i, 8) >= z.len() || byte(1) != 0 || byte(2) != 0 || byte(3) != 0 || byte(4) != 0
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_payload_size_0acbad50__v1_well_formed_header() {
+        assert_eq!(
+            super::payload_size(&[0xf0, 0, 0, 0, 0, 0, 0, 0, 0], 0),
+            Some((9, 0))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_payload_size_0acbad50__v2_truncated_header() {
+        assert_eq!(super::payload_size(&[0xf0, 0, 0, 0, 0, 0, 0, 0], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_payload_size_0acbad50__v3_byte1_set() {
+        assert_eq!(
+            super::payload_size(&[0xf0, 1, 0, 0, 0, 0, 0, 0, 0], 0),
+            None
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_payload_size_0acbad50__v4_byte2_set() {
+        assert_eq!(
+            super::payload_size(&[0xf0, 0, 1, 0, 0, 0, 0, 0, 0], 0),
+            None
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_payload_size_0acbad50__v5_byte3_set() {
+        assert_eq!(
+            super::payload_size(&[0xf0, 0, 0, 1, 0, 0, 0, 0, 0], 0),
+            None
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_payload_size_0acbad50__v6_byte4_set() {
+        assert_eq!(
+            super::payload_size(&[0xf0, 0, 0, 0, 1, 0, 0, 0, 0], 0),
+            None
+        );
+    }
+
+    // functions_json_validity_check_f527a718: !is_ok(at(z, j)) && at(z, j) != b'\''
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_f527a718__v1_verbatim_byte() {
+        assert_eq!(vc(&[0x17, b'a']), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_f527a718__v2_single_quote() {
+        assert_eq!(vc(&[0x17, b'\'']), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_f527a718__v3_double_quote() {
+        assert_ne!(vc(&[0x17, b'"']), 0);
+    }
+
+    // functions_json_validity_check_f4bfe042: x == J_OBJECT && cnt & 1 == 0
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_f4bfe042__v1_object_with_non_text_label() {
+        assert_ne!(vc(&[0x2c, 0x00, 0x00]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_f4bfe042__v2_array() {
+        assert_eq!(vc(&[0x1b, 0x00]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_f4bfe042__v3_object_value_position() {
+        assert_eq!(vc(&[0x3c, 0x17, b'a', 0x00]), 0);
+    }
+
+    // functions_json_validity_check_5ad27e49: x == J_OBJECT && cnt & 1 != 0
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_5ad27e49__v1_object_with_odd_count() {
+        assert_ne!(vc(&[0x2c, 0x17, b'a']), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_5ad27e49__v2_array() {
+        assert_eq!(vc(&[0x1b, 0x00]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_5ad27e49__v3_object_with_even_count() {
+        assert_eq!(vc(&[0x3c, 0x17, b'a', 0x00]), 0);
+    }
+
+    // functions_json_validity_check_float_6d937695: x == J_FLOAT || !is_digit(at(z, add(j, 1)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_6d937695__v1_float_with_leading_dot() {
+        assert_ne!(vc(&[0x25, b'.', b'5']), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_6d937695__v2_float5_leading_dot_digit() {
+        assert_eq!(vc(&[0x26, b'.', b'5']), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_6d937695__v3_float5_leading_dot_no_digit() {
+        assert_ne!(vc(&[0x26, b'.', b'x']), 0);
+    }
+
+    // functions_json_validity_check_float_d59b4883: at(z, j) == b'0' && x == J_FLOAT
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_d59b4883__v1_float_leading_zero() {
+        assert_eq!(vc(b"\x350.5"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_d59b4883__v2_float_no_leading_zero() {
+        assert_eq!(vc(b"\x351.5"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_d59b4883__v3_float5_leading_zero() {
+        assert_eq!(vc(b"\x360.5"), 0);
+    }
+
+    // functions_json_validity_check_float_c7de4d39: x == J_FLOAT && (add(j, 1) == k || !is_digit(at(z, add(j, 1))))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_c7de4d39__v1_float5_trailing_dot() {
+        assert_eq!(vc(b"\x261."), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_c7de4d39__v2_float_dot_at_end() {
+        assert_ne!(vc(b"\x251."), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_c7de4d39__v3_float_dot_then_non_digit() {
+        assert_ne!(vc(b"\x351.x"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_c7de4d39__v4_float_dot_then_digit() {
+        assert_eq!(vc(b"\x351.5"), 0);
+    }
+
+    // functions_json_validity_check_float_28d97a5d: c == b'e' || c == b'E'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_28d97a5d__v1_lowercase_e() {
+        assert_eq!(vc(b"\x351e5"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_28d97a5d__v2_uppercase_e() {
+        assert_eq!(vc(b"\x351E5"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_28d97a5d__v3_other_byte() {
+        assert_ne!(vc(b"\x251x"), 0);
+    }
+
+    // functions_json_validity_check_float_fd6cbc18: seen == 2 || add(j, 1) == k
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_fd6cbc18__v1_first_exponent() {
+        assert_eq!(vc(b"\x351e5"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_fd6cbc18__v2_second_exponent() {
+        assert_ne!(vc(b"\x551e5e5"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_float_fd6cbc18__v3_exponent_at_end() {
+        assert_ne!(vc(b"\x251e"), 0);
+    }
+
+    // functions_json_validity_check_text_9dc45fb1: !is_ok(c) && c != b'\''
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_9dc45fb1__v1_verbatim_byte() {
+        assert_eq!(vc(b"\x18a"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_9dc45fb1__v2_single_quote() {
+        assert_eq!(vc(b"\x18'"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_9dc45fb1__v3_lone_backslash() {
+        assert_ne!(vc(b"\x18\\"), 0);
+    }
+
+    // functions_json_validity_check_text_af61d726: c == b'"' || c <= 0x1f
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_af61d726__v1_raw_double_quote() {
+        assert_ne!(vc(b"\x18\""), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_af61d726__v2_control_byte() {
+        assert_ne!(vc(&[0x18, 0x01]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_af61d726__v3_valid_escape() {
+        assert_eq!(vc(b"\x28\\n"), 0);
+    }
+
+    // functions_json_validity_check_text_8885763b: add(j, 5) >= k || !is_4hex(z, add(j, 2))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_8885763b__v1_complete_unicode_escape() {
+        assert_eq!(vc(b"\x68\\u0041"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_8885763b__v2_truncated_escape() {
+        assert_ne!(vc(b"\x58\\u004"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_validity_check_text_8885763b__v3_non_hex_digits() {
+        assert_ne!(vc(b"\x78\\u00zz1"), 0);
+    }
+
+    // functions_json_decode_jsonb_1b58e491: payload.is_empty() || (t == J_INT5 && !int5_renders(payload))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_decode_jsonb_1b58e491__v1_empty_payload() {
+        assert!(super::decode_jsonb(&[0x03], 0, 0).is_none());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_decode_jsonb_1b58e491__v2_plain_int() {
+        assert!(super::decode_jsonb(b"\x131", 0, 0).is_some());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_decode_jsonb_1b58e491__v3_int5_not_rendering() {
+        assert!(super::decode_jsonb(b"\x340xg", 0, 0).is_none());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_decode_jsonb_1b58e491__v4_int5_rendering() {
+        assert!(super::decode_jsonb(b"\x340x1", 0, 0).is_some());
+    }
+
+    // functions_json_push_string_e3718ba2: is_ok(c) || c == b'\''
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_push_string_e3718ba2__v1_verbatim_byte() {
+        assert_eq!(pushed(b"a"), b"\"a\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_push_string_e3718ba2__v2_single_quote() {
+        assert_eq!(pushed(b"'"), b"\"'\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_push_string_e3718ba2__v3_double_quote() {
+        assert_eq!(pushed(b"\""), b"\"\\\"\"");
+    }
+
+    // functions_json_push_string_dc89f304: c == b'"' || c == b'\\'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_push_string_dc89f304__v1_double_quote() {
+        assert_eq!(pushed(b"\""), b"\"\\\"\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_push_string_dc89f304__v2_backslash() {
+        assert_eq!(pushed(b"\\"), b"\"\\\\\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_push_string_dc89f304__v3_control_byte() {
+        assert_eq!(pushed(&[0x01]), b"\"\\u0001\"");
+    }
+
+    // functions_json_render_float5_43b2273e: c == b'.' && (add(k, 1) == z.len() || !is_digit(at(z, add(k, 1))))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_float5_43b2273e__v1_no_dot() {
+        assert_eq!(float5(b"1"), b"1");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_float5_43b2273e__v2_dot_at_end() {
+        assert_eq!(float5(b"1."), b"1.0");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_float5_43b2273e__v3_dot_then_non_digit() {
+        assert_eq!(float5(b"1.e5"), b"1.0e5");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_float5_43b2273e__v4_dot_then_digit() {
+        assert_eq!(float5(b"1.5"), b"1.5");
+    }
+
+    // functions_json_render_text5_e3718ba2: is_ok(c) || c == b'\''
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_e3718ba2__v1_verbatim_byte() {
+        assert_eq!(text5(b"a"), b"\"a\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_e3718ba2__v2_single_quote() {
+        assert_eq!(text5(b"'"), b"\"'\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_e3718ba2__v3_double_quote() {
+        assert_eq!(text5(b"\""), b"\"\\\"\"");
+    }
+
+    // functions_json_render_text5_563dea76: rest > 2 && at(z, add(k, 2)) == b'\n'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_563dea76__v1_cr_lf_pair() {
+        assert_eq!(text5(b"\\\r\n"), b"\"\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_563dea76__v2_cr_at_end() {
+        assert_eq!(text5(b"\\\r"), b"\"\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_563dea76__v3_cr_then_other() {
+        assert_eq!(text5(b"\\\rx"), b"\"x\"");
+    }
+
+    // functions_json_render_text5_1cf7508c: rest < 4 || at(z, add(k, 2)) != 0x80 || !matches!(at(z, add(k, 3)), 0xa8 | 0xa9)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_1cf7508c__v1_line_separator_escape() {
+        assert_eq!(text5(&[b'\\', 0xe2, 0x80, 0xa8, b'x']), b"\"x\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_1cf7508c__v2_truncated() {
+        assert_eq!(text5(&[b'\\', 0xe2, 0x80]), b"\"\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_1cf7508c__v3_second_byte_wrong() {
+        assert_eq!(text5(&[b'\\', 0xe2, 0x00, 0xa8, b'x']), b"\"\"");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_render_text5_1cf7508c__v4_third_byte_wrong() {
+        assert_eq!(text5(&[b'\\', 0xe2, 0x80, 0x00, b'x']), b"\"\"");
+    }
+
+    // functions_json_utf8_read_ea0b4e24: i < n && at(z, i) & 0xc0 == 0x80
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_utf8_read_ea0b4e24__v1_continuation_byte() {
+        assert_eq!(super::utf8_read(&[0xc3, 0xa9]).1, 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_utf8_read_ea0b4e24__v2_input_exhausted() {
+        assert_eq!(super::utf8_read(&[0xc3]).1, 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_utf8_read_ea0b4e24__v3_not_a_continuation_byte() {
+        assert_eq!(super::utf8_read(&[0xc3, 0x41]).1, 1);
+    }
+
+    // functions_json_bytes_to_bypass_3eaaf6a9: add(i, 2) < n && at(z, add(i, 2)) == b'\n'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_bytes_to_bypass_3eaaf6a9__v1_cr_lf_pair() {
+        assert_eq!(super::bytes_to_bypass(b"\\\r\n"), 3);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_bytes_to_bypass_3eaaf6a9__v2_cr_at_end() {
+        assert_eq!(super::bytes_to_bypass(b"\\\r"), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_bytes_to_bypass_3eaaf6a9__v3_cr_then_other() {
+        assert_eq!(super::bytes_to_bypass(b"\\\rxy"), 2);
+    }
+
+    // functions_json_bytes_to_bypass_74f2c30d: c == 0xe2 && add(i, 3) < n && at(z, add(i, 2)) == 0x80 && matches!(at(z, add(i, 3)), 0xa8 | 0xa9)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_bytes_to_bypass_74f2c30d__v1_not_e2() {
+        assert_eq!(super::bytes_to_bypass(b"\\x"), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_bytes_to_bypass_74f2c30d__v2_line_separator() {
+        assert_eq!(super::bytes_to_bypass(&[b'\\', 0xe2, 0x80, 0xa8]), 4);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_bytes_to_bypass_74f2c30d__v3_too_short() {
+        assert_eq!(super::bytes_to_bypass(&[b'\\', 0xe2, 0x80]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_bytes_to_bypass_74f2c30d__v4_second_byte_wrong() {
+        assert_eq!(super::bytes_to_bypass(&[b'\\', 0xe2, 0x00, 0xa8]), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_bytes_to_bypass_74f2c30d__v5_third_byte_wrong() {
+        assert_eq!(super::bytes_to_bypass(&[b'\\', 0xe2, 0x80, 0x00]), 0);
+    }
+
+    // functions_json_unescape_one_6999beeb: v & 0xfc00 == 0xd800 && n >= 12 && at(z, 6) == b'\\' && at(z, 7) == b'u'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_unescape_one_6999beeb__v1_not_a_surrogate() {
+        assert_eq!(super::unescape_one(b"\\u0041"), (0x41, 6));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_unescape_one_6999beeb__v2_surrogate_too_short() {
+        assert_eq!(super::unescape_one(b"\\ud83d"), (0xd83d, 6));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_unescape_one_6999beeb__v3_no_second_backslash() {
+        assert_eq!(super::unescape_one(b"\\ud83dxuDE00"), (0xd83d, 6));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_unescape_one_6999beeb__v4_no_second_u() {
+        assert_eq!(super::unescape_one(b"\\ud83d\\xDE00"), (0xd83d, 6));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_unescape_one_6999beeb__v5_surrogate_pair() {
+        assert_eq!(super::unescape_one(b"\\ud83d\\ude00"), (0x1f600, 12));
+    }
+
+    // functions_json_unescape_one_6e731e5e: n > 2 && is_digit(at(z, 2))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_unescape_one_6e731e5e__v1_nul_escape_alone() {
+        assert_eq!(super::unescape_one(b"\\0"), (0, 2));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_unescape_one_6e731e5e__v2_nul_escape_then_letter() {
+        assert_eq!(super::unescape_one(b"\\0x"), (0, 2));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_unescape_one_6e731e5e__v3_nul_escape_then_digit() {
+        assert_eq!(super::unescape_one(b"\\01"), (super::INVALID_CHAR, 2));
+    }
+
+    // functions_json_label_char_56608d8a: raw || at(rest, 0) != b'\\'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_label_char_56608d8a__v1_raw_label() {
+        let mut pos = 0;
+        assert_eq!(super::label_char(b"\\n", &mut pos, true), 0x5c);
+        assert_eq!(pos, 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_label_char_56608d8a__v2_plain_char() {
+        let mut pos = 0;
+        assert_eq!(super::label_char(b"a", &mut pos, false), 0x61);
+        assert_eq!(pos, 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_label_char_56608d8a__v3_escape() {
+        let mut pos = 0;
+        assert_eq!(super::label_char(b"\\n", &mut pos, false), 0x0a);
+        assert_eq!(pos, 2);
+    }
+
+    // functions_json_label_eq_21faa02e: left_raw && right_raw
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_label_eq_21faa02e__v1_both_raw() {
+        assert!(super::label_eq(b"a", true, b"a", true));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_label_eq_21faa02e__v2_left_escaped() {
+        assert!(super::label_eq(b"\\u0061", false, b"a", true));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_label_eq_21faa02e__v3_right_escaped() {
+        assert!(super::label_eq(b"a", true, b"\\u0061", false));
+    }
+
+    // functions_json_step_key_d3b74428: at(path, k) != 0 && at(path, k) != b'"'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_d3b74428__v1_quoted_key() {
+        assert!(look(br#"{"a":1}"#, b".\"a\"", Edit::Lookup).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_d3b74428__v2_unterminated_key() {
+        assert_eq!(
+            look(br#"{"a":1}"#, b".\"a", Edit::Lookup),
+            Err(Lk::PathError)
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_d3b74428__v3_empty_quoted_key() {
+        assert!(look(br#"{"":1}"#, b".\"\"", Edit::Lookup).is_ok());
+    }
+
+    // functions_json_step_key_299abce7: at(path, k) == b'\\' && at(path, add(k, 1)) != 0
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_299abce7__v1_escaped_quote_in_key() {
+        assert!(look(br#"{"a\"b":1}"#, b".\"a\\\"b\"", Edit::Lookup).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_299abce7__v2_no_escape() {
+        assert!(look(br#"{"a":1}"#, b".\"a\"", Edit::Lookup).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_299abce7__v3_trailing_backslash() {
+        assert_eq!(
+            look(br#"{"a":1}"#, b".\"a\\", Edit::Lookup),
+            Err(Lk::PathError)
+        );
+    }
+
+    // functions_json_step_key_58597170: at(path, next) == 0 && walk.edit == Edit::Delete
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_58597170__v1_delete_last_step() {
+        assert!(look(br#"{"a":1}"#, b".a", Edit::Delete).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_58597170__v2_more_path_follows() {
+        assert!(look(br#"{"a":{"b":1}}"#, b".a.b", Edit::Delete).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_key_58597170__v3_lookup_last_step() {
+        assert!(look(br#"{"a":1}"#, b".a", Edit::Lookup).is_ok());
+    }
+
+    // functions_json_step_index_4a1e48af: i < add(pos, 2) || at(path, i) != b']'
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_4a1e48af__v1_plain_index() {
+        assert!(look(b"[1]", b"[0]", Edit::Lookup).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_4a1e48af__v2_no_digits() {
+        assert_eq!(look(b"[1]", b"[x]", Edit::Lookup), Err(Lk::PathError));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_4a1e48af__v3_missing_close_bracket() {
+        assert_eq!(look(b"[1]", b"[0x", Edit::Lookup), Err(Lk::PathError));
+    }
+
+    // functions_json_step_index_da2bb883: at(path, add(pos, 2)) == b'-' && is_digit(at(path, add(pos, 3)))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_da2bb883__v1_count_minus_n() {
+        assert!(look(b"[1,2]", b"[#-1]", Edit::Lookup).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_da2bb883__v2_plain_hash() {
+        assert_eq!(look(b"[1]", b"[#]", Edit::Lookup), Err(Lk::NotFound));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_da2bb883__v3_minus_without_digit() {
+        assert_eq!(look(b"[1]", b"[#-x]", Edit::Lookup), Err(Lk::PathError));
+    }
+
+    // functions_json_step_index_58597170: at(path, next) == 0 && walk.edit == Edit::Delete
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_58597170__v1_delete_last_step() {
+        assert!(look(b"[1]", b"[0]", Edit::Delete).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_58597170__v2_more_path_follows() {
+        assert!(look(b"[[1]]", b"[0][0]", Edit::Delete).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_58597170__v3_lookup_last_step() {
+        assert!(look(b"[1]", b"[0]", Edit::Lookup).is_ok());
+    }
+
+    // functions_json_step_index_90b7e49c: kk > count || !walk.edit.creates()
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_90b7e49c__v1_index_past_end() {
+        assert_eq!(look(b"[1]", b"[5]", Edit::Set), Err(Lk::NotFound));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_90b7e49c__v2_append_position_lookup() {
+        assert_eq!(look(b"[1]", b"[1]", Edit::Lookup), Err(Lk::NotFound));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_json_step_index_90b7e49c__v3_append_position_set() {
+        assert!(look(b"[1]", b"[1]", Edit::Set).is_ok());
     }
 }

@@ -818,6 +818,125 @@ mod mcdc_vectors {
         );
         assert!(!is_view_source_rejection(result));
     }
+
+    fn with_index(mut schemas: Vec<TableSchema>) -> Vec<TableSchema> {
+        schemas[0].indexes.push(crate::codegen::row::IndexSchema {
+            name: "idx_t_a".to_string(),
+            unique: false,
+            columns: vec![],
+            root_page: 9,
+        });
+        schemas
+    }
+
+    fn is_no_op(result: &Result<crate::vm::row::Program, DispatchError>) -> bool {
+        result.is_ok()
+    }
+
+    // codegen_row_dispatch_dispatch_create_table_9061156a:
+    // `create.if_not_exists && !matches!(err, DispatchError::NameTakenByOtherKind { .. })`
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_table_9061156a__v1_without_if_not_exists_a_clash_errors(
+    ) {
+        let (schemas, views) = catalog();
+        let result = compile_statement("CREATE TABLE t (a INTEGER)", &schemas, &views);
+        assert!(matches!(result, Err(DispatchError::TableAlreadyExists(_))));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_table_9061156a__v2_if_not_exists_same_kind_is_a_no_op(
+    ) {
+        let (schemas, views) = catalog();
+        let result =
+            compile_statement("CREATE TABLE IF NOT EXISTS t (a INTEGER)", &schemas, &views);
+        assert!(is_no_op(&result));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_table_9061156a__v3_if_not_exists_over_an_index_name_errors(
+    ) {
+        let (schemas, views) = catalog();
+        let schemas = with_index(schemas);
+        let result = compile_statement(
+            "CREATE TABLE IF NOT EXISTS idx_t_a (a INTEGER)",
+            &schemas,
+            &views,
+        );
+        assert!(matches!(
+            result,
+            Err(DispatchError::NameTakenByOtherKind { .. })
+        ));
+    }
+
+    // codegen_row_dispatch_dispatch_create_view_9061156a:
+    // `create.if_not_exists && !matches!(err, DispatchError::NameTakenByOtherKind { .. })`
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_view_9061156a__v1_without_if_not_exists_a_clash_errors(
+    ) {
+        let (schemas, views) = catalog();
+        let result = compile_statement("CREATE VIEW v AS SELECT a FROM t", &schemas, &views);
+        assert!(matches!(result, Err(DispatchError::ViewAlreadyExists(_))));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_view_9061156a__v2_if_not_exists_same_kind_is_a_no_op(
+    ) {
+        let (schemas, views) = catalog();
+        let result = compile_statement(
+            "CREATE VIEW IF NOT EXISTS v AS SELECT a FROM t",
+            &schemas,
+            &views,
+        );
+        assert!(is_no_op(&result));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_view_9061156a__v3_if_not_exists_over_an_index_name_errors(
+    ) {
+        let (schemas, views) = catalog();
+        let schemas = with_index(schemas);
+        let result = compile_statement(
+            "CREATE VIEW IF NOT EXISTS idx_t_a AS SELECT a FROM t",
+            &schemas,
+            &views,
+        );
+        assert!(matches!(
+            result,
+            Err(DispatchError::NameTakenByOtherKind { .. })
+        ));
+    }
+
+    // codegen_row_dispatch_dispatch_create_index_4a1095e8:
+    // `schemas.iter().any(|s| s.name.eq_ignore_ascii_case(&ci.name))
+    //  || views.iter().any(|v| v.name.eq_ignore_ascii_case(&ci.name))`
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_index_4a1095e8__v1_index_named_like_a_table_errors(
+    ) {
+        let (schemas, views) = catalog();
+        let result = compile_statement("CREATE INDEX w ON t (a)", &schemas, &views);
+        assert!(matches!(
+            result,
+            Err(DispatchError::NameTakenByOtherKind { .. })
+        ));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_index_4a1095e8__v2_index_named_like_a_view_errors(
+    ) {
+        let (schemas, views) = catalog();
+        let result = compile_statement("CREATE INDEX v ON t (a)", &schemas, &views);
+        assert!(matches!(
+            result,
+            Err(DispatchError::NameTakenByOtherKind { .. })
+        ));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_dispatch_dispatch_create_index_4a1095e8__v3_a_fresh_index_name_compiles() {
+        let (schemas, views) = catalog();
+        let result = compile_statement("CREATE INDEX fresh ON t (a)", &schemas, &views);
+        assert!(result.is_ok());
+    }
 }
 
 #[cfg(test)]
