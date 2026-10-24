@@ -2099,6 +2099,9 @@ pub db_core::parser::column::ParseError::Unexpected::message: alloc::string::Str
 pub db_core::parser::column::ParseError::Unexpected::span: db_core::parser::Span
 pub db_core::parser::column::ParseError::UnexpectedEof
 pub db_core::parser::column::ParseError::UnexpectedEof::span: db_core::parser::Span
+pub db_core::parser::column::ParseError::Unsupported
+pub db_core::parser::column::ParseError::Unsupported::message: alloc::string::String
+pub db_core::parser::column::ParseError::Unsupported::span: db_core::parser::Span
 impl db_core::parser::column::ParseError
 pub fn db_core::parser::column::ParseError::span(&self) -> db_core::parser::Span
 impl core::cmp::PartialEq for db_core::parser::column::ParseError
