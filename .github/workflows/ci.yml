@@ -12,6 +12,12 @@ on:
       - "**/*.md"
       - ".openspec/**"
 
+# A push to a PR branch supersedes the run still going for its previous
+# commit; main's runs are never cancelled.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # cargo-mvl-limit is not published to crates.io, so the qualified-subset
   # gate builds it from source at this pinned rev. Bumping it is a reviewed
