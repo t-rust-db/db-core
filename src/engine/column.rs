@@ -225,7 +225,7 @@ fn timestamp_columns(file: &ParquetFile<'_>) -> Vec<(String, i64)> {
         .filter_map(|f| match f.element.converted_type {
             Some(ConvertedType::TimestampMillis) => Some((f.name, 1_000)),
             Some(ConvertedType::TimestampMicros) => Some((f.name, 1_000_000)),
-            _ => None,
+            _ => f.element.timestamp_units.map(|units| (f.name, units)),
         })
         .collect()
 }
@@ -308,10 +308,15 @@ fn timestamp_units(text: &str, per_second: i64) -> Option<i64> {
     if !fraction.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
-    let seconds = match crate::functions::call(
-        "unixepoch",
-        &[crate::value::Value::Text(whole.to_string().into())],
-    ) {
+    // A literal names its own instant, so the clock is read only for
+    // `'now'`: a host without one (`wasm32-unknown-unknown`) panics on it.
+    let arg = [crate::value::Value::Text(whole.to_string().into())];
+    let parsed = if whole.eq_ignore_ascii_case("now") {
+        crate::functions::call("unixepoch", &arg)
+    } else {
+        crate::functions::call_at("unixepoch", &arg, 0)
+    };
+    let seconds = match parsed {
         Ok(crate::value::Value::Integer(s)) => s,
         _ => return None,
     };
@@ -1931,6 +1936,31 @@ mod tests {
         assert_eq!(rows(&mut engine, "SELECT sum(x) FROM nested_map"), ["100"]);
         let err = engine.run_query("SELECT key FROM nested_map").unwrap_err();
         assert!(err.to_string().contains("unknown column: key"), "{err}");
+    }
+
+    /// A nanosecond TIMESTAMP has no `ConvertedType`, only a `LogicalType`
+    /// unit; a quoted time compares with it all the same (#679).
+    #[cfg(feature = "storage-column-write")]
+    #[test]
+    fn a_nanosecond_timestamp_compares_with_a_quoted_time() {
+        use crate::storage::parquet::writer::{
+            ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+        };
+        let schema = vec![ColumnSpec::new("ts", ColumnType::TimestampNanos, false)];
+        let mut w = ParquetWriter::new(Vec::new(), schema, WriterOptions::default()).unwrap();
+        // 2026-10-22 00:00, 01:00 and 02:00 UTC.
+        let hour = 3_600_000_000_000_i64;
+        let day = 1_792_627_200_000_000_000_i64;
+        w.write_columns(vec![ColumnValues::TimestampNanos(
+            (0..3).map(|i| Some(day + i * hour)).collect(),
+        )])
+        .unwrap();
+        let mut engine = BatchEngine::from_bytes("t", w.finish().unwrap().0).unwrap();
+        let rows = engine
+            .run_query("SELECT count(*) FROM t WHERE ts >= '2026-10-22T01:00:00Z'")
+            .unwrap()
+            .rows;
+        assert_eq!(rows, vec![vec![crate::engine::Cell::Int(2)]]);
     }
 
     /// End to end over the 3-row-group fixture whose `id`/`amount` are

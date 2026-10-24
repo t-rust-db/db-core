@@ -1470,10 +1470,10 @@ pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + S
         return Vec::new();
     }
 
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(len);
+    let num_threads = pool_size(len);
+    if num_threads == 1 {
+        return items.iter().map(f).collect();
+    }
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<(usize, T)>> = Mutex::new(Vec::with_capacity(len));
 
@@ -1503,6 +1503,17 @@ pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + S
     results.into_iter().map(|(_, result)| result).collect()
 }
 
+/// Workers for `len` items: the host's parallelism, at most `len`. One
+/// means the pools run on the calling thread without spawning, which is
+/// also what a host that cannot spawn threads gets (`wasm32-unknown-unknown`
+/// reports no parallelism).
+fn pool_size(len: usize) -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(len)
+}
+
 /// [`run_morsels`] where each worker carries state across every item it
 /// claims and returns one value at the end (#488): `init` makes a worker's
 /// state, `fold` merges one item into it, `finish` turns it into the
@@ -1525,10 +1536,14 @@ pub(crate) fn run_morsels_fold<I: Sync, S, T: Send>(
     if len == 0 {
         return Ok(Vec::new());
     }
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(len);
+    let num_threads = pool_size(len);
+    if num_threads == 1 {
+        let mut state = init();
+        for item in items {
+            fold(&mut state, item)?;
+        }
+        return Ok(vec![finish(state)?]);
+    }
     let next = AtomicUsize::new(0);
     let failed = AtomicBool::new(false);
     let results: Mutex<Vec<(usize, Result<T>)>> = Mutex::new(Vec::with_capacity(num_threads));
@@ -1608,10 +1623,13 @@ fn run_morsels_ordered<I: Sync, T: Send>(
     if len == 0 {
         return Ok(());
     }
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(len);
+    let num_threads = pool_size(len);
+    if num_threads == 1 {
+        for item in items {
+            sink(f(item))?;
+        }
+        return Ok(());
+    }
     let window = num_threads * 2;
     let shared = Mutex::new(Shared {
         next_claim: 0,

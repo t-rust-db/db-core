@@ -213,6 +213,7 @@ mod tests {
             converted_type: None,
             scale: None,
             precision: None,
+            timestamp_units: None,
         }
     }
 
@@ -226,6 +227,7 @@ mod tests {
             converted_type: None,
             scale: None,
             precision: None,
+            timestamp_units: None,
         }
     }
 
