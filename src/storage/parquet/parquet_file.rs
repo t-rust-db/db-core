@@ -727,6 +727,70 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         Ok(Some((values, present)))
     }
 
+    /// [`Self::read_plain_fixed_column`] for a dictionary-encoded chunk
+    /// (#753): the dictionary page is decoded once through `decode`, then
+    /// each `PLAIN_DICTIONARY`/`RLE_DICTIONARY` data page's codes gather
+    /// their values straight into `(values, present)`, and a `PLAIN`
+    /// fallback page partway through is read as `read_plain_fixed_column`
+    /// would. `Ok(None)` without a dictionary page before the first data
+    /// page, or at a page of any other encoding, for the caller to fall
+    /// back to the `Vec<Option<T>>` readers.
+    pub fn read_dictionary_fixed_column<T: Copy + Default, const N: usize>(
+        &self,
+        column_index: usize,
+        decode: impl Fn([u8; N]) -> T,
+    ) -> Result<Option<(Vec<T>, Vec<bool>)>> {
+        let mut pages = self.pages(column_index)?;
+        let max_def_level = self.file.max_definition_level(column_index);
+
+        let mut dictionary: Option<Vec<T>> = None;
+        let mut values = Vec::new();
+        let mut present = Vec::new();
+        while let Some((header, compressed)) = pages.next()? {
+            match header.page_type {
+                PageType::Data(data_page_header) => {
+                    let Some(dictionary) = dictionary.as_deref() else {
+                        return Ok(None);
+                    };
+                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;
+                    match data_page_header.encoding {
+                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary => {
+                            reader::read_dictionary_fixed(
+                                &page_body,
+                                &data_page_header,
+                                max_def_level,
+                                dictionary,
+                                &mut values,
+                                &mut present,
+                            )?
+                        }
+                        page::Encoding::Plain => reader::read_plain_fixed(
+                            &page_body,
+                            &data_page_header,
+                            max_def_level,
+                            &decode,
+                            &mut values,
+                            &mut present,
+                        )?,
+                        _ => return Ok(None),
+                    }
+                }
+                PageType::Dictionary(dictionary_page_header) => {
+                    if dictionary.is_some() {
+                        return Err(FileError::UnexpectedDictionaryPage);
+                    }
+                    let body = pages.body(compressed, header.uncompressed_page_size)?;
+                    dictionary = Some(reader::decode_dictionary_fixed(
+                        &body,
+                        dictionary_page_header.num_values,
+                        &decode,
+                    )?);
+                }
+            }
+        }
+        Ok(dictionary.map(|_| (values, present)))
+    }
+
     /// Decodes a string column chunk straight into `Column::Str`'s
     /// layout (#731): `Ok(Some((offsets, data, present)))` with one offset
     /// per row plus the leading `0`, every value's bytes in one `data`
@@ -2336,6 +2400,170 @@ mod tests {
             rg.read_int64_column(0).unwrap(),
             vec![Some(20), Some(10), Some(20)]
         );
+    }
+
+    /// One data page of [`build_fixed_dictionary_chunk`]: dictionary codes,
+    /// or a `PLAIN` fallback page's body and value count.
+    enum DictTestPage<'a> {
+        Codes(&'a [u32]),
+        Plain(&'a [u8], i32),
+    }
+
+    /// A REQUIRED fixed-width chunk (#753): a dictionary page holding
+    /// `dict_body` (`dict_len` entries), then `pages` in order, the codes
+    /// bit-packed at the width `dict_len` needs.
+    fn build_fixed_dictionary_chunk(
+        physical_type: i32,
+        dict_body: &[u8],
+        dict_len: usize,
+        pages: &[DictTestPage<'_>],
+    ) -> Vec<u8> {
+        let mut page_bytes = build_dictionary_page_header(dict_len as i32, dict_body.len() as i32);
+        page_bytes.extend_from_slice(dict_body);
+        let bit_width = (usize::BITS - dict_len.saturating_sub(1).leading_zeros()).clamp(1, 32);
+        let mut num_rows = 0i64;
+        for page in pages {
+            let (header, body) = match page {
+                DictTestPage::Codes(codes) => {
+                    let body = encode_dictionary_indices(codes, bit_width);
+                    let header = build_dictionary_encoded_data_page_header(
+                        codes.len() as i32,
+                        body.len() as i32,
+                    );
+                    num_rows += codes.len() as i64;
+                    (header, body)
+                }
+                DictTestPage::Plain(body, n) => {
+                    num_rows += i64::from(*n);
+                    (build_page_header(*n, body.len() as i32), body.to_vec())
+                }
+            };
+            page_bytes.extend_from_slice(&header);
+            page_bytes.extend_from_slice(&body);
+        }
+
+        let mut meta = StructWriter::new();
+        meta.i32_field(1, physical_type);
+        meta.field_header(3, 0x09); // path_in_schema list<string>
+        meta.buf.push((1u8 << 4) | 0x08);
+        meta.write_varint(1);
+        meta.buf.push(b'v');
+        meta.i64_field(5, num_rows); // num_values
+        meta.i64_field(6, page_bytes.len() as i64); // total_uncompressed_size
+        meta.i64_field(7, page_bytes.len() as i64); // total_compressed_size
+        meta.i64_field(9, 4); // data_page_offset
+        let meta_bytes = meta.finish();
+        build_file_from_chunk_typed(&page_bytes, meta_bytes, num_rows, physical_type, None)
+    }
+
+    fn le_bytes<const N: usize>(values: impl IntoIterator<Item = [u8; N]>) -> Vec<u8> {
+        values.into_iter().flatten().collect()
+    }
+
+    #[test]
+    fn read_dictionary_fixed_column_gathers_pages_and_a_plain_fallback_like_the_option_reader() {
+        // #753: two dictionary pages, then a PLAIN page after the writer
+        // gave up on the dictionary.
+        let dict = le_bytes([10i64, 20, 30].map(i64::to_le_bytes));
+        let plain = le_bytes([7i64, 8].map(i64::to_le_bytes));
+        let file_bytes = build_fixed_dictionary_chunk(
+            2,
+            &dict,
+            3,
+            &[
+                DictTestPage::Codes(&[2, 0, 1]),
+                DictTestPage::Codes(&[1, 1]),
+                DictTestPage::Plain(&plain, 2),
+            ],
+        );
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let (values, present) = rg
+            .read_dictionary_fixed_column(0, i64::from_le_bytes)
+            .unwrap()
+            .expect("dictionary chunk");
+        assert_eq!(values, vec![30, 10, 20, 20, 20, 7, 8]);
+        assert!(present.is_empty(), "REQUIRED column: no per-row flags");
+        assert_eq!(
+            values.iter().copied().map(Some).collect::<Vec<_>>(),
+            rg.read_int64_column(0).unwrap()
+        );
+    }
+
+    #[test]
+    fn read_dictionary_fixed_column_widens_the_dictionary_through_decode() {
+        // INT32 and FLOAT entries widen once, in the dictionary.
+        let dict = le_bytes([-5i32, 9].map(i32::to_le_bytes));
+        let file_bytes =
+            build_fixed_dictionary_chunk(1, &dict, 2, &[DictTestPage::Codes(&[1, 0, 1])]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let (values, _) = rg
+            .read_dictionary_fixed_column(0, |b| i64::from(i32::from_le_bytes(b)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(values, vec![9, -5, 9]);
+        assert_eq!(
+            rg.read_int32_column(0).unwrap(),
+            vec![Some(9), Some(-5), Some(9)]
+        );
+
+        let dict = le_bytes([1.5f32, -0.25].map(f32::to_le_bytes));
+        let file_bytes = build_fixed_dictionary_chunk(4, &dict, 2, &[DictTestPage::Codes(&[0, 1])]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let (values, _) = rg
+            .read_dictionary_fixed_column(0, |b| f64::from(f32::from_le_bytes(b)))
+            .unwrap()
+            .unwrap();
+        assert_eq!(values, vec![1.5, -0.25]);
+        assert_eq!(
+            rg.read_float_column(0).unwrap(),
+            vec![Some(1.5), Some(-0.25)]
+        );
+
+        let dict = le_bytes([2.5f64, 1e300].map(f64::to_le_bytes));
+        let file_bytes =
+            build_fixed_dictionary_chunk(5, &dict, 2, &[DictTestPage::Codes(&[1, 1, 0])]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let (values, _) = rg
+            .read_dictionary_fixed_column(0, f64::from_le_bytes)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            values.iter().copied().map(Some).collect::<Vec<_>>(),
+            rg.read_double_column(0).unwrap()
+        );
+    }
+
+    #[test]
+    fn read_dictionary_fixed_column_rejects_a_code_past_the_dictionary() {
+        let dict = le_bytes([10i64, 20, 30].map(i64::to_le_bytes));
+        let file_bytes = build_fixed_dictionary_chunk(2, &dict, 3, &[DictTestPage::Codes(&[0, 3])]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let err = rg
+            .read_dictionary_fixed_column(0, i64::from_le_bytes)
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FileError::Read(ReadError::DictionaryIndexOutOfRange(3))
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn read_dictionary_fixed_column_declines_a_chunk_without_a_dictionary() {
+        let file = three_page_int64_file();
+        let parsed = ParquetFile::open(&file).unwrap();
+        let rg = parsed.row_group(0).unwrap();
+        assert!(rg
+            .read_dictionary_fixed_column(0, i64::from_le_bytes)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
