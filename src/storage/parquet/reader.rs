@@ -563,6 +563,52 @@ pub fn read_plain_fixed<T: Copy + Default, const N: usize>(
     Ok(())
 }
 
+/// Decodes one `PLAIN` `BYTE_ARRAY` data page into a shared string buffer
+/// (#731): each non-NULL value's bytes are appended to `data` and every row
+/// pushes the buffer's new end to `offsets` (a NULL row repeats the previous
+/// end). `present` follows [`read_plain_fixed`]'s convention (empty for a
+/// `REQUIRED` column). Nothing is UTF-8 checked here beyond each value
+/// starting on a character boundary (its first byte is not a continuation
+/// byte): the caller validates the whole `data` once, and valid UTF-8 whose
+/// values all start on a boundary means each value is valid on its own.
+/// An offset past `u32::MAX` saturates; the caller rejects a buffer that long.
+pub fn read_plain_strings(
+    page_body: &[u8],
+    header: &DataPageHeader,
+    max_def_level: u32,
+    data: &mut Vec<u8>,
+    offsets: &mut Vec<u32>,
+    present: &mut Vec<bool>,
+) -> Result<()> {
+    let num_values = value_count(header.num_values)?;
+    if num_values == 0 {
+        return Ok(());
+    }
+    let (levels, mut buf) = split_definition_levels(page_body, header, max_def_level)?;
+    let rows = if levels.is_empty() {
+        num_values
+    } else {
+        levels.len()
+    };
+    offsets.reserve(rows);
+    for row in 0..rows {
+        let is_present = levels.get(row).is_none_or(|&level| level == max_def_level);
+        if is_present {
+            let len = u32::from_le_bytes(take_array(&mut buf)?) as usize;
+            let bytes = take(&mut buf, len)?;
+            if bytes.first().is_some_and(|&b| b & 0xC0 == 0x80) {
+                return Err(ReadError::InvalidUtf8);
+            }
+            data.extend_from_slice(bytes);
+        }
+        offsets.push(u32::try_from(data.len()).unwrap_or(u32::MAX));
+        if !levels.is_empty() {
+            present.push(is_present);
+        }
+    }
+    Ok(())
+}
+
 /// Reads only the given rows of one `PLAIN` data page of a fixed-width
 /// primitive (#513): each `(row within the page, output slot)` pair
 /// writes that row's value to `values[slot]` (a NULL row leaves
@@ -1057,6 +1103,86 @@ mod tests {
         page.extend_from_slice(&2.5f64.to_le_bytes());
         let result = read_double_column(&page, &h, 1).unwrap();
         assert_eq!(result, vec![Some(1.5), None, Some(2.5)]);
+    }
+
+    fn plain_string(s: &[u8]) -> Vec<u8> {
+        let mut out = (s.len() as u32).to_le_bytes().to_vec();
+        out.extend_from_slice(s);
+        out
+    }
+
+    #[test]
+    fn plain_strings_nullable_page_fills_offsets_and_presence() {
+        let h = header(4);
+        let mut page = encode_def_levels(&[1, 0, 1, 1]);
+        for v in ["east", "", "wést"] {
+            page.extend(plain_string(v.as_bytes()));
+        }
+        let (mut data, mut offsets, mut present) = (Vec::new(), vec![0], Vec::new());
+        read_plain_strings(&page, &h, 1, &mut data, &mut offsets, &mut present).unwrap();
+        assert_eq!(data, "eastwést".as_bytes());
+        assert_eq!(offsets, vec![0, 4, 4, 4, 9]);
+        assert_eq!(present, vec![true, false, true, true]);
+    }
+
+    #[test]
+    fn plain_strings_required_page_leaves_present_empty() {
+        let h = header(2);
+        let mut page = plain_string(b"a");
+        page.extend(plain_string(b"bc"));
+        let (mut data, mut offsets, mut present) = (Vec::new(), vec![0], Vec::new());
+        read_plain_strings(&page, &h, 0, &mut data, &mut offsets, &mut present).unwrap();
+        assert_eq!(data, b"abc");
+        assert_eq!(offsets, vec![0, 1, 3]);
+        assert!(present.is_empty());
+    }
+
+    #[test]
+    fn plain_strings_null_only_page_pushes_repeated_offsets() {
+        let h = header(2);
+        let page = encode_def_levels(&[0, 0]);
+        let (mut data, mut offsets, mut present) = (Vec::new(), vec![0], Vec::new());
+        read_plain_strings(&page, &h, 1, &mut data, &mut offsets, &mut present).unwrap();
+        assert!(data.is_empty());
+        assert_eq!(offsets, vec![0, 0, 0]);
+        assert_eq!(present, vec![false, false]);
+    }
+
+    #[test]
+    fn plain_strings_value_starting_mid_character_is_invalid_utf8() {
+        // 0x80 is a continuation byte: it can only be valid as the tail of
+        // the previous value, which a value on its own cannot be.
+        let h = header(1);
+        let page = plain_string(&[0x80]);
+        let (mut data, mut offsets, mut present) = (Vec::new(), vec![0], Vec::new());
+        let err = read_plain_strings(&page, &h, 0, &mut data, &mut offsets, &mut present);
+        assert!(matches!(err, Err(ReadError::InvalidUtf8)));
+    }
+
+    #[test]
+    fn plain_strings_truncated_prefix_or_value_is_unexpected_eof() {
+        let (mut data, mut offsets, mut present) = (Vec::new(), vec![0], Vec::new());
+        let short_prefix = [1u8, 0];
+        let err = read_plain_strings(
+            &short_prefix,
+            &header(1),
+            0,
+            &mut data,
+            &mut offsets,
+            &mut present,
+        );
+        assert!(matches!(err, Err(ReadError::UnexpectedEof)));
+        let mut short_value = 5u32.to_le_bytes().to_vec();
+        short_value.extend_from_slice(b"abc");
+        let err = read_plain_strings(
+            &short_value,
+            &header(1),
+            0,
+            &mut data,
+            &mut offsets,
+            &mut present,
+        );
+        assert!(matches!(err, Err(ReadError::UnexpectedEof)));
     }
 
     // storage_parquet_reader_read_plain_fixed_944bcff7: `levels.is_empty() || levels.iter().all(|&level| level == max_def_level)`

@@ -35,7 +35,7 @@ pub(crate) struct Matcher {
 enum Shape {
     /// The literal segments between wildcards, none empty.
     Segments {
-        parts: Vec<String>,
+        parts: Vec<Finder>,
         anchored_start: bool,
         anchored_end: bool,
     },
@@ -64,7 +64,7 @@ impl Matcher {
                 parts: pattern
                     .split(any_run)
                     .filter(|s| !s.is_empty())
-                    .map(str::to_string)
+                    .map(Finder::new)
                     .collect(),
             }
         };
@@ -106,32 +106,94 @@ impl Matcher {
     }
 }
 
+/// A literal segment with its failure table built once, so each row's
+/// search is linear in the text (`str::find` rebuilds a searcher per call,
+/// #732). Found byte-wise: a match of valid UTF-8 in valid UTF-8 always
+/// starts on a character boundary.
+#[derive(Debug, Clone)]
+struct Finder {
+    needle: String,
+    /// KMP failure function: `fail[i]` is the length of the longest proper
+    /// border of `needle[..=i]`.
+    fail: Vec<usize>,
+}
+
+impl Finder {
+    fn new(needle: &str) -> Finder {
+        let n = needle.as_bytes();
+        let mut fail: Vec<usize> = Vec::with_capacity(n.len());
+        let mut k = 0usize;
+        for (i, b) in n.iter().enumerate() {
+            if i > 0 {
+                while k > 0 && n.get(k) != Some(b) {
+                    k = fail.get(k.saturating_sub(1)).copied().unwrap_or(0);
+                }
+                if n.get(k) == Some(b) {
+                    k = k.saturating_add(1);
+                }
+            }
+            fail.push(k);
+        }
+        Finder {
+            needle: needle.to_string(),
+            fail,
+        }
+    }
+
+    /// Byte offset of the leftmost occurrence in `text`.
+    fn find(&self, text: &[u8]) -> Option<usize> {
+        let n = self.needle.as_bytes();
+        let first = *n.first()?;
+        let mut k = 0usize;
+        let mut i = 0usize;
+        loop {
+            if k == 0 {
+                // Nothing matched yet: jump to the next candidate start.
+                let skip = text.get(i..)?.iter().position(|&b| b == first)?;
+                i = i.saturating_add(skip);
+            }
+            let b = *text.get(i)?;
+            if n.get(k) == Some(&b) {
+                k = k.saturating_add(1);
+                i = i.saturating_add(1);
+                if k == n.len() {
+                    return Some(i.saturating_sub(k));
+                }
+            } else if k > 0 {
+                k = self.fail.get(k.saturating_sub(1)).copied().unwrap_or(0);
+            } else {
+                i = i.saturating_add(1);
+            }
+        }
+    }
+}
+
 /// Whether `text` holds `parts` in order: the first at its start when
 /// `anchored_start`, the last at its end when `anchored_end`, none
 /// overlapping.
-fn segments_match(text: &str, parts: &[String], anchored_start: bool, anchored_end: bool) -> bool {
+fn segments_match(text: &str, parts: &[Finder], anchored_start: bool, anchored_end: bool) -> bool {
     let Some((first, rest)) = parts.split_first() else {
         // Only wildcards ("%"), or the empty pattern, which matches only
         // the empty text.
         return !(anchored_start && anchored_end) || text.is_empty();
     };
     if anchored_start && anchored_end && rest.is_empty() {
-        return text == first;
+        return text == first.needle;
     }
     let (mut pos, middle) = if anchored_start {
-        if !text.starts_with(first.as_str()) {
+        if !text.starts_with(first.needle.as_str()) {
             return false;
         }
-        (first.len(), rest)
+        (first.needle.len(), rest)
     } else {
         (0, parts)
     };
     let (end, middle) = match (anchored_end, middle.split_last()) {
         (true, Some((last, middle))) => {
-            if !text.ends_with(last.as_str()) {
+            if !text.ends_with(last.needle.as_str()) {
                 return false;
             }
-            let end = text.len().saturating_sub(last.len());
+            let end = text.len().saturating_sub(last.needle.len());
             if end < pos {
                 return false;
             }
@@ -140,10 +202,10 @@ fn segments_match(text: &str, parts: &[String], anchored_start: bool, anchored_e
         _ => (text.len(), middle),
     };
     for part in middle {
-        let Some(found) = text.get(pos..end).and_then(|t| t.find(part.as_str())) else {
+        let Some(found) = text.get(pos..end).and_then(|t| part.find(t.as_bytes())) else {
             return false;
         };
-        pos = pos.saturating_add(found).saturating_add(part.len());
+        pos = pos.saturating_add(found).saturating_add(part.needle.len());
     }
     true
 }

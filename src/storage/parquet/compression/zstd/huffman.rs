@@ -1,6 +1,6 @@
 //! Huffman-coded literals (RFC 8878 §4.2).
 
-use super::bits::Backward;
+use super::bits::{Backward, Stream};
 use super::fse;
 use super::{corrupt, Result};
 
@@ -83,9 +83,62 @@ impl Table {
     /// Decodes `out.len()` symbols from one stream, which must end exactly
     /// at its first bit.
     pub(super) fn decode(&self, stream: &[u8], out: &mut [u8]) -> Result<()> {
-        let mut br = Backward::new(stream).ok_or_else(|| corrupt("bad Huffman stream"))?;
-        for slot in out.iter_mut() {
-            let prefix = usize::try_from(br.peek(stream, self.max_bits)).unwrap_or(usize::MAX);
+        let mut br = Stream::new(stream).ok_or_else(|| corrupt("bad Huffman stream"))?;
+        self.run(&mut br, stream, out)?;
+        finish(&br)
+    }
+
+    /// Decodes four streams into their outputs, the last of which is the
+    /// shortest: groups of five symbols alternate between the streams, so
+    /// their independent dependency chains overlap.
+    pub(super) fn decode4(&self, streams: [&[u8]; 4], outs: [&mut [u8]; 4]) -> Result<()> {
+        let [sa, sb, sc, sd] = streams;
+        let [oa, ob, oc, od] = outs;
+        let mut ra = Stream::new(sa).ok_or_else(|| corrupt("bad Huffman stream"))?;
+        let mut rb = Stream::new(sb).ok_or_else(|| corrupt("bad Huffman stream"))?;
+        let mut rc = Stream::new(sc).ok_or_else(|| corrupt("bad Huffman stream"))?;
+        let mut rd = Stream::new(sd).ok_or_else(|| corrupt("bad Huffman stream"))?;
+        let head = od.len().wrapping_sub(od.len().wrapping_rem(5));
+        let (ha, ta) = split_head(oa, head)?;
+        let (hb, tb) = split_head(ob, head)?;
+        let (hc, tc) = split_head(oc, head)?;
+        let (hd, td) = split_head(od, head)?;
+        let groups = ha
+            .as_chunks_mut::<5>()
+            .0
+            .iter_mut()
+            .zip(hb.as_chunks_mut::<5>().0.iter_mut())
+            .zip(hc.as_chunks_mut::<5>().0.iter_mut())
+            .zip(hd.as_chunks_mut::<5>().0.iter_mut());
+        for (((ga, gb), gc), gd) in groups {
+            self.group(&mut ra, sa, ga.as_mut_slice())?;
+            self.group(&mut rb, sb, gb.as_mut_slice())?;
+            self.group(&mut rc, sc, gc.as_mut_slice())?;
+            self.group(&mut rd, sd, gd.as_mut_slice())?;
+        }
+        self.run(&mut ra, sa, ta)?;
+        self.run(&mut rb, sb, tb)?;
+        self.run(&mut rc, sc, tc)?;
+        self.run(&mut rd, sd, td)?;
+        finish(&ra)?;
+        finish(&rb)?;
+        finish(&rc)?;
+        finish(&rd)
+    }
+
+    /// Decodes `out` (any length) from `br`.
+    fn run(&self, br: &mut Stream, stream: &[u8], out: &mut [u8]) -> Result<()> {
+        out.chunks_mut(5)
+            .try_for_each(|group| self.group(br, stream, group))
+    }
+
+    /// Decodes up to five symbols: a reload leaves 56 bits, five codes of
+    /// at most 11.
+    #[inline(always)]
+    fn group(&self, br: &mut Stream, stream: &[u8], group: &mut [u8]) -> Result<()> {
+        br.reload(stream);
+        for slot in group {
+            let prefix = usize::try_from(br.peek(self.max_bits)).unwrap_or(usize::MAX);
             let &(symbol, bits) = self
                 .entries
                 .get(prefix)
@@ -93,11 +146,22 @@ impl Table {
             *slot = symbol;
             br.consume(u32::from(bits));
         }
-        if !br.finished() {
-            return Err(corrupt("Huffman stream not read to its end"));
-        }
         Ok(())
     }
+}
+
+/// `out` split after its first `head` symbols.
+fn split_head(out: &mut [u8], head: usize) -> Result<(&mut [u8], &mut [u8])> {
+    out.split_at_mut_checked(head)
+        .ok_or_else(|| corrupt("short Huffman output"))
+}
+
+/// Whether the stream was read exactly to its first bit.
+fn finish(br: &Stream) -> Result<()> {
+    if !br.finished() {
+        return Err(corrupt("Huffman stream not read to its end"));
+    }
+    Ok(())
 }
 
 /// Weights FSE-coded in `size` bytes after the header, decoded with two

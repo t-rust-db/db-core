@@ -123,6 +123,17 @@ pub fn apply_affinity(value: &mut Value, affinity: Affinity) {
             *value = numeric;
         }
     }
+    if affinity != Affinity::Real {
+        // NUMERIC and INTEGER affinity store a REAL that is a whole number
+        // as an INTEGER (datatype3.html §3: "If the floating point value
+        // can be exactly represented as an integer, the value is converted
+        // to an integer"), so '12.0' and 12.0 are stored as 12.
+        if let Value::Real(r) = *value {
+            if let Some(i) = real_as_integer(r) {
+                *value = Value::Integer(i);
+            }
+        }
+    }
     if affinity == Affinity::Real {
         if let Value::Integer(i) = *value {
             #[allow(clippy::cast_precision_loss)]
@@ -130,6 +141,16 @@ pub fn apply_affinity(value: &mut Value, affinity: Affinity) {
             *value = Value::Real(real);
         }
     }
+}
+
+/// `r` as an `i64` when it is a whole number that fits, as sqlite3's
+/// `sqlite3VdbeIntegerAffinity` does (the range is open at both ends).
+fn real_as_integer(r: f64) -> Option<i64> {
+    const LIMIT: f64 = 9_223_372_036_854_775_808.0;
+    let whole = r.fract() == 0.0;
+    let fits = r > -LIMIT && r < LIMIT;
+    #[allow(clippy::cast_possible_truncation)]
+    matches!((whole, fits), (true, true)).then_some(r as i64)
 }
 
 /// Parses `s` as a number only if the *entire* trimmed string is a valid
@@ -193,6 +214,31 @@ mod tests {
                 "affinity_of({declared:?}) mismatch"
             );
         }
+    }
+
+    #[test]
+    fn whole_reals_become_integers_under_numeric_and_integer_affinity() {
+        for affinity in [Affinity::Integer, Affinity::Numeric] {
+            let mut whole = Value::Real(12.0);
+            apply_affinity(&mut whole, affinity);
+            assert_eq!(whole, Value::Integer(12));
+            let mut negative_zero = Value::Real(-0.0);
+            apply_affinity(&mut negative_zero, affinity);
+            assert_eq!(negative_zero, Value::Integer(0));
+            let mut fractional = Value::Real(12.5);
+            apply_affinity(&mut fractional, affinity);
+            assert_eq!(fractional, Value::Real(12.5));
+            // 2^63 does not fit an i64, so it stays a REAL.
+            let mut too_big = Value::Real(9_223_372_036_854_775_808.0);
+            apply_affinity(&mut too_big, affinity);
+            assert_eq!(too_big, Value::Real(9_223_372_036_854_775_808.0));
+            let mut text = Value::Text("3.0".to_string().into());
+            apply_affinity(&mut text, affinity);
+            assert_eq!(text, Value::Integer(3));
+        }
+        let mut real_column = Value::Real(12.0);
+        apply_affinity(&mut real_column, Affinity::Real);
+        assert_eq!(real_column, Value::Real(12.0));
     }
 
     #[test]

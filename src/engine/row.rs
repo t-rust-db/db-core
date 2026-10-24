@@ -220,8 +220,23 @@ impl RowEngine {
     /// `AutoCommit` opcode flushes instead.
     fn run_statement(&mut self, program: &Program) -> Result<QueryResult, EngineError> {
         let mut vm = self.writable_vm();
-        let rows =
-            execute(&mut vm, program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
+        let rows = match execute(&mut vm, program) {
+            Ok(rows) => rows,
+            Err(e) => {
+                // A failed statement outside a transaction is undone as a
+                // whole: rows it wrote before the error must not be flushed
+                // by the next statement.
+                if vm.autocommit() {
+                    self.pager.borrow_mut().rollback().map_err(|r| {
+                        EngineError::new(
+                            ErrorKind::Execute,
+                            format!("{e}; rollback of the failed statement also failed: {r}"),
+                        )
+                    })?;
+                }
+                return Err(EngineError::new(ErrorKind::Execute, e));
+            }
+        };
         if vm.autocommit() {
             self.pager.borrow_mut().flush().map_err(|e| {
                 EngineError::new(

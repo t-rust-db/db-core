@@ -447,8 +447,41 @@ impl StorageFactory {
     }
 }
 
+impl StorageFactory {
+    /// Where each declared column of the table rooted at `root` is stored,
+    /// when that table is `WITHOUT ROWID` (#722): its root is an index
+    /// b-tree page, and `sqlite_master` has the `CREATE TABLE` that says
+    /// which columns are the key. `None` for an ordinary table.
+    fn without_rowid_layout(&self, root: u32) -> Option<Vec<usize>> {
+        // Page 1 holds `sqlite_master`, a table whatever its header says.
+        if root <= 1 {
+            return None;
+        }
+        let page = self.source.read_page(root).ok()?;
+        // 0x02 interior index, 0x0a leaf index.
+        if !matches!(page.first(), Some(0x02 | 0x0a)) {
+            return None;
+        }
+        let sql = btree::table_sql_by_root(&self.source, &self.header, root).ok()??;
+        crate::schema::without_rowid_layout(&sql)
+    }
+}
+
 impl CursorFactory for StorageFactory {
     fn open_read(&mut self, root: u32) -> Result<Box<dyn Cursor>, CursorFactoryError> {
+        if let Some(stored_at) = self.without_rowid_layout(root) {
+            let inner = IndexCursorAdapter::new(
+                Rc::clone(&self.source),
+                self.writer.clone(),
+                self.header,
+                root,
+            );
+            return Ok(Box::new(WithoutRowidCursorAdapter::new(
+                inner,
+                stored_at,
+                Rc::clone(&self.source),
+            )));
+        }
         Ok(Box::new(TableCursorAdapter::new(
             Rc::clone(&self.source),
             self.writer.clone(),
@@ -477,6 +510,160 @@ impl CursorFactory for StorageFactory {
             self.header,
             root,
         )))
+    }
+}
+
+// ------------------------------------------------------ WITHOUT ROWID
+
+/// A `WITHOUT ROWID` table's b-tree (#722). The table *is* an index
+/// b-tree: each entry holds a whole row, with the `PRIMARY KEY` columns
+/// first (in key order) and the other columns after them in declared
+/// order. This cursor reads it as a table: `column` takes the *declared*
+/// column index, so codegen reads such a table exactly like any other.
+/// There is no rowid.
+pub(crate) struct WithoutRowidCursorAdapter {
+    inner: IndexCursorAdapter,
+    /// For each declared column, its position in the stored record.
+    stored_at: Vec<usize>,
+    source: Rc<dyn PageSource>,
+}
+
+impl WithoutRowidCursorAdapter {
+    fn new(inner: IndexCursorAdapter, stored_at: Vec<usize>, source: Rc<dyn PageSource>) -> Self {
+        WithoutRowidCursorAdapter {
+            inner,
+            stored_at,
+            source,
+        }
+    }
+
+    /// `payload`, a record in declared column order, as the entry the
+    /// b-tree stores: each value moved to its stored position. `None` for
+    /// a record that is not one, or has more values than the table has
+    /// columns.
+    fn stored_row(&self, payload: &[u8]) -> Option<Vec<Value>> {
+        let declared = decode_record(payload, self.inner.header.text_encoding).ok()?;
+        let mut stored = vec![Value::Null; self.stored_at.len()];
+        for (column, value) in declared.into_iter().enumerate() {
+            *stored.get_mut(*self.stored_at.get(column)?)? = value;
+        }
+        Some(stored)
+    }
+}
+
+impl Cursor for WithoutRowidCursorAdapter {
+    fn rewind(&mut self) -> bool {
+        self.inner.rewind()
+    }
+
+    fn next(&mut self) -> bool {
+        self.inner.next()
+    }
+
+    fn last(&mut self) -> bool {
+        self.inner.last()
+    }
+
+    fn prev(&mut self) -> bool {
+        self.inner.prev()
+    }
+
+    fn column(&self, col: usize) -> Option<Value> {
+        self.inner.column(*self.stored_at.get(col)?)
+    }
+
+    fn rowid(&self) -> Option<i64> {
+        None
+    }
+
+    /// Positions on the row whose leading key columns equal `key` (the
+    /// `PRIMARY KEY` columns, in key order, which come first in the stored
+    /// record). The row has every other column after them, so a probe is
+    /// never as long as the entry unless every column is in the key.
+    fn seek_index_eq(&mut self, key: &[Value], collations: &[Collation]) -> bool {
+        let seeked = self.inner.cursor.seek(key, self.inner.header.text_encoding);
+        if !self.inner.set_current(seeked) {
+            return false;
+        }
+        let matched = self.inner.current.as_ref().is_some_and(|(_, values)| {
+            values.len() >= key.len()
+                && values
+                    .iter()
+                    .zip(key.iter())
+                    .zip(
+                        collations
+                            .iter()
+                            .chain(std::iter::repeat(&Collation::Binary)),
+                    )
+                    .all(|((stored, probe), &c)| compare(stored, probe, c).is_eq())
+        });
+        if !matched {
+            self.inner.current = None;
+        }
+        matched
+    }
+
+    /// Removes the row the cursor is on; it is positioned nowhere after.
+    fn delete(&mut self) -> bool {
+        let (Some(writer), Some((_, stored))) =
+            (self.inner.writer.as_ref(), self.inner.current.take())
+        else {
+            return false;
+        };
+        btree::delete_entry(
+            &mut writer.borrow_mut(),
+            &self.inner.header,
+            self.inner.root_page,
+            &stored,
+            self.inner.header.text_encoding,
+        )
+        .is_ok()
+    }
+
+    /// Adds the row `payload` (a record in declared column order, as
+    /// `MakeRecord` builds it). The caller has already probed that no row
+    /// has the same key: the b-tree itself only refuses an identical
+    /// record.
+    fn insert_payload(&mut self, _rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
+        self.inner.current = None;
+        let (Some(writer), Some(stored)) = (self.inner.writer.as_ref(), self.stored_row(payload))
+        else {
+            return Some(false);
+        };
+        Some(
+            btree::insert_entry(
+                &mut writer.borrow_mut(),
+                &self.inner.header,
+                self.inner.root_page,
+                &stored,
+                self.inner.header.text_encoding,
+            )
+            .is_ok(),
+        )
+    }
+
+    /// Replaces the row the cursor is on with `payload`, which must keep
+    /// its key: the entry is removed and the new one put in its place.
+    fn update_payload(&mut self, _rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
+        if !self.delete() {
+            return Some(false);
+        }
+        self.insert_payload(0, payload)
+    }
+
+    fn count(&self) -> Option<i64> {
+        let mut cursor = IndexCursor::new(
+            Rc::clone(&self.source),
+            self.inner.header.usable_page_size(),
+            self.inner.root_page,
+        );
+        let mut rows: i64 = 0;
+        let mut entry = cursor.first().ok()?;
+        while entry.is_some() {
+            rows = rows.saturating_add(1);
+            entry = cursor.next().ok()?;
+        }
+        Some(rows)
     }
 }
 
@@ -585,9 +772,21 @@ impl Transaction for PagerTransaction {
     }
 
     fn integrity_check(&mut self, quick: bool) -> Option<Result<Vec<String>, TransactionError>> {
+        // Page 1 as it is now, not as it was when the connection opened:
+        // the pager has moved the page count and the freelist since, and a
+        // check against the old header reports a mismatch that is not there.
+        let header = self
+            .source
+            .read_page(1)
+            .ok()
+            .and_then(|page| {
+                let bytes: [u8; 100] = page.get(..100)?.try_into().ok()?;
+                DatabaseHeader::parse(&bytes).ok()
+            })
+            .unwrap_or(self.header);
         Some(Ok(crate::storage::row::integrity::run_integrity_check(
             Rc::clone(&self.source),
-            &self.header,
+            &header,
             quick,
         )))
     }

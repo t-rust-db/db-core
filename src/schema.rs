@@ -302,6 +302,44 @@ pub(crate) fn autoindexes_from_sql(sql: &str) -> Vec<AutoIndex> {
     }
 }
 
+/// How a `WITHOUT ROWID` table lays its columns out in a b-tree entry
+/// (#722): the `PRIMARY KEY` columns first, in key order, then the other
+/// columns in declared order. Returns, for each declared column, its
+/// position in that stored record. `None` for a table that is not
+/// `WITHOUT ROWID`, or whose text does not parse.
+#[cfg(all(feature = "parser-row", feature = "engine-row"))]
+pub(crate) fn without_rowid_layout(sql: &str) -> Option<Vec<usize>> {
+    use crate::parser::row::error::ParseOutcome;
+    let ParseOutcome::Accepted(create) = crate::parser::row::parse_create_table(sql) else {
+        return None;
+    };
+    if !create.without_rowid {
+        return None;
+    }
+    let key = autoindexes(&create)
+        .into_iter()
+        .find(|index| index.is_table)?;
+    let mut stored: Vec<usize> = Vec::with_capacity(create.columns.len());
+    for column in &key.columns {
+        let declared = create
+            .columns
+            .iter()
+            .position(|def| def.name.eq_ignore_ascii_case(&column.name))?;
+        if !stored.contains(&declared) {
+            stored.push(declared);
+        }
+    }
+    let rest: Vec<usize> = (0..create.columns.len())
+        .filter(|declared| !stored.contains(declared))
+        .collect();
+    stored.extend(rest);
+    let mut position = vec![0; create.columns.len()];
+    for (at, declared) in stored.iter().enumerate() {
+        *position.get_mut(*declared)? = at;
+    }
+    Some(position)
+}
+
 /// A `CREATE INDEX` entry, same shape as
 /// `db_storage::row::schema::IndexSchema` (ADR 0012).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -391,6 +429,40 @@ mod tests {
             None
         );
         assert_eq!(alias("CREATE TABLE t (a TEXT, b, PRIMARY KEY(a))"), None);
+    }
+
+    #[cfg(feature = "engine-row")]
+    #[test]
+    fn without_rowid_layout_puts_the_key_columns_first() {
+        use super::without_rowid_layout;
+        // Declared a, b, c; key (c, a): stored c, a, b.
+        assert_eq!(
+            without_rowid_layout(
+                "CREATE TABLE w (a TEXT, b INT, c TEXT, PRIMARY KEY (c, a)) WITHOUT ROWID"
+            ),
+            Some(vec![1, 2, 0])
+        );
+        // A column-level key, not first in the declaration.
+        assert_eq!(
+            without_rowid_layout("CREATE TABLE w (a, b PRIMARY KEY, c) WITHOUT ROWID"),
+            Some(vec![1, 0, 2])
+        );
+        // Every column in the key: stored as the key order says.
+        assert_eq!(
+            without_rowid_layout("CREATE TABLE w (a, b, PRIMARY KEY (b, a)) WITHOUT ROWID"),
+            Some(vec![1, 0])
+        );
+        // An INTEGER PRIMARY KEY is no rowid alias here, just a key column.
+        assert_eq!(
+            without_rowid_layout("CREATE TABLE w (v, k INTEGER PRIMARY KEY) WITHOUT ROWID"),
+            Some(vec![1, 0])
+        );
+        // A rowid table has no such layout.
+        assert_eq!(
+            without_rowid_layout("CREATE TABLE t (a, b PRIMARY KEY)"),
+            None
+        );
+        assert_eq!(without_rowid_layout("not sql"), None);
     }
 
     #[test]

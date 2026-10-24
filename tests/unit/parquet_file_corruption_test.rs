@@ -55,12 +55,35 @@ const FIXTURES: &[&str] = &[
 
 /// Pages per column chunk whose headers get every-byte mutations.
 const HEADER_PAGES_PER_CHUNK: usize = 1;
-/// Pseudo-random single-byte flips in the data region, per file.
+/// Pseudo-random single-byte flips in the data region, per file, at full
+/// size.
 const DATA_FLIPS: usize = 200;
-/// Pseudo-random single-byte flips in the footer, per file.
+/// Pseudo-random single-byte flips in the footer, per file, at full size.
 const FOOTER_FLIPS: usize = 60;
-/// Evenly spaced truncation lengths, per file.
+/// Evenly spaced truncation lengths, per file, at full size.
 const TRUNCATIONS: usize = 50;
+
+/// How much of the mutation space a run applies, in percent:
+/// `DB_CORE_CORRUPTION_PERCENT`, 25 by default so that `cargo test` stays
+/// quick. The full run sets 100 (#726). It scales the evenly spaced
+/// truncations, the random flips and the page-header bytes (every fourth
+/// at 25); the footer's last 32 bytes and the cuts always run in full.
+fn percent() -> usize {
+    std::env::var("DB_CORE_CORRUPTION_PERCENT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(25)
+}
+
+/// Every `stride()`-th page-header byte is mutated: 1 at 100%, 4 at 25%.
+fn stride() -> usize {
+    (100 / percent().clamp(1, 100)).max(1)
+}
+
+/// `full` at [`percent`], at least 1.
+fn scaled(full: usize) -> usize {
+    (full * percent() / 100).max(1)
+}
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!(
@@ -124,8 +147,9 @@ fn mutations(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
     let mut out = Vec::new();
     let n = bytes.len();
 
-    for i in 0..TRUNCATIONS {
-        let len = n * i / TRUNCATIONS;
+    let truncations = scaled(TRUNCATIONS);
+    for i in 0..truncations {
+        let len = n * i / truncations;
         out.push((format!("truncate to {len}"), bytes[..len].to_vec()));
     }
     for len in n.saturating_sub(32)..n {
@@ -142,7 +166,7 @@ fn mutations(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
     }
 
     for range in page_header_ranges(bytes) {
-        for at in range {
+        for at in range.filter(|at| at % stride() == 0) {
             let original = bytes[at];
             // Two of four values per byte, alternating, to keep the count
             // (and the debug-build run time) down.
@@ -158,7 +182,10 @@ fn mutations(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
     }
 
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15 ^ n as u64);
-    for (count, region) in [(DATA_FLIPS, 4..footer), (FOOTER_FLIPS, footer..n - 8)] {
+    for (count, region) in [
+        (scaled(DATA_FLIPS), 4..footer),
+        (scaled(FOOTER_FLIPS), footer..n - 8),
+    ] {
         for _ in 0..count {
             let at = region.start + rng.below(region.len());
             let mask = 1u8 << rng.below(8);
@@ -200,6 +227,7 @@ const READERS: &[Reader] = &[
     |rg, c, _| drop(rg.read_plain_fixed_column::<i32, 4>(c, i32::from_le_bytes)), // 22
     |rg, c, p| drop(rg.read_plain_fixed_column_at::<i64, 8>(c, i64::from_le_bytes, p)), // 23
     |rg, c, p| drop(rg.read_plain_fixed_column_at::<f32, 4>(c, f32::from_le_bytes, p)), // 24
+    |rg, c, _| drop(rg.read_plain_string_column(c)),         // 25
 ];
 
 /// The readers a caller would use for a column of `physical_type`
@@ -211,7 +239,7 @@ fn readers_for(physical_type: PhysicalType) -> &'static [usize] {
         PhysicalType::Double => &[2, 12, 17, 21, 23],
         PhysicalType::Float => &[3, 18, 22, 24],
         PhysicalType::Boolean => &[4, 13, 19],
-        PhysicalType::ByteArray => &[5, 6, 14, 20],
+        PhysicalType::ByteArray => &[5, 6, 14, 20, 25],
         PhysicalType::FixedLenByteArray => &[7, 10],
         PhysicalType::Int96 => &[8, 9],
         PhysicalType::Unknown(_) => &[],
@@ -293,9 +321,12 @@ fn assert_no_panics(name: &str) {
     drop(file);
 
     let mutations = mutations(&bytes);
+    // The corpus must not quietly shrink: at least 300 mutations at full
+    // size, in proportion at a smaller percentage.
+    let floor = 300 * percent().min(100) / 100;
     assert!(
-        mutations.len() >= 300,
-        "{name}: only {} mutations",
+        mutations.len() >= floor,
+        "{name}: only {} mutations, expected {floor}",
         mutations.len()
     );
     install_quiet_hook();

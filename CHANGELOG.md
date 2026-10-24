@@ -12,6 +12,74 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 - **A quoted time is parsed without reading the clock** unless it is `'now'`. The TIMESTAMP literal rewrite called `unixepoch` through the clock-reading path, which panics on `wasm32-unknown-unknown` (no `SystemTime`).
 - **Batch queries run on a host without threads.** The morsel pools (`run_morsels`, `run_morsels_fold`, `run_morsels_ordered`) run on the calling thread when they would get one worker, instead of spawning one. `wasm32-unknown-unknown` reports no parallelism and cannot spawn, so a query there panicked (`unwrap_failed` in `Scope::spawn`); a one-core host also skips the spawn.
 
+## [0.169.4] - 2026-10-24
+
+### Changed
+
+- **`LIKE`/`GLOB` over a typed string column yields a typed `Bool` column, not one `Value` a row** (#743). The result of `typed_like` is a `Column::Bool` register, one byte a row plus the validity bitmap, which `Filter` reads directly; anything else converts it lazily, as it does for `LoadColumn`. NULL rows stay NULL. Measured end to end on column-rs (20M rows, ZSTD) the change is within noise on wall time, CPU and peak RSS; the per-row `Value` was about 2% of the CPU, and the rest is ZSTD decode and the matcher.
+
+## [0.169.3] - 2026-10-24
+
+### Changed
+
+- **`timediff` drops a redundant loop guard and keeps the other as a plain check** (#744). The `<` loop tested `d1.ijd < d2.ijd && !d2.is_error`, but an errored date has `ijd == 0`, so the second test could never change the result; the loop is now `while d1.ijd < d2.ijd`, as in sqlite3. The `>` loop keeps its stop against an endless loop on an errored `d2` as an `if d2.is_error { break; }` in the body. Results are unchanged; the `MC/DC` dashboard has no outstanding obligations left in `src/functions/datetime.rs`.
+
+## [0.169.2] - 2026-10-24
+
+### Changed
+
+- **`LIKE`/`ILIKE`/`GLOB` build each literal segment's search table once per pattern, not once per row** (#732). `str::find` rebuilt its searcher on every call, which a profile of `WHERE note LIKE '%host 42%'` over 20M rows put at about 17% of all CPU. Each segment now keeps a linear-time search table built in `Matcher::new`, so an adversarial pattern such as `a…ab` against `aaaa…` stays linear. Results are unchanged.
+
+## [0.169.1] - 2026-10-24
+
+### Fixed
+
+- **`engine-column` with `ingest-read` did not compile** (#738). The decoders `engine::column::table` uses to read a stored string column (`stored_column_values` and the JSON, logfmt and CLF helpers behind it) were gated on `ingest` alone, so the feature set column-rs enables failed with an unresolved import. They now build under `ingest`, or under `ingest-read` with `engine-column`. `make check-features` also builds that combination and column-rs's full feature set, so a helper gated on one feature but used under another can no longer pass the per-feature check.
+
+## [0.169.0] - 2026-10-23
+
+### Changed
+
+- **The ZSTD decoder is about 30% faster** (#733). The sequence loop reads bits from a 64-bit container reloaded once per sequence instead of a checked load per read, each sequence table entry carries its value baseline and extra-bit count so no code-table lookup follows, the first 16 bytes of a literal run or match are copied unconditionally with longer ones out of line, and the four Huffman literal streams decode in alternating groups of five symbols so their dependency chains overlap. On a 1 MB text page (level 3) 905 -> 1155 MB/s against libzstd's 1920; on an 8 MB log file 800 -> 1060 MB/s. No `unsafe`, no new dependencies.
+
+## [0.168.1] - 2026-10-23
+
+### Changed
+
+- **A `PLAIN` string column chunk decodes straight into `Column::Str`** (#731). A chunk with no dictionary (or one an encoder wrote as `PLAIN`, such as a high-cardinality `note`) used to allocate one `String` per row and then copy it into the column's buffer. The values now go into one buffer as they are read, and UTF-8 is validated once over the whole buffer plus a check that no value starts mid-character, which together make each value valid on its own. A value that splits a multi-byte character is still `InvalidUtf8`, a truncated prefix or value `UnexpectedEof`. A chunk with a dictionary page, or any other encoding, takes the earlier path. The positional reader is unchanged.
+
+## [0.168.0] - 2026-10-23
+
+### Added
+
+- **`INSERT`, `UPDATE` and `DELETE` on `WITHOUT ROWID` tables that have no secondary index** (#722, part of #696). A table made by sqlite3 can now be written, not only read: rows go into its index b-tree in key order, the `PRIMARY KEY` columns are `NOT NULL`, a repeated key fails with `UNIQUE constraint failed: t.a, t.b` (and `INSERT OR IGNORE`/`OR REPLACE` behave as in sqlite3), a key is probed with the column's affinity, and an `UPDATE` that changes a key deletes and re-inserts the row. The differential tests check both files with `PRAGMA integrity_check` and read each one back with the other engine. A table with a secondary index, an upsert, `INSERT ... SELECT` from the table being written, a `DESC` or non-`BINARY` key, and `CREATE TABLE ... WITHOUT ROWID` are still refused, each with its own message; they land in the next pull requests.
+
+### Fixed
+
+- **A statement that failed outside a transaction kept the rows it had already written.** `INSERT INTO t VALUES (1, 'a'), (9, 'dup')` over an existing key 9 failed, but row 1 stayed and was flushed with the next statement; sqlite3 undoes the whole statement. The pager's pending writes are now discarded when a statement fails in autocommit mode.
+- **A whole-number REAL was stored as a REAL under INTEGER or NUMERIC affinity.** `INSERT INTO t(k INTEGER) VALUES ('12.0')` stored `12.0` where sqlite3 stores the integer `12`, so the key differed in a `PRIMARY KEY` and in the file. Affinity now narrows a REAL that is a whole number and fits an `i64`.
+
+## [0.167.2] - 2026-10-22
+
+### Fixed
+
+- **Emptying an index left a file sqlite3 calls malformed.** Deleting rows from an indexed table (a `CREATE INDEX`, or the implicit index of a `PRIMARY KEY` or `UNIQUE` column) left every index page that lost its last entry in the b-tree, and SQLite refuses to open a page with no cells: after `DELETE FROM big` over 3000 rows, `PRAGMA integrity_check` in sqlite3 answered `database disk image is malformed (11)` (partial deletes that emptied a leaf did the same). A page that is emptied is now taken out of its parent and freed. The parent entry beside it is a real index entry, not just a routing key, so it is put back into the neighbouring subtree rather than dropped; an interior page left with no entries is replaced by its only child, and a root left that way takes the child's place. The pages go back to the freelist, which they never did.
+- **Deleting an entry that sits in an interior page could fail with `cells do not fit in page`.** The entry is replaced by its in-order predecessor, and a predecessor longer than the entry it replaces can overflow the page (found by a randomized test with keys of mixed length). The page is now split as an insert would split it. The replaced entry's overflow chain, which leaked, is freed.
+- **`PRAGMA integrity_check` reported a freelist mismatch that was not there.** It compared the freelist chain with the page count and freelist length of the header the connection opened with, and the pager changes both as pages are freed; it now reads page 1 as it is.
+
+Checked by a randomized test against a sorted model (1,500 seeds, mixed key sizes, no page leaked) and by engine tests that run a delete and have sqlite3 check the file after every statement; three of those fail on the previous release.
+
+## [0.167.1] - 2026-10-22
+
+### Fixed
+
+- **A SQL query on a `WITHOUT ROWID` table found no rows** (#722). `SELECT count(*)` answered `0` and every other query came back empty, on a file sqlite3 had written with 500 rows in it. The table's b-tree is an index b-tree whose entries are whole rows (the `PRIMARY KEY` columns first, in key order, then the others), and every table scan read it as a table b-tree and silently saw nothing. The cursor factory now recognises such a root (an index page, with a `WITHOUT ROWID` `CREATE TABLE` in `sqlite_master`) and hands back a cursor that reads it as a table: `Column` takes the declared column index, whatever the key is, and there is no rowid. Verified against sqlite3 over a 3000-row table keyed on its last two columns, a table whose every column is in the key, joins, subqueries, aggregates and `ORDER BY`/`LIMIT`.
+- **A secondary index on a `WITHOUT ROWID` table is not used to fetch rows.** Its entries end in the key columns, not a rowid, so the index walks, which fetch the row by rowid afterwards, answered `WHERE n = 40` with no row. Such tables enter a `SELECT`'s catalog without their secondary indexes and are scanned; `DROP TABLE` and the other DDL still see them.
+- **`PRAGMA integrity_check` and `quick_check` reported a valid `WITHOUT ROWID` file as corrupt** (`unexpected b-tree page type`, and a `rowid not present` line per secondary-index entry). They now walk such a table as an index b-tree, checking that its primary keys strictly increase, and check a secondary index's ordering and entry count.
+- **`ANALYZE` failed on any database holding a `WITHOUT ROWID` table.** Such tables are skipped, so the rest are still analyzed.
+
+Writing to `WITHOUT ROWID` tables is still refused; that follows in the next releases (#722).
+
 ## [0.167.0] - 2026-10-22
 
 ### Added

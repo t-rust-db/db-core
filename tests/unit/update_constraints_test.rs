@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use db_core::engine::row::RowEngine;
-use db_core::engine::{Cell, Engine, ErrorKind};
+use db_core::engine::{Cell, Engine};
 
 const FIXTURE: &str = "tests/fixtures/btrees/table_single_page.db";
 
@@ -97,15 +97,16 @@ fn update_with_a_literal_rowid_equality_that_matches_nothing_is_a_no_op() {
 }
 
 #[test]
-fn without_rowid_table_is_rejected_at_update_compile_time() {
-    // A file sqlite3 wrote: this engine no longer creates such tables.
+fn a_without_rowid_table_sqlite3_wrote_takes_an_update() {
     let db = TempDb::new("without-rowid-update");
     std::fs::copy("tests/fixtures/btrees/without_rowid.db", db.path())
         .expect("copy sqlite3 fixture");
     let mut e = open(&db);
-    let err = e.run_query("UPDATE t SET v = 'x'").unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Compile);
-    assert!(err.message.contains("WITHOUT ROWID"), "{}", err.message);
+    e.run_query("INSERT INTO t VALUES ('a', 'b')").unwrap();
+    e.run_query("UPDATE t SET v = 'x'").unwrap();
+    let rows = e.run_query("SELECT v FROM t WHERE k = 'a'").unwrap().rows;
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(&rows[0][0], Cell::Text(v) if v == "x"));
 }
 
 #[test]

@@ -242,6 +242,32 @@ fn find_master_rootpage(
     Ok(None)
 }
 
+/// The `CREATE TABLE` text of the table whose b-tree is rooted at `root`,
+/// read straight from `sqlite_master` (#722). A cursor factory uses it to
+/// learn the layout of a `WITHOUT ROWID` table from its root page alone.
+#[cfg(feature = "engine-row")]
+pub(crate) fn table_sql_by_root<P: crate::storage::row::vfs::PageSource>(
+    source: P,
+    header: &DatabaseHeader,
+    root: u32,
+) -> Result<Option<String>, BtreeError> {
+    let mut cursor =
+        crate::storage::row::btree::TableCursor::new(source, header, SQLITE_MASTER_ROOT_PAGE);
+    let mut row = cursor.first_row()?;
+    while let Some(r) = row {
+        let values = decode_record(&r.payload, header.text_encoding)?;
+        if let (Some(Value::Text(kind)), Some(Value::Integer(rootpage)), Some(Value::Text(sql))) =
+            (values.first(), values.get(3), values.get(4))
+        {
+            if let ("table", true) = (kind.as_ref(), *rootpage == i64::from(root)) {
+                return Ok(Some(sql.to_string()));
+            }
+        }
+        row = cursor.next_row()?;
+    }
+    Ok(None)
+}
+
 /// Updates `sqlite_sequence` for `table_name` after an INSERT assigns it
 /// `rowid`: creates the sequence table if needed (only ever necessary for
 /// an AUTOINCREMENT table), inserts a new `(table_name, rowid)` row if
@@ -553,5 +579,75 @@ mod tests {
         let row2 = cursor2.first_row().unwrap().unwrap();
         let values2 = decode_record(&row2.payload, header.text_encoding).unwrap();
         assert_eq!(values2[1], Value::Integer(9));
+    }
+
+    // storage_row_btree_master_delete_master_row_1bc8ded5: t.as_ref() == kind && n.as_ref() == name
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_btree_master_delete_master_row_1bc8ded5__v1_kind_differs() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        insert_master_row(
+            &mut pager,
+            &header,
+            &MasterEntry {
+                kind: "table".to_string(),
+                name: "x".to_string(),
+                tbl_name: "x".to_string(),
+                rootpage: 0,
+                sql: "CREATE TABLE x(a)".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            delete_master_row(&mut pager, &header, "view", "x"),
+            Err(BtreeError::MasterEntryNotFound)
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_btree_master_delete_master_row_1bc8ded5__v2_name_differs() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        insert_master_row(
+            &mut pager,
+            &header,
+            &MasterEntry {
+                kind: "table".to_string(),
+                name: "x".to_string(),
+                tbl_name: "x".to_string(),
+                rootpage: 0,
+                sql: "CREATE TABLE x(a)".to_string(),
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            delete_master_row(&mut pager, &header, "table", "y"),
+            Err(BtreeError::MasterEntryNotFound)
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_btree_master_delete_master_row_1bc8ded5__v3_kind_and_name_match() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        insert_master_row(
+            &mut pager,
+            &header,
+            &MasterEntry {
+                kind: "table".to_string(),
+                name: "x".to_string(),
+                tbl_name: "x".to_string(),
+                rootpage: 0,
+                sql: "CREATE TABLE x(a)".to_string(),
+            },
+        )
+        .unwrap();
+        delete_master_row(&mut pager, &header, "table", "x").unwrap();
     }
 }

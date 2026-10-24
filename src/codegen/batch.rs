@@ -5517,6 +5517,126 @@ mod tests {
         assert!(first_item("SELECT COUNT(*) FROM t", true).is_err());
     }
 
+    fn having_reuse_of(sql_text: &str) -> Result<Vec<Option<(usize, usize)>>> {
+        let select = sql::parse(sql_text).unwrap();
+        let items: Vec<Item> = select
+            .columns
+            .iter()
+            .map(|c| classify_item(c).unwrap())
+            .collect();
+        let having = select.having.as_ref().unwrap();
+        let calls = agg_expr_calls(having);
+        having_reuse(&calls, &select, &items)
+    }
+
+    // codegen_batch_having_reuse_14d24c6f (`having_reuse`):
+    // `distinct && found.is_none()`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_having_reuse_14d24c6f__v1_distinct_not_in_select_is_refused() {
+        assert!(having_reuse_of(
+            "SELECT region, SUM(amount) FROM t GROUP BY region HAVING COUNT(DISTINCT amount) > 1"
+        )
+        .is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_having_reuse_14d24c6f__v2_plain_call_not_in_select_gets_own_column() {
+        let reuse = having_reuse_of(
+            "SELECT region, SUM(amount) FROM t GROUP BY region HAVING MIN(amount) > 1",
+        )
+        .unwrap();
+        assert_eq!(reuse, vec![None]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_having_reuse_14d24c6f__v3_distinct_in_select_is_reused() {
+        let reuse = having_reuse_of(
+            "SELECT region, COUNT(DISTINCT amount) FROM t GROUP BY region \
+             HAVING COUNT(DISTINCT amount) > 1",
+        )
+        .unwrap();
+        assert_eq!(reuse, vec![Some((1, 0))]);
+    }
+
+    /// Compiles `name(<arity args>)`, built by renaming/resizing a parsed
+    /// two-argument call (the row parser itself rejects `ilike(...)`).
+    fn compile_call(name: &str, arity: usize) -> Vec<Instruction> {
+        let mut select = sql::parse("SELECT json_extract(a, 'x') FROM t").unwrap();
+        let ResultColumn::Expr { expr, .. } = &mut select.columns[0] else {
+            panic!("expected an expression column");
+        };
+        let ExprKind::FunctionCall {
+            name: n,
+            args: FunctionArgs::List(list),
+            ..
+        } = &mut expr.kind
+        else {
+            panic!("expected a function call");
+        };
+        *n = name.into();
+        let first = list[0].clone();
+        list.clear();
+        list.resize(arity, first);
+        let mut ctx = Ctx {
+            next_reg: 0,
+            column_regs: HashMap::new(),
+            program: Vec::new(),
+        };
+        compile_expr(expr, &mut ctx);
+        ctx.program
+    }
+
+    fn has_nocase_like(program: &[Instruction]) -> bool {
+        program.iter().any(|i| {
+            matches!(
+                i.opcode,
+                Opcode::Map {
+                    op: MapOp::Like { nocase: true, .. },
+                    ..
+                }
+            )
+        })
+    }
+
+    fn call_names(program: &[Instruction]) -> Vec<String> {
+        program
+            .iter()
+            .filter_map(|i| match &i.opcode {
+                Opcode::Call { name, .. } => Some(name.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // codegen_batch_compile_expr_c40c1a63 (`compile_expr`):
+    // `name.eq_ignore_ascii_case("ilike") && list.len() == 2`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_c40c1a63__v1_ilike_with_two_args_is_a_nocase_like() {
+        let program = compile_call("ILIKE", 2);
+        assert!(has_nocase_like(&program));
+        assert!(call_names(&program).is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_c40c1a63__v2_ilike_with_three_args_is_a_plain_call() {
+        let program = compile_call("ilike", 3);
+        assert!(!has_nocase_like(&program));
+        assert_eq!(call_names(&program).len(), 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_c40c1a63__v3_other_name_with_two_args_is_a_plain_call() {
+        let program = compile_call("json_extract", 2);
+        assert!(!has_nocase_like(&program));
+        assert_eq!(call_names(&program).len(), 1);
+    }
+
     fn distinct_item() -> Item {
         Item::Agg(AggFunc::Count, Some(AggArg::Column("x".into())), None, true)
     }

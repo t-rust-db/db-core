@@ -66,7 +66,7 @@
 /// qualified-subset gate (`make check-mvl-limit`) keeps `env!` out of
 /// `src/`. Must match `Cargo.toml`'s `version` -- `tests/version.rs`
 /// fails the build if the two drift, so bump both together on release.
-pub const VERSION: &str = "0.167.0";
+pub const VERSION: &str = "0.169.4";
 
 pub mod clock;
 pub mod coerce;
@@ -84,6 +84,8 @@ pub mod vm;
 
 pub mod storage;
 
+#[cfg(test)]
+mod test_clock;
 #[cfg(test)]
 mod test_rng;
 

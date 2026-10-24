@@ -8,23 +8,16 @@ use crate::storage::ingest::PageBody;
 use crate::storage::parquet::footer::ConvertedType;
 use crate::storage::parquet::writer::{ColumnType, ColumnValues};
 use crate::storage::parquet::ParquetFile;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-static NOW: AtomicI64 = AtomicI64::new(0);
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn serial() -> MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
+/// The tests' clock: one per test (see `test_clock`).
 fn clock() -> i64 {
-    NOW.load(Ordering::SeqCst)
+    crate::test_clock::now(0)
 }
 
 /// `day` days and `hour` hours past 2026-10-11.
 fn set_clock(day: i64, hour: i64) {
-    NOW.store((20_737 + day) * DAY_NS + hour * HOUR_NS, Ordering::SeqCst);
+    crate::test_clock::set((20_737 + day) * DAY_NS + hour * HOUR_NS);
 }
 
 struct TempTable(PathBuf);
@@ -243,7 +236,6 @@ fn assert_files_have_the_schema(w: &TableWriter) {
 
 #[test]
 fn rows_round_trip_through_replay_and_flush_with_exactly_the_schema() {
-    let _serial = serial();
     set_clock(0, 10);
     let t = TempTable::new();
     let mut w = TableWriter::open(&t.0, flat()).unwrap();
@@ -272,7 +264,6 @@ fn rows_round_trip_through_replay_and_flush_with_exactly_the_schema() {
 
 #[test]
 fn a_crash_at_every_flush_step_recovers_every_row_once() {
-    let _serial = serial();
     set_clock(0, 10);
     for step in [1u8, 2, 3, 5] {
         let t = TempTable::new();
@@ -306,7 +297,6 @@ fn a_crash_at_every_flush_step_recovers_every_row_once() {
 
 #[test]
 fn a_crash_at_every_flush_and_compaction_step_of_a_tiered_table_recovers_every_row_once() {
-    let _serial = serial();
     for step in [1u8, 2, 3, 5, 11, 12, 13] {
         let t = TempTable::new();
         set_clock(0, 10);
@@ -348,7 +338,6 @@ fn a_crash_at_every_flush_and_compaction_step_of_a_tiered_table_recovers_every_r
 
 #[test]
 fn a_tiered_hour_is_sorted_by_the_key_and_carries_arrival_times() {
-    let _serial = serial();
     set_clock(0, 10);
     let t = TempTable::new();
     let mut w = TableWriter::open(&t.0, tiered()).unwrap();
@@ -371,7 +360,6 @@ fn a_tiered_hour_is_sorted_by_the_key_and_carries_arrival_times() {
 
 #[test]
 fn rows_that_do_not_match_the_schema_are_refused() {
-    let _serial = serial();
     let t = TempTable::new();
     let mut w = TableWriter::open(&t.0, flat()).unwrap();
     let with = |i: usize, v: RecordValue| {
@@ -413,7 +401,6 @@ fn rows_that_do_not_match_the_schema_are_refused() {
 
 #[test]
 fn a_table_opens_only_as_the_kind_and_schema_it_was_created_with() {
-    let _serial = serial();
     let t = TempTable::new();
     TableWriter::open(&t.0, flat()).unwrap().close().unwrap();
     let lines = TableWriter::open(&t.0, TableOptions::default()).unwrap_err();
@@ -445,7 +432,6 @@ fn a_table_opens_only_as_the_kind_and_schema_it_was_created_with() {
 
 #[test]
 fn invalid_schemas_and_sort_keys_are_refused() {
-    let _serial = serial();
     let cases: [(Vec<ColumnSpec>, &str); 4] = [
         (Vec::new(), "at least one column"),
         (
@@ -538,7 +524,6 @@ mod mcdc_vectors {
 
     #[test]
     fn mcdc__storage_ingest_table_open_e26f89e4__v2_a_record_table_ignores_the_format() {
-        let _serial = serial();
         let t = TempTable::new();
         TableWriter::open(&t.0, flat()).unwrap().close().unwrap();
         let logfmt = TableOptions {

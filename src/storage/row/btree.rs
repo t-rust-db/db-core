@@ -26,6 +26,8 @@ mod table;
 
 pub use error::BtreeError;
 pub use index::{delete_entry, insert_entry, IndexCursor, IndexRow};
+#[cfg(feature = "engine-row")]
+pub(crate) use master::table_sql_by_root;
 pub use master::{
     bump_schema_cookie, delete_master_row, delete_stat1_rows_for_table,
     ensure_sqlite_sequence_table, ensure_sqlite_stat1_table, insert_autoindex_master_row,

@@ -1182,4 +1182,137 @@ mod tests {
         assert!(matches!(call("random", &[]).unwrap(), Value::Integer(_)));
         assert!(call("changes", &[]).is_err());
     }
+
+    // functions_text_printf_19d5fb5d: out.is_empty() && !converted
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_printf_19d5fb5d__v1_non_empty_output() {
+        assert_eq!(p(&[t("abc")]), t("abc"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_printf_19d5fb5d__v2_empty_and_no_conversion_is_null() {
+        assert_eq!(p(&[t("")]), Value::Null);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_printf_19d5fb5d__v3_empty_after_a_conversion_is_text() {
+        assert_eq!(p(&[t("%s"), t("")]), t(""));
+    }
+
+    // functions_text_integer_e7f100b2: self.plus && signed
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_e7f100b2__v1_no_plus_flag() {
+        assert_eq!(p(&[t("%d"), Value::Integer(5)]), t("5"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_e7f100b2__v2_plus_on_unsigned() {
+        assert_eq!(p(&[t("%+u"), Value::Integer(5)]), t("5"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_e7f100b2__v3_plus_on_signed() {
+        assert_eq!(p(&[t("%+d"), Value::Integer(5)]), t("+5"));
+    }
+
+    // functions_text_integer_5ad02a83: self.space && signed
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_5ad02a83__v1_no_space_flag() {
+        assert_eq!(p(&[t("%i"), Value::Integer(7)]), t("7"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_5ad02a83__v2_space_on_unsigned() {
+        assert_eq!(p(&[t("% u"), Value::Integer(7)]), t("7"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_5ad02a83__v3_space_on_signed() {
+        assert_eq!(p(&[t("% d"), Value::Integer(7)]), t(" 7"));
+    }
+
+    // functions_text_integer_905b8bff: self.comma && radix == 10
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_905b8bff__v1_no_comma_flag() {
+        assert_eq!(p(&[t("%d"), Value::Integer(4096)]), t("4096"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_905b8bff__v2_comma_in_hex() {
+        assert_eq!(p(&[t("%,x"), Value::Integer(4096)]), t("1000"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_integer_905b8bff__v3_comma_in_decimal() {
+        assert_eq!(p(&[t("%,d"), Value::Integer(4096)]), t("4,096"));
+    }
+
+    // functions_text_scientific_62e2e470: tail.is_empty() && !self.alt
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_scientific_62e2e470__v1_decimals_present() {
+        assert_eq!(p(&[t("%.1e"), Value::Real(5.0)]), t("5.0e+00"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_scientific_62e2e470__v2_alt_keeps_the_dot() {
+        assert_eq!(p(&[t("%#.0e"), Value::Real(5.0)]), t("5.e+00"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_scientific_62e2e470__v3_no_decimals_no_dot() {
+        assert_eq!(p(&[t("%.0e"), Value::Real(5.0)]), t("5e+00"));
+    }
+
+    // functions_text_general_854bc405: rexp < -4 || rexp >= p_i
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_general_854bc405__v1_fixed_in_range() {
+        assert_eq!(p(&[t("%g"), Value::Real(1.5)]), t("1.5"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_general_854bc405__v2_exponent_below_minus_four() {
+        assert_eq!(p(&[t("%g"), Value::Real(0.00001)]), t("1e-05"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_general_854bc405__v3_exponent_at_precision() {
+        assert_eq!(p(&[t("%g"), Value::Real(1e10)]), t("1e+10"));
+    }
+
+    // functions_text_group_thousands_4a6d0c91: i > 0 && (n.saturating_sub(i)) % 3 == 0
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_group_thousands_4a6d0c91__v1_first_digit_never_grouped() {
+        assert_eq!(p(&[t("%,d"), Value::Integer(5)]), t("5"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_group_thousands_4a6d0c91__v2_not_on_a_group_boundary() {
+        assert_eq!(p(&[t("%,d"), Value::Integer(12)]), t("12"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_text_group_thousands_4a6d0c91__v3_on_a_group_boundary() {
+        assert_eq!(p(&[t("%,d"), Value::Integer(1234)]), t("1,234"));
+    }
 }
