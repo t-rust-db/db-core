@@ -153,6 +153,7 @@ pub(crate) fn invalid_schema(schema: &[ColumnSpec]) -> Option<String> {
 }
 
 /// Whether `requested` is `stored` plus nullable columns at the end (#740).
+#[cfg(feature = "ingest")]
 pub(crate) fn extends_schema(stored: &[ColumnSpec], requested: &[ColumnSpec]) -> bool {
     requested
         .strip_prefix(stored)

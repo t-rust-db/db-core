@@ -33882,7 +33882,7 @@
   {
     "id": "storage_ingest_record_pad_row_0c78cd8b",
     "file": "src/storage/ingest/record.rs",
-    "line": 165,
+    "line": 166,
     "decision": "row.len() < schema.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -33892,7 +33892,7 @@
   {
     "id": "storage_ingest_record_check_row_852d8f47",
     "file": "src/storage/ingest/record.rs",
-    "line": 175,
+    "line": 176,
     "decision": "row.len() != schema.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -33902,7 +33902,7 @@
   {
     "id": "storage_ingest_record_check_row_d45a420b",
     "file": "src/storage/ingest/record.rs",
-    "line": 179,
+    "line": 180,
     "decision": "match (spec.column_type, value) {\n            (_, RecordValue::Null) => spec.nullable,\n            (ColumnType::Boolean, RecordValue::Bool(_))\n            | (\n                ColumnType::Int64 | ColumnType::TimestampMicros | ColumnType::TimestampNanos,\n                RecordValue::Int(_),\n            )\n            | (ColumnType::Float | ColumnType::Double, RecordValue::Float(_))\n            | (ColumnType::Utf8, RecordValue::Str(_))\n            | (ColumnType::Binary, RecordValue::Bytes(_)) => true,\n            (ColumnType::Int32, RecordValue::Int(i)) => i32::try_from(*i).is_ok(),\n            (\n                ColumnType::UInt8 | ColumnType::UInt16 | ColumnType::UInt32 | ColumnType::UInt64,\n                v,\n            ) => unsigned(v).is_some_and(|u| u <= unsigned_max(spec.column_type)),\n            (ColumnType::Decimal { precision, .. }, RecordValue::Decimal(d)) => {\n                d.unsigned_abs() < 10u128.pow(u32::from(precision))\n            }\n            (ColumnType::FixedLenByteArray(len), RecordValue::Bytes(b)) => {\n                b.len() == usize::from(len)\n            }\n            (ColumnType::MapUtf8, RecordValue::Map(_)) => true,\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33912,7 +33912,7 @@
   {
     "id": "storage_ingest_record_unsigned_9f2d0360",
     "file": "src/storage/ingest/record.rs",
-    "line": 216,
+    "line": 217,
     "decision": "match value {\n        RecordValue::UInt(u) => Some(*u),\n        RecordValue::Int(i) => u64::try_from(*i).ok(),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33922,7 +33922,7 @@
   {
     "id": "storage_ingest_record_unsigned_max_8451dfb9",
     "file": "src/storage/ingest/record.rs",
-    "line": 224,
+    "line": 225,
     "decision": "match t {\n        ColumnType::UInt8 => u64::from(u8::MAX),\n        ColumnType::UInt16 => u64::from(u16::MAX),\n        ColumnType::UInt32 => u64::from(u32::MAX),\n        _ => u64::MAX,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33932,7 +33932,7 @@
   {
     "id": "storage_ingest_record_encode_row_e0eab2bc",
     "file": "src/storage/ingest/record.rs",
-    "line": 250,
+    "line": 251,
     "decision": "match value {\n            RecordValue::Null => out.push(TAG_NULL),\n            RecordValue::Bool(b) => out.extend_from_slice(&[TAG_BOOL, u8::from(*b)]),\n            RecordValue::Int(i) => {\n                out.push(TAG_INT);\n                out.extend_from_slice(&i.to_le_bytes());\n            }\n            RecordValue::UInt(u) => {\n                out.push(TAG_UINT);\n                out.extend_from_slice(&u.to_le_bytes());\n            }\n            RecordValue::Float(f) => {\n                out.push(TAG_FLOAT);\n                out.extend_from_slice(&f.to_le_bytes());\n            }\n            RecordValue::Str(s) => {\n                out.push(TAG_STR);\n                length_prefixed(&mut out, s.as_bytes())?;\n            }\n            RecordValue::Bytes(b) => {\n                out.push(TAG_BYTES);\n                length_prefixed(&mut out, b)?;\n            }\n            RecordValue::Decimal(d) => {\n                out.push(TAG_DECIMAL);\n                out.extend_from_slice(&d.to_le_bytes());\n            }\n            // The entry count, then per entry the key and its value (a\n            // NULL tag, or a string tag and the string).\n            RecordValue::Map(entries) => {\n                out.push(TAG_MAP);\n                out.extend_from_slice(&u32::try_from(entries.len()).ok()?.to_le_bytes());\n                for (key, value) in entries {\n                    length_prefixed(&mut out, key.as_bytes())?;\n                    match value {\n                        None => out.push(TAG_NULL),\n                        Some(v) => {\n                            out.push(TAG_STR);\n                            length_prefixed(&mut out, v.as_bytes())?;\n                        }\n                    }\n                }\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33942,7 +33942,7 @@
   {
     "id": "storage_ingest_record_encode_row_6f186749",
     "file": "src/storage/ingest/record.rs",
-    "line": 284,
+    "line": 285,
     "decision": "match value {\n                        None => out.push(TAG_NULL),\n                        Some(v) => {\n                            out.push(TAG_STR);\n                            length_prefixed(&mut out, v.as_bytes())?;\n                        }\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33952,7 +33952,7 @@
   {
     "id": "storage_ingest_record_decode_row_73d6ecf7",
     "file": "src/storage/ingest/record.rs",
-    "line": 316,
+    "line": 317,
     "decision": "let Some(tag) = take(1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -33962,7 +33962,7 @@
   {
     "id": "storage_ingest_record_decode_row_0892001c",
     "file": "src/storage/ingest/record.rs",
-    "line": 317,
+    "line": 318,
     "decision": "match tag.first().copied()? {\n            TAG_NULL => RecordValue::Null,\n            TAG_BOOL => RecordValue::Bool(take(1)? != [0]),\n            TAG_INT => RecordValue::Int(i64::from_le_bytes(take(8)?.try_into().ok()?)),\n            TAG_UINT => RecordValue::UInt(u64::from_le_bytes(take(8)?.try_into().ok()?)),\n            TAG_FLOAT => RecordValue::Float(f64::from_le_bytes(take(8)?.try_into().ok()?)),\n            tag @ (TAG_STR | TAG_BYTES) => {\n                let len = u32::from_le_bytes(take(4)?.try_into().ok()?);\n                let data = take(usize::try_from(len).ok()?)?.to_vec();\n                if tag == TAG_STR {\n                    RecordValue::Str(String::from_utf8(data).ok()?)\n                } else {\n                    RecordValue::Bytes(data)\n                }\n            }\n            TAG_DECIMAL => RecordValue::Decimal(i128::from_le_bytes(take(16)?.try_into().ok()?)),\n            TAG_MAP => {\n                let count = u32::from_le_bytes(take(4)?.try_into().ok()?);\n                let mut entries = Vec::new();\n                for _ in 0..count {\n                    let len = u32::from_le_bytes(take(4)?.try_into().ok()?);\n                    let key = String::from_utf8(take(usize::try_from(len).ok()?)?.to_vec()).ok()?;\n                    let value = match take(1)?.first().copied()? {\n                        TAG_NULL => None,\n                        TAG_STR => {\n                            let len = u32::from_le_bytes(take(4)?.try_into().ok()?);\n                            let bytes = take(usize::try_from(len).ok()?)?.to_vec();\n                            Some(String::from_utf8(bytes).ok()?)\n                        }\n                        _ => return None,\n                    };\n                    entries.push((key, value));\n                }\n                RecordValue::Map(entries)\n            }\n            _ => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33972,7 +33972,7 @@
   {
     "id": "storage_ingest_record_decode_row_036fe671",
     "file": "src/storage/ingest/record.rs",
-    "line": 326,
+    "line": 327,
     "decision": "tag == TAG_STR",
     "conditions": 1,
     "vectors_required": 2,
@@ -33982,7 +33982,7 @@
   {
     "id": "storage_ingest_record_decode_row_cf8152c5",
     "file": "src/storage/ingest/record.rs",
-    "line": 339,
+    "line": 340,
     "decision": "match take(1)?.first().copied()? {\n                        TAG_NULL => None,\n                        TAG_STR => {\n                            let len = u32::from_le_bytes(take(4)?.try_into().ok()?);\n                            let bytes = take(usize::try_from(len).ok()?)?.to_vec();\n                            Some(String::from_utf8(bytes).ok()?)\n                        }\n                        _ => return None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33992,7 +33992,7 @@
   {
     "id": "storage_ingest_record_join_repeated_keys_a98dbba4",
     "file": "src/storage/ingest/record.rs",
-    "line": 434,
+    "line": 435,
     "decision": "match value {\n            RecordValue::Map(entries) => RecordValue::Map(join_entries(entries)),\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34002,7 +34002,7 @@
   {
     "id": "storage_ingest_record_join_entries_9904ef09",
     "file": "src/storage/ingest/record.rs",
-    "line": 449,
+    "line": 450,
     "decision": "key.eq_ignore_ascii_case(\"set-cookie\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -34012,7 +34012,7 @@
   {
     "id": "storage_ingest_record_join_entries_9f7715f7",
     "file": "src/storage/ingest/record.rs",
-    "line": 454,
+    "line": 455,
     "decision": "match (joined.as_mut(), value) {\n            (Some(acc), Some(v)) => {\n                acc.push_str(separator);\n                acc.push_str(&v);\n            }\n            (None, Some(v)) => *joined = Some(v),\n            (_, None) => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34022,7 +34022,7 @@
   {
     "id": "storage_ingest_record_push_value_b6817bff",
     "file": "src/storage/ingest/record.rs",
-    "line": 470,
+    "line": 471,
     "decision": "match column {\n        ColumnValues::Boolean(c) => c.push(match value {\n            V::Bool(b) => Some(b),\n            _ => None,\n        }),\n        ColumnValues::Int32(c) => c.push(match value {\n            V::Int(i) => i32::try_from(i).ok(),\n            _ => None,\n        }),\n        ColumnValues::Int64(c)\n        | ColumnValues::TimestampMicros(c)\n        | ColumnValues::TimestampNanos(c) => c.push(match value {\n            V::Int(i) => Some(i),\n            _ => None,\n        }),\n        ColumnValues::Float(c) => c.push(match value {\n            #[allow(clippy::cast_possible_truncation, reason = \"a FLOAT column narrows\")]\n            V::Float(f) => Some(f as f32),\n            _ => None,\n        }),\n        ColumnValues::Double(c) => c.push(match value {\n            V::Float(f) => Some(f),\n            _ => None,\n        }),\n        ColumnValues::Utf8(c) => c.push(match value {\n            V::Str(s) => Some(s),\n            _ => None,\n        }),\n        ColumnValues::Binary(c) | ColumnValues::FixedLenByteArray(c) => c.push(match value {\n            V::Bytes(b) => Some(b),\n            _ => None,\n        }),\n        ColumnValues::UInt8(c) => c.push(unsigned(&value).and_then(|u| u8::try_from(u).ok())),\n        ColumnValues::UInt16(c) => c.push(unsigned(&value).and_then(|u| u16::try_from(u).ok())),\n        ColumnValues::UInt32(c) => c.push(unsigned(&value).and_then(|u| u32::try_from(u).ok())),\n        ColumnValues::UInt64(c) => c.push(unsigned(&value)),\n        ColumnValues::Decimal(c) => c.push(match value {\n            V::Decimal(d) => Some(d),\n            _ => None,\n        }),\n        ColumnValues::Map(c) => c.push(match value {\n            V::Map(entries) => Some(\n                entries\n                    .into_iter()\n                    .map(|(k, v)| (k.into(), v.map(Into::into)))\n                    .collect(),\n            ),\n            _ => None,\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34032,7 +34032,7 @@
   {
     "id": "storage_ingest_record_push_value_7a558b85",
     "file": "src/storage/ingest/record.rs",
-    "line": 471,
+    "line": 472,
     "decision": "match value {\n            V::Bool(b) => Some(b),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34042,7 +34042,7 @@
   {
     "id": "storage_ingest_record_push_value_024c72b4",
     "file": "src/storage/ingest/record.rs",
-    "line": 475,
+    "line": 476,
     "decision": "match value {\n            V::Int(i) => i32::try_from(i).ok(),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34052,7 +34052,7 @@
   {
     "id": "storage_ingest_record_push_value_b8ab6c29",
     "file": "src/storage/ingest/record.rs",
-    "line": 481,
+    "line": 482,
     "decision": "match value {\n            V::Int(i) => Some(i),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34062,7 +34062,7 @@
   {
     "id": "storage_ingest_record_push_value_7b63b5ab",
     "file": "src/storage/ingest/record.rs",
-    "line": 485,
+    "line": 486,
     "decision": "match value {\n            #[allow(clippy::cast_possible_truncation, reason = \"a FLOAT column narrows\")]\n            V::Float(f) => Some(f as f32),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34072,7 +34072,7 @@
   {
     "id": "storage_ingest_record_push_value_66bb0b12",
     "file": "src/storage/ingest/record.rs",
-    "line": 490,
+    "line": 491,
     "decision": "match value {\n            V::Float(f) => Some(f),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34082,7 +34082,7 @@
   {
     "id": "storage_ingest_record_push_value_ce14926c",
     "file": "src/storage/ingest/record.rs",
-    "line": 494,
+    "line": 495,
     "decision": "match value {\n            V::Str(s) => Some(s),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34092,7 +34092,7 @@
   {
     "id": "storage_ingest_record_push_value_ceac3e7b",
     "file": "src/storage/ingest/record.rs",
-    "line": 498,
+    "line": 499,
     "decision": "match value {\n            V::Bytes(b) => Some(b),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34102,7 +34102,7 @@
   {
     "id": "storage_ingest_record_push_value_35c5e625",
     "file": "src/storage/ingest/record.rs",
-    "line": 506,
+    "line": 507,
     "decision": "match value {\n            V::Decimal(d) => Some(d),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34112,7 +34112,7 @@
   {
     "id": "storage_ingest_record_push_value_f556ffbf",
     "file": "src/storage/ingest/record.rs",
-    "line": 510,
+    "line": 511,
     "decision": "match value {\n            V::Map(entries) => Some(\n                entries\n                    .into_iter()\n                    .map(|(k, v)| (k.into(), v.map(Into::into)))\n                    .collect(),\n            ),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34122,7 +34122,7 @@
   {
     "id": "storage_ingest_record_engine_values_b0ad6979",
     "file": "src/storage/ingest/record.rs",
-    "line": 536,
+    "line": 537,
     "decision": "match values {\n        ColumnValues::Boolean(v) => map(v, |b| Value::Bool(*b)),\n        ColumnValues::Int32(v) => map(v, |i| Value::Int(i64::from(*i))),\n        ColumnValues::Int64(v)\n        | ColumnValues::TimestampMicros(v)\n        | ColumnValues::TimestampNanos(v) => map(v, |i| Value::Int(*i)),\n        ColumnValues::Float(v) => map(v, |f| Value::Float(f64::from(*f))),\n        ColumnValues::Double(v) => map(v, |f| Value::Float(*f)),\n        ColumnValues::Utf8(v) => map(v, |s| Value::Str(s.clone().into())),\n        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {\n            map(v, |b| Value::Str(hex(b).into()))\n        }\n        ColumnValues::UInt8(v) => map(v, |u| Value::Int(i64::from(*u))),\n        ColumnValues::UInt16(v) => map(v, |u| Value::Int(i64::from(*u))),\n        ColumnValues::UInt32(v) => map(v, |u| Value::Int(i64::from(*u))),\n        ColumnValues::UInt64(v) => v\n            .iter()\n            .map(|x| match x {\n                None => Ok(Value::Null),\n                Some(u) => i64::try_from(*u)\n                    .map(Value::Int)\n                    .map_err(|_| FileError::UnsignedOutOfRange(*u).to_string()),\n            })\n            .collect::<Result<_, _>>()?,\n        ColumnValues::Map(v) => map(v, |entries| Value::Map(Arc::new(entries.clone()))),\n        // Exact, as a flushed file's DECIMAL reads (#632).\n        ColumnValues::Decimal(v) => {\n            let scale = match column_type {\n                ColumnType::Decimal { scale, .. } => scale,\n                _ => 0,\n            };\n            map(v, |unscaled| Value::Decimal {\n                unscaled: *unscaled,\n                scale,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34132,7 +34132,7 @@
   {
     "id": "storage_ingest_record_engine_values_5c7123f4",
     "file": "src/storage/ingest/record.rs",
-    "line": 553,
+    "line": 554,
     "decision": "match x {\n                None => Ok(Value::Null),\n                Some(u) => i64::try_from(*u)\n                    .map(Value::Int)\n                    .map_err(|_| FileError::UnsignedOutOfRange(*u).to_string()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34142,7 +34142,7 @@
   {
     "id": "storage_ingest_record_engine_values_2c147097",
     "file": "src/storage/ingest/record.rs",
-    "line": 563,
+    "line": 564,
     "decision": "match column_type {\n                ColumnType::Decimal { scale, .. } => scale,\n                _ => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34152,7 +34152,7 @@
   {
     "id": "storage_ingest_record_gather_f7d42b3a",
     "file": "src/storage/ingest/record.rs",
-    "line": 581,
+    "line": 582,
     "decision": "match values {\n        ColumnValues::Boolean(v) => ColumnValues::Boolean(pick(v, order)),\n        ColumnValues::Int32(v) => ColumnValues::Int32(pick(v, order)),\n        ColumnValues::Int64(v) => ColumnValues::Int64(pick(v, order)),\n        ColumnValues::TimestampMicros(v) => ColumnValues::TimestampMicros(pick(v, order)),\n        ColumnValues::TimestampNanos(v) => ColumnValues::TimestampNanos(pick(v, order)),\n        ColumnValues::Float(v) => ColumnValues::Float(pick(v, order)),\n        ColumnValues::Double(v) => ColumnValues::Double(pick(v, order)),\n        ColumnValues::Utf8(v) => ColumnValues::Utf8(pick(v, order)),\n        ColumnValues::Binary(v) => ColumnValues::Binary(pick(v, order)),\n        ColumnValues::FixedLenByteArray(v) => ColumnValues::FixedLenByteArray(pick(v, order)),\n        ColumnValues::UInt8(v) => ColumnValues::UInt8(pick(v, order)),\n        ColumnValues::UInt16(v) => ColumnValues::UInt16(pick(v, order)),\n        ColumnValues::UInt32(v) => ColumnValues::UInt32(pick(v, order)),\n        ColumnValues::UInt64(v) => ColumnValues::UInt64(pick(v, order)),\n        ColumnValues::Decimal(v) => ColumnValues::Decimal(pick(v, order)),\n        ColumnValues::Map(v) => ColumnValues::Map(pick(v, order)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34162,7 +34162,7 @@
   {
     "id": "storage_ingest_record_by_a6002666",
     "file": "src/storage/ingest/record.rs",
-    "line": 631,
+    "line": 632,
     "decision": "match (\n            v.get(a).and_then(Option::as_ref),\n            w.get(b).and_then(Option::as_ref),\n        ) {\n            (Some(p), Some(q)) => cmp(p, q),\n            (p, q) => p.is_some().cmp(&q.is_some()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34172,7 +34172,7 @@
   {
     "id": "storage_ingest_record_compare_across_03b52936",
     "file": "src/storage/ingest/record.rs",
-    "line": 640,
+    "line": 641,
     "decision": "match (x, y) {\n        (C::Boolean(v), C::Boolean(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Int32(v), C::Int32(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Int64(v), C::Int64(w))\n        | (C::TimestampMicros(v), C::TimestampMicros(w))\n        | (C::TimestampNanos(v), C::TimestampNanos(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Float(v), C::Float(w)) => by(v, a, w, b, f32::total_cmp),\n        (C::Double(v), C::Double(w)) => by(v, a, w, b, f64::total_cmp),\n        (C::Utf8(v), C::Utf8(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Binary(v), C::Binary(w)) | (C::FixedLenByteArray(v), C::FixedLenByteArray(w)) => {\n            by(v, a, w, b, Ord::cmp)\n        }\n        (C::UInt8(v), C::UInt8(w)) => by(v, a, w, b, Ord::cmp),\n        (C::UInt16(v), C::UInt16(w)) => by(v, a, w, b, Ord::cmp),\n        (C::UInt32(v), C::UInt32(w)) => by(v, a, w, b, Ord::cmp),\n        (C::UInt64(v), C::UInt64(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Decimal(v), C::Decimal(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Map(v), C::Map(w)) => by(v, a, w, b, Ord::cmp),\n        _ => Ordering::Equal,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34182,7 +34182,7 @@
   {
     "id": "storage_ingest_record_read_column_2efbf5fe",
     "file": "src/storage/ingest/record.rs",
-    "line": 676,
+    "line": 677,
     "decision": "match column_type {\n        ColumnType::Boolean => ColumnValues::Boolean(rg.read_boolean_column(index)?),\n        ColumnType::Int32 => ColumnValues::Int32(rg.read_int32_column(index)?),\n        ColumnType::Int64 => ColumnValues::Int64(rg.read_int64_column(index)?),\n        ColumnType::TimestampMicros => ColumnValues::TimestampMicros(rg.read_int64_column(index)?),\n        ColumnType::TimestampNanos => ColumnValues::TimestampNanos(rg.read_int64_column(index)?),\n        ColumnType::Float => ColumnValues::Float(rg.read_float_column(index)?),\n        ColumnType::Double => ColumnValues::Double(rg.read_double_column(index)?),\n        ColumnType::Utf8 => ColumnValues::Utf8(rg.read_string_column(index)?),\n        ColumnType::Binary => ColumnValues::Binary(rg.read_binary_column(index)?),\n        ColumnType::FixedLenByteArray(_) => {\n            ColumnValues::FixedLenByteArray(rg.read_fixed_len_byte_array_column(index)?)\n        }\n        ColumnType::UInt8 => ColumnValues::UInt8(bits32(rg.read_int32_column(index)?)),\n        ColumnType::UInt16 => ColumnValues::UInt16(bits32(rg.read_int32_column(index)?)),\n        ColumnType::UInt32 => ColumnValues::UInt32(bits32(rg.read_int32_column(index)?)),\n        ColumnType::UInt64 => ColumnValues::UInt64(\n            rg.read_int64_column(index)?\n                .into_iter()\n                .map(|x| x.map(i64::cast_unsigned))\n                .collect(),\n        ),\n        ColumnType::MapUtf8 => ColumnValues::Map(rg.read_map_utf8_column(field)?),\n        ColumnType::Decimal { .. } => ColumnValues::Decimal(\n            rg.read_decimal_column(index)?\n                .into_iter()\n                .map(|d| d.map(|d| d.unscaled))\n                .collect(),\n        ),\n    }",
     "conditions": 0,
     "vectors_required": 0,
