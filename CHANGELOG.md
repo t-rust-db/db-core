@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.172.0] - 2026-10-24
+
+### Changed
+
+- **`engine::column::file_segments` takes the query's `WHERE` clause and prunes row groups by footer statistics** (#747, breaking). `file_segments(file, columns, where_clause, program)` passes the clause to the same pruning `BatchEngine` does (#458): a row group whose min/max (or dictionary, for `=`) proves no row can match is left out. column-rs, which loads Parquet files through `file_segments`, never pruned; it passes `select.where_clause.as_ref()` (`None` keeps every group, as before). Pruning only drops groups the filter would empty anyway, so results are unchanged; a test pins that against the unpruned run. Measured with column-rs patched to pass the clause (20M rows, 163 row groups, ascending `id`, hyperfine mean of 10): `count(*) WHERE id < 100000` 51 -> 6 ms wall (CPU 428 -> 4 ms) and `WHERE id > 19900000` 50 -> 7 ms, both reading 1 of 163 row groups, with the same counts. column-rs needs a matching change (`Opened::segments` passing `select.where_clause`), a separate tools PR.
+
 ## [0.171.2] - 2026-10-24
 
 ### Changed

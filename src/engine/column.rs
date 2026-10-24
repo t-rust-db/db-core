@@ -743,16 +743,20 @@ impl Segment for FileSegment<'_, '_> {
 /// is the file's column `col` and keys the batches as given; a name the
 /// file has no column for is an error. `program` drives late
 /// materialization where it has a `WHERE` (ADR-0026); an empty program
-/// loads every column eagerly. No row group is pruned.
+/// loads every column eagerly. A row group that `where_clause`'s footer
+/// statistics prove cannot match is left out (#458, #747); `None` keeps
+/// them all. Pass the query's own clause: pruning only drops groups the
+/// filter would empty anyway.
 pub fn file_segments<'f>(
     file: &'f ParquetFile<'f>,
     columns: &[String],
+    where_clause: Option<&Expr>,
     program: &'f Program,
 ) -> Result<Vec<FileSegment<'f, 'f>>, EngineError> {
     let all_leaves = leaf_columns(file);
     let leaves = resolve_columns(&all_leaves, columns)?;
     Ok(
-        row_group_segments(file, &leaves, &all_leaves, None, program)
+        row_group_segments(file, &leaves, &all_leaves, where_clause, program)
             .into_iter()
             .map(FileSegment)
             .collect(),
@@ -1816,6 +1820,42 @@ mod tests {
         );
     }
 
+    /// #747: a WHERE clause that the footer statistics rule out for all but
+    /// one row group leaves one segment, and the query answers as it does
+    /// over every group (the clause is qualified, as column-rs's is).
+    #[test]
+    fn file_segments_prune_row_groups_by_the_where_clause() {
+        let stats = |lo: f64, hi: f64| Some(build_statistics(&lo.to_le_bytes(), &hi.to_le_bytes()));
+        let file_bytes = build_file(&[
+            (&[1.0, 2.0, 3.0], stats(1.0, 3.0)),
+            (&[100.0, 150.0], stats(100.0, 150.0)),
+            (&[500.0, 900.0], stats(500.0, 900.0)),
+        ]);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let select =
+            planner_parse("SELECT t.amount FROM t WHERE t.amount > 120 AND t.amount < 600")
+                .unwrap();
+        let program: Program = planner::compile(&select).unwrap();
+        let columns = program.columns_to_load();
+        let run = |clause| {
+            let segments = file_segments(&file, &columns, clause, &program).unwrap();
+            let output = engine::run(&segments, &program).unwrap();
+            (segments.len(), query_result(&select, output).rows)
+        };
+        let (all_groups, expected) = run(None);
+        let (pruned_groups, rows) = run(select.where_clause.as_ref());
+        assert_eq!(all_groups, 3);
+        assert_eq!(pruned_groups, 2, "group 0 (max 3.0) cannot match");
+        assert_eq!(rows, expected);
+        assert_eq!(rows.len(), 2);
+
+        let narrow = planner_parse("SELECT t.amount FROM t WHERE t.amount > 800").unwrap();
+        let program: Program = planner::compile(&narrow).unwrap();
+        let segments =
+            file_segments(&file, &columns, narrow.where_clause.as_ref(), &program).unwrap();
+        assert_eq!(segments.len(), 1);
+    }
+
     #[test]
     fn file_segments_run_a_filtered_query_like_the_engine() {
         // #699: column-rs's file segments, keyed by the names as given
@@ -1832,12 +1872,18 @@ mod tests {
         )
         .unwrap();
         let program: Program = planner::compile(&select).unwrap();
-        let segments = file_segments(&file, &program.columns_to_load(), &program).unwrap();
+        let segments = file_segments(
+            &file,
+            &program.columns_to_load(),
+            select.where_clause.as_ref(),
+            &program,
+        )
+        .unwrap();
         assert_eq!(segments.len(), file.num_row_groups());
         let output = engine::run(&segments, &program).unwrap();
         assert_eq!(query_result(&select, output).rows, expected);
 
-        let err = file_segments(&file, &["p.nosuch".to_string()], &program)
+        let err = file_segments(&file, &["p.nosuch".to_string()], None, &program)
             .err()
             .expect("an unknown column is an error");
         assert!(
