@@ -1759,7 +1759,9 @@ pub(crate) fn sliceable(program: &[Opcode]) -> bool {
 
 /// Runs `program` over `batch`, in [`SLICE_ROWS`]-row slices when
 /// [`sliceable`], handing each slice's output and first row to `sink`
-/// in row order.
+/// in row order. A [`folds_dict_groups`] program's slices that group by
+/// codes of one dictionary fold into one output, handed on with the
+/// first of those slices' first row (#751).
 pub(crate) fn execute_in_slices(
     batch: &Batch,
     program: &[Opcode],
@@ -1770,15 +1772,106 @@ pub(crate) fn execute_in_slices(
         vm.execute(batch, program)?;
         return sink(0, vm.take_output());
     }
+    let folds = folds_dict_groups(program);
+    // `folds`: everything up to the `GroupReduce`, then the `Emit`.
+    let (body, emit) = program.split_at(program.len().saturating_sub(1));
+    // #751: the fold in progress and the offset of its first slice.
+    let mut fold: Option<(usize, DictGroupFold)> = None;
     let mut start = 0;
     while start < batch.num_rows {
         let slice = batch.slice(start, SLICE_ROWS);
         let mut vm = Vm::new();
-        vm.execute(&slice, program)?;
-        sink(start, vm.take_output())?;
+        if !folds {
+            vm.execute(&slice, program)?;
+            sink(start, vm.take_output())?;
+            start = start.saturating_add(SLICE_ROWS);
+            continue;
+        }
+        let (first, state) = fold.take().unwrap_or((start, DictGroupFold::default()));
+        vm.group_fold = Some(state);
+        vm.execute(&slice, body)?;
+        match vm.group_fold.take() {
+            Some(state) if state.folded => fold = Some((first, state)),
+            // This slice's key is not codes under the fold's dictionary:
+            // hand on what the fold holds, then this slice's own groups.
+            state => {
+                if let Some(state) = state.filter(|s| s.adopted) {
+                    sink(first, finish_dict_fold(batch, state, body, emit)?)?;
+                }
+                vm.execute(&slice, emit)?;
+                sink(start, vm.take_output())?;
+            }
+        }
         start = start.saturating_add(SLICE_ROWS);
     }
+    if let Some((first, state)) = fold {
+        sink(first, finish_dict_fold(batch, state, body, emit)?)?;
+    }
     Ok(())
+}
+
+/// Whether [`execute_in_slices`] may fold `program`'s slices (#751): it
+/// ends in its one `GroupReduce`, on a single key, then an `Emit` of
+/// only that key and the aggregates -- the shape of every `GROUP BY
+/// <col>` aggregate body -- with no `Reduce`.
+pub(crate) fn folds_dict_groups(program: &[Opcode]) -> bool {
+    let [rest @ .., reduce, emit] = program else {
+        return false;
+    };
+    let (
+        Opcode::GroupReduce {
+            group_by, agg_dst, ..
+        },
+        Opcode::Emit { registers },
+    ) = (reduce, emit)
+    else {
+        return false;
+    };
+    let single_key = group_by.len() == 1;
+    let emits_only_results = registers
+        .iter()
+        .all(|r| group_by.contains(r) || agg_dst.contains(r));
+    let no_other_reduce = !rest
+        .iter()
+        .any(|op| matches!(op, Opcode::GroupReduce { .. } | Opcode::Reduce { .. }));
+    single_key && emits_only_results && no_other_reduce
+}
+
+/// A finished [`DictGroupFold`] as `emit` would have output it after one
+/// `GroupReduce` (the last of `body`) over all its slices: the
+/// aggregates' finals, then the keys, written to their registers.
+fn finish_dict_fold(
+    batch: &Batch,
+    fold: DictGroupFold,
+    body: &[Opcode],
+    emit: &[Opcode],
+) -> Result<QueryOutput> {
+    let Some(Opcode::GroupReduce {
+        group_by,
+        aggs,
+        agg_dst,
+    }) = body.last()
+    else {
+        return Err(VmError::MalformedProgram {
+            opcode: "GroupReduce",
+            reason: "a folded program does not end in GroupReduce".to_string(),
+        });
+    };
+    let mut vm = Vm::new();
+    for (((func, src), dst), accs) in aggs.iter().zip(agg_dst.iter()).zip(&fold.accs) {
+        let result: Vec<Value> = accs
+            .iter()
+            .map(|acc| acc.finalize(*func, src.is_none(), "GroupReduce"))
+            .collect::<Result<_>>()?;
+        vm.registers.insert(*dst, Arc::new(result));
+    }
+    // After the aggregates, as `group_reduce` writes them.
+    let keys = Arc::new(fold.keys);
+    for reg in group_by.iter() {
+        vm.registers.insert(*reg, Arc::clone(&keys));
+    }
+    vm.execute(batch, emit)?;
+    Ok(vm.take_output())
 }
 
 /// Run `program` (a flat, non-looping instruction list ending in
@@ -2996,7 +3089,7 @@ fn dict_group_by_single_column(
                 let key = if slot == null_slot {
                     Value::Null
                 } else {
-                    Value::Str(dict[slot].to_string().into())
+                    Value::Str(String::from(&*dict[slot]).into())
                 };
                 let g = group_keys.len();
                 group_keys.push(key);
@@ -3007,6 +3100,97 @@ fn dict_group_by_single_column(
         row_group.push(group);
     }
     (row_group, group_keys.len(), vec![group_keys])
+}
+
+/// #751: a single-`Dict`-key `GroupReduce`'s groups and accumulators,
+/// carried by [`execute_in_slices`] across the slices of one segment, so
+/// the segment hands `Combine` one partial row per group rather than one
+/// per group per slice (#643's slicing made that about eight times as
+/// many rows, each with a freshly allocated key string). Codes are only
+/// comparable under one dictionary, so a fold holds the first slice's
+/// and folds only slices that share it (by entry identity, as a sliced
+/// `Dict` column does). Groups are numbered in first-seen row order
+/// across the slices, which is the order one unsliced `GroupReduce`
+/// gives.
+#[derive(Debug, Default)]
+struct DictGroupFold {
+    dict: Vec<Arc<str>>,
+    /// Group id per code, `dict.len()` being `NULL`'s slot; `u32::MAX`
+    /// until the code is seen.
+    code_to_group: Vec<u32>,
+    keys: Vec<Value>,
+    /// One accumulator per group, per aggregate in `aggs` order.
+    accs: Vec<Vec<RunningAgg>>,
+    /// Whether a `GroupReduce` has taken its dictionary yet.
+    adopted: bool,
+    /// Whether the last `GroupReduce` folded into this one -- and so wrote
+    /// no registers.
+    folded: bool,
+}
+
+impl DictGroupFold {
+    /// Takes `dict` as this fold's dictionary if it has none yet; whether
+    /// codes under `dict` can fold into it.
+    fn adopt(&mut self, dict: &[Arc<str>], num_aggs: usize) -> bool {
+        if !self.adopted {
+            self.adopted = true;
+            self.dict = dict.to_vec();
+            self.code_to_group = vec![u32::MAX; dict.len().saturating_add(1)];
+            self.accs = vec![Vec::new(); num_aggs];
+            return true;
+        }
+        self.dict
+            .iter()
+            .map(Arc::as_ptr)
+            .eq(dict.iter().map(Arc::as_ptr))
+    }
+
+    /// [`dict_group_by_single_column`] into this fold's groups: the group
+    /// of each row, a new group (and key string) only for a code no
+    /// earlier slice has seen.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "as in `dict_group_by_single_column`: `slot <= dict.len()`, in range for `code_to_group`, and a stored group id indexes `keys`"
+    )]
+    fn assign(
+        &mut self,
+        indices: &[u32],
+        valid: &Bitmap,
+        num_rows: usize,
+        physical: impl Fn(usize) -> usize,
+    ) -> Result<Vec<usize>> {
+        let null_slot = self.dict.len();
+        let mut row_group = Vec::with_capacity(num_rows);
+        for row in 0..num_rows {
+            let p = physical(row);
+            let slot = if valid.get(p) {
+                usize::try_from(indices[p])
+                    .unwrap_or(null_slot)
+                    .min(null_slot)
+            } else {
+                null_slot
+            };
+            let group = match self.code_to_group[slot] {
+                u32::MAX => {
+                    let g = self.keys.len();
+                    self.code_to_group[slot] =
+                        u32::try_from(g).map_err(|_| VmError::MalformedProgram {
+                            opcode: "GroupReduce",
+                            reason: "more dictionary groups than u32 codes".to_string(),
+                        })?;
+                    self.keys.push(if slot == null_slot {
+                        Value::Null
+                    } else {
+                        Value::Str(String::from(&*self.dict[slot]).into())
+                    });
+                    g
+                }
+                g => g as usize,
+            };
+            row_group.push(group);
+        }
+        Ok(row_group)
+    }
 }
 
 /// SQL join-key equality between a probe row and an already-built row's
@@ -3271,9 +3455,9 @@ impl BuildTable {
 /// default `RandomState` cost every probe row (~20 ns of the 34 ns a
 /// match took).
 #[derive(Clone, Copy, Default)]
-struct SlotState;
+pub(crate) struct SlotState;
 
-struct SlotHasher(u64);
+pub(crate) struct SlotHasher(u64);
 
 impl Hasher for SlotHasher {
     fn finish(&self) -> u64 {
@@ -3751,6 +3935,9 @@ pub struct Vm {
     /// and `Emit` tell them apart from a genuine one-row *column*
     /// unambiguously. Reset wherever `registers` is.
     scalar_registers: HashSet<usize>,
+    /// #751: set by [`execute_in_slices`] while it folds a segment's
+    /// slices; see [`DictGroupFold`].
+    group_fold: Option<DictGroupFold>,
     /// Instructions executed so far, checked against [`MAX_STEPS`] by
     /// [`Vm::execute`]/[`Vm::run`].
     steps: usize,
@@ -4932,17 +5119,24 @@ impl Vm {
         // per-row hash entirely. Only fires for exactly one group-by
         // column (matching a `GROUP BY <dict col>` with no other
         // key); a composite key falls back to the general path.
-        let dict_group_by = match group_by {
-            [reg] => match self.typed_registers.get(reg).map(Arc::as_ref) {
-                Some(Column::Dict {
-                    dict,
-                    indices,
-                    valid,
-                }) => Some((dict.clone(), indices.clone(), valid.clone())),
-                _ => None,
-            },
+        let dict_group_by: Option<Arc<Column>> = match group_by {
+            [reg] => self
+                .typed_registers
+                .get(reg)
+                .filter(|column| matches!(column.as_ref(), Column::Dict { .. }))
+                .map(Arc::clone),
             _ => None,
         };
+        // #751: inside `execute_in_slices`, fold this slice's groups into
+        // the segment's running ones instead of emitting them.
+        let mut fold = self.group_fold.take();
+        let folding = match (fold.as_mut(), dict_group_by.as_deref()) {
+            (Some(f), Some(Column::Dict { dict, .. })) => f.adopt(dict, aggs.len()),
+            _ => false,
+        };
+        if let Some(f) = fold.as_mut() {
+            f.folded = folding;
+        }
         // #482: materialize every register this opcode might read
         // as `Vec<Value>` up front, before `key_columns` below
         // starts borrowing `self.registers` -- the `aggs` fallback
@@ -4998,7 +5192,7 @@ impl Vm {
                 .first()
                 .map(KeyView::len)
                 .or(int_group_by.as_ref().map(|c| c.len()))
-                .or(dict_group_by.as_ref().map(|(_, _, valid)| valid.len()))
+                .or(dict_group_by.as_ref().map(|c| c.len()))
             {
                 Some(len) => len,
                 None => match aggs
@@ -5040,10 +5234,24 @@ impl Vm {
                 .map_or(row, |sel| sel.indices[row] as usize)
         };
 
-        let (row_group, num_groups, key_columns): GroupedKeys = match dict_group_by {
-            Some((dict, indices, valid)) => {
-                dict_group_by_single_column(&dict, &indices, &valid, num_rows, physical)
-            }
+        let (row_group, num_groups, key_columns): GroupedKeys = match dict_group_by.as_deref() {
+            Some(Column::Dict { indices, valid, .. }) if folding => match fold.as_mut() {
+                Some(f) => {
+                    let row_group = f.assign(indices, valid, num_rows, physical)?;
+                    (row_group, f.keys.len(), Vec::new())
+                }
+                None => {
+                    return Err(VmError::MalformedProgram {
+                        opcode,
+                        reason: "folding without a fold".to_string(),
+                    })
+                }
+            },
+            Some(Column::Dict {
+                dict,
+                indices,
+                valid,
+            }) => dict_group_by_single_column(dict, indices, valid, num_rows, physical),
             // #439/#440: hash column-wise (`hash_columns_by_row`, no
             // per-row key materialized), then probe by hash first on
             // a borrowed row view, only clone+allocate a
@@ -5054,19 +5262,31 @@ impl Vm {
             // buckets group ids by hash (collisions possible, so
             // each bucket is checked for an exact match) rather
             // than owning a `GroupKey` per entry.
-            None => match int_key {
+            _ => match int_key {
                 Some((data, valid)) => int_group_by_single_column(data, valid, num_rows, physical)?,
                 None => group_by_key_views(&key_views, num_rows, physical)?,
             },
         };
 
-        for ((func, src), dst) in aggs.iter().zip(agg_dst.iter()) {
+        for (i, ((func, src), dst)) in aggs.iter().zip(agg_dst.iter()).enumerate() {
             // #477: one `RunningAgg` per group instead of
             // `per_group: Vec<Vec<Value>>` + a final
             // `reduce_values` pass -- O(1) memory per row instead
             // of O(matched rows), same accumulator
             // `Opcode::HashProbeGroupReduce` (#441) already uses.
-            let mut accs: Vec<RunningAgg> = vec![RunningAgg::default(); num_groups];
+            // #751: a fold's own accumulators, grown to its groups.
+            let mut local;
+            let accs: &mut Vec<RunningAgg> = match fold.as_mut().filter(|_| folding) {
+                Some(f) => {
+                    let accs = &mut f.accs[i];
+                    accs.resize(num_groups, RunningAgg::default());
+                    accs
+                }
+                None => {
+                    local = vec![RunningAgg::default(); num_groups];
+                    &mut local
+                }
+            };
             match src {
                 Some(reg) => match self.typed_registers.get(reg).map(Arc::clone) {
                     // #477: read straight from the typed column's
@@ -5121,12 +5341,19 @@ impl Vm {
                     }
                 }
             }
+            if folding {
+                continue;
+            }
             let is_count_star = src.is_none();
             let result: Vec<Value> = accs
                 .iter()
                 .map(|acc| acc.finalize(*func, is_count_star, opcode))
                 .collect::<Result<_>>()?;
             self.registers.insert(*dst, Arc::new(result));
+        }
+        self.group_fold = fold;
+        if folding {
+            return Ok(());
         }
 
         // After the aggregates, which may read a key register as
@@ -11755,6 +11982,179 @@ mod tests {
             slice_starts(SLICE_ROWS + 1, &sliceable_program()),
             vec![0, SLICE_ROWS]
         );
+    }
+
+    /// `num_rows` rows of a `Dict` key `k` over `dict_len` entries (every
+    /// seventh row `NULL`, codes visited out of order) and an `Int` `v`.
+    fn dict_key_batch(num_rows: usize, dict_len: usize) -> Batch {
+        let dict: Vec<Arc<str>> = (0..dict_len).map(|i| format!("k{i}").into()).collect();
+        let indices = (0..num_rows)
+            .map(|i| u32::try_from((i * 7919) % dict_len).unwrap())
+            .collect();
+        let valid = Bitmap::from_bools((0..num_rows).map(|i| i % 7 != 3));
+        Batch::new(num_rows)
+            .with_typed_column(
+                "k",
+                Column::Dict {
+                    dict,
+                    indices,
+                    valid,
+                },
+            )
+            .with_column(
+                "v",
+                (0..num_rows).map(|i| Value::Int(i as i64 % 100)).collect(),
+            )
+    }
+
+    /// `SELECT k, SUM(v), COUNT(*), MIN(v) ... [WHERE v > 40] GROUP BY k`.
+    fn dict_group_program(filtered: bool) -> Vec<Opcode> {
+        let mut program = vec![
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "v".into(),
+            },
+        ];
+        if filtered {
+            program.extend([
+                Opcode::LoadConst {
+                    reg: 5,
+                    value: Value::Int(40),
+                },
+                Opcode::Map {
+                    dst: 6,
+                    op: MapOp::Gt,
+                    a: 1,
+                    b: 5,
+                },
+                Opcode::Filter { predicate: 6 },
+            ]);
+        }
+        program.extend([
+            Opcode::GroupReduce {
+                group_by: vec![0].into(),
+                aggs: vec![
+                    (AggFunc::Sum, Some(1)),
+                    (AggFunc::Count, None),
+                    (AggFunc::Min, Some(1)),
+                ]
+                .into(),
+                agg_dst: vec![2, 3, 4].into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 2, 3, 4].into(),
+            },
+        ]);
+        program
+    }
+
+    /// `program` over `batch` in one `Vm`, unsliced.
+    fn whole_rows(batch: &Batch, program: &[Opcode]) -> Vec<Vec<Value>> {
+        let mut vm = Vm::new();
+        vm.execute(batch, program).unwrap();
+        vm.take_output().into_rows()
+    }
+
+    /// `execute_in_slices`' outputs, with the first row each came with.
+    fn sliced_outputs(batch: &Batch, program: &[Opcode]) -> Vec<(usize, Vec<Vec<Value>>)> {
+        let mut outputs = Vec::new();
+        execute_in_slices(batch, program, |start, output| {
+            outputs.push((start, output.into_rows()));
+            Ok(())
+        })
+        .unwrap();
+        outputs
+    }
+
+    #[test]
+    fn a_dict_keyed_group_reduce_folds_its_slices_into_one_output() {
+        // #751: one row per group for the whole segment, in first-seen
+        // order, `NULL` keys grouped -- as one unsliced `GroupReduce`.
+        let batch = dict_key_batch(SLICE_ROWS * 2 + 100, 50);
+        let program = dict_group_program(false);
+        let outputs = sliced_outputs(&batch, &program);
+        assert_eq!(outputs.len(), 1, "folded into one output");
+        assert_eq!(outputs[0].0, 0);
+        let rows = &outputs[0].1;
+        assert_eq!(rows.len(), 51, "50 keys and NULL");
+        assert_eq!(rows, &whole_rows(&batch, &program));
+    }
+
+    #[test]
+    fn a_filtered_dict_keyed_group_reduce_folds_like_the_unsliced_one() {
+        let batch = dict_key_batch(SLICE_ROWS * 3 + 100, 300);
+        let program = dict_group_program(true);
+        let outputs = sliced_outputs(&batch, &program);
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].1, whole_rows(&batch, &program));
+    }
+
+    #[test]
+    fn a_slice_whose_dictionary_is_decoded_hands_on_the_fold_first() {
+        // A 100-row last slice decodes a 1000-entry dictionary to `Str`
+        // (`Column::slice`), so it cannot fold: the fold so far goes out
+        // with its first slice's offset, then the last slice's own groups.
+        let n = SLICE_ROWS * 2 + 100;
+        let batch = dict_key_batch(n, 1000);
+        let program = dict_group_program(false);
+        let outputs = sliced_outputs(&batch, &program);
+        let starts: Vec<usize> = outputs.iter().map(|(start, _)| *start).collect();
+        assert_eq!(starts, vec![0, SLICE_ROWS * 2]);
+        assert_eq!(
+            outputs[0].1,
+            whole_rows(&batch.slice(0, SLICE_ROWS * 2), &program)
+        );
+        assert_eq!(
+            outputs[1].1,
+            whole_rows(&batch.slice(SLICE_ROWS * 2, 100), &program)
+        );
+    }
+
+    #[test]
+    fn a_str_keyed_group_reduce_is_not_folded() {
+        // Only dictionary codes fold: a `Str` key still emits per slice.
+        let n = SLICE_ROWS + 10;
+        let keys = (0..n).map(|i| Value::Str(format!("k{}", i % 5).into()));
+        let batch = Batch::new(n)
+            .with_column("k", keys.collect())
+            .with_column("v", (0..n).map(|_| Value::Int(1)).collect());
+        let starts: Vec<usize> = sliced_outputs(&batch, &dict_group_program(false))
+            .iter()
+            .map(|(start, _)| *start)
+            .collect();
+        assert_eq!(starts, vec![0, SLICE_ROWS]);
+    }
+
+    #[test]
+    fn only_a_single_key_group_reduce_emitting_its_results_folds() {
+        assert!(folds_dict_groups(&dict_group_program(true)));
+        let mut two_keys = dict_group_program(false);
+        two_keys[2] = Opcode::GroupReduce {
+            group_by: vec![0, 1].into(),
+            aggs: vec![(AggFunc::Count, None)].into(),
+            agg_dst: vec![3].into(),
+        };
+        assert!(!folds_dict_groups(&two_keys), "composite key");
+        let mut emits_a_row_column = dict_group_program(false);
+        emits_a_row_column[3] = Opcode::Emit {
+            registers: vec![0, 1].into(),
+        };
+        assert!(!folds_dict_groups(&emits_a_row_column), "emits `v`");
+        let mut with_reduce = dict_group_program(false);
+        with_reduce.insert(
+            2,
+            Opcode::Reduce {
+                func: AggFunc::Count,
+                src: None,
+                dst: 7,
+            },
+        );
+        assert!(!folds_dict_groups(&with_reduce), "another reduce");
+        assert!(!folds_dict_groups(&sliceable_program()), "no GroupReduce");
     }
 
     // vm_batch_typed_arithmetic_b747ddc4 (`typed_arithmetic`):

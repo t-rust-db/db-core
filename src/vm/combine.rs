@@ -35,7 +35,7 @@ use std::sync::Arc;
 use super::acc_column::AccColumn;
 use super::batch::{
     agg_cmp, apply_map_op, chunk_len, hash_columns_by_row, mix_hash, AggOperand, AggPart, Chunk,
-    HiddenPart, MapOp, QueryOutput, Result, Value, VmError, HASH_SEED,
+    HiddenPart, MapOp, QueryOutput, Result, SlotState, Value, VmError, HASH_SEED,
 };
 use super::int_key_table::IntKeyTable;
 
@@ -495,18 +495,19 @@ enum KeyIndex {
 
 /// Group ids by key hash: the first group with a hash inline, any others
 /// (a collision, rare) in a side table -- one map entry per group instead
-/// of a `Vec` allocated per group (#643).
+/// of a `Vec` allocated per group (#643). Slotted by [`SlotState`]'s
+/// Murmur mix of the already-mixed key hash, not SipHash (#751, as #514).
 #[derive(Default)]
 struct GenericIndex {
-    first: HashMap<u64, usize>,
-    more: HashMap<u64, Vec<usize>>,
+    first: HashMap<u64, usize, SlotState>,
+    more: HashMap<u64, Vec<usize>, SlotState>,
 }
 
 impl GenericIndex {
     fn with_capacity(groups: usize) -> Self {
         GenericIndex {
-            first: HashMap::with_capacity(groups),
-            more: HashMap::new(),
+            first: HashMap::with_capacity_and_hasher(groups, SlotState),
+            more: HashMap::default(),
         }
     }
 

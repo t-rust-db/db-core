@@ -35,8 +35,8 @@ use std::hint::black_box;
 
 use db_core::value::Value as RowValue;
 use db_core::vm::batch::{
-    compare_for_order, AggFunc, AggPart, Batch, Instruction, MapOp, Opcode as BatchOpcode, Program,
-    Value as BatchValue, Vm as BatchVm, WindowFunc,
+    compare_for_order, AggFunc, AggPart, Batch, Bitmap, Column, Instruction, MapOp,
+    Opcode as BatchOpcode, Program, Value as BatchValue, Vm as BatchVm, WindowFunc,
 };
 use db_core::vm::engine::{run, InMemorySegment};
 use db_core::vm::row::{
@@ -758,6 +758,59 @@ fn bench_engine_combine(r: &mut common::Report) {
     );
 }
 
+/// #751: `GROUP BY <dictionary string>` at high cardinality through
+/// `run` -- the shape of `SELECT user_name, count(*) ... GROUP BY
+/// user_name` over a Parquet file: 160 segments (row groups) of 120K
+/// rows, each a `Column::Dict` over the same 10K names, so every segment
+/// runs in `SLICE_ROWS` slices and folds them by code before `Combine`.
+fn bench_engine_combine_dict_key(r: &mut common::Report) {
+    const NAMES: usize = 10_000;
+    const ROWS_PER_SEGMENT: usize = 120_000;
+    const SEGMENTS: usize = 160;
+    let segments: Vec<InMemorySegment> = (0..SEGMENTS)
+        .map(|seg| {
+            let dict: Vec<std::sync::Arc<str>> =
+                (0..NAMES).map(|i| format!("user_{i:05}").into()).collect();
+            let indices: Vec<u32> = (0..ROWS_PER_SEGMENT)
+                .map(|i| ((i * 7919 + seg * 31) % NAMES) as u32)
+                .collect();
+            InMemorySegment(Batch::new(ROWS_PER_SEGMENT).with_typed_column(
+                "user_name",
+                Column::Dict {
+                    dict,
+                    indices,
+                    valid: Bitmap::from_bools((0..ROWS_PER_SEGMENT).map(|_| true)),
+                },
+            ))
+        })
+        .collect();
+    let program = Program::new(vec![
+        Instruction::new(BatchOpcode::LoadColumn {
+            reg: 0,
+            column: "user_name".into(),
+        }),
+        Instruction::new(BatchOpcode::GroupReduce {
+            group_by: vec![0].into(),
+            aggs: vec![(AggFunc::Count, None)].into(),
+            agg_dst: vec![1].into(),
+        }),
+        Instruction::new(BatchOpcode::Emit {
+            registers: vec![0, 1].into(),
+        }),
+        Instruction::new(BatchOpcode::Combine {
+            agg_parts: vec![AggPart::GroupKey, AggPart::Count].into(),
+            num_group_keys: 1,
+            distinct: false,
+            output_order: Vec::new().into(),
+            project: Vec::new().into(),
+        }),
+    ]);
+    r.bench(
+        "vm_opcodes/engine::run Dict GroupReduce+Combine (160 segments x 120K rows, 10K keys)",
+        || run(black_box(&segments), &program),
+    );
+}
+
 /// #479: `GROUP BY <typed Int column>` -- the `GROUP BY customer_id` shape
 /// -- at the two cardinalities that matter: the parity file's 4-group
 /// case (must not regress) and the 100K-group case the ticket targets
@@ -875,6 +928,7 @@ fn main() {
     bench_batch_group_reduce_typed_int_key(&mut report);
     bench_batch_group_reduce_generic_keys(&mut report);
     bench_engine_combine(&mut report);
+    bench_engine_combine_dict_key(&mut report);
     bench_string_order_by_sort(&mut report);
     bench_run_parallel_top_n(&mut report);
     bench_window_partition_by_string(&mut report);
