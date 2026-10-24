@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.171.2] - 2026-10-24
+
+### Changed
+
+- **`=`, `<>`, `<`, `<=`, `>`, `>=`, `AND` and `OR` over typed `Int`/`Float`/`Bool` columns run on the buffers, not one `Value` a row** (#748). `Vm::typed_compare` takes an `Int`/`Float` column against a numeric literal (either side) or another column and yields a typed `Bool` column, as `typed_like` does (#743); `Vm::typed_bool_op` combines two typed `Bool` columns with SQL's three-valued logic (`three_valued`'s answers, now shared through `kleene`). So `x BETWEEN a AND b` is three typed passes that `Filter` reads without materializing. The answers are `apply_map_op`'s: both sides compare as `f64` as `compare_values` does (an `Int` past 2^53 rounds, a NaN is unequal to everything), and a NULL operand is a NULL row. A string, NULL or decimal literal, or two literals, still take the general path. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(*) WHERE amount >= 100` 60 -> 28 ms wall (CPU 430 -> 173 ms); `WHERE amount BETWEEN 100 AND 200` 113 -> 32 ms (CPU 874 -> 232 ms); `WHERE id BETWEEN 100 AND 2000000` 121 -> 37 ms (CPU 927 -> 271 ms), peak RSS 167 -> 125 MB; the `count(amount)` control is unchanged at 41 ms.
+
 ## [0.171.1] - 2026-10-24
 
 ### Changed
@@ -30,7 +36,6 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 - **A quoted time is parsed without reading the clock** unless it is `'now'`. The TIMESTAMP literal rewrite called `unixepoch` through the clock-reading path, which panics on `wasm32-unknown-unknown` (no `SystemTime`).
 - **Batch queries run on a host without threads.** The morsel pools (`run_morsels`, `run_morsels_fold`, `run_morsels_ordered`) run on the calling thread when they would get one worker, instead of spawning one. `wasm32-unknown-unknown` reports no parallelism and cannot spawn, so a query there panicked (`unwrap_failed` in `Scope::spawn`); a one-core host also skips the spawn.
 
-||||||| parent of a4926286 (perf(vm): Reduce over Str/Dict columns counts and orders in place (#750))
 ## [0.169.4] - 2026-10-24
 
 ### Changed
