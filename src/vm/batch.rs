@@ -4229,6 +4229,94 @@ impl Vm {
         Ok(Some(Column::Bool { data, valid }))
     }
 
+    /// A comparison operand for [`Vm::typed_compare`]: a typed `Int`/`Float`
+    /// register, or a numeric `LoadConst` literal read as is. `None` for
+    /// anything else (a string, a NULL, a decimal, a materialized register).
+    fn compare_operand(&self, reg: usize) -> Option<CompareOperand> {
+        if let Some(column) = self.typed_registers.get(&reg) {
+            return match column.as_ref() {
+                Column::Int { .. } => Some(CompareOperand::Int(Arc::clone(column))),
+                Column::Float { .. } => Some(CompareOperand::Float(Arc::clone(column))),
+                _ => None,
+            };
+        }
+        match self.const_value(reg)? {
+            Value::Int(v) => Some(CompareOperand::Const(int_as_f64(*v))),
+            Value::Float(v) => Some(CompareOperand::Const(*v)),
+            _ => None,
+        }
+    }
+
+    /// Fast path for [`Opcode::Map`]'s `= <> < <= > >=` (#748) when each
+    /// operand is a typed `Int`/`Float` column or a numeric literal, at
+    /// least one of them a column. The answer is [`compare_values`]'s for
+    /// every pair: both sides compare as `f64` (so an `Int` against an
+    /// `Int` rounds as it does there, and a NaN is unequal to everything,
+    /// even itself), and a NULL on either side is a NULL row. Yields a
+    /// typed `Bool` column, as [`Vm::typed_like`] does. `None` otherwise;
+    /// the caller then takes the general elementwise path.
+    fn typed_compare(&self, op: MapOp, a: usize, b: usize) -> Option<Column> {
+        if !matches!(
+            op,
+            MapOp::Eq | MapOp::Ne | MapOp::Lt | MapOp::Le | MapOp::Gt | MapOp::Ge
+        ) {
+            return None;
+        }
+        let (lhs, rhs) = (self.compare_operand(a)?, self.compare_operand(b)?);
+        // Two literals have no row count: the general path takes them.
+        let len = lhs.len().or(rhs.len())?;
+        if lhs.len().zip(rhs.len()).is_some_and(|(x, y)| x != y) {
+            return None;
+        }
+        Some(match lhs {
+            CompareOperand::Const(c) => compare_with(op, len, &ConstRows(c), &rhs),
+            CompareOperand::Int(column) => compare_with(op, len, &IntRows(column), &rhs),
+            CompareOperand::Float(column) => compare_with(op, len, &FloatRows(column), &rhs),
+        })
+    }
+
+    /// Fast path for [`Opcode::Map`]'s `AND`/`OR` (#748) when both operands
+    /// are typed `Bool` columns, as `typed_compare` and `typed_like`
+    /// produce: SQL's three-valued logic over the buffers, with
+    /// [`three_valued`]'s answers. `None` otherwise.
+    fn typed_bool_op(&self, op: MapOp, a: usize, b: usize) -> Option<Column> {
+        if !matches!(op, MapOp::And | MapOp::Or) {
+            return None;
+        }
+        let (a_col, b_col) = (self.typed_registers.get(&a)?, self.typed_registers.get(&b)?);
+        let (
+            Column::Bool {
+                data: xs,
+                valid: x_valid,
+            },
+            Column::Bool {
+                data: ys,
+                valid: y_valid,
+            },
+        ) = (a_col.as_ref(), b_col.as_ref())
+        else {
+            return None;
+        };
+        if xs.len() != ys.len() {
+            return None;
+        }
+        let len = xs.len();
+        let mut data = Vec::with_capacity(len);
+        let mut valid = Bitmap::new(len, true);
+        for (i, (&x, &y)) in xs.iter().zip(ys).enumerate() {
+            let x = x_valid.get(i).then_some(x);
+            let y = y_valid.get(i).then_some(y);
+            match kleene(op, x, y) {
+                Some(truth) => data.push(truth),
+                None => {
+                    data.push(false);
+                    valid.set(i, false);
+                }
+            }
+        }
+        Some(Column::Bool { data, valid })
+    }
+
     /// Fast path for [`Opcode::Map`]'s `Add`/`Sub`/`Mul`/`Div` when
     /// *both* operands are typed `Int`/`Float` columns (#130 child 4
     /// slice 2, db-core#431): computes over the packed buffers, honoring
@@ -4431,6 +4519,13 @@ impl Vm {
                     // `Filter` reads the `Bool` buffer directly, and
                     // `ensure_materialized` builds the `Value`s only
                     // for a reader that needs them.
+                    self.registers.remove(dst);
+                    self.typed_registers.insert(*dst, Arc::new(column));
+                } else if let Some(column) = self
+                    .typed_compare(*op, *a, *b)
+                    .or_else(|| self.typed_bool_op(*op, *a, *b))
+                {
+                    // #748: typed-only, as `typed_like` above.
                     self.registers.remove(dst);
                     self.typed_registers.insert(*dst, Arc::new(column));
                 } else if let Some(column) = self.typed_arithmetic(*op, *a, *b, opcode)? {
@@ -6149,11 +6244,121 @@ fn truth(v: &Value) -> Option<bool> {
 /// `AND`, a TRUE side decides `OR`, otherwise an unknown side makes the
 /// result unknown (NULL).
 fn three_valued(op: MapOp, a: Option<bool>, b: Option<bool>) -> Value {
+    kleene(op, a, b).map_or(Value::Null, Value::Bool)
+}
+
+/// [`three_valued`]'s answer as an `Option`: `None` for an unknown result.
+fn kleene(op: MapOp, a: Option<bool>, b: Option<bool>) -> Option<bool> {
     let decided = op == MapOp::Or;
     match (a, b) {
-        (Some(x), _) | (_, Some(x)) if x == decided => Value::Bool(decided),
-        (Some(_), Some(_)) => Value::Bool(!decided),
-        _ => Value::Null,
+        (Some(x), _) | (_, Some(x)) if x == decided => Some(decided),
+        (Some(_), Some(_)) => Some(!decided),
+        _ => None,
+    }
+}
+
+/// One side of [`Vm::typed_compare`]: a typed `Int` or `Float` register,
+/// or a numeric literal already widened to `f64`.
+enum CompareOperand {
+    Int(Arc<Column>),
+    Float(Arc<Column>),
+    Const(f64),
+}
+
+impl CompareOperand {
+    /// The row count, `None` for a literal (it has as many as the other side).
+    fn len(&self) -> Option<usize> {
+        match self {
+            CompareOperand::Int(column) | CompareOperand::Float(column) => Some(column.len()),
+            CompareOperand::Const(_) => None,
+        }
+    }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "comparisons widen an integer to f64, as `Value::as_f64` does"
+)]
+fn int_as_f64(x: i64) -> f64 {
+    x as f64
+}
+
+/// Row `i` of a comparison operand as `f64`, `None` for a NULL. One
+/// implementation per operand kind, so [`compare_rows`] is monomorphized
+/// per pair and the read has no dispatch.
+trait NumericRows {
+    fn at(&self, i: usize) -> Option<f64>;
+}
+
+struct ConstRows(f64);
+struct IntRows(Arc<Column>);
+struct FloatRows(Arc<Column>);
+
+impl NumericRows for ConstRows {
+    fn at(&self, _: usize) -> Option<f64> {
+        Some(self.0)
+    }
+}
+
+impl NumericRows for IntRows {
+    fn at(&self, i: usize) -> Option<f64> {
+        match self.0.as_ref() {
+            Column::Int { data, valid } if valid.get(i) => data.get(i).map(|&x| int_as_f64(x)),
+            _ => None,
+        }
+    }
+}
+
+impl NumericRows for FloatRows {
+    fn at(&self, i: usize) -> Option<f64> {
+        match self.0.as_ref() {
+            Column::Float { data, valid } if valid.get(i) => data.get(i).copied(),
+            _ => None,
+        }
+    }
+}
+
+/// [`compare_rows`] with `rhs`'s reader chosen by its kind.
+fn compare_with<L: NumericRows>(op: MapOp, len: usize, lhs: &L, rhs: &CompareOperand) -> Column {
+    match rhs {
+        CompareOperand::Const(c) => compare_rows(op, len, lhs, &ConstRows(*c)),
+        CompareOperand::Int(column) => compare_rows(op, len, lhs, &IntRows(Arc::clone(column))),
+        CompareOperand::Float(column) => compare_rows(op, len, lhs, &FloatRows(Arc::clone(column))),
+    }
+}
+
+/// `op` over `len` rows of two numeric operands; a NULL on either side is
+/// a NULL row (`false` in `data`, invalid in the bitmap).
+fn compare_rows<L: NumericRows, R: NumericRows>(op: MapOp, len: usize, lhs: &L, rhs: &R) -> Column {
+    let mut data = Vec::with_capacity(len);
+    let mut valid = Bitmap::new(len, true);
+    for i in 0..len {
+        match (lhs.at(i), rhs.at(i)) {
+            (Some(x), Some(y)) => data.push(compare_f64(op, x, y)),
+            _ => {
+                data.push(false);
+                valid.set(i, false);
+            }
+        }
+    }
+    Column::Bool { data, valid }
+}
+
+/// `x op y` as [`compare_values`] answers it: an unordered pair (a NaN)
+/// is unequal and in no order.
+#[allow(
+    clippy::float_cmp,
+    reason = "IEEE comparison is `partial_cmp`'s, which `compare_values` uses"
+)]
+fn compare_f64(op: MapOp, x: f64, y: f64) -> bool {
+    match op {
+        MapOp::Eq => x == y,
+        MapOp::Ne => x != y,
+        MapOp::Lt => x < y,
+        MapOp::Le => x <= y,
+        MapOp::Gt => x > y,
+        MapOp::Ge => x >= y,
+        _ => false,
     }
 }
 
@@ -6855,6 +7060,224 @@ mod tests {
                 Value::Bool(false),
                 Value::Bool(false),
                 Value::Bool(false)
+            ]
+        );
+    }
+
+    /// One operand of [`compare_over`].
+    #[derive(Clone, Debug)]
+    enum Side {
+        Column(&'static str),
+        Literal(Value),
+    }
+
+    /// #748: runs `lhs <op> rhs` where each side is a column (`Some`) or a
+    /// `LoadConst` literal, returns the result register and whether it
+    /// stayed a typed `Bool` column.
+    fn compare_over(batch: &Batch, op: MapOp, lhs: Side, rhs: Side) -> (Vec<Value>, bool) {
+        let load = |reg, side: Side| match side {
+            Side::Column(column) => Opcode::LoadColumn {
+                reg,
+                column: column.into(),
+            },
+            Side::Literal(value) => Opcode::LoadConst { reg, value },
+        };
+        let mut vm = Vm::new();
+        vm.execute(
+            batch,
+            &[
+                load(0, lhs),
+                load(1, rhs),
+                Opcode::Map {
+                    dst: 2,
+                    op,
+                    a: 0,
+                    b: 1,
+                },
+            ],
+        )
+        .unwrap();
+        let typed = matches!(vm.typed_register(2), Some(Column::Bool { .. }));
+        (vm.register(2).unwrap().to_vec(), typed)
+    }
+
+    /// #748: every comparison over typed `Int`/`Float` columns and numeric
+    /// literals gives the general path's answer -- NULLs, NaN, an integer
+    /// past 2^53 (both sides compare as `f64`), mixed Int/Float, a literal
+    /// on either side.
+    #[test]
+    fn typed_comparisons_match_apply_map_op() {
+        let ints = vec![
+            Value::Int(1),
+            Value::Null,
+            Value::Int(5),
+            Value::Int(-3),
+            Value::Int(9_007_199_254_740_993),
+            Value::Int(5),
+        ];
+        let floats = vec![
+            Value::Float(1.0),
+            Value::Float(f64::NAN),
+            Value::Float(5.5),
+            Value::Null,
+            Value::Float(9_007_199_254_740_992.0),
+            Value::Float(-0.0),
+        ];
+        let other_ints = vec![
+            Value::Int(1),
+            Value::Int(2),
+            Value::Null,
+            Value::Int(-3),
+            Value::Int(9_007_199_254_740_992),
+            Value::Int(0),
+        ];
+        let columns = [("i", ints), ("f", floats), ("j", other_ints)];
+        let mut typed = Batch::new(6);
+        let mut plain = Batch::new(6);
+        for (name, values) in &columns {
+            typed = typed.with_typed_column(*name, Column::from(values.clone()));
+            plain = plain.with_column(*name, values.clone());
+        }
+        let literals = [
+            Value::Int(5),
+            Value::Float(5.0),
+            Value::Float(f64::NAN),
+            Value::Float(0.0),
+        ];
+        let mut sides: Vec<(Side, Side)> = Vec::new();
+        for (a, _) in &columns {
+            for (b, _) in &columns {
+                sides.push((Side::Column(a), Side::Column(b)));
+            }
+            for literal in &literals {
+                sides.push((Side::Column(a), Side::Literal(literal.clone())));
+                sides.push((Side::Literal(literal.clone()), Side::Column(a)));
+            }
+        }
+        for op in [
+            MapOp::Eq,
+            MapOp::Ne,
+            MapOp::Lt,
+            MapOp::Le,
+            MapOp::Gt,
+            MapOp::Ge,
+        ] {
+            for (lhs, rhs) in &sides {
+                let (fast, is_typed) = compare_over(&typed, op, lhs.clone(), rhs.clone());
+                let (general, general_typed) = compare_over(&plain, op, lhs.clone(), rhs.clone());
+                assert_eq!(fast, general, "{op:?} {lhs:?} {rhs:?}");
+                assert!(is_typed, "{op:?} {lhs:?} {rhs:?} takes the typed path");
+                assert!(!general_typed);
+            }
+        }
+    }
+
+    /// #748: what the typed kernels leave to the general path -- a string
+    /// literal (converted to the column's type), a NULL literal, two
+    /// literals -- still answers correctly.
+    #[test]
+    fn typed_comparisons_leave_other_operands_to_the_general_path() {
+        let values = vec![Value::Int(4), Value::Null, Value::Int(5)];
+        let batch = Batch::new(3).with_typed_column("i", Column::from(values));
+        for (literal, expected) in [
+            (
+                Value::Str("5".into()),
+                [Value::Bool(false), Value::Null, Value::Bool(true)],
+            ),
+            (Value::Null, [Value::Null, Value::Null, Value::Null]),
+        ] {
+            let (got, is_typed) = compare_over(
+                &batch,
+                MapOp::Eq,
+                Side::Column("i"),
+                Side::Literal(literal.clone()),
+            );
+            assert_eq!(got, expected, "{literal:?}");
+            assert!(!is_typed, "{literal:?}");
+        }
+    }
+
+    /// #748: `AND`/`OR` over typed `Bool` columns follow three-valued logic
+    /// for every pair of TRUE, FALSE and NULL.
+    #[test]
+    fn typed_and_or_match_apply_map_op_over_every_truth_pair() {
+        let states = [Value::Bool(true), Value::Bool(false), Value::Null];
+        let (mut xs, mut ys) = (Vec::new(), Vec::new());
+        for x in &states {
+            for y in &states {
+                xs.push(x.clone());
+                ys.push(y.clone());
+            }
+        }
+        let typed = Batch::new(9)
+            .with_typed_column("x", Column::from(xs.clone()))
+            .with_typed_column("y", Column::from(ys.clone()));
+        let plain = Batch::new(9).with_column("x", xs).with_column("y", ys);
+        for op in [MapOp::And, MapOp::Or] {
+            let (fast, is_typed) = compare_over(&typed, op, Side::Column("x"), Side::Column("y"));
+            let (general, _) = compare_over(&plain, op, Side::Column("x"), Side::Column("y"));
+            assert_eq!(fast, general, "{op:?}");
+            assert!(is_typed, "{op:?}");
+        }
+    }
+
+    /// #748: `a BETWEEN lo AND hi` is two typed comparisons and a typed
+    /// `AND`, which `Filter` reads without materializing any of them.
+    #[test]
+    fn between_over_a_typed_column_stays_typed_through_filter() {
+        let values = vec![
+            Value::Int(50),
+            Value::Int(100),
+            Value::Null,
+            Value::Int(150),
+            Value::Int(200),
+            Value::Int(250),
+        ];
+        let batch = Batch::new(6).with_typed_column("amount", Column::from(values));
+        let program = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "amount".into(),
+            },
+            Opcode::LoadConst {
+                reg: 1,
+                value: Value::Int(100),
+            },
+            Opcode::LoadConst {
+                reg: 2,
+                value: Value::Int(200),
+            },
+            Opcode::Map {
+                dst: 3,
+                op: MapOp::Ge,
+                a: 0,
+                b: 1,
+            },
+            Opcode::Map {
+                dst: 4,
+                op: MapOp::Le,
+                a: 0,
+                b: 2,
+            },
+            Opcode::Map {
+                dst: 5,
+                op: MapOp::And,
+                a: 3,
+                b: 4,
+            },
+            Opcode::Filter { predicate: 5 },
+            Opcode::Emit {
+                registers: vec![0].into(),
+            },
+        ];
+        let mut vm = Vm::new();
+        vm.execute(&batch, &program).unwrap();
+        assert_eq!(
+            vm.take_output(),
+            vec![
+                vec![Value::Int(100)],
+                vec![Value::Int(150)],
+                vec![Value::Int(200)]
             ]
         );
     }
