@@ -637,27 +637,29 @@ fn a_nullable_column_can_be_appended_to_the_schema() {
     TableWriter::open(&t.0, evolved()).unwrap();
 }
 
+/// `schema()` changed by `f`.
+fn changed(f: impl FnOnce(&mut Vec<ColumnSpec>)) -> TableOptions {
+    let mut s = schema();
+    f(&mut s);
+    TableOptions {
+        schema: Some(s),
+        ..flat()
+    }
+}
+
 #[test]
 fn only_nullable_columns_at_the_end_extend_the_schema() {
     let t = TempTable::new();
     TableWriter::open(&t.0, flat()).unwrap().close().unwrap();
-    let with = |f: &dyn Fn(&mut Vec<ColumnSpec>)| {
-        let mut s = schema();
-        f(&mut s);
-        TableOptions {
-            schema: Some(s),
-            ..flat()
-        }
-    };
     let cases = [
-        with(&|s| s.push(ColumnSpec::new("c", ColumnType::Utf8, false))),
-        with(&|s| {
+        changed(|s| s.push(ColumnSpec::new("c", ColumnType::Utf8, false))),
+        changed(|s| {
             s.pop();
         }),
-        with(&|s| s[3].column_type = ColumnType::Binary),
-        with(&|s| s.insert(0, ColumnSpec::new("c", ColumnType::Utf8, true))),
-        with(&|s| s.swap(3, 4)),
-        with(&|s| s[3].name = "other".to_string()),
+        changed(|s| s[3].column_type = ColumnType::Binary),
+        changed(|s| s.insert(0, ColumnSpec::new("c", ColumnType::Utf8, true))),
+        changed(|s| s.swap(3, 4)),
+        changed(|s| s[3].name = "other".to_string()),
     ];
     for options in cases {
         let err = TableWriter::open(&t.0, options).unwrap_err();
