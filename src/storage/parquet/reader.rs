@@ -1627,14 +1627,13 @@ mod tests {
         assert_eq!(result, vec![Some(2), None, Some(0), Some(1)]);
     }
 
-    /// #753: the nullable path gathers present rows and defaults NULL
-    /// slots; the all-present and REQUIRED paths take one pass. A bad code
-    /// is an error on either path.
+    // storage_parquet_reader_read_dictionary_fixed_944bcff7 (#753): `levels.is_empty() || levels.iter().all(|&level| level == max_def_level)`
     #[test]
-    fn read_dictionary_fixed_matches_the_option_reader() {
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_reader_read_dictionary_fixed_944bcff7__v3_nullable_page_with_a_null_takes_the_row_loop(
+    ) {
         let dictionary = [10i64, 20, 30];
-        let levels = [1, 0, 1, 1, 0];
-        let mut page = encode_def_levels(&levels);
+        let mut page = encode_def_levels(&[1, 0, 1, 1, 0]);
         page.extend_from_slice(&encode_dictionary_indices(&[2, 0, 1], 2));
         let (mut values, mut present) = (Vec::new(), Vec::new());
         read_dictionary_fixed(&page, &header(5), 1, &dictionary, &mut values, &mut present)
@@ -1645,21 +1644,52 @@ mod tests {
             read_int64_column_dictionary(&page, &header(5), 1, &dictionary).unwrap(),
             [Some(30), None, Some(10), Some(20), None]
         );
+    }
 
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_reader_read_dictionary_fixed_944bcff7__v2_nullable_page_without_nulls_gathers_in_one_pass(
+    ) {
         let mut page = encode_def_levels(&[1, 1]);
         page.extend_from_slice(&encode_dictionary_indices(&[1, 1], 2));
-        read_dictionary_fixed(&page, &header(2), 1, &dictionary, &mut values, &mut present)
-            .unwrap();
-        assert_eq!(values[5..], [20, 20]);
-        assert_eq!(present[5..], [true, true]);
+        let (mut values, mut present) = (vec![5i64], vec![true]);
+        read_dictionary_fixed(
+            &page,
+            &header(2),
+            1,
+            &[10, 20, 30],
+            &mut values,
+            &mut present,
+        )
+        .unwrap();
+        assert_eq!(values, [5, 20, 20]);
+        assert_eq!(present, [true, true, true]);
+    }
 
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_reader_read_dictionary_fixed_944bcff7__v1_required_page_has_no_levels_and_appends_no_flags(
+    ) {
         let page = encode_dictionary_indices(&[0, 2], 2);
         let (mut values, mut present) = (Vec::new(), Vec::new());
-        read_dictionary_fixed(&page, &header(2), 0, &dictionary, &mut values, &mut present)
-            .unwrap();
+        read_dictionary_fixed(
+            &page,
+            &header(2),
+            0,
+            &[10i64, 20, 30],
+            &mut values,
+            &mut present,
+        )
+        .unwrap();
         assert_eq!(values, [10, 30]);
         assert!(present.is_empty());
+    }
 
+    /// #753: a code past the dictionary is an error on the one-pass and the
+    /// row-loop path alike.
+    #[test]
+    fn read_dictionary_fixed_rejects_a_code_past_the_dictionary() {
+        let dictionary = [10i64, 20, 30];
         for max_def_level in [0, 1] {
             let mut page = if max_def_level == 0 {
                 Vec::new()

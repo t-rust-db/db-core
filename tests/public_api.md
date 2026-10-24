@@ -2454,6 +2454,9 @@ pub db_core::parser::ParseError::Unexpected::message: alloc::string::String
 pub db_core::parser::ParseError::Unexpected::span: db_core::parser::Span
 pub db_core::parser::ParseError::UnexpectedEof
 pub db_core::parser::ParseError::UnexpectedEof::span: db_core::parser::Span
+pub db_core::parser::ParseError::Unsupported
+pub db_core::parser::ParseError::Unsupported::message: alloc::string::String
+pub db_core::parser::ParseError::Unsupported::span: db_core::parser::Span
 impl db_core::parser::column::ParseError
 pub fn db_core::parser::column::ParseError::span(&self) -> db_core::parser::Span
 impl core::cmp::PartialEq for db_core::parser::column::ParseError
@@ -3047,6 +3050,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boo
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_dictionary_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
@@ -3122,6 +3126,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::reader::In
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_boolean(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<bool>>
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_bytes(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_double(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f64>>
+pub fn db_core::storage::column::parquet::reader::decode_dictionary_fixed<T, const N: usize>(&[u8], i32, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<T>>
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_fixed_len_byte_array(&[u8], i32, usize) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_float(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f32>>
 pub fn db_core::storage::column::parquet::reader::decode_dictionary_int32(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<i32>>
@@ -3132,6 +3137,7 @@ pub fn db_core::storage::column::parquet::reader::decode_dictionary_string_picke
 pub fn db_core::storage::column::parquet::reader::read_boolean_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::column::parquet::reader::read_boolean_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[bool]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::column::parquet::reader::read_bytes_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
+pub fn db_core::storage::column::parquet::reader::read_dictionary_fixed<T: core::marker::Copy + core::default::Default>(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[T], &mut alloc::vec::Vec<T>, &mut alloc::vec::Vec<bool>) -> db_core::storage::parquet::reader::Result<()>
 pub fn db_core::storage::column::parquet::reader::read_dictionary_index_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<u32>>>
 pub fn db_core::storage::column::parquet::reader::read_double_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::column::parquet::reader::read_double_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[f64]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
@@ -3543,6 +3549,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boo
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_dictionary_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
@@ -3713,6 +3720,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boo
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_dictionary_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
@@ -5039,6 +5047,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boo
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_dictionary_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
@@ -5114,6 +5123,7 @@ impl core::marker::StructuralPartialEq for db_core::storage::parquet::reader::In
 pub fn db_core::storage::parquet::reader::decode_dictionary_boolean(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<bool>>
 pub fn db_core::storage::parquet::reader::decode_dictionary_bytes(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::parquet::reader::decode_dictionary_double(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f64>>
+pub fn db_core::storage::parquet::reader::decode_dictionary_fixed<T, const N: usize>(&[u8], i32, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<T>>
 pub fn db_core::storage::parquet::reader::decode_dictionary_fixed_len_byte_array(&[u8], i32, usize) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::parquet::reader::decode_dictionary_float(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<f32>>
 pub fn db_core::storage::parquet::reader::decode_dictionary_int32(&[u8], i32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<i32>>
@@ -5124,6 +5134,7 @@ pub fn db_core::storage::parquet::reader::decode_dictionary_string_picked(&[u8],
 pub fn db_core::storage::parquet::reader::read_boolean_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::reader::read_boolean_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[bool]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::reader::read_bytes_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
+pub fn db_core::storage::parquet::reader::read_dictionary_fixed<T: core::marker::Copy + core::default::Default>(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[T], &mut alloc::vec::Vec<T>, &mut alloc::vec::Vec<bool>) -> db_core::storage::parquet::reader::Result<()>
 pub fn db_core::storage::parquet::reader::read_dictionary_index_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<u32>>>
 pub fn db_core::storage::parquet::reader::read_double_column(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::reader::read_double_column_dictionary(&[u8], &db_core::storage::parquet::page::DataPageHeader, u32, &[f64]) -> db_core::storage::parquet::reader::Result<alloc::vec::Vec<core::option::Option<f64>>>
@@ -5535,6 +5546,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boo
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_dictionary_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
@@ -7786,6 +7798,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boo
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_decimal_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<db_core::storage::parquet::decimal::Decimal>>>
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_dictionary_fixed_column<T: core::marker::Copy + core::default::Default, const N: usize>(&self, usize, impl core::ops::function::Fn([u8; N]) -> T) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<(alloc::vec::Vec<T>, alloc::vec::Vec<bool>)>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<f64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_double_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<f64>>>
