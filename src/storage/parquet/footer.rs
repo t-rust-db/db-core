@@ -131,6 +131,11 @@ pub struct SchemaElement {
     pub scale: Option<i32>,
     /// `DECIMAL`'s precision (total significant digits).
     pub precision: Option<i32>,
+    /// A `TIMESTAMP` logical type's units per second (1 000, 1 000 000 or
+    /// 1 000 000 000), from the `LogicalType` union (field 10). Nanosecond
+    /// timestamps have no `ConvertedType`, so this is the only place their
+    /// unit is recorded.
+    pub timestamp_units: Option<i64>,
 }
 
 /// `parquet.thrift` `ConvertedType` enum (values relevant to this reader).
@@ -359,6 +364,21 @@ fn parse_schema_element(v: &Value) -> SchemaElement {
     let converted_type = v.field(6).and_then(Value::as_i32).map(ConvertedType::from);
     let scale = v.field(7).and_then(Value::as_i32);
     let precision = v.field(8).and_then(Value::as_i32);
+    // LogicalType (10) is a union; TIMESTAMP is its field 8, a
+    // TimestampType whose `unit` (2) is the TimeUnit union MILLIS (1),
+    // MICROS (2) or NANOS (3).
+    let timestamp_units = v
+        .field(10)
+        .and_then(|l| l.field(8))
+        .and_then(|t| t.field(2))
+        .and_then(Value::as_struct)
+        .and_then(|unit| unit.first())
+        .and_then(|(id, _)| match id {
+            1 => Some(1_000),
+            2 => Some(1_000_000),
+            3 => Some(1_000_000_000),
+            _ => None,
+        });
     SchemaElement {
         name,
         physical_type,
@@ -368,6 +388,7 @@ fn parse_schema_element(v: &Value) -> SchemaElement {
         converted_type,
         scale,
         precision,
+        timestamp_units,
     }
 }
 

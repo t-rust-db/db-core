@@ -4,6 +4,14 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.170.0] - 2026-10-24
+
+### Fixed
+
+- **A nanosecond TIMESTAMP compares with a quoted time in a single-file query** (#679 follow-up). `BatchEngine` found TIMESTAMP columns through `ConvertedType` only, which has no nanosecond value, so `ts >= '2026-10-22T01:00:00Z'` over a TIMESTAMP(NANOS) column (what a db-core table writes) failed with "could not convert string ... to INTEGER". The footer now reads the `LogicalType` timestamp unit (`SchemaElement::timestamp_units`).
+- **A quoted time is parsed without reading the clock** unless it is `'now'`. The TIMESTAMP literal rewrite called `unixepoch` through the clock-reading path, which panics on `wasm32-unknown-unknown` (no `SystemTime`).
+- **Batch queries run on a host without threads.** The morsel pools (`run_morsels`, `run_morsels_fold`, `run_morsels_ordered`) run on the calling thread when they would get one worker, instead of spawning one. `wasm32-unknown-unknown` reports no parallelism and cannot spawn, so a query there panicked (`unwrap_failed` in `Scope::spawn`); a one-core host also skips the spawn.
+
 ## [0.169.4] - 2026-10-24
 
 ### Changed

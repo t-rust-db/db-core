@@ -2823,6 +2823,7 @@ pub db_core::storage::column::parquet::footer::SchemaElement::physical_type: cor
 pub db_core::storage::column::parquet::footer::SchemaElement::precision: core::option::Option<i32>
 pub db_core::storage::column::parquet::footer::SchemaElement::repetition: core::option::Option<db_core::storage::parquet::footer::Repetition>
 pub db_core::storage::column::parquet::footer::SchemaElement::scale: core::option::Option<i32>
+pub db_core::storage::column::parquet::footer::SchemaElement::timestamp_units: core::option::Option<i64>
 pub db_core::storage::column::parquet::footer::SchemaElement::type_length: core::option::Option<i32>
 impl core::clone::Clone for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::clone(&self) -> Self
@@ -4812,6 +4813,7 @@ pub db_core::storage::parquet::footer::SchemaElement::physical_type: core::optio
 pub db_core::storage::parquet::footer::SchemaElement::precision: core::option::Option<i32>
 pub db_core::storage::parquet::footer::SchemaElement::repetition: core::option::Option<db_core::storage::parquet::footer::Repetition>
 pub db_core::storage::parquet::footer::SchemaElement::scale: core::option::Option<i32>
+pub db_core::storage::parquet::footer::SchemaElement::timestamp_units: core::option::Option<i64>
 pub db_core::storage::parquet::footer::SchemaElement::type_length: core::option::Option<i32>
 impl core::clone::Clone for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::clone(&self) -> Self
