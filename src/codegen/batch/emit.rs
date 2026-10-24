@@ -1434,6 +1434,20 @@ mod tests {
     }
 
     #[test]
+    fn render_opcode_renders_an_in_list_with_its_literals() {
+        let op = Opcode::InList {
+            dst: 1,
+            src: 0,
+            list: vec![Value::Str("a".into()), Value::Null].into(),
+            negated: true,
+        };
+        assert_eq!(
+            render_opcode(&op),
+            "Opcode::InList { dst: 1, src: 0, list: std::borrow::Cow::Borrowed(&[Value::Str(std::borrow::Cow::Borrowed(\"a\")), Value::Null]), negated: true }"
+        );
+    }
+
+    #[test]
     fn render_opcode_emits_compile_error_for_unplanned_join_opcodes() {
         // No planner feeds these to the flat renderer yet, so rather than
         // a fake rendering (or a panic in this emitter) the *generated*
