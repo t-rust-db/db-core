@@ -4,6 +4,24 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.171.1] - 2026-10-24
+
+### Changed
+
+- **`=`, `<>`, `<`, `<=`, `>`, `>=`, `AND` and `OR` over typed `Int`/`Float`/`Bool` columns run on the buffers, not one `Value` a row** (#748). `Vm::typed_compare` takes an `Int`/`Float` column against a numeric literal (either side) or another column and yields a typed `Bool` column, as `typed_like` does (#743); `Vm::typed_bool_op` combines two typed `Bool` columns with SQL's three-valued logic (`three_valued`'s answers, now shared through `kleene`). So `x BETWEEN a AND b` is three typed passes that `Filter` reads without materializing. The answers are `apply_map_op`'s: both sides compare as `f64` as `compare_values` does (an `Int` past 2^53 rounds, a NaN is unequal to everything), and a NULL operand is a NULL row. A string, NULL or decimal literal, or two literals, still take the general path. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(*) WHERE amount >= 100` 60 -> 28 ms wall (CPU 430 -> 173 ms); `WHERE amount BETWEEN 100 AND 200` 113 -> 32 ms (CPU 874 -> 232 ms); `WHERE id BETWEEN 100 AND 2000000` 121 -> 37 ms (CPU 927 -> 271 ms), peak RSS 167 -> 125 MB; the `count(amount)` control is unchanged at 41 ms.
+
+## [0.171.0] - 2026-10-24
+
+### Added
+
+- **A record table's schema can gain nullable columns at the end** (#740). `TableWriter::open` accepts a requested schema that is the stored one plus nullable columns and commits it to the manifest before anything is appended; a dropped, renamed, retyped, reordered or non-nullable column still fails with `SchemaMismatch`. Rows that predate the change read NULL in the new columns: WAL rows of the old arity are padded on replay (writer and `Snapshot`), and a day merge reads a nullable column an older hour file lacks as NULL instead of `Corrupt("has no column ...")`. A manifest whose schema evolved is written as version 5 (`Manifest::evolved`), so a reader that predates it refuses the table rather than reading files and rows that lack the columns.
+
+## [0.170.1] - 2026-10-24
+
+### Changed
+
+- **`count`/`min`/`max` over a `Str` or `Dict` column reduce on the typed column, not one `Value` a row** (#750). `typed_reduce_values` now counts from the validity bitmap and orders strings in place, byte-wise as `agg_cmp` does; a dictionary column marks the codes in use and orders only those entries. `sum`/`avg` stay NULL, as before. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(kind)` 86 -> 14 ms wall (CPU 862 -> 81 ms); `min(user_name), max(user_name), count(note)` 222 -> 81 ms (CPU 2325 -> 779 ms); the `count(amount)` control is unchanged at 32 ms. Results equal `reduce_values`' for NULLs, empty strings, all-NULL and zero-length columns, and unused dictionary entries.
+
 ## [0.170.0] - 2026-10-24
 
 ### Fixed
@@ -11,19 +29,6 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 - **A nanosecond TIMESTAMP compares with a quoted time in a single-file query** (#679 follow-up). `BatchEngine` found TIMESTAMP columns through `ConvertedType` only, which has no nanosecond value, so `ts >= '2026-10-22T01:00:00Z'` over a TIMESTAMP(NANOS) column (what a db-core table writes) failed with "could not convert string ... to INTEGER". The footer now reads the `LogicalType` timestamp unit (`SchemaElement::timestamp_units`).
 - **A quoted time is parsed without reading the clock** unless it is `'now'`. The TIMESTAMP literal rewrite called `unixepoch` through the clock-reading path, which panics on `wasm32-unknown-unknown` (no `SystemTime`).
 - **Batch queries run on a host without threads.** The morsel pools (`run_morsels`, `run_morsels_fold`, `run_morsels_ordered`) run on the calling thread when they would get one worker, instead of spawning one. `wasm32-unknown-unknown` reports no parallelism and cannot spawn, so a query there panicked (`unwrap_failed` in `Scope::spawn`); a one-core host also skips the spawn.
-
-||||||| parent of a4926286 (perf(vm): Reduce over Str/Dict columns counts and orders in place (#750))
-## [0.170.2] - 2026-10-24
-
-### Changed
-
-- **`=`, `<>`, `<`, `<=`, `>`, `>=`, `AND` and `OR` over typed `Int`/`Float`/`Bool` columns run on the buffers, not one `Value` a row** (#748). `Vm::typed_compare` takes an `Int`/`Float` column against a numeric literal (either side) or another column and yields a typed `Bool` column, as `typed_like` does (#743); `Vm::typed_bool_op` combines two typed `Bool` columns with SQL's three-valued logic (`three_valued`'s answers, now shared through `kleene`). So `x BETWEEN a AND b` is three typed passes that `Filter` reads without materializing. The answers are `apply_map_op`'s: both sides compare as `f64` as `compare_values` does (an `Int` past 2^53 rounds, a NaN is unequal to everything), and a NULL operand is a NULL row. A string, NULL or decimal literal, or two literals, still take the general path. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(*) WHERE amount >= 100` 60 -> 28 ms wall (CPU 430 -> 173 ms); `WHERE amount BETWEEN 100 AND 200` 113 -> 32 ms (CPU 874 -> 232 ms); `WHERE id BETWEEN 100 AND 2000000` 121 -> 37 ms (CPU 927 -> 271 ms), peak RSS 167 -> 125 MB; the `count(amount)` control is unchanged at 41 ms.
-
-## [0.170.1] - 2026-10-24
-
-### Changed
-
-- **`count`/`min`/`max` over a `Str` or `Dict` column reduce on the typed column, not one `Value` a row** (#750). `typed_reduce_values` now counts from the validity bitmap and orders strings in place, byte-wise as `agg_cmp` does; a dictionary column marks the codes in use and orders only those entries. `sum`/`avg` stay NULL, as before. Measured end to end on column-rs (20M rows, 163 row groups, hyperfine mean of 10, A/B/A): `count(kind)` 86 -> 14 ms wall (CPU 862 -> 81 ms); `min(user_name), max(user_name), count(note)` 222 -> 81 ms (CPU 2325 -> 779 ms); the `count(amount)` control is unchanged at 32 ms. Results equal `reduce_values`' for NULLs, empty strings, all-NULL and zero-length columns, and unused dictionary entries.
 
 ## [0.169.4] - 2026-10-24
 

@@ -33,6 +33,11 @@
 //! `schema` is optional (present for a record table), so a reader that
 //! predates key ranges refuses it. A string bound that would need escaping
 //! is not written: that file is then never skipped on that column.
+//!
+//! A record table whose schema gained nullable columns at the end (#740)
+//! is written as version 5 (otherwise as version 4), so a reader that
+//! predates schema evolution refuses it rather than reading files and
+//! WAL rows that lack the new columns.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -53,6 +58,9 @@ const VERSION: i64 = 2;
 const RECORDS_VERSION: i64 = 3;
 /// The version of a manifest whose files carry key ranges.
 const KEYS_VERSION: i64 = 4;
+/// The version of a manifest whose schema gained columns (#740); the rest
+/// is as version 4, so a reader that predates it refuses the table.
+const EVOLVED_VERSION: i64 = 5;
 
 /// A bound of a [`KeyRange`]. Bounds of one column are one variant, and
 /// order as the column's values do (strings byte-wise).
@@ -120,6 +128,9 @@ pub struct Manifest {
     pub layout: LayoutKind,
     /// A record table's schema (#594); `None` for a lines table.
     pub schema: Option<Vec<ColumnSpec>>,
+    /// The schema gained columns after the table was created (#740):
+    /// older files and WAL rows lack them. Written as version 5.
+    pub evolved: bool,
     /// Every LSN up to this one is in `files` or was dropped.
     pub flushed_lsn: u64,
     /// Every LSN up to this one was dropped by retention (0: none was).
@@ -181,6 +192,7 @@ impl Manifest {
             format,
             layout,
             schema: None,
+            evolved: false,
             flushed_lsn: 0,
             dropped_lsn: 0,
             files: Vec::new(),
@@ -286,7 +298,9 @@ impl Manifest {
     pub fn to_json(&self) -> String {
         let mut out = String::new();
         let keys = |f: &FileEntry| f.keys.iter().any(KeyRange::writable);
-        let version = if self.files.iter().any(keys) {
+        let version = if self.evolved {
+            EVOLVED_VERSION
+        } else if self.files.iter().any(keys) {
             KEYS_VERSION
         } else if self.schema.is_some() {
             RECORDS_VERSION
@@ -347,7 +361,7 @@ impl Manifest {
         }
         let fields = owned(&root)?.into_object()?;
         let version = int(&fields, "version")?;
-        if !(1..=KEYS_VERSION).contains(&version) {
+        if !(1..=EVOLVED_VERSION).contains(&version) {
             return Err(malformed("unsupported version"));
         }
         let format = format_from_name(&string(&fields, "format")?)
@@ -363,7 +377,9 @@ impl Manifest {
         // table.
         let schema = match version {
             RECORDS_VERSION => Some(schema(&fields)?),
-            KEYS_VERSION if fields.iter().any(|(k, _)| k == "schema") => Some(schema(&fields)?),
+            KEYS_VERSION | EVOLVED_VERSION if fields.iter().any(|(k, _)| k == "schema") => {
+                Some(schema(&fields)?)
+            }
             _ => None,
         };
         let flushed_lsn = unsigned(&fields, "flushed_lsn")?;
@@ -383,6 +399,7 @@ impl Manifest {
             format,
             layout,
             schema,
+            evolved: version == EVOLVED_VERSION,
             flushed_lsn,
             dropped_lsn,
             files,

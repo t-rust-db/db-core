@@ -152,6 +152,22 @@ pub(crate) fn invalid_schema(schema: &[ColumnSpec]) -> Option<String> {
         .map(|e| e.to_string())
 }
 
+/// Whether `requested` is `stored` plus nullable columns at the end (#740).
+pub(crate) fn extends_schema(stored: &[ColumnSpec], requested: &[ColumnSpec]) -> bool {
+    requested
+        .strip_prefix(stored)
+        .is_some_and(|added| !added.is_empty() && added.iter().all(|s| s.nullable))
+}
+
+/// `row`, written under an older, shorter schema, with the columns added
+/// since set to NULL (#740).
+pub(crate) fn pad_row(schema: &[ColumnSpec], mut row: Vec<RecordValue>) -> Vec<RecordValue> {
+    if row.len() < schema.len() {
+        row.resize(schema.len(), RecordValue::Null);
+    }
+    row
+}
+
 /// Why `row` does not match `schema`: its length, a NULL in a required
 /// column, or a value of another type or out of its column's range.
 /// Values are never converted between types.
