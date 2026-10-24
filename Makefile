@@ -184,11 +184,14 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # nothing else). `--all-features` hides a missing implication; a consumer
 # enabling one feature finds it. 0.78.0 shipped `storage-row` without
 # `parser-row` this way.
+# Feature sets a downstream crate enables together, each checked as one (#738):
+# a helper gated on one feature but used under another builds alone and fails here.
+FEATURE_SETS := engine-column,ingest-read parser-column,vm-batch,codegen-batch,emit-batch,storage-column,engine-column,ingest-read
 FEATURES := storage-row storage-column storage-column-write ingest-read ingest storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
 check-features: ## Each Cargo feature builds standalone, without warnings (cargo check --no-default-features --features X)
-	@for f in $(FEATURES); do \
-		printf '  %-22s' "$$f"; \
+	@for f in $(FEATURES) $(FEATURE_SETS); do \
+		printf '  %-22s ' "$$f"; \
 		if out=$$(cargo check -q --no-default-features --features $$f 2>&1) \
 			&& ! echo "$$out" | grep -qE '^warning'; then echo ok; \
 		else echo FAIL; echo "$$out" | grep -E -A3 '^(error|warning)' | head -20; exit 1; fi; \
