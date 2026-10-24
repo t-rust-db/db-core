@@ -8112,6 +8112,11 @@ pub db_core::vm::batch::Opcode::HashProbeGroupReduce::group_by: alloc::borrow::C
 pub db_core::vm::batch::Opcode::HashProbeGroupReduce::key_cols: alloc::borrow::Cow<'static, [usize]>
 pub db_core::vm::batch::Opcode::HashProbeGroupReduce::kind: db_core::vm::batch::JoinKind
 pub db_core::vm::batch::Opcode::HashProbeGroupReduce::table: usize
+pub db_core::vm::batch::Opcode::InList
+pub db_core::vm::batch::Opcode::InList::dst: usize
+pub db_core::vm::batch::Opcode::InList::list: alloc::borrow::Cow<'static, [db_core::vm::batch::Value]>
+pub db_core::vm::batch::Opcode::InList::negated: bool
+pub db_core::vm::batch::Opcode::InList::src: usize
 pub db_core::vm::batch::Opcode::Limit
 pub db_core::vm::batch::Opcode::Limit::n: usize
 pub db_core::vm::batch::Opcode::Limit::offset: usize

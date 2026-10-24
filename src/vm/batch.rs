@@ -791,6 +791,24 @@ pub enum Opcode {
         /// Argument registers, in call order.
         args: Cow<'static, [usize]>,
     },
+    /// `registers[dst] = registers[src] IN (list)` (`negated`: `NOT IN`)
+    /// per row, with exactly the answers of the `src = a OR src = b ...`
+    /// (`src <> a AND src <> b ...`) chain `parser::column` lowers an `IN`
+    /// list to (#737): TRUE on a match, otherwise NULL when the row or an
+    /// item is NULL, otherwise FALSE, and `NOT IN` swaps TRUE and FALSE.
+    /// Codegen emits it for such a chain over one column and literals, so
+    /// a row costs one set probe instead of a comparison and an `OR` per
+    /// item.
+    InList {
+        /// Destination register.
+        dst: usize,
+        /// The tested register.
+        src: usize,
+        /// The list's literals.
+        list: Cow<'static, [Value]>,
+        /// `true` for `NOT IN`.
+        negated: bool,
+    },
 }
 
 /// Where [`Opcode::ScanSource`] materializes a cross-mode join's build side
@@ -865,6 +883,7 @@ impl Opcode {
             Opcode::Sort { .. } => "Sort",
             Opcode::Limit { .. } => "Limit",
             Opcode::Call { .. } => "Call",
+            Opcode::InList { .. } => "InList",
         }
     }
 }
@@ -1715,6 +1734,7 @@ pub(crate) fn sliceable(program: &[Opcode]) -> bool {
             op,
             Opcode::Map { .. }
                 | Opcode::Call { .. }
+                | Opcode::InList { .. }
                 | Opcode::Filter { .. }
                 | Opcode::Reduce { .. }
                 | Opcode::GroupReduce { .. }
@@ -1728,6 +1748,7 @@ pub(crate) fn sliceable(program: &[Opcode]) -> bool {
                     | Opcode::LoadConst { .. }
                     | Opcode::Map { .. }
                     | Opcode::Call { .. }
+                    | Opcode::InList { .. }
                     | Opcode::Filter { .. }
                     | Opcode::Reduce { .. }
                     | Opcode::GroupReduce { .. }
@@ -4229,6 +4250,79 @@ impl Vm {
         Ok(Some(Column::Bool { data, valid }))
     }
 
+    /// Fast path for [`Opcode::InList`] (#737) when `src` is a typed
+    /// [`Column::Str`] or [`Column::Dict`] and every item is a string or
+    /// NULL: the strings go into one hash set, probed once per row (once
+    /// per distinct value for a dictionary column) with the row's bytes in
+    /// the column's own buffer. A string equals a string only byte for
+    /// byte ([`compare_values`]), so the set gives the comparison chain's
+    /// answers. `None` otherwise; the caller then takes the general path.
+    fn typed_in_list(&self, src: usize, list: &[Value], negated: bool) -> Option<Column> {
+        let column = self.typed_registers.get(&src)?;
+        if !matches!(column.as_ref(), Column::Str { .. } | Column::Dict { .. }) {
+            return None;
+        }
+        let mut set = std::collections::HashSet::with_capacity(list.len());
+        let mut has_null = false;
+        for item in list {
+            match item {
+                Value::Str(s) => {
+                    set.insert(s.as_ref());
+                }
+                Value::Null => has_null = true,
+                _ => return None,
+            }
+        }
+        // A match is TRUE (FALSE negated); a miss is NULL when the list
+        // holds a NULL, else FALSE (TRUE negated).
+        let answer = |hit: bool| (hit || !has_null).then_some(hit != negated);
+        let len = column.len();
+        let mut data = Vec::with_capacity(len);
+        let mut valid = Bitmap::new(len, true);
+        let mut push = |i: usize, value: Option<bool>| {
+            data.push(value.unwrap_or(false));
+            if value.is_none() {
+                valid.set(i, false);
+            }
+        };
+        match column.as_ref() {
+            Column::Str {
+                offsets,
+                data: text_data,
+                valid: text_valid,
+            } => {
+                for i in 0..len {
+                    let text = offsets
+                        .get(i)
+                        .zip(offsets.get(i.saturating_add(1)))
+                        .and_then(|(&lo, &hi)| text_data.get(lo as usize..hi as usize));
+                    match text {
+                        Some(text) if text_valid.get(i) => push(i, answer(set.contains(text))),
+                        _ => push(i, None),
+                    }
+                }
+            }
+            Column::Dict {
+                dict,
+                indices,
+                valid: code_valid,
+            } => {
+                let hits: Vec<Option<bool>> = dict
+                    .iter()
+                    .map(|s| answer(set.contains(s.as_ref())))
+                    .collect();
+                for (i, &code) in indices.iter().enumerate() {
+                    match hits.get(code as usize) {
+                        Some(&value) if code_valid.get(i) => push(i, value),
+                        _ => push(i, None),
+                    }
+                }
+            }
+            _ => return None,
+        }
+        Some(Column::Bool { data, valid })
+    }
+
     /// Fast path for [`Opcode::Map`]'s `Add`/`Sub`/`Mul`/`Div` when
     /// *both* operands are typed `Int`/`Float` columns (#130 child 4
     /// slice 2, db-core#431): computes over the packed buffers, honoring
@@ -4504,6 +4598,26 @@ impl Vm {
                     result
                 };
                 self.registers.insert(*dst, Arc::new(result));
+            }
+            Opcode::InList {
+                dst,
+                src,
+                list,
+                negated,
+            } => {
+                // Elementwise, like `Map`: resolve any pending selection
+                // first (see the comment on that arm).
+                self.resolve_selection(opcode)?;
+                if let Some(column) = self.typed_in_list(*src, list, *negated) {
+                    // Typed-only, as `typed_like`'s result (#743).
+                    self.registers.remove(dst);
+                    self.typed_registers.insert(*dst, Arc::new(column));
+                } else {
+                    self.ensure_materialized(*src);
+                    let result = in_list_values(self.reg(*src, opcode)?, list, *negated)?;
+                    self.registers.insert(*dst, Arc::new(result));
+                    self.typed_registers.remove(dst);
+                }
             }
             Opcode::Filter { predicate } => self.filter(opcode, predicate)?,
             Opcode::Reduce { func, src, dst } => self.reduce(batch, opcode, func, src, dst)?,
@@ -5922,6 +6036,33 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Result<Value> {
 /// overflow-checked for integers and decimals, a float if either operand
 /// is one, and `/` always a float. Returns
 /// [`VmError::IntegerOverflow`] when an exact result leaves its type.
+/// [`Opcode::InList`] over plain values: each row compared with every item
+/// and the answers folded with three-valued `OR` (`<>` and `AND` when
+/// `negated`), the comparison chain's own steps in one pass. It never stops
+/// at a decided row, so an item that does not convert to the row's type is
+/// the same [`VmError::Conversion`] the chain gives.
+fn in_list_values(values: &[Value], list: &[Value], negated: bool) -> Result<Vec<Value>> {
+    let (cmp, join) = if negated {
+        (MapOp::Ne, MapOp::And)
+    } else {
+        (MapOp::Eq, MapOp::Or)
+    };
+    values
+        .iter()
+        .map(|v| {
+            let mut acc: Option<Value> = None;
+            for item in list {
+                let r = apply_map_op(cmp, v, item)?;
+                acc = Some(match acc {
+                    None => r,
+                    Some(prev) => three_valued(join, truth(&prev), truth(&r)),
+                });
+            }
+            Ok(acc.unwrap_or(Value::Bool(negated)))
+        })
+        .collect()
+}
+
 pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     // `IsNull`/`IsNotNull` must observe a `Null` operand, so they run
     // before the null-propagation rule below.
@@ -11864,5 +12005,163 @@ mod tests {
         );
         assert_eq!(sums, vec![Value::Int(5), Value::Int(2)]);
         assert_eq!(counts, vec![Value::Int(2), Value::Int(1)]);
+    }
+
+    /// `col IN (list)` run as [`Opcode::InList`] and as the `=`/`OR`
+    /// chain (`<>`/`AND`, negated) it replaces (#737): the answers, or
+    /// the error, and whether the tested column was materialized.
+    fn in_list_both_ways(
+        batch: &Batch,
+        list: &[Value],
+        negated: bool,
+    ) -> (Result<Vec<Value>>, Result<Vec<Value>>, bool) {
+        let load = Opcode::LoadColumn {
+            reg: 0,
+            column: "c".into(),
+        };
+        let mut vm = Vm::new();
+        let probe = vm
+            .execute(
+                batch,
+                &[
+                    load.clone(),
+                    Opcode::InList {
+                        dst: 1,
+                        src: 0,
+                        list: list.to_vec().into(),
+                        negated,
+                    },
+                ],
+            )
+            .and_then(|()| vm.register(1).map(<[Value]>::to_vec));
+        let materialized = vm.registers.contains_key(&0);
+        let (cmp, join) = if negated {
+            (MapOp::Ne, MapOp::And)
+        } else {
+            (MapOp::Eq, MapOp::Or)
+        };
+        let mut chain = vec![load];
+        let mut acc = None;
+        for (i, item) in list.iter().enumerate() {
+            let (k, eq) = (1 + 3 * i, 2 + 3 * i);
+            chain.push(Opcode::LoadConst {
+                reg: k,
+                value: item.clone(),
+            });
+            chain.push(Opcode::Map {
+                dst: eq,
+                op: cmp,
+                a: 0,
+                b: k,
+            });
+            acc = Some(match acc {
+                None => eq,
+                Some(prev) => {
+                    chain.push(Opcode::Map {
+                        dst: eq + 1,
+                        op: join,
+                        a: prev,
+                        b: eq,
+                    });
+                    eq + 1
+                }
+            });
+        }
+        let out = acc.expect("a non-empty list");
+        let mut vm = Vm::new();
+        let reference = vm
+            .execute(batch, &chain)
+            .and_then(|()| vm.register(out).map(<[Value]>::to_vec));
+        (probe, reference, materialized)
+    }
+
+    #[test]
+    fn in_list_over_a_string_column_answers_as_the_comparison_chain() {
+        let values: Vec<Value> = ["a", "b", "", "c", "a"]
+            .iter()
+            .map(|s| Value::Str(s.to_string().into()))
+            .chain([Value::Null])
+            .collect();
+        let dict = Column::Dict {
+            dict: vec!["a".into(), "b".into(), "c".into()],
+            indices: vec![0, 1, 2, 2, 0, 0],
+            valid: crate::vm::column::Bitmap::from_bools(
+                [true, true, true, true, true, false].into_iter(),
+            ),
+        };
+        let dict_values: Vec<Value> = (0..6).map(|i| dict.get(i)).collect();
+        let batches = [
+            (
+                Batch::new(6).with_typed_column("c", Column::from(values.clone())),
+                true,
+            ),
+            (Batch::new(6).with_typed_column("c", dict), true),
+            (Batch::new(6).with_column("c", values), false),
+            (Batch::new(6).with_column("c", dict_values), false),
+        ];
+        let s = |x: &str| Value::Str(x.to_string().into());
+        let lists = [
+            vec![s("a"), s("c")],
+            vec![s("a"), Value::Null],
+            vec![s("zz"), s("")],
+            vec![Value::Null, Value::Null],
+        ];
+        for (batch, typed) in &batches {
+            for list in &lists {
+                for negated in [false, true] {
+                    let (probe, reference, materialized) = in_list_both_ways(batch, list, negated);
+                    assert_eq!(
+                        probe.unwrap(),
+                        reference.unwrap(),
+                        "{list:?} negated={negated}"
+                    );
+                    assert_eq!(
+                        !materialized, *typed,
+                        "{list:?}: the typed column stays typed"
+                    );
+                }
+            }
+        }
+        let (probe, ..) = in_list_both_ways(&batches[0].0, &[s("a"), Value::Null], false);
+        assert_eq!(
+            probe.unwrap(),
+            [
+                Value::Bool(true),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Bool(true),
+                Value::Null
+            ]
+        );
+    }
+
+    #[test]
+    fn in_list_over_other_values_converts_and_errors_as_the_comparison_chain() {
+        let ints = vec![Value::Int(1), Value::Int(2), Value::Null, Value::Int(4)];
+        let s = |x: &str| Value::Str(x.to_string().into());
+        let typed = Batch::new(4).with_typed_column("c", Column::from(ints.clone()));
+        let plain = Batch::new(4).with_column("c", ints);
+        let decimal = Value::Decimal {
+            unscaled: 20,
+            scale: 1,
+        };
+        for batch in [&typed, &plain] {
+            for list in [
+                vec![Value::Int(2), Value::Int(4)],
+                vec![s("2"), Value::Float(4.0)],
+                vec![decimal.clone(), Value::Null],
+            ] {
+                for negated in [false, true] {
+                    let (probe, reference, _) = in_list_both_ways(batch, &list, negated);
+                    assert_eq!(probe.unwrap(), reference.unwrap(), "{list:?}");
+                }
+            }
+            // A string that is no integer is an error both ways, wherever
+            // it sits in the list.
+            let (probe, reference, _) = in_list_both_ways(batch, &[Value::Int(1), s("abc")], false);
+            assert!(matches!(probe, Err(VmError::Conversion { .. })));
+            assert!(matches!(reference, Err(VmError::Conversion { .. })));
+        }
     }
 }

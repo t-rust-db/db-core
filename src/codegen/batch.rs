@@ -1262,6 +1262,57 @@ pub fn resolve_group_by(select: &Select, schema: &[String]) -> Result<Select> {
     Ok(resolved)
 }
 
+/// `(column, items, negated)` when `expr` is an `OR` chain of at least two
+/// `column = literal` (an `AND` chain of `column <> literal`, `negated`)
+/// over one column: the shape `parser::column` lowers `column [NOT] IN
+/// (literal, ...)` to, or the same written out by hand. Any other leaf, a
+/// second column, or a single comparison is `None`, compiled as before.
+fn in_list_chain(expr: &AstExpr) -> Option<(String, Vec<Value>, bool)> {
+    let (join, cmp, negated) = match &expr.kind {
+        ExprKind::Binary {
+            op: AstBinOp::Or, ..
+        } => (AstBinOp::Or, AstBinOp::Eq, false),
+        ExprKind::Binary {
+            op: AstBinOp::And, ..
+        } => (AstBinOp::And, AstBinOp::Ne, true),
+        _ => return None,
+    };
+    let leaves = chain_operands(expr, join);
+    if leaves.len() < 2 {
+        return None;
+    }
+    let mut column: Option<String> = None;
+    let mut items = Vec::with_capacity(leaves.len());
+    for leaf in leaves {
+        let ExprKind::Binary { op, lhs, rhs } = &leaf.kind else {
+            return None;
+        };
+        let (ExprKind::Literal(lit), Some(name)) = (&rhs.kind, expr_column_name(lhs)) else {
+            return None;
+        };
+        if *op != cmp || column.as_ref().is_some_and(|c| *c != name) {
+            return None;
+        }
+        column = Some(name);
+        items.push(literal_value(lit));
+    }
+    column.map(|c| (c, items, negated))
+}
+
+/// The operands of `expr`'s nested `join` nodes (through parentheses), left
+/// to right.
+fn chain_operands(expr: &AstExpr, join: AstBinOp) -> Vec<&AstExpr> {
+    match &expr.kind {
+        ExprKind::Paren(inner) => chain_operands(inner, join),
+        ExprKind::Binary { op, lhs, rhs } if *op == join => {
+            let mut operands = chain_operands(lhs, join);
+            operands.extend(chain_operands(rhs, join));
+            operands
+        }
+        _ => vec![expr],
+    }
+}
+
 fn map_bin_op(op: AstBinOp) -> MapOp {
     match op {
         AstBinOp::Add => MapOp::Add,
@@ -1329,6 +1380,20 @@ impl Ctx {
 }
 
 fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
+    // `col IN (lit, ...)`, which `parser::column` lowers to an `OR` chain
+    // of `=` (an `AND` chain of `<>` for `NOT IN`): one set probe per row
+    // instead of a comparison and an `OR` per item (#737).
+    if let Some((column, list, negated)) = in_list_chain(expr) {
+        let src = ctx.load_column(&column);
+        let dst = ctx.alloc();
+        ctx.push(Opcode::InList {
+            dst,
+            src,
+            list: list.into(),
+            negated,
+        });
+        return dst;
+    }
     match &expr.kind {
         ExprKind::Column { .. } => match expr_column_name(expr) {
             Some(name) => ctx.load_column(&name),
@@ -3268,6 +3333,14 @@ fn render_operands(op: &Opcode) -> String {
         Opcode::Sort { keys, hidden } => format!("keys={keys:?} hidden={hidden}"),
         Opcode::Limit { n, offset } => format!("n={n} offset={offset}"),
         Opcode::Call { dst, name, args } => format!("dst={dst} name={name} args={args:?}"),
+        // The item count, not the items: a list of a hundred ids would
+        // drown the plan.
+        Opcode::InList {
+            dst,
+            src,
+            list,
+            negated,
+        } => format!("dst={dst} src={src} items={} negated={negated}", list.len()),
     }
 }
 
@@ -3798,6 +3871,99 @@ mod tests {
             .iter()
             .any(|op| matches!(op, Opcode::GroupReduce { .. })));
         assert!(body.iter().any(|op| matches!(op, Opcode::Filter { .. })));
+    }
+
+    /// `(items, negated)` of each [`Opcode::InList`] the `WHERE` of `query`
+    /// compiles to, as the column dialect lowers it, and how many `Map`s
+    /// remain.
+    fn in_lists(query: &str) -> (Vec<(Vec<Value>, bool)>, usize) {
+        let program = compile(&crate::parser::column::parse(query).unwrap()).unwrap();
+        let (body, ..) = program.split_finalize();
+        let lists = body
+            .iter()
+            .filter_map(|op| match op {
+                Opcode::InList { list, negated, .. } => Some((list.to_vec(), *negated)),
+                _ => None,
+            })
+            .collect();
+        let maps = body
+            .iter()
+            .filter(|op| matches!(op, Opcode::Map { .. }))
+            .count();
+        (lists, maps)
+    }
+
+    /// #737: a literal `IN` list is one set probe, not a comparison and an
+    /// `OR` per item; inside a conjunction too.
+    #[test]
+    fn in_list_of_literals_compiles_to_one_in_list_probe() {
+        let s = |x: &str| Value::Str(x.to_string().into());
+        assert_eq!(
+            in_lists("SELECT id FROM t WHERE name IN ('a', 'b', 'c')"),
+            (vec![(vec![s("a"), s("b"), s("c")], false)], 0)
+        );
+        assert_eq!(
+            in_lists("SELECT id FROM t WHERE id NOT IN (1, 2)"),
+            (vec![(vec![Value::Int(1), Value::Int(2)], true)], 0)
+        );
+        // The comparison and the AND around it stay `Map`s.
+        assert_eq!(
+            in_lists("SELECT id FROM t WHERE ts >= 5 AND name IN ('a', 'b')"),
+            (vec![(vec![s("a"), s("b")], false)], 2)
+        );
+        // Written out by hand, through parentheses.
+        assert_eq!(
+            in_lists("SELECT id FROM t WHERE (name = 'a' OR name = 'b') OR name = 'c'").0,
+            vec![(vec![s("a"), s("b"), s("c")], false)]
+        );
+    }
+
+    // codegen_batch_in_list_chain_1c58189f (`in_list_chain`):
+    // `*op != cmp || column.as_ref().is_some_and(|c| *c != name)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_in_list_chain_1c58189f__v1_same_op_same_column_is_a_list() {
+        assert_eq!(
+            in_lists("SELECT id FROM t WHERE a = 1 OR a = 2").0,
+            vec![(vec![Value::Int(1), Value::Int(2)], false)]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_in_list_chain_1c58189f__v2_another_op_is_no_list() {
+        assert!(in_lists("SELECT id FROM t WHERE a = 1 OR a < 2")
+            .0
+            .is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_in_list_chain_1c58189f__v3_another_column_is_no_list() {
+        assert!(in_lists("SELECT id FROM t WHERE a = 1 OR b = 2")
+            .0
+            .is_empty());
+    }
+
+    #[test]
+    fn in_list_chain_that_is_not_one_column_against_literals_compiles_as_before() {
+        for query in [
+            // One item: a plain `=`, which keeps the dictionary fast path.
+            "SELECT id FROM t WHERE name IN ('a')",
+            // An expression item.
+            "SELECT id FROM t WHERE id IN (1, 1 + 1)",
+            // Two columns.
+            "SELECT id FROM t WHERE a = 1 OR b = 2",
+            // `<>` under OR, `=` under AND: no IN list.
+            "SELECT id FROM t WHERE a <> 1 OR a <> 2",
+            "SELECT id FROM t WHERE a = 1 AND a = 2",
+            // A column on the right.
+            "SELECT id FROM t WHERE a = b OR a = c",
+        ] {
+            let (lists, maps) = in_lists(query);
+            assert!(lists.is_empty(), "{query}");
+            assert!(maps > 0, "{query}");
+        }
     }
 
     #[test]
