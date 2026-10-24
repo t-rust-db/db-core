@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.173.0] - 2026-10-24
+
+### Added
+
+- **`ORDER BY <ordinal>` in the column engine** (#752). An integer term `k` names the `k`-th select item, 1-based as in SQLite and DuckDB: its alias when it has one, otherwise its column or aggregate expression, so `GROUP BY user_name ORDER BY 2 DESC, 1` sorts on `count(*)` then the key. `ORDER BY 0` or past the select list is sqlite3's `1st ORDER BY term out of range - should be between 1 and N`; an ordinal naming `*` or an unaliased computed expression is refused with a hint to alias it. New sqllogictest file `order_by_ordinal_752.test` against DuckDB.
+- **`ParseError::Unsupported`** (#752): the column validator's rejections of SQL that parsed fine now read `unsupported at L:C: ...` instead of `unexpected token at L:C: ...`. Grammar failures keep `ParseError::Unexpected`. An exhaustive `match` on `ParseError` needs the new arm.
+
+### Changed
+
+- **Dictionary-encoded INT32/INT64/DOUBLE/FLOAT chunks decode straight into typed columns** (#753). `RowGroupReader::read_dictionary_fixed_column` decodes the dictionary page once through the caller's decode (INT32 and FLOAT widen per entry, not per row) and gathers each `PLAIN_DICTIONARY`/`RLE_DICTIONARY` page's codes into `(values, present)`, with a `PLAIN` fallback page read in place and a bad code as `DictionaryIndexOutOfRange`; `decode_column_full` tries it after the `PLAIN` reader, before the `Vec<Option<T>>` readers. The positional `decode_column_at` is unchanged. A/B/A against main through `BatchEngine` (20M rows, DuckDB-written, uncompressed, `amount` PLAIN_DICTIONARY, best of 7): `count(amount)` 25.2 -> 22.5 ms wall, `sum(amount)` 26.6 -> 22.7 ms, CPU 262 -> 236 ms a run, peak RSS 108-116 -> 84-92 MB; a dictionary chunk now costs what the PLAIN `id` chunk does (233 ms CPU).
+
 ## [0.172.1] - 2026-10-24
 
 ### Changed
