@@ -708,6 +708,7 @@ pub enum db_core::engine::resolve::CrossModeEngine
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::driving: db_core::engine::column::BatchEngine
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::lookup: db_core::engine::row::RowEngine
+pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::lookup_path: std::path::PathBuf
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::driving: db_core::engine::stream::StreamEngine
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookup: db_core::engine::row::RowEngine

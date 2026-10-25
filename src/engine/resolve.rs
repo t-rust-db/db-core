@@ -382,13 +382,135 @@ pub fn run_column_query(
     )
 }
 
+/// `EXPLAIN QUERY PLAN` for a Parquet/SQLite join (#770), labelling each
+/// side by mode and file as [`explain_plan`] does for stream/SQLite, plus
+/// a row for the row-group pruning the `WHERE` implies on the Parquet file
+/// (see [`prune`]).
 #[cfg(feature = "engine-column")]
-fn column_explain_unsupported() -> EngineError {
-    EngineError::new(
-        ErrorKind::Unsupported,
-        "EXPLAIN for a Parquet/SQLite join (#598) is not yet supported; \
-         run the query directly instead",
-    )
+fn explain_column_plan(
+    driving: &BatchEngine,
+    lookup: &RowEngine,
+    lookup_file: &Path,
+    sql: &str,
+) -> Result<Vec<PlanRow>, EngineError> {
+    let stmt = single_statement(sql)?;
+    let select =
+        resolve_cross_mode_group_by(driving.parse_join(&stmt)?, driving.columns(), lookup)?;
+    check_single_join_explain(&select)?;
+    let table = driving.table_name();
+    let (lookup_table, plan) = plan_join(&select, table, lookup)?;
+
+    let probe_stats = TableStats {
+        source: Some(format!("batch {}", driving.path().display())),
+        ..driving.table_stats()
+    };
+    let lookup_stats = TableStats {
+        row_groups: 1,
+        rows: 0,
+        source: Some(format!("sqlite {}", lookup_file.display())),
+    };
+    let nodes = planner::explain(&select, |name| {
+        if name.eq_ignore_ascii_case(table) {
+            probe_stats.clone()
+        } else if name.eq_ignore_ascii_case(&lookup_table) {
+            lookup_stats.clone()
+        } else {
+            TableStats {
+                row_groups: 0,
+                rows: 0,
+                source: None,
+            }
+        }
+    })
+    .map_err(plan_err)?;
+    let mut rows: Vec<PlanRow> = nodes
+        .into_iter()
+        .map(|n| PlanRow {
+            id: i64::from(n.id),
+            parent: i64::from(n.parent),
+            detail: n.detail,
+        })
+        .collect();
+
+    let pruning = prune::probe_pruning(&select, lookup)?;
+    let kept = match (pruning.empty, pruning.predicate.as_ref()) {
+        (true, _) => Some(0),
+        (false, Some(predicate)) => Some(driving.with_probe_segments(
+            &plan.left_columns,
+            Some(predicate),
+            |segments| Ok(segments.len()),
+        )?),
+        (false, None) => None,
+    };
+    if let Some(kept) = kept {
+        rows.push(PlanRow {
+            id: rows
+                .iter()
+                .map(|r| r.id)
+                .max()
+                .map_or(0, |m| m.saturating_add(1)),
+            parent: 0,
+            detail: format!(
+                "PRUNE ROW GROUPS OF {table} BY {lookup_table} FILTER ({kept} of {} kept)",
+                probe_stats.row_groups
+            ),
+        });
+    }
+    Ok(rows)
+}
+
+/// `EXPLAIN` (bare opcode listing) for a Parquet/SQLite join (#770),
+/// mirroring [`explain_opcodes_query`] with the plan execution compiles:
+/// the SQLite build side is `"row"`, the Parquet probe and the body
+/// `"batch"`.
+#[cfg(feature = "engine-column")]
+fn explain_column_opcodes(
+    driving: &BatchEngine,
+    lookup: &RowEngine,
+    sql: &str,
+) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
+    let stmt = single_statement(sql)?;
+    let select =
+        resolve_cross_mode_group_by(driving.parse_join(&stmt)?, driving.columns(), lookup)?;
+    check_single_join_explain(&select)?;
+    let table = driving.table_name();
+    let (_, plan) = plan_join(&select, table, lookup)?;
+    Ok(vec![
+        (
+            "row",
+            planner::OpcodeSection {
+                label: "JOIN build (sqlite)".to_string(),
+                rows: planner::render_program(&plan.build),
+            },
+        ),
+        (
+            "batch",
+            planner::OpcodeSection {
+                label: format!("JOIN probe (parquet {table})"),
+                rows: planner::render_program(&plan.probe),
+            },
+        ),
+        (
+            "batch",
+            planner::OpcodeSection {
+                label: "JOIN body".to_string(),
+                rows: planner::render_program(&plan.body),
+            },
+        ),
+    ])
+}
+
+/// A star join's `EXPLAIN` is not supported, as for stream/SQLite (#394).
+#[cfg(feature = "engine-column")]
+fn check_single_join_explain(select: &Select) -> Result<(), EngineError> {
+    if join_count(select) > 1 {
+        return Err(EngineError::new(
+            ErrorKind::Unsupported,
+            "EXPLAIN for a multi-way Parquet/SQLite join is not yet \
+             supported; run the query directly instead",
+        ));
+    }
+    Ok(())
 }
 
 fn join_count(select: &Select) -> usize {
@@ -1004,6 +1126,8 @@ pub enum CrossModeEngine {
         driving: BatchEngine,
         /// The SQLite lookup engine, the build side.
         lookup: RowEngine,
+        /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
+        lookup_path: PathBuf,
     },
     /// Two stream engines joined via a windowed self-join (ADR-0022).
     StreamStream {
@@ -1036,6 +1160,7 @@ impl CrossModeEngine {
         Ok(CrossModeEngine::ColumnSqlite {
             driving: BatchEngine::open(parquet)?,
             lookup: RowEngine::open(lookup_path)?,
+            lookup_path: lookup_path.to_path_buf(),
         })
     }
 
@@ -1070,9 +1195,9 @@ impl Engine for CrossModeEngine {
                 driving, lookup, ..
             } => run_query(driving, lookup, sql),
             #[cfg(feature = "engine-column")]
-            CrossModeEngine::ColumnSqlite { driving, lookup } => {
-                run_column_query(driving, lookup, sql)
-            }
+            CrossModeEngine::ColumnSqlite {
+                driving, lookup, ..
+            } => run_column_query(driving, lookup, sql),
             CrossModeEngine::StreamStream { left, right } => {
                 run_stream_stream_query(left, right, sql)
             }
@@ -1087,7 +1212,11 @@ impl Engine for CrossModeEngine {
                 lookup_path,
             } => explain_plan(driving, lookup, lookup_path, sql),
             #[cfg(feature = "engine-column")]
-            CrossModeEngine::ColumnSqlite { .. } => Err(column_explain_unsupported()),
+            CrossModeEngine::ColumnSqlite {
+                driving,
+                lookup,
+                lookup_path,
+            } => explain_column_plan(driving, lookup, lookup_path, sql),
             CrossModeEngine::StreamStream { left, right } => {
                 explain_stream_stream_plan(left, right, sql)
             }
@@ -1100,7 +1229,9 @@ impl Engine for CrossModeEngine {
                 driving, lookup, ..
             } => explain_opcodes_query(driving, lookup, sql)?,
             #[cfg(feature = "engine-column")]
-            CrossModeEngine::ColumnSqlite { .. } => return Err(column_explain_unsupported()),
+            CrossModeEngine::ColumnSqlite {
+                driving, lookup, ..
+            } => explain_column_opcodes(driving, lookup, sql)?,
             CrossModeEngine::StreamStream { left, .. } => {
                 explain_opcodes_stream_stream_query(left, sql)?
             }
@@ -1127,7 +1258,9 @@ impl Engine for CrossModeEngine {
                 Ok(tables)
             }
             #[cfg(feature = "engine-column")]
-            CrossModeEngine::ColumnSqlite { driving, lookup } => {
+            CrossModeEngine::ColumnSqlite {
+                driving, lookup, ..
+            } => {
                 let mut tables = driving.tables()?;
                 tables.extend(lookup.tables()?);
                 Ok(tables)

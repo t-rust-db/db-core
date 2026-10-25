@@ -140,6 +140,20 @@ impl BatchEngine {
     }
 
     /// The file's column names, for the resolver's `GROUP BY` lookup.
+    /// Row groups and rows of the file, for a cross-mode `EXPLAIN`.
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn table_stats(&self) -> TableStats {
+        TableStats {
+            row_groups: self.num_row_groups,
+            rows: self.num_rows,
+            source: None,
+        }
+    }
+
     #[cfg(all(
         feature = "engine-row",
         feature = "engine-stream",

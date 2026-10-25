@@ -214,13 +214,97 @@ fn a_query_over_neither_table_is_a_compile_error() {
 }
 
 #[test]
-fn explain_is_unsupported_for_now() {
-    let db = LookupDb::new("explain");
+fn explain_plan_labels_both_sides_by_mode_and_file() {
+    let db = LookupDb::new("explain-plan");
     let e = db.engine();
-    let err = e
-        .explain_plan("SELECT * FROM production JOIN labels ON production.id = labels.id")
-        .unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
+    let plan = e
+        .explain_plan(
+            "SELECT production.id FROM production JOIN labels ON production.id = labels.id",
+        )
+        .unwrap();
+    let text: Vec<&str> = plan.iter().map(|r| r.detail.as_str()).collect();
+    assert!(
+        text.iter()
+            .any(|d| d.contains("batch tests/fixtures/parquet/production.parquet")),
+        "{text:?}"
+    );
+    assert!(text.iter().any(|d| d.contains("sqlite ")), "{text:?}");
+    assert!(
+        !text.iter().any(|d| d.contains("PRUNE")),
+        "no lookup filter, nothing to prune: {text:?}"
+    );
+}
+
+#[test]
+fn explain_plan_reports_the_row_group_pruning_a_lookup_filter_implies() {
+    let db = LookupDb::new("explain-prune");
+    let e = db.engine();
+    let plan = e
+        .explain_plan(
+            "SELECT production.id FROM production JOIN labels ON production.id = labels.id \
+             WHERE labels.label = 'nope'",
+        )
+        .unwrap();
+    let prune: Vec<&str> = plan
+        .iter()
+        .map(|r| r.detail.as_str())
+        .filter(|d| d.contains("PRUNE"))
+        .collect();
+    assert_eq!(prune.len(), 1, "{plan:?}");
+    assert!(prune[0].contains("0 of "), "{prune:?}");
+
+    let plan = e
+        .explain_plan(
+            "SELECT production.id FROM production JOIN labels ON production.id = labels.id \
+             WHERE labels.label = 'two'",
+        )
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|r| r.detail.contains("PRUNE") && r.detail.contains("1 of ")),
+        "{plan:?}"
+    );
+}
+
+#[test]
+fn explain_opcodes_show_the_sqlite_build_and_the_batch_probe_and_body() {
+    let db = LookupDb::new("explain-opcodes");
+    let e = db.engine();
+    let sections = e
+        .explain_opcodes(
+            "SELECT production.id, labels.label FROM production \
+             JOIN labels ON production.id = labels.id",
+        )
+        .unwrap();
+    let lanes: Vec<(&str, &str)> = sections
+        .iter()
+        .map(|s| (s.lane, s.label.as_str()))
+        .collect();
+    assert_eq!(
+        lanes,
+        [
+            ("row", "JOIN build (sqlite)"),
+            ("batch", "JOIN probe (parquet production)"),
+            ("batch", "JOIN body"),
+        ]
+    );
+    assert!(sections.iter().all(|s| !s.rows.is_empty()));
+}
+
+#[test]
+fn explain_of_a_star_join_is_unsupported_with_a_clear_message() {
+    let db = LookupDb::new("explain-star");
+    let e = db.engine();
+    let sql = "SELECT production.id FROM production \
+               JOIN labels ON production.id = labels.id \
+               JOIN tiers ON production.id = tiers.id";
+    for err in [
+        e.explain_plan(sql).unwrap_err(),
+        e.explain_opcodes(sql).unwrap_err(),
+    ] {
+        assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
+        assert!(err.message.contains("multi-way"), "{err}");
+    }
 }
 
 #[test]
