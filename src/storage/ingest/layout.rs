@@ -54,6 +54,26 @@ pub struct TierOptions {
     /// drops older ones, whole, in one commit, and deletes their files after
     /// the grace period. `None` (the default) keeps everything.
     pub retention_days: Option<u32>,
+    /// A key column whose high 32 bits are the start time of the session
+    /// it names (#599). `None` (the default) prunes by nothing but the
+    /// sort key. Unlike the other options it is recorded in the manifest,
+    /// since readers in other processes prune with it.
+    pub session_key: Option<SessionKey>,
+}
+
+/// A session key column: a 64-bit integer whose high 32 bits are the
+/// session's start, in seconds since the Unix epoch. A session's rows
+/// arrive no earlier than that start and no later than `max_session_secs`
+/// after it, so a predicate on the key bounds the arrival hours to read.
+///
+/// The bound is a contract: a row arriving later than `start +
+/// max_session_secs` is hidden from a query that filters on its key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionKey {
+    /// The key column; an integer (`Int64` or `UInt64`).
+    pub column: String,
+    /// The longest a session runs, in seconds.
+    pub max_session_secs: u32,
 }
 
 impl Default for TierOptions {
@@ -67,6 +87,7 @@ impl Default for TierOptions {
             delete_grace_ns: 600_000_000_000,
             spill_rows: 1_000_000,
             retention_days: None,
+            session_key: None,
         }
     }
 }

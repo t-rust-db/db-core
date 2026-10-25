@@ -16012,7 +16012,7 @@
   {
     "id": "engine_column_table_key_11cf1552",
     "file": "src/engine/column/table.rs",
-    "line": 60,
+    "line": 63,
     "decision": "match self {\n            Fixup::Null(key) | Fixup::Cast(key, _) => key,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16022,7 +16022,7 @@
   {
     "id": "engine_column_table_take_values_0d13dba8",
     "file": "src/engine/column/table.rs",
-    "line": 68,
+    "line": 71,
     "decision": "let Some(values) = batch.columns.remove(key)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16032,7 +16032,7 @@
   {
     "id": "engine_column_table_take_values_401f5b4a",
     "file": "src/engine/column/table.rs",
-    "line": 71,
+    "line": 74,
     "decision": "match batch.typed_columns.remove(key) {\n        Some(column) => (0..batch.num_rows).map(|i| column.get(i)).collect(),\n        None => vec![Value::Null; batch.num_rows],\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16042,7 +16042,7 @@
   {
     "id": "engine_column_table_load_fixed_694f2152",
     "file": "src/engine/column/table.rs",
-    "line": 94,
+    "line": 97,
     "decision": "match fixup {\n            Fixup::Null(_) => vec![Value::Null; batch.num_rows],\n            Fixup::Cast(key, t) => take_values(&mut batch, key)\n                .into_iter()\n                .map(|v| cast(v, *t))\n                .collect(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16052,7 +16052,7 @@
   {
     "id": "engine_column_table_load_rows_453cf8c7",
     "file": "src/engine/column/table.rs",
-    "line": 125,
+    "line": 128,
     "decision": "match rows.engine_column(&r.name) {\n                Some(values) => values.map_err(|reason| VmError::SegmentLoad {\n                    reason: format!(\"page column `{}`: {reason}\", r.name),\n                })?,\n                None => vec![Value::Null; rows.len()],\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16062,7 +16062,7 @@
   {
     "id": "engine_column_table_load_2cdfc5fc",
     "file": "src/engine/column/table.rs",
-    "line": 137,
+    "line": 140,
     "decision": "match self {\n            TableSegment::RowGroup { inner, fixups } if fixups.is_empty() => inner.load(),\n            TableSegment::RowGroup { inner, fixups } => {\n                let all: Vec<String> = inner\n                    .columns\n                    .iter()\n                    .map(|(key, _, _)| key.clone())\n                    .chain(fixups.iter().map(|f| f.key().to_string()))\n                    .collect();\n                load_fixed(inner, fixups, &all)\n            }\n            TableSegment::Page {\n                segment,\n                requests,\n                format,\n            } => Ok(Arc::new(load_page(segment, requests, *format))),\n            TableSegment::Rows { rows, requests } => load_rows(rows, requests).map(Arc::new),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16072,7 +16072,7 @@
   {
     "id": "engine_column_table_load_dea6f0c4",
     "file": "src/engine/column/table.rs",
-    "line": 138,
+    "line": 141,
     "decision": "fixups.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16082,7 +16082,7 @@
   {
     "id": "engine_column_table_order_key_bound_17154051",
     "file": "src/engine/column/table.rs",
-    "line": 158,
+    "line": 161,
     "decision": "match self {\n            TableSegment::RowGroup { inner, .. } => inner.order_key_bound(descending),\n            TableSegment::Page { .. } | TableSegment::Rows { .. } => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16092,7 +16092,7 @@
   {
     "id": "engine_column_table_load_columns_d78d81f2",
     "file": "src/engine/column/table.rs",
-    "line": 165,
+    "line": 168,
     "decision": "match self {\n            TableSegment::RowGroup { inner, fixups } if fixups.is_empty() => {\n                inner.load_columns(columns)\n            }\n            TableSegment::RowGroup { inner, fixups } => load_fixed(inner, fixups, columns),\n            TableSegment::Page { .. } | TableSegment::Rows { .. } => self.load(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16102,7 +16102,7 @@
   {
     "id": "engine_column_table_load_columns_dea6f0c4",
     "file": "src/engine/column/table.rs",
-    "line": 166,
+    "line": 169,
     "decision": "fixups.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16112,7 +16112,7 @@
   {
     "id": "engine_column_table_gather_at_efc1b3b1",
     "file": "src/engine/column/table.rs",
-    "line": 175,
+    "line": 178,
     "decision": "match self {\n            TableSegment::RowGroup { inner, fixups } if fixups.is_empty() => {\n                inner.gather_at(columns, positions)\n            }\n            TableSegment::RowGroup { .. }\n            | TableSegment::Page { .. }\n            | TableSegment::Rows { .. } => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16122,7 +16122,7 @@
   {
     "id": "engine_column_table_gather_at_dea6f0c4",
     "file": "src/engine/column/table.rs",
-    "line": 176,
+    "line": 179,
     "decision": "fixups.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16132,7 +16132,7 @@
   {
     "id": "engine_column_table_file_plan_4458abae",
     "file": "src/engine/column/table.rs",
-    "line": 231,
+    "line": 234,
     "decision": "match leaves.iter().find(|(name, _, _)| *name == r.name) {\n            Some((_, index, pt)) => {\n                columns.push((r.key.clone(), *index, *pt));\n                if physical_type(r.column_type) != *pt {\n                    fixups.push(Fixup::Cast(r.key.clone(), r.column_type));\n                }\n            }\n            None => fixups.push(Fixup::Null(r.key.clone())),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16142,8 +16142,28 @@
   {
     "id": "engine_column_table_file_plan_fe69b3f1",
     "file": "src/engine/column/table.rs",
-    "line": 234,
+    "line": 237,
     "decision": "physical_type(r.column_type) != *pt",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_column_table_of_b5bf93d5",
+    "file": "src/engine/column/table.rs",
+    "line": 326,
+    "decision": "!matches!(spec.column_type, ColumnType::Int64 | ColumnType::UInt64)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_column_table_bounds_7f4b864d",
+    "file": "src/engine/column/table.rs",
+    "line": 354,
+    "decision": "column != self.column",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -16152,7 +16172,7 @@
   {
     "id": "engine_column_table_bounds_49a1c887",
     "file": "src/engine/column/table.rs",
-    "line": 320,
+    "line": 394,
     "decision": "match b {\n            KeyBound::Int(i) if integer => Some(prune::StatValue::Int(*i)),\n            KeyBound::Str(s) if spec.column_type == ColumnType::Utf8 => {\n                Some(prune::StatValue::Str(s.clone()))\n            }\n            KeyBound::Int(_) | KeyBound::Str(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16162,7 +16182,7 @@
   {
     "id": "engine_column_table_bounds_e4502fa3",
     "file": "src/engine/column/table.rs",
-    "line": 321,
+    "line": 395,
     "decision": "integer",
     "conditions": 1,
     "vectors_required": 2,
@@ -16172,7 +16192,7 @@
   {
     "id": "engine_column_table_bounds_5c93f06b",
     "file": "src/engine/column/table.rs",
-    "line": 322,
+    "line": 396,
     "decision": "spec.column_type == ColumnType::Utf8",
     "conditions": 1,
     "vectors_required": 2,
@@ -16182,7 +16202,7 @@
   {
     "id": "engine_column_table_page_segments_bee9308b",
     "file": "src/engine/column/table.rs",
-    "line": 340,
+    "line": 414,
     "decision": "match &page.body {\n            PageBody::Lines(segment) => TableSegment::Page {\n                segment: Arc::clone(segment),\n                requests: requests.to_vec(),\n                format: snapshot.format(),\n            },\n            PageBody::Rows(rows) => TableSegment::Rows {\n                rows: Arc::clone(rows),\n                requests: requests.to_vec(),\n            },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16192,7 +16212,7 @@
   {
     "id": "engine_column_table_schema_timestamps_6cb3944b",
     "file": "src/engine/column/table.rs",
-    "line": 390,
+    "line": 464,
     "decision": "match s.column_type {\n            ColumnType::TimestampMicros => Some((s.name.clone(), 1_000_000)),\n            ColumnType::TimestampNanos => Some((s.name.clone(), 1_000_000_000)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16202,7 +16222,7 @@
   {
     "id": "engine_column_table_tests_random_line_3d4dc5a3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 199,
+    "line": 201,
     "decision": "rng.below(10) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16212,7 +16232,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645",
     "file": "src/engine/column/table/tests.rs",
-    "line": 204,
+    "line": 206,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16222,7 +16242,7 @@
   {
     "id": "engine_column_table_tests_random_line_c832c68e",
     "file": "src/engine/column/table/tests.rs",
-    "line": 207,
+    "line": 209,
     "decision": "rng.below(3) > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16232,7 +16252,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 210,
+    "line": 212,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16242,7 +16262,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 213,
+    "line": 215,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16252,7 +16272,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_4",
     "file": "src/engine/column/table/tests.rs",
-    "line": 216,
+    "line": 218,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16262,7 +16282,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_5",
     "file": "src/engine/column/table/tests.rs",
-    "line": 219,
+    "line": 221,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16272,7 +16292,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_6",
     "file": "src/engine/column/table/tests.rs",
-    "line": 222,
+    "line": 224,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16282,7 +16302,7 @@
   {
     "id": "engine_column_table_tests_random_line_2b0e2d15",
     "file": "src/engine/column/table/tests.rs",
-    "line": 224,
+    "line": 226,
     "decision": "i < switch.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16292,7 +16312,7 @@
   {
     "id": "engine_column_table_tests_random_line_89187645_7",
     "file": "src/engine/column/table/tests.rs",
-    "line": 230,
+    "line": 232,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16302,7 +16322,7 @@
   {
     "id": "engine_column_table_tests_random_line_2b0e2c42",
     "file": "src/engine/column/table/tests.rs",
-    "line": 232,
+    "line": 234,
     "decision": "i < switch.1",
     "conditions": 1,
     "vectors_required": 2,
@@ -16312,7 +16332,7 @@
   {
     "id": "engine_column_table_tests_random_line_3db240d1",
     "file": "src/engine/column/table/tests.rs",
-    "line": 238,
+    "line": 240,
     "decision": "match rng.below(5) {\n        0 => fields.push(format!(r#\"\"m\":{}\"#, rng.below(9))),\n        1 => fields.push(format!(r#\"\"m\":{}.75\"#, rng.below(9))),\n        2 => fields.push(format!(r#\"\"m\":\"m{}\"\"#, rng.below(9))),\n        3 => fields.push(format!(r#\"\"m\":{}\"#, rng.below(2) == 0)),\n        _ => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16322,7 +16342,7 @@
   {
     "id": "engine_column_table_tests_random_row_9ca45e12",
     "file": "src/engine/column/table/tests.rs",
-    "line": 329,
+    "line": 331,
     "decision": "rng.below(4) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16332,7 +16352,7 @@
   {
     "id": "engine_column_table_tests_append_0a7de807",
     "file": "src/engine/column/table/tests.rs",
-    "line": 405,
+    "line": 407,
     "decision": "match self {\n            Record::Line(l) => w.append(l.as_bytes(), Ack::Memory),\n            Record::Row(r) => w.append_row(r.clone(), Ack::Memory),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16342,7 +16362,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_e6d3ec00",
     "file": "src/engine/column/table/tests.rs",
-    "line": 434,
+    "line": 436,
     "decision": "match kind {\n        Kind::Lines => (&INVARIANCE_QUERIES, [&[], &[\"s\"], &[\"k\", \"n\"]]),\n        Kind::Records => (&RECORD_INVARIANCE_QUERIES, [&[], &[\"kind\"], &[\"u\", \"n\"]]),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16352,7 +16372,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_3c26becb",
     "file": "src/engine/column/table/tests.rs",
-    "line": 444,
+    "line": 446,
     "decision": "match kind {\n                Kind::Lines => Record::Line(random_line(&mut rng, i, switch)),\n                Kind::Records => Record::Row(random_row(&mut rng, i)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16362,7 +16382,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_62fa6506",
     "file": "src/engine/column/table/tests.rs",
-    "line": 458,
+    "line": 460,
     "decision": "tiered",
     "conditions": 1,
     "vectors_required": 2,
@@ -16372,7 +16392,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_89187645",
     "file": "src/engine/column/table/tests.rs",
-    "line": 465,
+    "line": 467,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16382,7 +16402,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_89187645_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 468,
+    "line": 470,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16392,7 +16412,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d2cddf82",
     "file": "src/engine/column/table/tests.rs",
-    "line": 489,
+    "line": 492,
     "decision": "rng.below(8) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16402,7 +16422,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_bc08b02e",
     "file": "src/engine/column/table/tests.rs",
-    "line": 494,
+    "line": 497,
     "decision": "rng.below(seal_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16412,7 +16432,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d4525ddd",
     "file": "src/engine/column/table/tests.rs",
-    "line": 497,
+    "line": 500,
     "decision": "rng.below(flush_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16422,7 +16442,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d4525ddd_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 500,
+    "line": 503,
     "decision": "rng.below(flush_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16432,7 +16452,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_a58ed6fd",
     "file": "src/engine/column/table/tests.rs",
-    "line": 504,
+    "line": 507,
     "decision": "[rng.below(40) == 0, last].contains(&true)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16442,7 +16462,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_62fa6506_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 516,
+    "line": 519,
     "decision": "tiered",
     "conditions": 1,
     "vectors_required": 2,
@@ -16452,8 +16472,18 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_62fa6506_3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 521,
+    "line": 524,
     "decision": "tiered",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_column_table_tests_sessions_by_hour_311273f4",
+    "file": "src/engine/column/table/tests.rs",
+    "line": 1229,
+    "decision": "hour < 4",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -33542,7 +33572,7 @@
   {
     "id": "storage_ingest_layout_kind_545d8da4",
     "file": "src/storage/ingest/layout.rs",
-    "line": 87,
+    "line": 108,
     "decision": "match self {\n            Layout::Flat => LayoutKind::Flat,\n            Layout::Tiered(_) => LayoutKind::Tiered,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33552,7 +33582,7 @@
   {
     "id": "storage_ingest_layout_as_str_e8fee942",
     "file": "src/storage/ingest/layout.rs",
-    "line": 106,
+    "line": 127,
     "decision": "match self {\n            LayoutKind::Flat => \"flat\",\n            LayoutKind::Tiered => \"tiered\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33562,7 +33592,7 @@
   {
     "id": "storage_ingest_layout_as_str_0e051416",
     "file": "src/storage/ingest/layout.rs",
-    "line": 136,
+    "line": 157,
     "decision": "match self {\n            Area::Data => \"data\",\n            Area::Live => \"live\",\n            Area::Archive => \"archive\",\n            Area::Staging => \"staging\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33572,7 +33602,7 @@
   {
     "id": "storage_ingest_layout_date_string_1f89292c",
     "file": "src/storage/ingest/layout.rs",
-    "line": 185,
+    "line": 206,
     "decision": "mp < 10",
     "conditions": 1,
     "vectors_required": 2,
@@ -33582,7 +33612,7 @@
   {
     "id": "storage_ingest_layout_rank_b95490ac",
     "file": "src/storage/ingest/layout.rs",
-    "line": 226,
+    "line": 247,
     "decision": "match v {\n            Value::Null => 0,\n            Value::Int(_) | Value::Float(_) | Value::Decimal { .. } => 1,\n            Value::Bool(_) => 2,\n            Value::Str(_) => 3,\n            Value::Map(_) => 4,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33592,7 +33622,7 @@
   {
     "id": "storage_ingest_layout_compare_918c034a",
     "file": "src/storage/ingest/layout.rs",
-    "line": 234,
+    "line": 255,
     "decision": "let Some(order) = numeric_cmp(a, b)",
     "conditions": 1,
     "vectors_required": 2,
@@ -33602,7 +33632,7 @@
   {
     "id": "storage_ingest_layout_compare_fc802c5b",
     "file": "src/storage/ingest/layout.rs",
-    "line": 237,
+    "line": 258,
     "decision": "match (a, b) {\n        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),\n        (Value::Str(x), Value::Str(y)) => x.cmp(y),\n        (Value::Map(x), Value::Map(y)) => x.cmp(y),\n        _ => rank(a).cmp(&rank(b)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33632,7 +33662,7 @@
   {
     "id": "storage_ingest_manifest_writable_9466371b",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 91,
+    "line": 100,
     "decision": "match b {\n            KeyBound::Int(_) => true,\n            KeyBound::Str(s) => !s.chars().any(|c| c == '\"' || c == '\\\\' || c.is_control()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33642,7 +33672,7 @@
   {
     "id": "storage_ingest_manifest_fmt_1380111b",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 155,
+    "line": 167,
     "decision": "match self {\n            ManifestError::Io(e) => write!(f, \"manifest: {e}\"),\n            ManifestError::Malformed(why) => write!(f, \"manifest: malformed: {why}\"),\n            ManifestError::Invariant(why) => write!(f, \"manifest: invariant broken: {why}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33652,7 +33682,7 @@
   {
     "id": "storage_ingest_manifest_check_c6d8b3d1",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 210,
+    "line": 223,
     "decision": "self.dropped_lsn > self.flushed_lsn",
     "conditions": 1,
     "vectors_required": 2,
@@ -33662,7 +33692,7 @@
   {
     "id": "storage_ingest_manifest_check_05cabde0",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 220,
+    "line": 233,
     "decision": "match (self.layout, file.area) {\n                (LayoutKind::Flat, Area::Data) => true,\n                (LayoutKind::Tiered, area @ (Area::Archive | Area::Live | Area::Staging)) => {\n                    let rank = match area {\n                        Area::Archive => 0,\n                        Area::Live => 1,\n                        _ => 2,\n                    };\n                    let in_order = rank >= tier;\n                    tier = rank;\n                    in_order\n                }\n                _ => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33672,7 +33702,7 @@
   {
     "id": "storage_ingest_manifest_check_55217fb9",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 223,
+    "line": 236,
     "decision": "match area {\n                        Area::Archive => 0,\n                        Area::Live => 1,\n                        _ => 2,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33682,7 +33712,7 @@
   {
     "id": "storage_ingest_manifest_check_062007c4",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 234,
+    "line": 247,
     "decision": "!allowed",
     "conditions": 1,
     "vectors_required": 2,
@@ -33692,7 +33722,7 @@
   {
     "id": "storage_ingest_manifest_check_37d65e68",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 242,
+    "line": 255,
     "decision": "file.lsn_lo != next",
     "conditions": 1,
     "vectors_required": 2,
@@ -33702,7 +33732,7 @@
   {
     "id": "storage_ingest_manifest_check_fe9f2813",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 252,
+    "line": 265,
     "decision": "span != Some(file.rows)",
     "conditions": 1,
     "vectors_required": 2,
@@ -33712,7 +33742,7 @@
   {
     "id": "storage_ingest_manifest_check_79f880d4",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 261,
+    "line": 274,
     "decision": "covered != self.flushed_lsn",
     "conditions": 1,
     "vectors_required": 2,
@@ -33722,8 +33752,18 @@
   {
     "id": "storage_ingest_manifest_dropping_85406495",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 291,
+    "line": 304,
     "decision": "let Some(last) = dropped.last()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_manifest_to_json_e2db0276",
+    "file": "src/storage/ingest/manifest.rs",
+    "line": 314,
+    "decision": "self.session_key.is_some()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -33732,7 +33772,7 @@
   {
     "id": "storage_ingest_manifest_to_json_65ff1571",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 301,
+    "line": 316,
     "decision": "self.evolved",
     "conditions": 1,
     "vectors_required": 2,
@@ -33742,7 +33782,7 @@
   {
     "id": "storage_ingest_manifest_to_json_93c556cd",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 303,
+    "line": 318,
     "decision": "self.files.iter().any(keys)",
     "conditions": 1,
     "vectors_required": 2,
@@ -33752,7 +33792,7 @@
   {
     "id": "storage_ingest_manifest_to_json_2fe3378d",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 305,
+    "line": 320,
     "decision": "self.schema.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -33762,7 +33802,7 @@
   {
     "id": "storage_ingest_manifest_to_json_cc197593",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 315,
+    "line": 330,
     "decision": "let Some(schema) = &self.schema",
     "conditions": 1,
     "vectors_required": 2,
@@ -33772,7 +33812,7 @@
   {
     "id": "storage_ingest_manifest_to_json_3366051e",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 318,
+    "line": 333,
     "decision": "i > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -33782,8 +33822,28 @@
   {
     "id": "storage_ingest_manifest_to_json_56405734",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 330,
+    "line": 345,
     "decision": "self.dropped_lsn > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_manifest_to_json_a9616f53",
+    "file": "src/storage/ingest/manifest.rs",
+    "line": 348,
+    "decision": "let Some(key) = &self.session_key",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_manifest_to_json_65ff1571_2",
+    "file": "src/storage/ingest/manifest.rs",
+    "line": 353,
+    "decision": "self.evolved",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -33792,7 +33852,7 @@
   {
     "id": "storage_ingest_manifest_to_json_3366051e_2",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 335,
+    "line": 359,
     "decision": "i > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -33802,7 +33862,7 @@
   {
     "id": "storage_ingest_manifest_parse_fcf4b1fc",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 359,
+    "line": 383,
     "decision": "!rest.trim().is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -33810,10 +33870,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_manifest_parse_4c88b7fc",
+    "id": "storage_ingest_manifest_parse_015ab3a2",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 364,
-    "decision": "!(1..=EVOLVED_VERSION).contains(&version)",
+    "line": 388,
+    "decision": "!(1..=SESSION_VERSION).contains(&version)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -33822,7 +33882,7 @@
   {
     "id": "storage_ingest_manifest_parse_26b45337",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 370,
+    "line": 394,
     "decision": "version == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -33830,10 +33890,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_manifest_parse_8c6d2c90",
+    "id": "storage_ingest_manifest_parse_eae5a938",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 378,
-    "decision": "match version {\n            RECORDS_VERSION => Some(schema(&fields)?),\n            KEYS_VERSION | EVOLVED_VERSION if fields.iter().any(|(k, _)| k == \"schema\") => {\n                Some(schema(&fields)?)\n            }\n            _ => None,\n        }",
+    "line": 402,
+    "decision": "match version {\n            RECORDS_VERSION => Some(schema(&fields)?),\n            KEYS_VERSION | EVOLVED_VERSION | SESSION_VERSION\n                if fields.iter().any(|(k, _)| k == \"schema\") =>\n            {\n                Some(schema(&fields)?)\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -33842,7 +33902,7 @@
   {
     "id": "storage_ingest_manifest_parse_b08f5d3f",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 380,
+    "line": 405,
     "decision": "fields.iter().any(|(k, _)| k == \"schema\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -33852,7 +33912,7 @@
   {
     "id": "storage_ingest_manifest_parse_b27c6f70",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 386,
+    "line": 412,
     "decision": "fields.iter().any(|(k, _)| k == \"dropped_lsn\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -33860,9 +33920,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_manifest_parse_2f421138",
+    "file": "src/storage/ingest/manifest.rs",
+    "line": 417,
+    "decision": "version == SESSION_VERSION",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_manifest_parse_5034f38c",
+    "file": "src/storage/ingest/manifest.rs",
+    "line": 422,
+    "decision": "match version {\n            EVOLVED_VERSION => true,\n            SESSION_VERSION => fields.iter().any(|(k, _)| k == \"evolved\"),\n            _ => false,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "storage_ingest_manifest_read_3e97dd0c",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 413,
+    "line": 450,
     "decision": "match fs::read_to_string(table.join(MANIFEST_FILE)) {\n            Ok(text) => Manifest::parse(&text).map(Some),\n            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),\n            Err(e) => Err(ManifestError::Io(e)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33872,7 +33952,7 @@
   {
     "id": "storage_ingest_manifest_read_20fc5e15",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 415,
+    "line": 452,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -33882,7 +33962,7 @@
   {
     "id": "storage_ingest_manifest_write_keys_c7754951",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 437,
+    "line": 474,
     "decision": "match b {\n        KeyBound::Int(i) => i.to_string(),\n        KeyBound::Str(s) => format!(\"\\\"{s}\\\"\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33892,7 +33972,7 @@
   {
     "id": "storage_ingest_manifest_write_keys_10b8f03e",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 443,
+    "line": 480,
     "decision": "first",
     "conditions": 1,
     "vectors_required": 2,
@@ -33902,7 +33982,7 @@
   {
     "id": "storage_ingest_manifest_write_keys_3a1b111f",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 452,
+    "line": 489,
     "decision": "!first",
     "conditions": 1,
     "vectors_required": 2,
@@ -33912,7 +33992,7 @@
   {
     "id": "storage_ingest_manifest_write_range_d36c01aa",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 458,
+    "line": 495,
     "decision": "match range {\n        Some((lo, hi)) => out.push_str(&format!(\",\\\"{name}_min\\\":{lo},\\\"{name}_max\\\":{hi}\")),\n        None => out.push_str(&format!(\",\\\"{name}_min\\\":null,\\\"{name}_max\\\":null\")),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33922,7 +34002,7 @@
   {
     "id": "storage_ingest_manifest_into_object_d05c2e47",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 479,
+    "line": 516,
     "decision": "match self {\n            Json::Object(fields) => Ok(fields),\n            _ => Err(malformed(\"expected an object\")),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33932,7 +34012,7 @@
   {
     "id": "storage_ingest_manifest_owned_at_dc90c9aa",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 498,
+    "line": 535,
     "decision": "match value {\n        JsonValue::Null => Json::Null,\n        JsonValue::Int(v) => Json::Int(*v),\n        JsonValue::Str(s) => Json::Str((*s).to_string()),\n        JsonValue::Object(fields) => Json::Object(\n            fields\n                .iter()\n                .map(|(k, v)| Ok(((*k).to_string(), owned_at(v, arrays)?)))\n                .collect::<Result<Vec<_>, ManifestError>>()?,\n        ),\n        JsonValue::Array(text) => {\n            let arrays = arrays\n                .checked_add(1)\n                .filter(|a| *a <= MAX_ARRAY_DEPTH)\n                .ok_or_else(|| malformed(\"arrays nested too deeply\"))?;\n            Json::Array(array_of_objects(text, arrays)?)\n        }\n        JsonValue::Bool(b) => Json::Bool(*b),\n        JsonValue::Float(_) => Json::Other,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33942,7 +34022,7 @@
   {
     "id": "storage_ingest_manifest_int_f6fe9a4b",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 529,
+    "line": 579,
     "decision": "match field(fields, name)? {\n        Json::Int(v) => Ok(v),\n        _ => Err(ManifestError::Malformed(format!(\n            \"{name} is not an integer\"\n        ))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33952,7 +34032,7 @@
   {
     "id": "storage_ingest_manifest_string_9d48722e",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 543,
+    "line": 593,
     "decision": "match field(fields, name)? {\n        Json::Str(s) if !s.contains('\\\\') => Ok(s),\n        _ => Err(ManifestError::Malformed(format!(\n            \"{name} is not a plain string\"\n        ))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33962,7 +34042,7 @@
   {
     "id": "storage_ingest_manifest_string_427a91e8",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 544,
+    "line": 594,
     "decision": "!s.contains('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -33972,7 +34052,7 @@
   {
     "id": "storage_ingest_manifest_range_389645b1",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 554,
+    "line": 604,
     "decision": "match (lo, hi) {\n        (Json::Int(lo), Json::Int(hi)) => Ok(Some((lo, hi))),\n        (Json::Null, Json::Null) => Ok(None),\n        _ => Err(ManifestError::Malformed(format!(\"{name} range\"))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33982,7 +34062,7 @@
   {
     "id": "storage_ingest_manifest_key_ranges_7319c889",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 574,
+    "line": 624,
     "decision": "version < KEYS_VERSION || !fields.iter().any(|(k, _)| k == \"keys\")",
     "conditions": 2,
     "vectors_required": 3,
@@ -33992,7 +34072,7 @@
   {
     "id": "storage_ingest_manifest_key_ranges_4dda6d7f",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 585,
+    "line": 635,
     "decision": "match bounds {\n                (Json::Int(lo), Json::Int(hi)) => (KeyBound::Int(lo), KeyBound::Int(hi)),\n                (Json::Str(lo), Json::Str(hi)) if !lo.contains('\\\\') && !hi.contains('\\\\') => {\n                    (KeyBound::Str(lo), KeyBound::Str(hi))\n                }\n                _ => return Err(ManifestError::Malformed(format!(\"key range of {column}\"))),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34002,7 +34082,7 @@
   {
     "id": "storage_ingest_manifest_key_ranges_581bc309",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 587,
+    "line": 637,
     "decision": "!lo.contains('\\\\') && !hi.contains('\\\\')",
     "conditions": 2,
     "vectors_required": 3,
@@ -34012,7 +34092,7 @@
   {
     "id": "storage_ingest_manifest_file_entry_26b45337",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 611,
+    "line": 661,
     "decision": "version == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -34022,7 +34102,7 @@
   {
     "id": "storage_ingest_manifest_array_of_objects_7fc5a244",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 637,
+    "line": 687,
     "decision": "let Some(after) = rest.strip_prefix(']')",
     "conditions": 1,
     "vectors_required": 2,
@@ -34032,7 +34112,7 @@
   {
     "id": "storage_ingest_manifest_array_of_objects_f97d8cca",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 645,
+    "line": 695,
     "decision": "let Some(next) = after.strip_prefix(',')",
     "conditions": 1,
     "vectors_required": 2,
@@ -34042,7 +34122,7 @@
   {
     "id": "storage_ingest_manifest_end_of_array_3751695c",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 657,
+    "line": 707,
     "decision": "after.trim().is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35000,9 +35080,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_table_open_444a8375",
+    "file": "src/storage/ingest/table.rs",
+    "line": 154,
+    "decision": "let Some(key) = &tier.session_key",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_open_f1954601",
+    "file": "src/storage/ingest/table.rs",
+    "line": 159,
+    "decision": "!integer",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_ingest_table_open_7bfc05c8",
     "file": "src/storage/ingest/table.rs",
-    "line": 156,
+    "line": 168,
     "decision": "match Manifest::read(table)? {\n            Some(m) => m,\n            None => {\n                let mut m = Manifest::new(options.format, options.layout.kind());\n                m.schema.clone_from(&options.schema);\n                m.write(table)?;\n                m\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35012,7 +35112,7 @@
   {
     "id": "storage_ingest_table_open_f11309de",
     "file": "src/storage/ingest/table.rs",
-    "line": 165,
+    "line": 177,
     "decision": "manifest.schema != options.schema",
     "conditions": 1,
     "vectors_required": 2,
@@ -35022,8 +35122,28 @@
   {
     "id": "storage_ingest_table_open_01e4a6bc",
     "file": "src/storage/ingest/table.rs",
-    "line": 172,
+    "line": 184,
     "decision": "!extends_schema(stored, requested)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_open_a1f994f2",
+    "file": "src/storage/ingest/table.rs",
+    "line": 194,
+    "decision": "match &options.layout {\n            Layout::Tiered(tier) => tier.session_key.clone(),\n            Layout::Flat => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_open_a136b6da",
+    "file": "src/storage/ingest/table.rs",
+    "line": 198,
+    "decision": "manifest.session_key != session_key",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -35032,7 +35152,7 @@
   {
     "id": "storage_ingest_table_open_e26f89e4",
     "file": "src/storage/ingest/table.rs",
-    "line": 179,
+    "line": 202,
     "decision": "manifest.schema.is_none() && manifest.format != options.format",
     "conditions": 2,
     "vectors_required": 3,
@@ -35042,7 +35162,7 @@
   {
     "id": "storage_ingest_table_open_f8609734",
     "file": "src/storage/ingest/table.rs",
-    "line": 185,
+    "line": 208,
     "decision": "manifest.layout != options.layout.kind()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35052,7 +35172,7 @@
   {
     "id": "storage_ingest_table_open_8b58671f",
     "file": "src/storage/ingest/table.rs",
-    "line": 194,
+    "line": 217,
     "decision": "match &manifest.schema {\n            Some(schema) => HeadPage::for_records(Arc::from(schema.as_slice())),\n            None => HeadPage::default(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35062,7 +35182,7 @@
   {
     "id": "storage_ingest_table_open_e0b92d04",
     "file": "src/storage/ingest/table.rs",
-    "line": 216,
+    "line": 239,
     "decision": "match writer.manifest.schema.as_deref() {\n                Some(schema) => {\n                    let row = decode_row(body)\n                        .map(|row| pad_row(schema, row))\n                        .filter(|row| check_row(schema, row).is_none())\n                        .ok_or_else(corrupt)?;\n                    writer.push(observed, |head| head.push_row(lsn, observed, row))?;\n                }\n                None => writer.push(observed, |head| head.push(lsn, observed, body))?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35072,7 +35192,7 @@
   {
     "id": "storage_ingest_table_push_bc95699f",
     "file": "src/storage/ingest/table.rs",
-    "line": 238,
+    "line": 261,
     "decision": "other_hour && self.options.layout.kind() == LayoutKind::Tiered",
     "conditions": 2,
     "vectors_required": 3,
@@ -35082,7 +35202,7 @@
   {
     "id": "storage_ingest_table_push_bb94a090",
     "file": "src/storage/ingest/table.rs",
-    "line": 242,
+    "line": 265,
     "decision": "self.head.is_full()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35092,7 +35212,7 @@
   {
     "id": "storage_ingest_table_append_1a8220c4",
     "file": "src/storage/ingest/table.rs",
-    "line": 258,
+    "line": 281,
     "decision": "self.manifest.schema.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35102,7 +35222,7 @@
   {
     "id": "storage_ingest_table_append_7c5bb3a4",
     "file": "src/storage/ingest/table.rs",
-    "line": 263,
+    "line": 286,
     "decision": "let Some(why) = invalid_line(line)",
     "conditions": 1,
     "vectors_required": 2,
@@ -35112,7 +35232,7 @@
   {
     "id": "storage_ingest_table_append_row_dd5b95aa",
     "file": "src/storage/ingest/table.rs",
-    "line": 281,
+    "line": 304,
     "decision": "let Some(why) = check_row(schema, &row)",
     "conditions": 1,
     "vectors_required": 2,
@@ -35122,7 +35242,7 @@
   {
     "id": "storage_ingest_table_append_record_934749ae",
     "file": "src/storage/ingest/table.rs",
-    "line": 303,
+    "line": 326,
     "decision": "match ack {\n            Ack::Flushed => Ack::Durable,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35132,7 +35252,7 @@
   {
     "id": "storage_ingest_table_append_record_3da5fd41",
     "file": "src/storage/ingest/table.rs",
-    "line": 310,
+    "line": 333,
     "decision": "ack == Ack::Flushed",
     "conditions": 1,
     "vectors_required": 2,
@@ -35142,7 +35262,7 @@
   {
     "id": "storage_ingest_table_seal_head_a79440f4",
     "file": "src/storage/ingest/table.rs",
-    "line": 324,
+    "line": 347,
     "decision": "let Layout::Tiered(tier) = &self.options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -35152,7 +35272,7 @@
   {
     "id": "storage_ingest_table_seal_head_9b37d8ce",
     "file": "src/storage/ingest/table.rs",
-    "line": 326,
+    "line": 349,
     "decision": "sealed > tier.spill_rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -35162,7 +35282,7 @@
   {
     "id": "storage_ingest_table_seal_1bfebd78",
     "file": "src/storage/ingest/table.rs",
-    "line": 336,
+    "line": 359,
     "decision": "self.head.len() == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -35172,7 +35292,7 @@
   {
     "id": "storage_ingest_table_flush_726fcc45",
     "file": "src/storage/ingest/table.rs",
-    "line": 355,
+    "line": 378,
     "decision": "match self.options.layout.kind() {\n            LayoutKind::Flat => Ok(self.flush_flat()?.into_iter().collect()),\n            LayoutKind::Tiered => self.flush_hours(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35182,7 +35302,7 @@
   {
     "id": "storage_ingest_table_flush_hours_60dc24c4",
     "file": "src/storage/ingest/table.rs",
-    "line": 426,
+    "line": 449,
     "decision": "self\n            .head\n            .first_observed()\n            .is_some_and(|t| hour_of(t) < open_hour)",
     "conditions": 1,
     "vectors_required": 2,
@@ -35192,7 +35312,7 @@
   {
     "id": "storage_ingest_table_flush_hours_096d2cfa",
     "file": "src/storage/ingest/table.rs",
-    "line": 435,
+    "line": 458,
     "decision": "let Some(hour) = self\n            .staging_hour()\n            .or_else(|| self.sealed.first().and_then(page_hour))",
     "conditions": 1,
     "vectors_required": 2,
@@ -35202,7 +35322,7 @@
   {
     "id": "storage_ingest_table_flush_hours_6698cede",
     "file": "src/storage/ingest/table.rs",
-    "line": 439,
+    "line": 462,
     "decision": "hour >= open_hour",
     "conditions": 1,
     "vectors_required": 2,
@@ -35212,7 +35332,7 @@
   {
     "id": "storage_ingest_table_flush_hour_328fb315",
     "file": "src/storage/ingest/table.rs",
-    "line": 599,
+    "line": 622,
     "decision": "count > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -35222,7 +35342,7 @@
   {
     "id": "storage_ingest_table_retain_faaf46ac",
     "file": "src/storage/ingest/table.rs",
-    "line": 665,
+    "line": 688,
     "decision": "count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -35232,7 +35352,7 @@
   {
     "id": "storage_ingest_table_delete_expired_a1e9aa27",
     "file": "src/storage/ingest/table.rs",
-    "line": 748,
+    "line": 771,
     "decision": "match fs::remove_file(&path) {\n                Ok(()) => {}\n                Err(e) if e.kind() == io::ErrorKind::NotFound => {}\n                Err(e) => return Err(e.into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35242,7 +35362,7 @@
   {
     "id": "storage_ingest_table_delete_expired_20fc5e15",
     "file": "src/storage/ingest/table.rs",
-    "line": 750,
+    "line": 773,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -35252,7 +35372,7 @@
   {
     "id": "storage_ingest_table_crash_point_791d8530",
     "file": "src/storage/ingest/table.rs",
-    "line": 815,
+    "line": 838,
     "decision": "self.crash_after == Some(step)",
     "conditions": 1,
     "vectors_required": 2,
@@ -35262,7 +35382,7 @@
   {
     "id": "storage_ingest_table_remove_empty_parents_b71c29ab",
     "file": "src/storage/ingest/table.rs",
-    "line": 875,
+    "line": 898,
     "decision": "let Some(d) = dir",
     "conditions": 1,
     "vectors_required": 2,
@@ -35272,7 +35392,7 @@
   {
     "id": "storage_ingest_table_remove_empty_parents_58e0bb1d",
     "file": "src/storage/ingest/table.rs",
-    "line": 876,
+    "line": 899,
     "decision": "d == table || d.parent() == Some(table) || fs::remove_dir(d).is_err()",
     "conditions": 3,
     "vectors_required": 4,
@@ -35282,7 +35402,7 @@
   {
     "id": "storage_ingest_table_clean_up_322d979c",
     "file": "src/storage/ingest/table.rs",
-    "line": 890,
+    "line": 913,
     "decision": "tmp.exists()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35292,7 +35412,7 @@
   {
     "id": "storage_ingest_table_clean_dir_6f777079",
     "file": "src/storage/ingest/table.rs",
-    "line": 910,
+    "line": 933,
     "decision": "entry.file_type()?.is_dir()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35302,7 +35422,7 @@
   {
     "id": "storage_ingest_table_clean_dir_b4151af7",
     "file": "src/storage/ingest/table.rs",
-    "line": 911,
+    "line": 934,
     "decision": "clean_dir(&entry.path(), &path, manifest)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -35312,7 +35432,7 @@
   {
     "id": "storage_ingest_table_clean_dir_b0d759e3",
     "file": "src/storage/ingest/table.rs",
-    "line": 916,
+    "line": 939,
     "decision": "manifest.files.iter().any(|f| f.path == path)",
     "conditions": 1,
     "vectors_required": 2,
@@ -35322,7 +35442,7 @@
   {
     "id": "storage_ingest_table_record_tests_value_at_0cea1e54",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 141,
+    "line": 142,
     "decision": "match values {\n        ColumnValues::UInt64(v) => at(v, i).map(RecordValue::UInt),\n        ColumnValues::TimestampNanos(v) => at(v, i).map(RecordValue::Int),\n        ColumnValues::UInt16(v) => at(v, i).map(|x| RecordValue::Int(i64::from(x))),\n        ColumnValues::Utf8(v) => at(v, i).map(RecordValue::Str),\n        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {\n            at(v, i).map(RecordValue::Bytes)\n        }\n        ColumnValues::Decimal(v) => at(v, i).map(RecordValue::Decimal),\n        ColumnValues::Map(v) => at(v, i).map(|m| {\n            RecordValue::Map(\n                m.into_iter()\n                    .map(|(k, v)| (k.to_string(), v.map(|v| v.to_string())))\n                    .collect(),\n            )\n        }),\n        other => panic!(\"not in the test schema: {other:?}\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35332,7 +35452,7 @@
   {
     "id": "storage_ingest_table_record_tests_a_crash_at_every_flush_and_compaction_step_of_a_tiered_table_recovers_every_row_once_b0b5282f",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 307,
+    "line": 308,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -35342,7 +35462,7 @@
   {
     "id": "storage_ingest_table_record_tests_a_crash_at_every_flush_and_compaction_step_of_a_tiered_table_recovers_every_row_once_b0b5282f_2",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 313,
+    "line": 314,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -35352,7 +35472,17 @@
   {
     "id": "storage_ingest_table_record_tests_invalid_schemas_and_sort_keys_are_refused_740f3227",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 486,
+    "line": 487,
+    "decision": "let Layout::Tiered(tier) = &mut options.layout",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_record_tests_a_session_key_is_validated_and_recorded_in_the_manifest_740f3227",
+    "file": "src/storage/ingest/table/record_tests.rs",
+    "line": 501,
     "decision": "let Layout::Tiered(tier) = &mut options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -35362,7 +35492,7 @@
   {
     "id": "storage_ingest_table_record_tests_notes_c954ecb2",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 573,
+    "line": 615,
     "decision": "match field {\n                Some(f) => add(&mut out, &read_column(&rg, f, ColumnType::Utf8).unwrap()),\n                None => out.extend((0..rg.num_rows()).map(|_| None)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35372,7 +35502,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_walk_03cfa916",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 115,
+    "line": 116,
     "decision": "e.file_type().unwrap().is_dir()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35382,7 +35512,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_flush_and_compaction_step_recovers_every_record_once_b0b5282f",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 319,
+    "line": 320,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -35392,7 +35522,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_flush_and_compaction_step_recovers_every_record_once_b0b5282f_2",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 325,
+    "line": 326,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -35402,7 +35532,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_spill_and_close_step_recovers_every_record_once_ab360a62",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 597,
+    "line": 598,
     "decision": "closing",
     "conditions": 1,
     "vectors_required": 2,
@@ -35412,7 +35542,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_spill_and_close_step_recovers_every_record_once_ab360a62_2",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 604,
+    "line": 605,
     "decision": "closing",
     "conditions": 1,
     "vectors_required": 2,

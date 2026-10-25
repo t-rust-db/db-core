@@ -3879,11 +3879,23 @@ impl core::fmt::Debug for db_core::storage::ingest::layout::LayoutKind
 pub fn db_core::storage::ingest::layout::LayoutKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::ingest::layout::LayoutKind
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::layout::LayoutKind
+pub struct db_core::storage::ingest::layout::SessionKey
+pub db_core::storage::ingest::layout::SessionKey::column: alloc::string::String
+pub db_core::storage::ingest::layout::SessionKey::max_session_secs: u32
+impl core::clone::Clone for db_core::storage::ingest::layout::SessionKey
+pub fn db_core::storage::ingest::layout::SessionKey::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::layout::SessionKey
+impl core::cmp::PartialEq for db_core::storage::ingest::layout::SessionKey
+pub fn db_core::storage::ingest::layout::SessionKey::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::ingest::layout::SessionKey
+pub fn db_core::storage::ingest::layout::SessionKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::layout::SessionKey
 pub struct db_core::storage::ingest::layout::TierOptions
 pub db_core::storage::ingest::layout::TierOptions::delete_grace_ns: i64
 pub db_core::storage::ingest::layout::TierOptions::max_file_size: u64
 pub db_core::storage::ingest::layout::TierOptions::retention_days: core::option::Option<u32>
 pub db_core::storage::ingest::layout::TierOptions::row_group_max_rows: usize
+pub db_core::storage::ingest::layout::TierOptions::session_key: core::option::Option<db_core::storage::ingest::layout::SessionKey>
 pub db_core::storage::ingest::layout::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::ingest::layout::TierOptions::spill_rows: usize
 impl core::clone::Clone for db_core::storage::ingest::layout::TierOptions
@@ -3984,6 +3996,7 @@ pub db_core::storage::ingest::manifest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::manifest::Manifest::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::manifest::Manifest::layout: db_core::storage::ingest::layout::LayoutKind
 pub db_core::storage::ingest::manifest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>>
+pub db_core::storage::ingest::manifest::Manifest::session_key: core::option::Option<db_core::storage::ingest::layout::SessionKey>
 impl db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::check(&self) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::dropping(&self, usize) -> db_core::storage::ingest::manifest::Manifest
@@ -4422,6 +4435,7 @@ pub db_core::storage::ingest::Manifest::flushed_lsn: u64
 pub db_core::storage::ingest::Manifest::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::Manifest::layout: db_core::storage::ingest::layout::LayoutKind
 pub db_core::storage::ingest::Manifest::schema: core::option::Option<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>>
+pub db_core::storage::ingest::Manifest::session_key: core::option::Option<db_core::storage::ingest::layout::SessionKey>
 impl db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::check(&self) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::dropping(&self, usize) -> db_core::storage::ingest::manifest::Manifest
@@ -4465,6 +4479,17 @@ impl core::clone::Clone for db_core::storage::ingest::record::RowPage
 pub fn db_core::storage::ingest::record::RowPage::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::record::RowPage
 pub fn db_core::storage::ingest::record::RowPage::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::SessionKey
+pub db_core::storage::ingest::SessionKey::column: alloc::string::String
+pub db_core::storage::ingest::SessionKey::max_session_secs: u32
+impl core::clone::Clone for db_core::storage::ingest::layout::SessionKey
+pub fn db_core::storage::ingest::layout::SessionKey::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::layout::SessionKey
+impl core::cmp::PartialEq for db_core::storage::ingest::layout::SessionKey
+pub fn db_core::storage::ingest::layout::SessionKey::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::ingest::layout::SessionKey
+pub fn db_core::storage::ingest::layout::SessionKey::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::layout::SessionKey
 pub struct db_core::storage::ingest::Snapshot
 impl db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
@@ -4540,6 +4565,7 @@ pub db_core::storage::ingest::TierOptions::delete_grace_ns: i64
 pub db_core::storage::ingest::TierOptions::max_file_size: u64
 pub db_core::storage::ingest::TierOptions::retention_days: core::option::Option<u32>
 pub db_core::storage::ingest::TierOptions::row_group_max_rows: usize
+pub db_core::storage::ingest::TierOptions::session_key: core::option::Option<db_core::storage::ingest::layout::SessionKey>
 pub db_core::storage::ingest::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::ingest::TierOptions::spill_rows: usize
 impl core::clone::Clone for db_core::storage::ingest::layout::TierOptions

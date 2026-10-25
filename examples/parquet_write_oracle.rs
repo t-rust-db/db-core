@@ -796,6 +796,7 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
             // Keeps two closed days: the first is dropped once the fourth
             // opens.
             retention_days: Some(2),
+            session_key: None,
         }),
         clock: now,
         ..TableOptions::default()
@@ -903,6 +904,7 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             // Every 7th row is flushed, as in the tiered table case.
             spill_rows: 1_000_000,
             retention_days: None,
+            session_key: None,
         }),
         clock: now,
         ..TableOptions::default()

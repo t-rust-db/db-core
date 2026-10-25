@@ -43,6 +43,7 @@ fn tier() -> TierOptions {
         delete_grace_ns: 60_000_000_000,
         spill_rows: usize::MAX,
         retention_days: None,
+        session_key: None,
     }
 }
 

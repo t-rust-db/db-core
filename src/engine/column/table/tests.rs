@@ -1,7 +1,9 @@
 use super::*;
 use crate::engine::Cell;
 use crate::storage::ingest::layout::{DAY_NS, HOUR_NS};
-use crate::storage::ingest::{Ack, Layout, RecordValue, TableOptions, TableWriter, TierOptions};
+use crate::storage::ingest::{
+    Ack, Layout, RecordValue, SessionKey, TableOptions, TableWriter, TierOptions,
+};
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
 use crate::test_rng::Rng;
 use std::fs;
@@ -472,6 +474,7 @@ fn flush_timing_invariance(kind: Kind) {
                 },
                 // Retention drops rows the reference keeps.
                 retention_days: None,
+                session_key: None,
             })
         } else {
             Layout::Flat
@@ -977,7 +980,7 @@ fn a_sort_key_filter_opens_only_the_files_whose_range_matches() {
         let select = crate::parser::parse(sql).unwrap();
         snapshot
             .files()
-            .filter(|(entry, _)| may_match(entry, &schema, select.where_clause.as_ref()))
+            .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
             .count()
     };
     assert_eq!(opened("SELECT i FROM logs WHERE kind = 'c'"), 1);
@@ -996,7 +999,7 @@ fn a_sort_key_filter_opens_only_the_files_whose_range_matches() {
         let select = crate::parser::column::parse(sql).unwrap();
         snapshot
             .files()
-            .filter(|(entry, _)| may_match(entry, &schema, select.where_clause.as_ref()))
+            .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
             .count()
     };
     assert_eq!(opened_in("SELECT i FROM logs WHERE kind IN ('a', 'x')"), 3);
@@ -1185,4 +1188,128 @@ fn queries_see_null_for_columns_added_after_a_file_was_written() {
         .iter()
         .any(|f| f.area == crate::storage::ingest::Area::Archive));
     check(&w);
+}
+
+/// Start of the day the session-key tests run in, in seconds.
+const SESSION_BASE: i64 = 20_737 * 86_400;
+
+/// The key of a session that started `offset` seconds into hour `hour`
+/// (negative: before it, as one that arrives in the hour has).
+fn session_id(hour: i64, offset: i64) -> u64 {
+    u64::try_from((SESSION_BASE + hour * 3_600 + offset) << 32).unwrap()
+}
+
+/// A tiered record table with `session_key` on `sid`, four closed hours
+/// (two rows of one session each) and one session still in the open hour.
+fn sessions_by_hour(t: &TempTable, session_key: Option<SessionKey>) -> TableWriter {
+    crate::test_clock::set(20_737 * DAY_NS);
+    let mut w = t.writer_with(TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            session_key,
+            ..TierOptions::default()
+        }),
+        schema: Some(vec![
+            ColumnSpec::new("sid", ColumnType::UInt64, false),
+            ColumnSpec::new("n", ColumnType::UInt64, false),
+        ]),
+        clock,
+        ..TableOptions::default()
+    });
+    for hour in 0..5 {
+        for n in 0..2u64 {
+            w.append_row(
+                vec![
+                    RecordValue::UInt(session_id(hour, -10)),
+                    RecordValue::UInt(n),
+                ],
+                Ack::Memory,
+            )
+            .unwrap();
+        }
+        if hour < 4 {
+            advance_clock(HOUR_NS);
+            w.flush().unwrap();
+        }
+    }
+    w
+}
+
+/// #599 acceptance: a filter on a session key opens only the files that
+/// can hold the session's rows, for `=`, `IN` and ranges, and answers as
+/// without the option.
+#[test]
+fn a_session_key_filter_opens_only_the_files_its_arrival_window_can_hold() {
+    let t = TempTable::new();
+    let w = sessions_by_hour(
+        &t,
+        Some(SessionKey {
+            column: "sid".to_string(),
+            max_session_secs: 1_800,
+        }),
+    );
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.files().count(), 4);
+    let schema = snapshot.schema().unwrap();
+    let key = snapshot.manifest().session_key.clone();
+    assert!(key.is_some(), "readers get the option from the manifest");
+    let opened = |select: Select| {
+        snapshot
+            .files()
+            .filter(|(entry, _)| {
+                may_match(entry, &schema, key.as_ref(), select.where_clause.as_ref())
+            })
+            .count()
+    };
+    let sql =
+        |filter: &str| crate::parser::parse(&format!("SELECT n FROM t WHERE {filter}")).unwrap();
+    let column = |filter: &str| {
+        crate::parser::column::parse(&format!("SELECT n FROM t WHERE {filter}")).unwrap()
+    };
+    let (s1, s2) = (session_id(1, -10), session_id(2, -10));
+    assert_eq!(opened(sql(&format!("sid = {s2}"))), 1);
+    assert_eq!(opened(column(&format!("sid IN ({s1}, {s2})"))), 2);
+    assert_eq!(
+        opened(sql(&format!("sid >= {s1} AND sid <= {s2}"))),
+        2,
+        "a range maps to a window"
+    );
+    assert_eq!(opened(sql(&format!("sid = {s1} OR sid = {s2}"))), 2);
+    // A key outside every window reads no file.
+    assert_eq!(opened(sql(&format!("sid = {}", session_id(30, 0)))), 0);
+    assert_eq!(opened(sql(&format!("sid = {}", session_id(-30, 0)))), 0);
+    // Shapes it cannot bound keep every file.
+    assert_eq!(opened(sql(&format!("sid <> {s2}"))), 4);
+    assert_eq!(opened(sql(&format!("sid = {s2} OR n = 0"))), 4);
+    assert_eq!(opened(sql("n = 0")), 4);
+    // ...and the answers are the unpruned ones, the open hour included.
+    let count = |filter: &str| rows(&w, &format!("SELECT COUNT(*) FROM logs WHERE {filter}"));
+    assert_eq!(count(&format!("sid = {s2}")), vec![vec![Cell::Int(2)]]);
+    assert_eq!(
+        count(&format!("sid = {}", session_id(4, -10))),
+        vec![vec![Cell::Int(2)]]
+    );
+    assert_eq!(
+        count(&format!("sid = {}", session_id(30, 0))),
+        vec![vec![Cell::Int(0)]]
+    );
+}
+
+/// #599 acceptance: without the option, the same filter opens every file.
+#[test]
+fn without_a_session_key_option_no_file_is_skipped_on_the_key() {
+    let t = TempTable::new();
+    let w = sessions_by_hour(&t, None);
+    let snapshot = w.snapshot().unwrap();
+    assert!(snapshot.manifest().session_key.is_none());
+    let schema = snapshot.schema().unwrap();
+    let select = crate::parser::parse(&format!(
+        "SELECT n FROM t WHERE sid = {}",
+        session_id(2, -10)
+    ))
+    .unwrap();
+    let opened = snapshot
+        .files()
+        .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
+        .count();
+    assert_eq!(opened, 4);
 }
