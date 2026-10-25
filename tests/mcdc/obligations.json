@@ -16712,7 +16712,7 @@
   {
     "id": "engine_resolve_expand_cross_mode_star_515c3b52",
     "file": "src/engine/resolve.rs",
-    "line": 373,
+    "line": 359,
     "decision": "match c {\n            ResultColumn::Star => star.clone(),\n            other => vec![other],\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16720,9 +16720,169 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_resolve_column_owner_ef6d0f1c",
+    "file": "src/engine/resolve.rs",
+    "line": 394,
+    "decision": "match owners.as_slice() {\n        [] => Ok(None),\n        [only] => Ok(Some((*only).clone())),\n        [first, ..] if using_keys.iter().any(|k| k.eq_ignore_ascii_case(name)) => {\n            Ok(Some((*first).clone()))\n        }\n        _ => Err(EngineError::new(\n            ErrorKind::Compile,\n            format!(\n                \"ambiguous column name: {name} (in {}); qualify it with its table\",\n                owners\n                    .iter()\n                    .map(|t| t.as_str())\n                    .collect::<Vec<_>>()\n                    .join(\", \")\n            ),\n        )),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "engine_resolve_column_owner_5bfa8df6",
+    "file": "src/engine/resolve.rs",
+    "line": 397,
+    "decision": "using_keys.iter().any(|k| k.eq_ignore_ascii_case(name))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_columns_588587a8",
+    "file": "src/engine/resolve.rs",
+    "line": 420,
+    "decision": "match &mut expr.kind {\n        ExprKind::Column {\n            table: table @ None,\n            name,\n            ..\n        } => {\n            *table = owner(name)?;\n        }\n        ExprKind::FunctionCall { args, tail, .. } => {\n            if let FunctionArgs::List(list) = args {\n                for e in list {\n                    qualify_columns(e, owner)?;\n                }\n            }\n            if let Some(tail) = tail {\n                if let Some(filter) = &mut tail.filter {\n                    qualify_columns(filter, owner)?;\n                }\n            }\n        }\n        ExprKind::Unary { expr: inner, .. }\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. }\n        | ExprKind::Paren(inner) => qualify_columns(inner, owner)?,\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            qualify_columns(lhs, owner)?;\n            qualify_columns(rhs, owner)?;\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            qualify_columns(inner, owner)?;\n            qualify_columns(lo, owner)?;\n            qualify_columns(hi, owner)?;\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            qualify_columns(inner, owner)?;\n            for e in list {\n                qualify_columns(e, owner)?;\n            }\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            qualify_columns(inner, owner)?;\n            qualify_columns(pattern, owner)?;\n            if let Some(e) = escape {\n                qualify_columns(e, owner)?;\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(o) = operand {\n                qualify_columns(o, owner)?;\n            }\n            for (when, then) in whens {\n                qualify_columns(when, owner)?;\n                qualify_columns(then, owner)?;\n            }\n            if let Some(e) = else_ {\n                qualify_columns(e, owner)?;\n            }\n        }\n        // Literals and parameters hold no column; subqueries are refused by\n        // the column validator before a select gets here.\n        _ => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "engine_resolve_qualify_columns_a77e706f",
+    "file": "src/engine/resolve.rs",
+    "line": 429,
+    "decision": "let FunctionArgs::List(list) = args",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_columns_756219c6",
+    "file": "src/engine/resolve.rs",
+    "line": 434,
+    "decision": "let Some(tail) = tail",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_columns_a60126d0",
+    "file": "src/engine/resolve.rs",
+    "line": 435,
+    "decision": "let Some(filter) = &mut tail.filter",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_columns_ef9b411b",
+    "file": "src/engine/resolve.rs",
+    "line": 475,
+    "decision": "let Some(e) = escape",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_columns_1bf37598",
+    "file": "src/engine/resolve.rs",
+    "line": 484,
+    "decision": "let Some(o) = operand",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_columns_56705ec3",
+    "file": "src/engine/resolve.rs",
+    "line": 491,
+    "decision": "let Some(e) = else_",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_cross_mode_columns_89a29fff",
+    "file": "src/engine/resolve.rs",
+    "line": 522,
+    "decision": "name.eq_ignore_ascii_case(driving)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_cross_mode_columns_7f46f070",
+    "file": "src/engine/resolve.rs",
+    "line": 536,
+    "decision": "match &j.constraint {\n            Some(JoinConstraint::Using(columns)) => columns.first().cloned(),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "engine_resolve_qualify_cross_mode_columns_f7406a53",
+    "file": "src/engine/resolve.rs",
+    "line": 543,
+    "decision": "let ResultColumn::Expr { expr, alias } = column",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_cross_mode_columns_579acdc6",
+    "file": "src/engine/resolve.rs",
+    "line": 546,
+    "decision": "let ExprKind::Column {\n                table: None, name, ..\n            } = &expr.kind",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_qualify_cross_mode_columns_1afa3e43",
+    "file": "src/engine/resolve.rs",
+    "line": 568,
+    "decision": "match c {\n            ResultColumn::Expr {\n                alias: Some(alias), ..\n            } => Some(alias.clone()),\n            ResultColumn::Expr {\n                expr:\n                    Expr {\n                        kind: ExprKind::Column { name, .. },\n                        ..\n                    },\n                ..\n            } => Some(name.clone()),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "engine_resolve_qualify_cross_mode_columns_954faf0b",
+    "file": "src/engine/resolve.rs",
+    "line": 584,
+    "decision": "match &term.expr.kind {\n            ExprKind::Column {\n                table: None, name, ..\n            } => items.iter().any(|i| i.eq_ignore_ascii_case(name)),\n            _ => false,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "engine_resolve_qualify_cross_mode_columns_149671df",
+    "file": "src/engine/resolve.rs",
+    "line": 590,
+    "decision": "!names_item",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_resolve_resolve_cross_mode_group_by_d2f8fb17",
     "file": "src/engine/resolve.rs",
-    "line": 390,
+    "line": 606,
     "decision": "select.group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16730,9 +16890,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_resolve_cross_mode_group_by_2f9779f5",
+    "id": "engine_resolve_resolve_cross_mode_group_by_names_2f9779f5",
     "file": "src/engine/resolve.rs",
-    "line": 401,
+    "line": 628,
     "decision": "named.iter().any(|n| n.eq_ignore_ascii_case(&table.name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16742,7 +16902,7 @@
   {
     "id": "engine_resolve_run_query_82b1b600",
     "file": "src/engine/resolve.rs",
-    "line": 419,
+    "line": 646,
     "decision": "join_count(&select) > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -16752,7 +16912,7 @@
   {
     "id": "engine_resolve_run_column_query_82b1b600",
     "file": "src/engine/resolve.rs",
-    "line": 456,
+    "line": 683,
     "decision": "join_count(&select) > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -16762,7 +16922,7 @@
   {
     "id": "engine_resolve_run_column_query_afcf4357",
     "file": "src/engine/resolve.rs",
-    "line": 462,
+    "line": 689,
     "decision": "pruning.empty",
     "conditions": 1,
     "vectors_required": 2,
@@ -16772,7 +16932,7 @@
   {
     "id": "engine_resolve_run_column_query_afcf4357_2",
     "file": "src/engine/resolve.rs",
-    "line": 474,
+    "line": 701,
     "decision": "pruning.empty",
     "conditions": 1,
     "vectors_required": 2,
@@ -16782,7 +16942,7 @@
   {
     "id": "engine_resolve_explain_column_plan_91a305fc",
     "file": "src/engine/resolve.rs",
-    "line": 514,
+    "line": 741,
     "decision": "name.eq_ignore_ascii_case(table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16792,7 +16952,7 @@
   {
     "id": "engine_resolve_explain_column_plan_49e09ee9",
     "file": "src/engine/resolve.rs",
-    "line": 516,
+    "line": 743,
     "decision": "name.eq_ignore_ascii_case(&lookup_table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16802,7 +16962,7 @@
   {
     "id": "engine_resolve_explain_column_plan_ce396362",
     "file": "src/engine/resolve.rs",
-    "line": 537,
+    "line": 764,
     "decision": "match (pruning.empty, pruning.predicate.as_ref()) {\n        (true, _) => Some(0),\n        (false, Some(predicate)) => Some(driving.with_probe_segments(\n            &plan.left_columns,\n            Some(predicate),\n            |segments| Ok(segments.len()),\n        )?),\n        (false, None) => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16812,7 +16972,7 @@
   {
     "id": "engine_resolve_explain_column_plan_08a78031",
     "file": "src/engine/resolve.rs",
-    "line": 546,
+    "line": 773,
     "decision": "let Some(kept) = kept",
     "conditions": 1,
     "vectors_required": 2,
@@ -16822,7 +16982,7 @@
   {
     "id": "engine_resolve_check_single_join_explain_c43658ef",
     "file": "src/engine/resolve.rs",
-    "line": 611,
+    "line": 838,
     "decision": "join_count(select) > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -16832,7 +16992,7 @@
   {
     "id": "engine_resolve_explain_plan_6d58e3a5",
     "file": "src/engine/resolve.rs",
-    "line": 775,
+    "line": 1002,
     "decision": "select.from.as_ref().is_some_and(|f| f.joins.len() > 1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16842,7 +17002,7 @@
   {
     "id": "engine_resolve_explain_plan_cbd67ad2",
     "file": "src/engine/resolve.rs",
-    "line": 795,
+    "line": 1022,
     "decision": "table.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16852,7 +17012,7 @@
   {
     "id": "engine_resolve_explain_plan_6d0bbb8e",
     "file": "src/engine/resolve.rs",
-    "line": 797,
+    "line": 1024,
     "decision": "table.eq_ignore_ascii_case(&lookup_table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16862,7 +17022,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_ecf724d4",
     "file": "src/engine/resolve.rs",
-    "line": 829,
+    "line": 1056,
     "decision": "from.joins.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -16872,7 +17032,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_0cfb5f70",
     "file": "src/engine/resolve.rs",
-    "line": 854,
+    "line": 1081,
     "decision": "!from_name.eq_ignore_ascii_case(super::stream::TABLE)\n        || !join_name.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 2,
     "vectors_required": 3,
@@ -16882,7 +17042,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_b20d52d9",
     "file": "src/engine/resolve.rs",
-    "line": 880,
+    "line": 1107,
     "decision": "left_alias.eq_ignore_ascii_case(right_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16892,7 +17052,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_06064080",
     "file": "src/engine/resolve.rs",
-    "line": 887,
+    "line": 1114,
     "decision": "match select.scope.as_ref() {\n        None => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a SINCE/UNTIL window: with no \\\n                 SQLite side to bound the query, the window is what makes the \\\n                 join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) if !matches!(super::stream::resolve_scope(select), Scope::Time(_)) => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a time-based SINCE/UNTIL window \\\n                 (e.g. `SINCE 1 hour`); `LINES`/`BYTES` scopes don't bound either \\\n                 side by time and can't make the join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16902,7 +17062,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_9a3b2404",
     "file": "src/engine/resolve.rs",
-    "line": 896,
+    "line": 1123,
     "decision": "!matches!(super::stream::resolve_scope(select), Scope::Time(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -16912,7 +17072,7 @@
   {
     "id": "engine_resolve_alias_normalize_f42b0018",
     "file": "src/engine/resolve.rs",
-    "line": 918,
+    "line": 1145,
     "decision": "let Some(from) = &mut select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -16922,7 +17082,7 @@
   {
     "id": "engine_resolve_alias_normalize_567a3ca4",
     "file": "src/engine/resolve.rs",
-    "line": 920,
+    "line": 1147,
     "decision": "let Some(join) = from.joins.first_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16932,7 +17092,7 @@
   {
     "id": "engine_resolve_materialize_segments_cdfe5103",
     "file": "src/engine/resolve.rs",
-    "line": 953,
+    "line": 1180,
     "decision": "num_rows > MAX_STREAM_STREAM_BUILD_ROWS",
     "conditions": 1,
     "vectors_required": 2,
@@ -16942,7 +17102,7 @@
   {
     "id": "engine_resolve_materialize_segments_cfd2fd17",
     "file": "src/engine/resolve.rs",
-    "line": 967,
+    "line": 1194,
     "decision": "let Some(col) = batch.columns.get(&request.key)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16952,7 +17112,7 @@
   {
     "id": "engine_resolve_explain_stream_stream_plan_3be1fe26",
     "file": "src/engine/resolve.rs",
-    "line": 1055,
+    "line": 1282,
     "decision": "table.eq_ignore_ascii_case(&left_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16962,7 +17122,7 @@
   {
     "id": "engine_resolve_explain_stream_stream_plan_6b519d7c",
     "file": "src/engine/resolve.rs",
-    "line": 1057,
+    "line": 1284,
     "decision": "table.eq_ignore_ascii_case(&right_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16972,7 +17132,7 @@
   {
     "id": "engine_resolve_explain_opcodes_query_6d58e3a5",
     "file": "src/engine/resolve.rs",
-    "line": 1096,
+    "line": 1323,
     "decision": "select.from.as_ref().is_some_and(|f| f.joins.len() > 1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16982,7 +17142,7 @@
   {
     "id": "engine_resolve_run_query_a33ca03f",
     "file": "src/engine/resolve.rs",
-    "line": 1299,
+    "line": 1526,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => run_query(driving, lookup, sql),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => run_column_query(driving, lookup, sql),\n            CrossModeEngine::StreamStream { left, right } => {\n                run_stream_stream_query(left, right, sql)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16992,7 +17152,7 @@
   {
     "id": "engine_resolve_explain_plan_7b0019a7",
     "file": "src/engine/resolve.rs",
-    "line": 1314,
+    "line": 1541,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_plan(driving, lookup, lookup_path, sql),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_column_plan(driving, lookup, lookup_path, sql),\n            CrossModeEngine::StreamStream { left, right } => {\n                explain_stream_stream_plan(left, right, sql)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17002,7 +17162,7 @@
   {
     "id": "engine_resolve_explain_opcodes_41e273ff",
     "file": "src/engine/resolve.rs",
-    "line": 1333,
+    "line": 1560,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => explain_opcodes_query(driving, lookup, sql)?,\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => explain_column_opcodes(driving, lookup, sql)?,\n            CrossModeEngine::StreamStream { left, .. } => {\n                explain_opcodes_stream_stream_query(left, sql)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17012,7 +17172,7 @@
   {
     "id": "engine_resolve_stats_63cfcd33",
     "file": "src/engine/resolve.rs",
-    "line": 1349,
+    "line": 1576,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, .. } => driving.stats(),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite { driving, .. } => driving.stats(),\n            CrossModeEngine::StreamStream { left, .. } => left.stats(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17022,7 +17182,7 @@
   {
     "id": "engine_resolve_tables_009128f1",
     "file": "src/engine/resolve.rs",
-    "line": 1358,
+    "line": 1585,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            CrossModeEngine::StreamStream { left, right } => {\n                let mut tables = left.tables()?;\n                tables.extend(right.tables()?);\n                Ok(tables)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,

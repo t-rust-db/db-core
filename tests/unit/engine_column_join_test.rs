@@ -401,10 +401,8 @@ fn star_over_an_on_join_lists_both_key_columns() {
              ORDER BY production.id",
         )
         .unwrap();
-    assert_eq!(
-        star.columns,
-        ["region", "amount", "production.id", "labels.id", "label"]
-    );
+    // Bare headers, duplicates included, as in SQLite and DuckDB.
+    assert_eq!(star.columns, ["region", "amount", "id", "id", "label"]);
     assert_eq!(star.rows[0][2], star.rows[0][3]);
 }
 
@@ -450,4 +448,70 @@ fn a_lookup_filter_with_using_still_keeps_the_matching_rows() {
          WHERE labels.label = 'two'",
     );
     assert_eq!(got, vec![vec![Cell::Int(2)]]);
+}
+
+#[test]
+fn an_unqualified_column_in_both_tables_is_ambiguous_unless_it_is_the_using_key() {
+    let db = LookupDb::new("ambiguous");
+    let mut e = db.engine();
+    for sql in [
+        "SELECT id FROM production JOIN labels ON production.id = labels.id",
+        "SELECT production.id FROM production JOIN labels ON production.id = labels.id \
+         WHERE id = 2",
+        "SELECT region FROM production JOIN labels ON production.id = labels.id \
+         ORDER BY id",
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Compile, "{sql}: {err}");
+        assert!(err.message.contains("ambiguous column name: id"), "{err}");
+        assert!(err.message.contains("production, labels"), "{err}");
+    }
+    // `ORDER BY id` names the output column `id`, not either table's.
+    let got = rows(
+        &mut e,
+        "SELECT production.id FROM production JOIN labels ON production.id = labels.id \
+         ORDER BY id DESC",
+    );
+    assert_eq!(got.first(), Some(&vec![Cell::Int(3)]));
+    // `USING (id)` merges the two: the key is the table written first.
+    let got = rows(
+        &mut e,
+        "SELECT id FROM production JOIN labels USING (id) WHERE id = 2",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(2)]]);
+}
+
+#[test]
+fn an_unqualified_column_of_one_table_resolves_to_it() {
+    let db = LookupDb::new("owner");
+    let mut e = db.engine();
+    // `label` is only in the lookup table, `region` only in the Parquet one,
+    // whichever table is written first, and the header stays as written.
+    for sql in [
+        "SELECT label, region FROM production JOIN labels ON production.id = labels.id \
+         WHERE label = 'two'",
+        "SELECT label, region FROM labels JOIN production ON labels.id = production.id \
+         WHERE label = 'two'",
+    ] {
+        let r = e.run_query(sql).unwrap();
+        assert_eq!(r.columns, ["label", "region"], "{sql}");
+        assert_eq!(r.rows, vec![vec![text("two"), text("north")]], "{sql}");
+    }
+    let got = rows(
+        &mut e,
+        "SELECT label, count(*) FROM production JOIN labels USING (id) \
+         GROUP BY label ORDER BY label",
+    );
+    assert_eq!(
+        got,
+        vec![
+            vec![text("one"), Cell::Int(1)],
+            vec![text("three"), Cell::Int(1)],
+            vec![text("two"), Cell::Int(1)],
+        ]
+    );
+    let err = e
+        .run_query("SELECT nope FROM production JOIN labels USING (id)")
+        .unwrap_err();
+    assert!(err.message.contains("unknown column: nope"), "{err}");
 }

@@ -73,6 +73,13 @@ QUERIES=(
   "SELECT region, count(*) FROM __P__ JOIN __ids__ USING (id) GROUP BY region ORDER BY region"
   "SELECT id, count(*) FROM __P__ JOIN __ids__ USING (id) WHERE id > 1 GROUP BY id ORDER BY id"
   "SELECT id FROM __P__ LEFT JOIN __ids__ USING (id) WHERE id < 5 AND ids.label IS NULL ORDER BY id"
+  # an unqualified column is the one table's that has it, either table
+  # written first; ORDER BY names the output column
+  "SELECT label, region FROM __P__ JOIN __ids__ ON production.id = ids.id WHERE label = 'two'"
+  "SELECT label, region FROM __ids__ JOIN __P__ ON ids.id = production.id WHERE label = 'two'"
+  "SELECT label, count(*) FROM __P__ JOIN __ids__ ON production.id = ids.id GROUP BY label ORDER BY label"
+  "SELECT production.id FROM __P__ JOIN __ids__ ON production.id = ids.id ORDER BY id DESC"
+  "SELECT region, zone, count(*) FROM __P__ JOIN __regions__ USING (region) GROUP BY region, zone ORDER BY region"
   # the ON operands in either order
   "SELECT production.id, ids.label FROM __P__ JOIN __ids__ ON ids.id = production.id ORDER BY production.id"
   "SELECT production.id, ids.label FROM __P__ LEFT JOIN __ids__ ON ids.id = production.id ORDER BY production.id LIMIT 6"
@@ -87,6 +94,16 @@ QUERIES=(
   "SELECT production.id, ids.label, regions.zone FROM __P__ JOIN __ids__ ON production.id = ids.id JOIN __regions__ ON production.region = regions.region ORDER BY production.id"
   "SELECT production.id, ids.label, regions.zone FROM __P__ JOIN __ids__ ON production.id = ids.id JOIN __regions__ ON production.region = regions.region WHERE regions.zone = 'A' AND ids.weight >= 10 ORDER BY production.id"
   "SELECT regions.zone, count(*) FROM __P__ JOIN __ids__ ON production.id = ids.id JOIN __regions__ ON production.region = regions.region GROUP BY regions.zone ORDER BY regions.zone"
+)
+
+# Queries both engines must refuse: an unqualified column that two tables
+# have is ambiguous (unless it is the USING key), and so is an unknown one.
+# (`USING (a, b)` is valid in DuckDB; db-core refuses it by design, #771.)
+ERROR_QUERIES=(
+  "SELECT id FROM __P__ JOIN __ids__ ON production.id = ids.id"
+  "SELECT production.id FROM __P__ JOIN __ids__ ON production.id = ids.id WHERE id = 2"
+  "SELECT region FROM __P__ JOIN __ids__ ON production.id = ids.id ORDER BY id"
+  "SELECT nope FROM __P__ JOIN __ids__ USING (id)"
 )
 
 workdir="$(mktemp -d)"
@@ -115,6 +132,25 @@ for template in "${QUERIES[@]}"; do
     echo "MISMATCH: $db_sql"
     echo "  db-core: $got"
     echo "  duckdb:  $want"
+    fail=1
+  fi
+done
+
+for template in "${ERROR_QUERIES[@]}"; do
+  db_sql="${template//__P__/production}"
+  db_sql="${db_sql//__ids__/ids}"
+  db_sql="${db_sql//__regions__/regions}"
+  duck_sql="${template//__P__/\'$FIXTURE\' AS production}"
+  duck_sql="${duck_sql//__ids__/lk.ids}"
+  duck_sql="${duck_sql//__regions__/lk.regions}"
+
+  checked=$((checked + 1))
+  if ./target/release/examples/column_join_oracle "$FIXTURE" "$lookup" "$db_sql" >/dev/null 2>&1; then
+    echo "NOT REFUSED by db-core: $db_sql"
+    fail=1
+  fi
+  if duckdb -csv -noheader -c "INSTALL sqlite; LOAD sqlite; ATTACH '$lookup' AS lk (TYPE sqlite); $duck_sql" >/dev/null 2>&1; then
+    echo "NOT REFUSED by duckdb (the expectation is wrong): $db_sql"
     fail=1
   fi
 done

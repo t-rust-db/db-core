@@ -156,6 +156,26 @@ fn star_expands_over_both_tables_of_a_stream_sqlite_join() {
     assert!(result.rows.iter().all(|r| r.len() == columns.len()));
 }
 
+/// #771: an unqualified column belongs to the one table that has it
+/// (`region` is the lookup's, `severity` is `log`'s), where it used to
+/// mean `log`'s and fail as unknown.
+#[test]
+fn an_unqualified_column_resolves_to_the_table_that_has_it() {
+    let db = HostsDb::new("unqualified");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let result = run_query(
+        &driving,
+        &lookup,
+        "SELECT region, count(*) FROM log JOIN hosts ON log.hostname = hosts.name \
+         WHERE severity >= 'WARN' GROUP BY region ORDER BY region",
+    )
+    .expect("unqualified lookup column");
+    assert_eq!(result.columns, vec!["region", "COUNT(*)"]);
+    assert!(!result.rows.is_empty());
+}
+
 /// #387: the same stream/SQLite cross-mode join, but routed through
 /// `CrossModeEngine`'s `Engine` impl instead of the free functions --
 /// `run_query`/`explain_opcodes` must agree with the free-function path
