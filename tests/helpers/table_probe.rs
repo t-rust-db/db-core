@@ -5,8 +5,10 @@
 //! directory given as the only argument and appends `{"i":<n>,...}` for
 //! n = 0, 1, ... forever, each `Ack::Durable`, sealing a page every 37
 //! records and flushing every 150. After each ack it prints the record's
-//! LSN (always n + 1). The parent reads the table from its own process
-//! meanwhile, and kills this one with SIGKILL.
+//! LSN (always n + 1), then waits a millisecond: the table grows at a
+//! bounded rate whatever the disk, so a fast disk does not make the
+//! parent's reads ever slower (#726). The parent reads the table from its
+//! own process meanwhile, and kills this one with SIGKILL.
 
 #![allow(
     clippy::unwrap_used,
@@ -17,6 +19,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use db_core::storage::ingest::{Ack, TableOptions, TableWriter};
 
@@ -32,6 +35,7 @@ fn main() {
         let mut out = std::io::stdout().lock();
         writeln!(out, "{lsn}").unwrap();
         out.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(1));
         if n % 37 == 36 {
             writer.seal_head().unwrap();
         }
