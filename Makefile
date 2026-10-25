@@ -227,6 +227,12 @@ check-column-profile: ## Charter gate: the column profile carries exactly its na
 check-column-oracle: ## Local-only: column engine query results agree with DuckDB over Parquet fixtures (tools/check_column_oracle.sh)
 	@tools/check_column_oracle.sh
 
+# The same for a Parquet table joined to SQLite lookup tables (#598):
+# DuckDB reads the file and attaches the SQLite file. Needs `duckdb` and
+# `sqlite3` on PATH.
+check-column-join-oracle: ## Local-only: Parquet/SQLite joins agree with DuckDB over the Parquet file plus the attached SQLite file (tools/check_column_join_oracle.sh)
+	@tools/check_column_join_oracle.sh
+
 # sqlite-rs parses with this crate's parser::row, so its grammar must say
 # the same as grammar.ebnf's SQLITE-RS ONLY section (#565). Pairs with
 # sqlite-rs's own check-grammar-drift (its EBNF against parse.y).

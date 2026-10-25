@@ -315,6 +315,10 @@ name = "map_vs_flat"
 required-features = ["storage-column-write", "engine-column"]
 
 [[example]]
+name = "column_join_oracle"
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch"]
+
+[[example]]
 name = "row_oracle"
 required-features = ["engine-row"]
 
