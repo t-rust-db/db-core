@@ -42,7 +42,7 @@ mod tier;
 pub use error::IngestError;
 #[cfg(feature = "ingest")]
 pub use handle::{Table, FOLLOW_DIR};
-pub use layout::{Area, Layout, LayoutKind, TierOptions};
+pub use layout::{Area, Layout, LayoutKind, SessionKey, TierOptions};
 #[cfg(feature = "ingest")]
 pub use lock::{LockError, TableLock, LOCK_FILE};
 pub use manifest::{FileEntry, KeyBound, KeyRange, Manifest, ManifestError, MANIFEST_FILE};

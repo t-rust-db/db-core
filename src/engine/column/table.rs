@@ -30,7 +30,10 @@ use super::{
 };
 use crate::parser::ast::{Expr, Literal};
 use crate::storage::ingest::snapshot::{cast, physical_type};
-use crate::storage::ingest::{FileEntry, KeyBound, KeyRange, PageBody, RowPage, Snapshot};
+use crate::storage::ingest::{
+    FileEntry, KeyBound, KeyRange, PageBody, RowPage, SessionKey, Snapshot,
+};
+use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::schema::{ColumnSpec, ColumnType};
 use crate::storage::stream::adapter::stored_column_values;
 use crate::storage::stream::detect::Format;
@@ -261,7 +264,14 @@ pub fn query_snapshot(
     let requests = resolve(&schema, &program.columns_to_load())?;
     let files = snapshot
         .files()
-        .filter(|(entry, _)| may_match(entry, &schema, select.where_clause.as_ref()))
+        .filter(|(entry, _)| {
+            may_match(
+                entry,
+                &schema,
+                snapshot.manifest().session_key.as_ref(),
+                select.where_clause.as_ref(),
+            )
+        })
         .map(|(entry, bytes)| {
             ParquetFile::open(bytes).map_err(|e| open_error(format!("{}: {e}", entry.path)))
         })
@@ -280,13 +290,77 @@ pub fn query_snapshot(
 }
 
 /// Whether `where_clause` may match a row of `entry`'s file: false when
-/// its key ranges prove it matches none.
+/// its key ranges, or the arrival window of the session keys it names
+/// (#599), prove it matches none.
 pub(super) fn may_match(
     entry: &FileEntry,
     schema: &[ColumnSpec],
+    session_key: Option<&SessionKey>,
     where_clause: Option<&Expr>,
 ) -> bool {
-    where_clause.is_none_or(|w| !prune::definitely_empty_in(w, &(entry.keys.as_slice(), schema)))
+    where_clause.is_none_or(|w| {
+        let session = session_key.and_then(|key| SessionWindow::of(key, entry, schema));
+        !(prune::definitely_empty_in(w, &(entry.keys.as_slice(), schema))
+            || session.is_some_and(|s| prune::definitely_empty_in(w, &s)))
+    })
+}
+
+/// The keys of a session key column that can have rows in one file, as
+/// pruning bounds. A file whose rows arrived in `[lo, hi]` holds rows of
+/// sessions that started in `[lo - max_session, hi]`, whose keys lie in
+/// `[(lo_s - max) << 32, (hi_s << 32) | 0xFFFF_FFFF]`.
+struct SessionWindow {
+    column: String,
+    min: i64,
+    max: i64,
+    physical: PhysicalType,
+}
+
+impl SessionWindow {
+    /// `None` when the file has no arrival bounds or the key column is not
+    /// an integer of the schema (a file then bounds nothing).
+    fn of(key: &SessionKey, entry: &FileEntry, schema: &[ColumnSpec]) -> Option<Self> {
+        const NS: i64 = 1_000_000_000;
+        let (lo, hi) = entry.observed_ts?;
+        let spec = schema.iter().find(|s| s.name == key.column)?;
+        if !matches!(spec.column_type, ColumnType::Int64 | ColumnType::UInt64) {
+            return None;
+        }
+        // Saturating, so a bound that does not fit i64 stays a bound that
+        // keeps the file ("may match") rather than wrapping.
+        let key_of = |secs: i64| secs.saturating_mul(1 << 32);
+        let first = lo
+            .div_euclid(NS)
+            .saturating_sub(i64::from(key.max_session_secs));
+        Some(SessionWindow {
+            column: key.column.clone(),
+            min: key_of(first),
+            max: key_of(hi.div_euclid(NS)).saturating_add(0xFFFF_FFFF),
+            physical: physical_type(spec.column_type),
+        })
+    }
+}
+
+impl prune::Bounds for SessionWindow {
+    fn bounds(
+        &self,
+        column: &str,
+        literal: &Literal,
+    ) -> Option<(
+        Option<prune::StatValue>,
+        Option<prune::StatValue>,
+        prune::StatValue,
+    )> {
+        if column != self.column {
+            return None;
+        }
+        let literal = prune::literal_stat_value(literal, self.physical)?;
+        Some((
+            Some(prune::StatValue::Int(self.min)),
+            Some(prune::StatValue::Int(self.max)),
+            literal,
+        ))
+    }
 }
 
 /// A file's manifest key ranges and the table's columns, as pruning

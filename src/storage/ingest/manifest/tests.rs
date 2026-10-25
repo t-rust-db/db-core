@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::ingest::layout::{Area, LayoutKind};
+use crate::storage::ingest::layout::{Area, LayoutKind, SessionKey};
 
 fn entry(lo: u64, hi: u64) -> FileEntry {
     FileEntry {
@@ -362,8 +362,43 @@ fn an_evolved_schema_is_version_5_so_older_readers_refuse_it() {
     }
     let future = two_files()
         .to_json()
-        .replace("\"version\":2", "\"version\":6");
+        .replace("\"version\":2", "\"version\":7");
     assert!(Manifest::parse(&future).is_err());
+}
+
+#[test]
+fn a_session_key_is_version_6_so_older_readers_refuse_it() {
+    use crate::storage::parquet::schema::ColumnType;
+    const { assert!(SESSION_VERSION > EVOLVED_VERSION) };
+    let mut m = with_keys();
+    m.schema = Some(vec![ColumnSpec::new("sid", ColumnType::UInt64, false)]);
+    m.session_key = Some(SessionKey {
+        column: "sid".to_string(),
+        max_session_secs: 1_800,
+    });
+    // `evolved` survives, though the version no longer says it.
+    for evolved in [false, true] {
+        m.evolved = evolved;
+        let text = m.to_json();
+        assert!(text.contains("\"version\":6"), "{text}");
+        assert!(text.contains("\"session_key\":{\"column\":\"sid\",\"max_session_secs\":1800}"));
+        assert_eq!(Manifest::parse(&text).unwrap(), m);
+    }
+    // Without one the version is as before.
+    m.session_key = None;
+    m.evolved = false;
+    assert!(m.to_json().contains("\"version\":4"));
+    let broken = |from: &str, to: &str| {
+        let mut m = m.clone();
+        m.session_key = Some(SessionKey {
+            column: "sid".to_string(),
+            max_session_secs: 1,
+        });
+        Manifest::parse(&m.to_json().replace(from, to))
+    };
+    assert!(broken("\"max_session_secs\":1", "\"max_session_secs\":4294967296").is_err());
+    assert!(broken("\"max_session_secs\":1", "\"max_session_secs\":-1").is_err());
+    assert!(broken("\"session_key\":{", "\"session_key\":[{").is_err());
 }
 
 #[test]

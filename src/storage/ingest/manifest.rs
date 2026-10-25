@@ -38,13 +38,19 @@
 //! is written as version 5 (otherwise as version 4), so a reader that
 //! predates schema evolution refuses it rather than reading files and
 //! WAL rows that lack the new columns.
+//!
+//! A table with a session key (#599) records `session_key`, the column and
+//! the longest a session runs, and is written as version 6 (with `evolved`
+//! named, as the version no longer says it), so a reader that predates it
+//! refuses the table rather than ignoring a pruning contract it cannot
+//! honour.
 
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Path;
 
-use super::layout::{Area, LayoutKind};
+use super::layout::{Area, LayoutKind, SessionKey};
 use super::record::{type_from_name, type_name};
 use crate::json_path::{parse_object, JsonValue};
 use crate::storage::parquet::schema::ColumnSpec;
@@ -61,6 +67,9 @@ const KEYS_VERSION: i64 = 4;
 /// The version of a manifest whose schema gained columns (#740); the rest
 /// is as version 4, so a reader that predates it refuses the table.
 const EVOLVED_VERSION: i64 = 5;
+/// The version of a manifest that records a session key (#599). It names
+/// `evolved` itself, since the version no longer says so.
+const SESSION_VERSION: i64 = 6;
 
 /// A bound of a [`KeyRange`]. Bounds of one column are one variant, and
 /// order as the column's values do (strings byte-wise).
@@ -135,6 +144,9 @@ pub struct Manifest {
     pub flushed_lsn: u64,
     /// Every LSN up to this one was dropped by retention (0: none was).
     pub dropped_lsn: u64,
+    /// The session key column readers prune by (#599). Written as
+    /// version 6.
+    pub session_key: Option<SessionKey>,
     /// The live files, in LSN order.
     pub files: Vec<FileEntry>,
 }
@@ -195,6 +207,7 @@ impl Manifest {
             evolved: false,
             flushed_lsn: 0,
             dropped_lsn: 0,
+            session_key: None,
             files: Vec::new(),
         }
     }
@@ -298,7 +311,9 @@ impl Manifest {
     pub fn to_json(&self) -> String {
         let mut out = String::new();
         let keys = |f: &FileEntry| f.keys.iter().any(KeyRange::writable);
-        let version = if self.evolved {
+        let version = if self.session_key.is_some() {
+            SESSION_VERSION
+        } else if self.evolved {
             EVOLVED_VERSION
         } else if self.files.iter().any(keys) {
             KEYS_VERSION
@@ -329,6 +344,15 @@ impl Manifest {
         }
         if self.dropped_lsn > 0 {
             out.push_str(&format!("\"dropped_lsn\":{},", self.dropped_lsn));
+        }
+        if let Some(key) = &self.session_key {
+            out.push_str(&format!(
+                "\"session_key\":{{\"column\":\"{}\",\"max_session_secs\":{}}},",
+                key.column, key.max_session_secs
+            ));
+            if self.evolved {
+                out.push_str("\"evolved\":true,");
+            }
         }
         out.push_str(&format!("\"flushed_lsn\":{},\"files\":[", self.flushed_lsn));
         for (i, file) in self.files.iter().enumerate() {
@@ -361,7 +385,7 @@ impl Manifest {
         }
         let fields = owned(&root)?.into_object()?;
         let version = int(&fields, "version")?;
-        if !(1..=EVOLVED_VERSION).contains(&version) {
+        if !(1..=SESSION_VERSION).contains(&version) {
             return Err(malformed("unsupported version"));
         }
         let format = format_from_name(&string(&fields, "format")?)
@@ -377,7 +401,9 @@ impl Manifest {
         // table.
         let schema = match version {
             RECORDS_VERSION => Some(schema(&fields)?),
-            KEYS_VERSION | EVOLVED_VERSION if fields.iter().any(|(k, _)| k == "schema") => {
+            KEYS_VERSION | EVOLVED_VERSION | SESSION_VERSION
+                if fields.iter().any(|(k, _)| k == "schema") =>
+            {
                 Some(schema(&fields)?)
             }
             _ => None,
@@ -387,6 +413,16 @@ impl Manifest {
             unsigned(&fields, "dropped_lsn")?
         } else {
             0
+        };
+        let session_key = if version == SESSION_VERSION {
+            Some(session_key(&fields)?)
+        } else {
+            None
+        };
+        let evolved = match version {
+            EVOLVED_VERSION => true,
+            SESSION_VERSION => fields.iter().any(|(k, _)| k == "evolved"),
+            _ => false,
         };
         let Json::Array(files) = field(&fields, "files")? else {
             return Err(malformed("files is not an array"));
@@ -399,9 +435,10 @@ impl Manifest {
             format,
             layout,
             schema,
-            evolved: version == EVOLVED_VERSION,
+            evolved,
             flushed_lsn,
             dropped_lsn,
+            session_key,
             files,
         };
         manifest.check()?;
@@ -514,6 +551,19 @@ fn owned_at(value: &JsonValue, arrays: usize) -> Result<Json, ManifestError> {
         }
         JsonValue::Bool(b) => Json::Bool(*b),
         JsonValue::Float(_) => Json::Other,
+    })
+}
+
+/// A version 6 manifest's `session_key`.
+fn session_key(fields: &[(String, Json)]) -> Result<SessionKey, ManifestError> {
+    let Json::Object(key) = field(fields, "session_key")? else {
+        return Err(malformed("session_key is not an object"));
+    };
+    let max = unsigned(&key, "max_session_secs")?;
+    Ok(SessionKey {
+        column: string(&key, "column")?,
+        max_session_secs: u32::try_from(max)
+            .map_err(|_| malformed("max_session_secs too large"))?,
     })
 }
 

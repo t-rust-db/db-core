@@ -239,12 +239,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test
-      # Tests write tables with an fsync per append: on tmpfs the library run
-      # takes about 4 s instead of 21 s (#726). A process kill, which is what
-      # the crash tests do, leaves the page cache intact either way.
       - run: make test
-        env:
-          TMPDIR: /dev/shm
 
   # Compile-level guard for the AOT emitter (db-core#447). The source
   # `codegen::batch::emit` generates calls the *consumer's*
@@ -366,7 +361,4 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      # tmpfs for the tests' tables, as in the Test job (#726).
       - run: make check-coverage
-        env:
-          TMPDIR: /dev/shm
