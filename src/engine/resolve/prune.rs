@@ -138,11 +138,9 @@ fn join_keys(join: &Join, table: &str) -> Option<(String, String)> {
     let on = match &join.constraint {
         Some(JoinConstraint::On(on)) => on,
         // `USING (k)` names the same column on both sides.
+        // The first column keys the hash join; any one key prunes.
         Some(JoinConstraint::Using(columns)) => {
-            return match columns.as_slice() {
-                [key] => Some((key.clone(), key.clone())),
-                _ => None,
-            };
+            return columns.first().map(|key| (key.clone(), key.clone()));
         }
         None => return None,
     };

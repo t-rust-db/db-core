@@ -27,6 +27,9 @@ CREATE TABLE ids(id INTEGER PRIMARY KEY, label TEXT, weight INTEGER);
 INSERT INTO ids VALUES (1,'one',10),(2,'two',20),(3,'three',30),(10,'ten',5),(4999,'last',7),(6000,'nowhere',1);
 CREATE TABLE regions(region TEXT PRIMARY KEY, zone TEXT);
 INSERT INTO regions VALUES ('north','A'),('south','A'),('east','B');
+-- a two-column key: ids 1, 2 and 10 agree with production's region too
+CREATE TABLE pairs(id INTEGER, region TEXT, tag TEXT);
+INSERT INTO pairs VALUES (1,'west','w1'),(2,'north','n2'),(3,'east','e3'),(4,'south','s4'),(10,'north','n10');
 "
 
 J_IDS="__P__ JOIN __ids__ ON production.id = ids.id"
@@ -90,6 +93,15 @@ QUERIES=(
   "SELECT * FROM __P__ JOIN __ids__ USING (id) ORDER BY id"
   "SELECT * FROM __P__ JOIN __ids__ ON production.id = ids.id ORDER BY production.id"
   "SELECT * FROM __P__ JOIN __regions__ ON production.region = regions.region WHERE production.id < 6 ORDER BY production.id"
+  # USING (a, b): hash on a, filter on b, inner joins
+  "SELECT production.id, pairs.tag FROM __P__ JOIN __pairs__ USING (id, region) ORDER BY production.id"
+  "SELECT * FROM __P__ JOIN __pairs__ USING (id, region) ORDER BY id"
+  "SELECT count(*) FROM __P__ JOIN __pairs__ USING (id, region) WHERE pairs.tag LIKE 'n%'"
+  "SELECT region, count(*) FROM __P__ JOIN __pairs__ USING (id, region) GROUP BY region ORDER BY region"
+  # t.*: one table's columns, the USING key included
+  "SELECT ids.* FROM __P__ JOIN __ids__ USING (id) ORDER BY ids.id"
+  "SELECT production.*, ids.label FROM __P__ JOIN __ids__ ON production.id = ids.id ORDER BY production.id"
+  "SELECT regions.* FROM __P__ JOIN __regions__ USING (region) WHERE production.id < 5 ORDER BY production.id"
   # a star join over both lookup tables
   "SELECT production.id, ids.label, regions.zone FROM __P__ JOIN __ids__ ON production.id = ids.id JOIN __regions__ ON production.region = regions.region ORDER BY production.id"
   "SELECT production.id, ids.label, regions.zone FROM __P__ JOIN __ids__ ON production.id = ids.id JOIN __regions__ ON production.region = regions.region WHERE regions.zone = 'A' AND ids.weight >= 10 ORDER BY production.id"
@@ -98,7 +110,9 @@ QUERIES=(
 
 # Queries both engines must refuse: an unqualified column that two tables
 # have is ambiguous (unless it is the USING key), and so is an unknown one.
-# (`USING (a, b)` is valid in DuckDB; db-core refuses it by design, #771.)
+# (`LEFT JOIN ... USING (a, b)` is valid in DuckDB; db-core refuses it by
+# design, #771: the extra keys filter after the join, which an outer join
+# cannot do.)
 ERROR_QUERIES=(
   "SELECT id FROM __P__ JOIN __ids__ ON production.id = ids.id"
   "SELECT production.id FROM __P__ JOIN __ids__ ON production.id = ids.id WHERE id = 2"
@@ -120,9 +134,11 @@ for template in "${QUERIES[@]}"; do
   db_sql="${template//__P__/production}"
   db_sql="${db_sql//__ids__/ids}"
   db_sql="${db_sql//__regions__/regions}"
+  db_sql="${db_sql//__pairs__/pairs}"
   duck_sql="${template//__P__/\'$FIXTURE\' AS production}"
   duck_sql="${duck_sql//__ids__/lk.ids}"
   duck_sql="${duck_sql//__regions__/lk.regions}"
+  duck_sql="${duck_sql//__pairs__/lk.pairs}"
 
   got="$(./target/release/examples/column_join_oracle "$FIXTURE" "$lookup" "$db_sql")"
   want="$(duckdb -csv -noheader -nullvalue '' -c "INSTALL sqlite; LOAD sqlite; ATTACH '$lookup' AS lk (TYPE sqlite); $duck_sql" | grep -v '^$' || true)"
@@ -140,9 +156,11 @@ for template in "${ERROR_QUERIES[@]}"; do
   db_sql="${template//__P__/production}"
   db_sql="${db_sql//__ids__/ids}"
   db_sql="${db_sql//__regions__/regions}"
+  db_sql="${db_sql//__pairs__/pairs}"
   duck_sql="${template//__P__/\'$FIXTURE\' AS production}"
   duck_sql="${duck_sql//__ids__/lk.ids}"
   duck_sql="${duck_sql//__regions__/lk.regions}"
+  duck_sql="${duck_sql//__pairs__/lk.pairs}"
 
   checked=$((checked + 1))
   if ./target/release/examples/column_join_oracle "$FIXTURE" "$lookup" "$db_sql" >/dev/null 2>&1; then

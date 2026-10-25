@@ -996,6 +996,58 @@ struct JoinStep {
     table: String,
     left_col: String,
     right_col: String,
+    /// The `(FROM column, joined column)` pairs of a `USING (a, b, ...)`
+    /// past the first, which keys the hash; they filter the joined rows.
+    extra_keys: Vec<(String, String)>,
+}
+
+/// `select` with every join's extra `USING` keys added to its `WHERE` as
+/// `from.k = joined.k` (#771): the hash join keys on the first column and
+/// these keep the rows that agree on the rest. Only an inner join can drop
+/// a non-matching row, so an outer join with extra keys is refused.
+fn with_extra_key_filters(select: &Select, from_name: &str, joins: &[JoinStep]) -> Result<Select> {
+    let mut filtered = select.clone();
+    for join in joins {
+        if join.extra_keys.is_empty() {
+            continue;
+        }
+        if join.op != JoinOp::Inner {
+            return Err(PlanError::UnsupportedJoinKind(join.op));
+        }
+        for (from_col, join_col) in &join.extra_keys {
+            let equal = AstExpr {
+                kind: ExprKind::Binary {
+                    op: AstBinOp::Eq,
+                    lhs: Box::new(key_column(from_name, from_col)),
+                    rhs: Box::new(key_column(&join.table, join_col)),
+                },
+                span: crate::parser::Span::UNKNOWN,
+            };
+            filtered.where_clause = Some(match filtered.where_clause.take() {
+                Some(existing) => AstExpr {
+                    kind: ExprKind::Binary {
+                        op: AstBinOp::And,
+                        lhs: Box::new(existing),
+                        rhs: Box::new(equal),
+                    },
+                    span: crate::parser::Span::UNKNOWN,
+                },
+                None => equal,
+            });
+        }
+    }
+    Ok(filtered)
+}
+
+fn key_column(table: &str, name: &str) -> AstExpr {
+    AstExpr {
+        kind: ExprKind::Column {
+            table: Some(table.to_string()),
+            catalog: None,
+            name: name.to_string(),
+        },
+        span: crate::parser::Span::UNKNOWN,
+    }
 }
 
 fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
@@ -1008,6 +1060,7 @@ fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
                     "subquery in JOIN is not supported by the batch planner".into(),
                 ));
             };
+            let mut extra_keys = Vec::new();
             let (left_col, right_col) = match &j.constraint {
                 Some(JoinConstraint::On(expr)) => {
                     let (left, right) = extract_equi_join(expr).ok_or_else(|| {
@@ -1024,12 +1077,16 @@ fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
                 }
                 // `USING (k)` is `ON <from>.k = <joined>.k` (#771): the
                 // `FROM` table's value is the one an unqualified `k`
-                // names, as in SQLite and DuckDB.
-                Some(JoinConstraint::Using(columns)) => match columns.as_slice() {
-                    [key] => (format!("{from_name}.{key}"), format!("{table}.{key}")),
-                    _ => {
+                // names, as in SQLite and DuckDB. Further columns of
+                // `USING (k, l)` are filters, see `with_extra_key_filters`.
+                Some(JoinConstraint::Using(columns)) => match columns.split_first() {
+                    Some((key, rest)) => {
+                        extra_keys = rest.iter().map(|c| (c.clone(), c.clone())).collect();
+                        (format!("{from_name}.{key}"), format!("{table}.{key}"))
+                    }
+                    None => {
                         return Err(PlanError::UnknownColumn(
-                            "USING takes exactly one key column".into(),
+                            "USING takes at least one key column".into(),
                         ))
                     }
                 },
@@ -1045,6 +1102,7 @@ fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
                 table: table.clone(),
                 left_col,
                 right_col,
+                extra_keys,
             })
         })
         .collect()
@@ -1219,6 +1277,7 @@ fn order_by_text(terms: &[(String, bool)]) -> String {
 /// `GROUP BY` or an aggregate/window select item.
 pub fn expand_star(select: &Select, schema: &[String]) -> Result<Select> {
     let select = &resolve_group_by(select, schema)?;
+    let select = &lower_table_star(select)?;
     let items = classify_items(select)?;
     if !items.iter().any(|c| matches!(c, Item::Star)) {
         return Ok(select.clone());
@@ -1252,6 +1311,29 @@ pub fn expand_star(select: &Select, schema: &[String]) -> Result<Select> {
         columns,
         ..select.clone()
     })
+}
+
+/// `select` with `t.*` read as `*` when `t` is the `FROM` table (by name
+/// or alias), which is what a single-table `t.*` means (#771). A `t.*`
+/// naming another table is an unknown table here: `schema` is the `FROM`
+/// table's, so a join's own `t.*` is expanded by its resolver.
+fn lower_table_star(select: &Select) -> Result<Select> {
+    let mut lowered = select.clone();
+    let Some(from) = &select.from else {
+        return Ok(lowered);
+    };
+    let first = (from.first.name(), from.first.alias.as_deref());
+    for column in &mut lowered.columns {
+        let ResultColumn::TableStar { table } = column else {
+            continue;
+        };
+        let names = |n: Option<&str>| n.is_some_and(|n| n.eq_ignore_ascii_case(table));
+        if ![first.0, first.1].into_iter().any(names) {
+            return Err(PlanError::UnknownColumn(format!("unknown table: {table}")));
+        }
+        *column = ResultColumn::Star;
+    }
+    Ok(lowered)
 }
 
 /// `select` with each `GROUP BY` name that is not a column of `schema`
@@ -2197,6 +2279,8 @@ fn compile_join_impl(
     if !matches!(join.op, JoinOp::Inner | JoinOp::Left) {
         return Err(PlanError::UnsupportedJoinKind(join.op));
     }
+    let from_name = table_name(from)?;
+    let select = &with_extra_key_filters(select, from_name, &joins)?;
     let body = compile(select)?;
 
     let mut needed: Vec<String> = body.columns_to_load();
@@ -2508,8 +2592,9 @@ pub fn compile_cross_mode_multi_join(
         }
     }
 
-    let body = compile(select)?;
     let from_name = table_name(from)?;
+    let select = &with_extra_key_filters(select, from_name, &joins)?;
+    let body = compile(select)?;
 
     let mut needed: Vec<String> = body.columns_to_load();
     for j in &joins {
@@ -4230,6 +4315,27 @@ mod tests {
         assert_eq!(
             plan("SELECT orders.id, regions.budget FROM orders LEFT JOIN regions USING (k)"),
             plan("SELECT orders.id, regions.budget FROM orders LEFT JOIN regions ON orders.k = regions.k")
+        );
+    }
+
+    /// #771: `USING (k, l)` keys the hash on `k` and filters on `l`; an
+    /// outer join cannot, and is refused.
+    #[test]
+    fn compile_join_filters_on_the_extra_using_columns_of_an_inner_join_only() {
+        let plan = |sql: &str| compile_join(&sql::parse(sql).unwrap(), BuildSourceKind::InMemory);
+        let using = plan("SELECT orders.id FROM orders JOIN regions USING (k, l)").unwrap();
+        let single = plan("SELECT orders.id FROM orders JOIN regions USING (k)").unwrap();
+        // The filter loads `l` from both tables on top of the key.
+        assert!(using.left_columns.contains(&"orders.l".to_string()));
+        assert!(using.right_columns.contains(&"regions.l".to_string()));
+        assert!(!single.left_columns.contains(&"orders.l".to_string()));
+        // The parser already refuses it; the planner refuses it too.
+        let mut outer =
+            sql::parse("SELECT orders.id FROM orders JOIN regions USING (k, l)").unwrap();
+        outer.from.as_mut().unwrap().joins[0].op = JoinOp::Left;
+        assert_eq!(
+            compile_join(&outer, BuildSourceKind::InMemory),
+            Err(PlanError::UnsupportedJoinKind(JoinOp::Left))
         );
     }
 

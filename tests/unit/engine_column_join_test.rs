@@ -51,6 +51,10 @@ impl LookupDb {
                  INSERT INTO labels VALUES (1, 'one');\
                  INSERT INTO labels VALUES (2, 'two');\
                  INSERT INTO labels VALUES (3, 'three');\
+                 CREATE TABLE pairs(id INTEGER, region TEXT, tag TEXT);\
+                 INSERT INTO pairs VALUES (1, 'west', 'w1');\
+                 INSERT INTO pairs VALUES (2, 'north', 'n2');\
+                 INSERT INTO pairs VALUES (3, 'east', 'e3');\
                  CREATE TABLE tiers(id INTEGER PRIMARY KEY, tier TEXT);\
                  INSERT INTO tiers VALUES (1, 'gold');\
                  INSERT INTO tiers VALUES (2, 'silver');",
@@ -428,14 +432,79 @@ fn on_operands_in_either_order_and_using_with_the_lookup_first_join_the_same() {
 }
 
 #[test]
-fn using_with_several_columns_is_unsupported_with_the_reason() {
+fn using_with_several_columns_joins_on_all_of_them_for_an_inner_join_only() {
     let db = LookupDb::new("using-several");
     let mut e = db.engine();
+    // `pairs` has (1, 'west'), (2, 'north'), (3, 'east'): only id 1 and 2
+    // agree with production's region too.
+    let got = rows(
+        &mut e,
+        "SELECT production.id, pairs.tag FROM production \
+         JOIN pairs USING (id, region) ORDER BY production.id",
+    );
+    assert_eq!(
+        got,
+        vec![
+            vec![Cell::Int(1), text("w1")],
+            vec![Cell::Int(2), text("n2")],
+        ]
+    );
+    let star = e
+        .run_query("SELECT * FROM production JOIN pairs USING (id, region) ORDER BY id")
+        .unwrap();
+    assert_eq!(star.columns, ["region", "amount", "id", "tag"]);
+
     let err = e
-        .run_query("SELECT production.id FROM production JOIN labels USING (id, label)")
+        .run_query("SELECT production.id FROM production LEFT JOIN pairs USING (id, region)")
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Parse, "{err}");
-    assert!(err.message.contains("USING with several columns"), "{err}");
+    assert!(
+        err.message.contains("supported on an INNER JOIN only"),
+        "{err}"
+    );
+}
+
+#[test]
+fn table_star_expands_one_tables_columns_by_name_or_alias() {
+    let db = LookupDb::new("table-star");
+    let mut e = db.engine();
+    let labels = e
+        .run_query("SELECT labels.* FROM production JOIN labels USING (id) ORDER BY labels.id")
+        .unwrap();
+    // `t.*` keeps the USING key, `*` would list it once.
+    assert_eq!(labels.columns, ["id", "label"]);
+    assert_eq!(labels.rows[0], vec![Cell::Int(1), text("one")]);
+
+    let both = e
+        .run_query(
+            "SELECT p.*, l.label FROM production p JOIN labels l ON p.id = l.id \
+             ORDER BY p.id LIMIT 1",
+        )
+        .unwrap();
+    // An explicit `l.label` keeps the engine's qualified header.
+    assert_eq!(both.columns, ["region", "amount", "id", "labels.label"]);
+    assert_eq!(both.rows[0][3], text("one"));
+
+    let err = e
+        .run_query("SELECT nope.* FROM production JOIN labels USING (id)")
+        .unwrap_err();
+    assert!(err.message.contains("nope"), "{err}");
+}
+
+#[test]
+fn expression_headers_stay_as_written() {
+    let db = LookupDb::new("headers");
+    let mut e = db.engine();
+    let r = e
+        .run_query(
+            "SELECT sum(amount), count(label), max(production.id) FROM production \
+             JOIN labels USING (id)",
+        )
+        .unwrap();
+    assert_eq!(
+        r.columns,
+        ["SUM(amount)", "COUNT(label)", "MAX(production.id)"]
+    );
 }
 
 #[test]
