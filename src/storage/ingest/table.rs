@@ -151,6 +151,18 @@ impl TableWriter {
                         "sort key {key} is not a column that sorts (a MAP does not)"
                     )));
                 }
+                if let Some(key) = &tier.session_key {
+                    let integer = schema.iter().any(|s| {
+                        s.name == key.column
+                            && matches!(s.column_type, ColumnType::Int64 | ColumnType::UInt64)
+                    });
+                    if !integer {
+                        return Err(IngestError::InvalidSchema(format!(
+                            "session key {} is not an Int64 or UInt64 column",
+                            key.column
+                        )));
+                    }
+                }
             }
         }
         let mut manifest = match Manifest::read(table)? {
@@ -174,6 +186,17 @@ impl TableWriter {
             }
             manifest.schema.clone_from(&options.schema);
             manifest.evolved = true;
+            manifest.write(table)?;
+        }
+        // Like the other tier options the session key may change between
+        // opens; readers see it through the manifest, so it is committed
+        // before anything is appended.
+        let session_key = match &options.layout {
+            Layout::Tiered(tier) => tier.session_key.clone(),
+            Layout::Flat => None,
+        };
+        if manifest.session_key != session_key {
+            manifest.session_key = session_key;
             manifest.write(table)?;
         }
         if manifest.schema.is_none() && manifest.format != options.format {

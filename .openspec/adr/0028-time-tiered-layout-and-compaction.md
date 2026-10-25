@@ -218,6 +218,7 @@ row_group_max_rows = 1_000_000
 sort_key = ["event_type", "timestamp"]   # within each row group; empty = arrival order
 delete_grace = "10m"          # external readers of replaced files
 retention = "90d"
+session_key = { column = "session_id", max_session = "30m" }   # optional; high 32 bits = start, seconds
 ```
 
 No further levels until a workload measurably needs one.
@@ -252,7 +253,7 @@ has these options, cheapest first:
 | 5 | **Another primary order**: (a) re-partition the one copy by key within time, or (b) a second copy in another order (a projection) | Workloads where the key matters more than time | (a) An hour becomes several files with interleaved LSNs, which breaks the per-file contiguity invariant. (b) Storage and write cost double per projection, but both copies commit in one manifest swap |
 
 **Decision.**
-- **1 and 2 are the default.** Approach 2 is completed by two small additions, so the sort pays off across many files: each file's manifest entry records min/max of the sort-key columns, so a query skips whole files without opening them; and a row group whose dictionary lacks an equality literal is skipped even when its min/max is wide (the stream engine already prunes segments this way). Tracked in #589. Built in #589: the ranges are kept by the file writer for integer, timestamp and UTF-8 key columns, in manifest version 4 (a string bound that would need escaping is left out), and `query_snapshot` drops files before opening their footers. A range bounds a column only when its kind matches the table's type for it, as footer statistics do. The dictionary check walks the chunk's page headers and decodes the dictionary page only; any data page not dictionary-encoded means "may match". `IN (...)` is not pruned: the column dialect does not parse it yet, and its `OR` form prunes.
+- **1 and 2 are the default.** Approach 2 is completed by two small additions, so the sort pays off across many files: each file's manifest entry records min/max of the sort-key columns, so a query skips whole files without opening them; and a row group whose dictionary lacks an equality literal is skipped even when its min/max is wide (the stream engine already prunes segments this way). Tracked in #589. Built in #589: the ranges are kept by the file writer for integer, timestamp and UTF-8 key columns, in manifest version 4 (a string bound that would need escaping is left out), and `query_snapshot` drops files before opening their footers. A range bounds a column only when its kind matches the table's type for it, as footer statistics do. The dictionary check walks the chunk's page headers and decodes the dictionary page only; any data page not dictionary-encoded means "may match". `IN (...)` prunes too, as the `OR` chain the column dialect lowers it to (#737).
 - **3** comes when a high-cardinality filter shows up in real queries (#590).
 - **4 and 5b are one decision, deferred** until a measured workload needs it. If it comes, prefer 5b: a projection commits atomically with the table through the manifest, where an index has to be kept in step.
 - **5a is rejected** while time is the main access path. Event-time partitioning stays rejected for the reasons above.
@@ -379,3 +380,31 @@ days, and DuckDB over `archive/` returns exactly those.
 **Not yet:**
 - the byte-copy merge
 - the compactor thread (#574)
+
+## As built (#599)
+
+**Session-key time pruning.** A key whose high 32 bits are the session's
+start (seconds) is a time index: its rows arrive between that start and
+`start + max_session`. `TierOptions.session_key` (`SessionKey { column,
+max_session_secs }`, an `Int64` or `UInt64` column, checked at open) is
+recorded in the manifest as version 6, with `evolved` named explicitly
+as the version no longer says it, so a reader that predates it refuses
+the table instead of ignoring a contract it cannot honour. It may change
+between opens; the manifest follows the options.
+
+`query_snapshot` reuses the #589 pruner. A file whose rows arrived in
+`[lo, hi]` can hold only sessions that started in `[lo - max, hi]`, so
+its keys lie in `[(lo_s - max) << 32, (hi_s << 32) | 0xFFFF_FFFF]`
+(saturating); `=`, `IN`, ranges and their `AND`/`OR` are decided against
+that interval exactly as against a sort-key range. The open hour and WAL
+pages are never pruned, a file without `observed_ts` is kept, and any
+shape the pruner does not recognise keeps every file.
+
+**The bound is a contract.** A row that arrives after `start +
+max_session` is hidden from a query that filters on its key; there is no
+safety margin and no check on append.
+
+**Checked:** four closed hours and an open one, with `=`, `IN`, range and
+`OR` predicates opening exactly the files whose window holds the key,
+a key outside every window opening none, and every answer equal to the
+unpruned one.

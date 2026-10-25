@@ -2,7 +2,7 @@
 //! hours, days and crashes, read back with exactly the declared schema.
 
 use super::*;
-use crate::storage::ingest::layout::{TierOptions, DAY_NS, HOUR_NS};
+use crate::storage::ingest::layout::{SessionKey, TierOptions, DAY_NS, HOUR_NS};
 use crate::storage::ingest::record::{join_repeated_keys, read_column, RecordValue};
 use crate::storage::ingest::PageBody;
 use crate::storage::parquet::footer::ConvertedType;
@@ -76,6 +76,7 @@ fn tiered() -> TableOptions {
             delete_grace_ns: 0,
             spill_rows: usize::MAX,
             retention_days: None,
+            session_key: None,
         }),
         ..flat()
     }
@@ -489,6 +490,47 @@ fn invalid_schemas_and_sort_keys_are_refused() {
         let err = TableWriter::open(&t.0, options).unwrap_err();
         assert_eq!(err.to_string(), format!("invalid record schema: {why}"));
     }
+}
+
+/// #599: the session key must be an integer column of the schema, and is
+/// committed to the manifest (changing it between opens is allowed).
+#[test]
+fn a_session_key_is_validated_and_recorded_in_the_manifest() {
+    let with_key = |column: &str| {
+        let mut options = tiered();
+        if let Layout::Tiered(tier) = &mut options.layout {
+            tier.session_key = Some(SessionKey {
+                column: column.to_string(),
+                max_session_secs: 600,
+            });
+        }
+        options
+    };
+    for column in ["nope", "kind", "ts"] {
+        let t = TempTable::new();
+        let err = TableWriter::open(&t.0, with_key(column)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("invalid record schema: session key {column} is not an Int64 or UInt64 column")
+        );
+    }
+    let t = TempTable::new();
+    let recorded = |t: &TempTable| Manifest::read(&t.0).unwrap().unwrap().session_key;
+    TableWriter::open(&t.0, with_key("session_id")).unwrap();
+    assert_eq!(
+        recorded(&t),
+        Some(SessionKey {
+            column: "session_id".to_string(),
+            max_session_secs: 600
+        })
+    );
+    // Reopened with none, the manifest follows the options.
+    TableWriter::open(&t.0, tiered()).unwrap();
+    assert_eq!(recorded(&t), None);
+    // A flat table has none.
+    let t = TempTable::new();
+    TableWriter::open(&t.0, flat()).unwrap();
+    assert_eq!(recorded(&t), None);
 }
 
 #[allow(non_snake_case)]

@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.174.0] - 2026-10-25
+
+### Added
+
+- **Session-key time pruning** (#599). `TierOptions.session_key: Option<SessionKey>` names a key column (`Int64` or `UInt64`) whose high 32 bits are the session's start in seconds, and the longest a session runs (`max_session_secs`). A session's rows arrive no earlier than its start and no later than `start + max_session_secs`, so `query_snapshot` turns `=`, `IN (...)` and range predicates on the key (with `AND`/`OR`) into the arrival window each file can hold and skips files whose `observed_ts` lies outside it, before opening any footer. It reuses the #589 pruner: a file's arrival range `[lo, hi]` bounds the keys it can hold to `[(lo_s - max) << 32, (hi_s << 32) | 0xFFFF_FFFF]`, saturating. The open hour and WAL pages are never pruned, a file without arrival bounds is kept, and any predicate shape it cannot bound (`<>`, `OR` with a non-key arm, functions) keeps every file. The option is recorded in the manifest (version 6, with `evolved` named explicitly), since readers in other processes prune with it, so an older binary refuses the table. Without the option, results and files read are unchanged. The bound is a contract: a row arriving later than `start + max_session_secs` is hidden from a query that filters on its key.
+
 ## [0.173.1] - 2026-10-24
 
 ### Changed
