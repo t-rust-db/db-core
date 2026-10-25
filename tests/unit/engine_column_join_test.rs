@@ -51,6 +51,10 @@ impl LookupDb {
                  INSERT INTO labels VALUES (1, 'one');\
                  INSERT INTO labels VALUES (2, 'two');\
                  INSERT INTO labels VALUES (3, 'three');\
+                 CREATE TABLE pairs(id INTEGER, region TEXT, tag TEXT);\
+                 INSERT INTO pairs VALUES (1, 'west', 'w1');\
+                 INSERT INTO pairs VALUES (2, 'north', 'n2');\
+                 INSERT INTO pairs VALUES (3, 'east', 'e3');\
                  CREATE TABLE tiers(id INTEGER PRIMARY KEY, tier TEXT);\
                  INSERT INTO tiers VALUES (1, 'gold');\
                  INSERT INTO tiers VALUES (2, 'silver');",
@@ -357,4 +361,226 @@ fn a_left_join_filter_on_the_lookup_table_still_sees_the_unmatched_rows() {
          LEFT JOIN labels ON production.id = labels.id WHERE labels.label = 'two'",
     );
     assert_eq!(got, vec![vec![Cell::Int(2)]]);
+}
+
+#[test]
+fn using_joins_like_the_equivalent_on_and_lists_the_key_once_under_star() {
+    let db = LookupDb::new("using");
+    let mut e = db.engine();
+    let on = rows(
+        &mut e,
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels ON production.id = labels.id ORDER BY production.id",
+    );
+    let using = rows(
+        &mut e,
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels USING (id) ORDER BY production.id",
+    );
+    assert_eq!(using, on);
+
+    // An unqualified key is the FROM table's, on a LEFT JOIN too.
+    let left = rows(
+        &mut e,
+        "SELECT id, labels.label FROM production LEFT JOIN labels USING (id) \
+         ORDER BY id LIMIT 4",
+    );
+    assert_eq!(left[3], vec![Cell::Int(4), Cell::Null]);
+
+    let star = e
+        .run_query("SELECT * FROM production JOIN labels USING (id) ORDER BY id")
+        .unwrap();
+    assert_eq!(star.columns, ["region", "amount", "id", "label"]);
+    assert_eq!(star.rows[0].len(), 4);
+    assert_eq!(star.rows.len(), 3);
+}
+
+#[test]
+fn star_over_an_on_join_lists_both_key_columns() {
+    let db = LookupDb::new("star-on");
+    let mut e = db.engine();
+    let star = e
+        .run_query(
+            "SELECT * FROM production JOIN labels ON production.id = labels.id \
+             ORDER BY production.id",
+        )
+        .unwrap();
+    // Bare headers, duplicates included, as in SQLite and DuckDB.
+    assert_eq!(star.columns, ["region", "amount", "id", "id", "label"]);
+    assert_eq!(star.rows[0][2], star.rows[0][3]);
+}
+
+#[test]
+fn on_operands_in_either_order_and_using_with_the_lookup_first_join_the_same() {
+    let db = LookupDb::new("operand-order");
+    let mut e = db.engine();
+    let want = rows(
+        &mut e,
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels ON production.id = labels.id ORDER BY production.id",
+    );
+    for sql in [
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels ON labels.id = production.id ORDER BY production.id",
+        "SELECT production.id, labels.label FROM labels \
+         JOIN production ON production.id = labels.id ORDER BY production.id",
+        "SELECT production.id, labels.label FROM labels \
+         JOIN production USING (id) ORDER BY production.id",
+    ] {
+        assert_eq!(rows(&mut e, sql), want, "{sql}");
+    }
+}
+
+#[test]
+fn using_with_several_columns_joins_on_all_of_them_for_an_inner_join_only() {
+    let db = LookupDb::new("using-several");
+    let mut e = db.engine();
+    // `pairs` has (1, 'west'), (2, 'north'), (3, 'east'): only id 1 and 2
+    // agree with production's region too.
+    let got = rows(
+        &mut e,
+        "SELECT production.id, pairs.tag FROM production \
+         JOIN pairs USING (id, region) ORDER BY production.id",
+    );
+    assert_eq!(
+        got,
+        vec![
+            vec![Cell::Int(1), text("w1")],
+            vec![Cell::Int(2), text("n2")],
+        ]
+    );
+    let star = e
+        .run_query("SELECT * FROM production JOIN pairs USING (id, region) ORDER BY id")
+        .unwrap();
+    assert_eq!(star.columns, ["region", "amount", "id", "tag"]);
+
+    let err = e
+        .run_query("SELECT production.id FROM production LEFT JOIN pairs USING (id, region)")
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Parse, "{err}");
+    assert!(
+        err.message.contains("supported on an INNER JOIN only"),
+        "{err}"
+    );
+}
+
+#[test]
+fn table_star_expands_one_tables_columns_by_name_or_alias() {
+    let db = LookupDb::new("table-star");
+    let mut e = db.engine();
+    let labels = e
+        .run_query("SELECT labels.* FROM production JOIN labels USING (id) ORDER BY labels.id")
+        .unwrap();
+    // `t.*` keeps the USING key, `*` would list it once.
+    assert_eq!(labels.columns, ["id", "label"]);
+    assert_eq!(labels.rows[0], vec![Cell::Int(1), text("one")]);
+
+    let both = e
+        .run_query(
+            "SELECT p.*, l.label FROM production p JOIN labels l ON p.id = l.id \
+             ORDER BY p.id LIMIT 1",
+        )
+        .unwrap();
+    // An explicit `l.label` keeps the engine's qualified header.
+    assert_eq!(both.columns, ["region", "amount", "id", "labels.label"]);
+    assert_eq!(both.rows[0][3], text("one"));
+
+    let err = e
+        .run_query("SELECT nope.* FROM production JOIN labels USING (id)")
+        .unwrap_err();
+    assert!(err.message.contains("nope"), "{err}");
+}
+
+#[test]
+fn expression_headers_stay_as_written() {
+    let db = LookupDb::new("headers");
+    let mut e = db.engine();
+    let r = e
+        .run_query(
+            "SELECT sum(amount), count(label), max(production.id) FROM production \
+             JOIN labels USING (id)",
+        )
+        .unwrap();
+    assert_eq!(
+        r.columns,
+        ["SUM(amount)", "COUNT(label)", "MAX(production.id)"]
+    );
+}
+
+#[test]
+fn a_lookup_filter_with_using_still_keeps_the_matching_rows() {
+    let db = LookupDb::new("using-filter");
+    let mut e = db.engine();
+    let got = rows(
+        &mut e,
+        "SELECT production.id FROM production JOIN labels USING (id) \
+         WHERE labels.label = 'two'",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(2)]]);
+}
+
+#[test]
+fn an_unqualified_column_in_both_tables_is_ambiguous_unless_it_is_the_using_key() {
+    let db = LookupDb::new("ambiguous");
+    let mut e = db.engine();
+    for sql in [
+        "SELECT id FROM production JOIN labels ON production.id = labels.id",
+        "SELECT production.id FROM production JOIN labels ON production.id = labels.id \
+         WHERE id = 2",
+        "SELECT region FROM production JOIN labels ON production.id = labels.id \
+         ORDER BY id",
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Compile, "{sql}: {err}");
+        assert!(err.message.contains("ambiguous column name: id"), "{err}");
+        assert!(err.message.contains("production, labels"), "{err}");
+    }
+    // `ORDER BY id` names the output column `id`, not either table's.
+    let got = rows(
+        &mut e,
+        "SELECT production.id FROM production JOIN labels ON production.id = labels.id \
+         ORDER BY id DESC",
+    );
+    assert_eq!(got.first(), Some(&vec![Cell::Int(3)]));
+    // `USING (id)` merges the two: the key is the table written first.
+    let got = rows(
+        &mut e,
+        "SELECT id FROM production JOIN labels USING (id) WHERE id = 2",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(2)]]);
+}
+
+#[test]
+fn an_unqualified_column_of_one_table_resolves_to_it() {
+    let db = LookupDb::new("owner");
+    let mut e = db.engine();
+    // `label` is only in the lookup table, `region` only in the Parquet one,
+    // whichever table is written first, and the header stays as written.
+    for sql in [
+        "SELECT label, region FROM production JOIN labels ON production.id = labels.id \
+         WHERE label = 'two'",
+        "SELECT label, region FROM labels JOIN production ON labels.id = production.id \
+         WHERE label = 'two'",
+    ] {
+        let r = e.run_query(sql).unwrap();
+        assert_eq!(r.columns, ["label", "region"], "{sql}");
+        assert_eq!(r.rows, vec![vec![text("two"), text("north")]], "{sql}");
+    }
+    let got = rows(
+        &mut e,
+        "SELECT label, count(*) FROM production JOIN labels USING (id) \
+         GROUP BY label ORDER BY label",
+    );
+    assert_eq!(
+        got,
+        vec![
+            vec![text("one"), Cell::Int(1)],
+            vec![text("three"), Cell::Int(1)],
+            vec![text("two"), Cell::Int(1)],
+        ]
+    );
+    let err = e
+        .run_query("SELECT nope FROM production JOIN labels USING (id)")
+        .unwrap_err();
+    assert!(err.message.contains("unknown column: nope"), "{err}");
 }

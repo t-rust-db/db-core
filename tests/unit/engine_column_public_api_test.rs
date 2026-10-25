@@ -505,3 +505,18 @@ fn grouped_columns_come_back_in_select_list_order_under_their_own_headers() {
         agg_first.rows[0]
     );
 }
+
+#[test]
+fn table_star_in_a_single_table_query_is_the_whole_row_by_name_or_alias() {
+    let mut e = open();
+    for sql in [
+        "SELECT production.* FROM production ORDER BY id LIMIT 1",
+        "SELECT p.* FROM production p ORDER BY id LIMIT 1",
+    ] {
+        let r = e.run_query(sql).unwrap();
+        assert_eq!(r.columns, ["region", "amount", "id"], "{sql}");
+        assert_eq!(r.rows[0][2], Cell::Int(1), "{sql}");
+    }
+    let err = e.run_query("SELECT other.* FROM production").unwrap_err();
+    assert!(err.message.contains("unknown table: other"), "{err}");
+}
