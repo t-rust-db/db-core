@@ -309,17 +309,17 @@ pub(super) fn may_match(
 /// pruning bounds. A file whose rows arrived in `[lo, hi]` holds rows of
 /// sessions that started in `[lo - max_session, hi]`, whose keys lie in
 /// `[(lo_s - max) << 32, (hi_s << 32) | 0xFFFF_FFFF]`.
-struct SessionWindow<'a> {
-    column: &'a str,
+struct SessionWindow {
+    column: String,
     min: i64,
     max: i64,
     physical: PhysicalType,
 }
 
-impl<'a> SessionWindow<'a> {
+impl SessionWindow {
     /// `None` when the file has no arrival bounds or the key column is not
     /// an integer of the schema (a file then bounds nothing).
-    fn of(key: &'a SessionKey, entry: &FileEntry, schema: &[ColumnSpec]) -> Option<Self> {
+    fn of(key: &SessionKey, entry: &FileEntry, schema: &[ColumnSpec]) -> Option<Self> {
         const NS: i64 = 1_000_000_000;
         let (lo, hi) = entry.observed_ts?;
         let spec = schema.iter().find(|s| s.name == key.column)?;
@@ -333,7 +333,7 @@ impl<'a> SessionWindow<'a> {
             .div_euclid(NS)
             .saturating_sub(i64::from(key.max_session_secs));
         Some(SessionWindow {
-            column: &key.column,
+            column: key.column.clone(),
             min: key_of(first),
             max: key_of(hi.div_euclid(NS)).saturating_add(0xFFFF_FFFF),
             physical: physical_type(spec.column_type),
@@ -341,7 +341,7 @@ impl<'a> SessionWindow<'a> {
     }
 }
 
-impl prune::Bounds for SessionWindow<'_> {
+impl prune::Bounds for SessionWindow {
     fn bounds(
         &self,
         column: &str,
