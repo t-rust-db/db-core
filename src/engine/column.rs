@@ -124,6 +124,67 @@ impl BatchEngine {
         self.leaves.iter().map(|(n, _, _)| n.clone()).collect()
     }
 
+    /// Parses the `SELECT` of a cross-mode join whose probe side is this
+    /// file: no `FROM`-table check (the resolver sorts the sides out) and
+    /// no `JOIN` rejection, but TIMESTAMP literals resolved as for a
+    /// single-table query.
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn parse_join(&self, sql: &str) -> Result<Select, EngineError> {
+        let mut select = planner_parse(sql)?;
+        timestamp_literals(&mut select, &self.timestamps)?;
+        Ok(select)
+    }
+
+    /// The file's column names, for the resolver's `GROUP BY` lookup.
+    /// Row groups and rows of the file, for a cross-mode `EXPLAIN`.
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn table_stats(&self) -> TableStats {
+        TableStats {
+            row_groups: self.num_row_groups,
+            rows: self.num_rows,
+            source: None,
+        }
+    }
+
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn columns(&self) -> Vec<String> {
+        self.column_names()
+    }
+
+    /// Runs `f` over one segment per row group, loading `columns` (`t.col`
+    /// names as the join plan qualifies them) eagerly: the probe side of a
+    /// cross-mode join. A row group that `prune`'s footer statistics prove
+    /// cannot match is left out (the join's own filters still run). The
+    /// segments borrow the file view opened here, so
+    /// they only live for the call.
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn with_probe_segments<T>(
+        &self,
+        columns: &[String],
+        prune: Option<&Expr>,
+        f: impl FnOnce(Vec<FileSegment<'_, '_>>) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        let file = self.file()?;
+        let eager = Program::from_opcodes([]);
+        f(file_segments(&file, columns, prune, &eager)?)
+    }
+
     /// Parses one `SELECT` for this table; see [`parse_select`].
     fn parse_for_table(&self, sql: &str) -> Result<Select, EngineError> {
         let mut select = parse_select(sql, &self.table, &self.column_names(), "this file")?;
