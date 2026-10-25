@@ -705,6 +705,9 @@ impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod db_core::engine::resolve
 pub enum db_core::engine::resolve::CrossModeEngine
+pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite
+pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::driving: db_core::engine::column::BatchEngine
+pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::lookup: db_core::engine::row::RowEngine
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::driving: db_core::engine::stream::StreamEngine
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookup: db_core::engine::row::RowEngine
@@ -713,6 +716,7 @@ pub db_core::engine::resolve::CrossModeEngine::StreamStream
 pub db_core::engine::resolve::CrossModeEngine::StreamStream::left: db_core::engine::stream::StreamEngine
 pub db_core::engine::resolve::CrossModeEngine::StreamStream::right: db_core::engine::stream::StreamEngine
 impl db_core::engine::resolve::CrossModeEngine
+pub fn db_core::engine::resolve::CrossModeEngine::open_column_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::open_stream_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::open_stream_stream(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 impl core::fmt::Debug for db_core::engine::resolve::CrossModeEngine
@@ -728,6 +732,7 @@ pub fn db_core::engine::resolve::CrossModeEngine::stats(&self) -> db_core::engin
 pub fn db_core::engine::resolve::CrossModeEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::explain_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &std::path::Path, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::explain_stream_stream_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::stream::StreamEngine, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::run_column_query(&db_core::engine::column::BatchEngine, &db_core::engine::row::RowEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::run_query(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::run_stream_stream_query(&db_core::engine::stream::StreamEngine, &db_core::engine::stream::StreamEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub mod db_core::engine::row

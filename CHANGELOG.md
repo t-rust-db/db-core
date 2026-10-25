@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.174.0] - 2026-10-25
+
+### Added
+
+- **A Parquet table joins SQLite lookup tables** (#598). `CrossModeEngine::open_column_sqlite(parquet, sqlite)` and `resolve::run_column_query` run `events JOIN event_def ON events.event_id = event_def.event_id` with the Parquet file (named after its stem) as the probe side, one segment per row group, and the SQLite tables as the `HashBuild` side, one table or a star of several. Same rules as the stream/SQLite join: the lookup side builds wherever the query writes it, a plain `JOIN` is inner with no semantic change, `LEFT JOIN` needs the Parquet table first, and `lookup LEFT JOIN parquet` (which would keep the lookup rows) is `ErrorKind::Unsupported` with the way to write it. `EXPLAIN` of this join is `Unsupported` for now. No new opcodes; single-table queries are untouched, and `resolve_sides`/`resolve_multi_sides` now take the driving table's name instead of assuming `log`.
+
 ## [0.173.1] - 2026-10-24
 
 ### Changed
