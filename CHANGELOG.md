@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.176.0] - 2026-10-25
+
+### Added
+
+- **`JOIN ... USING (k)`** (#771): the `FROM` table's value for an unqualified `k`. `USING (a, b)` hashes on `a` and filters on `b`, so it is inner-only; a `LEFT JOIN` with several columns is an `Unsupported` error. Works for Parquet/SQLite and stream/SQLite joins and prunes row groups from lookup filters like `ON`.
+- **`SELECT *` over a cross-mode join** (#771) lists every table's columns in the order written, the `USING` key once; it used to fail with "emit has no registers".
+- **`ON j.k = f.k` with the joined table's column first** (#771) joins instead of failing with "unknown column".
+- **Unqualified columns in a cross-mode join resolve like SQLite and DuckDB** (#771): the one table that has the name, an `ambiguous column name` error when several do (except a `USING` key), where a bare name used to mean the `FROM` table silently. `SELECT *` headers are bare names.
+- **`t.*` in a select list** (#771): one table's columns by name or alias in a cross-mode join, the whole row in a single-table query; it was refused. Expression headers of a cross-mode join stay as written (`SUM(amount)`).
+
 ## [0.175.0] - 2026-10-25
 
 ### Added
