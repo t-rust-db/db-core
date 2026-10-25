@@ -358,3 +358,96 @@ fn a_left_join_filter_on_the_lookup_table_still_sees_the_unmatched_rows() {
     );
     assert_eq!(got, vec![vec![Cell::Int(2)]]);
 }
+
+#[test]
+fn using_joins_like_the_equivalent_on_and_lists_the_key_once_under_star() {
+    let db = LookupDb::new("using");
+    let mut e = db.engine();
+    let on = rows(
+        &mut e,
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels ON production.id = labels.id ORDER BY production.id",
+    );
+    let using = rows(
+        &mut e,
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels USING (id) ORDER BY production.id",
+    );
+    assert_eq!(using, on);
+
+    // An unqualified key is the FROM table's, on a LEFT JOIN too.
+    let left = rows(
+        &mut e,
+        "SELECT id, labels.label FROM production LEFT JOIN labels USING (id) \
+         ORDER BY id LIMIT 4",
+    );
+    assert_eq!(left[3], vec![Cell::Int(4), Cell::Null]);
+
+    let star = e
+        .run_query("SELECT * FROM production JOIN labels USING (id) ORDER BY id")
+        .unwrap();
+    assert_eq!(star.columns, ["region", "amount", "id", "label"]);
+    assert_eq!(star.rows[0].len(), 4);
+    assert_eq!(star.rows.len(), 3);
+}
+
+#[test]
+fn star_over_an_on_join_lists_both_key_columns() {
+    let db = LookupDb::new("star-on");
+    let mut e = db.engine();
+    let star = e
+        .run_query(
+            "SELECT * FROM production JOIN labels ON production.id = labels.id \
+             ORDER BY production.id",
+        )
+        .unwrap();
+    assert_eq!(
+        star.columns,
+        ["region", "amount", "production.id", "labels.id", "label"]
+    );
+    assert_eq!(star.rows[0][2], star.rows[0][3]);
+}
+
+#[test]
+fn on_operands_in_either_order_and_using_with_the_lookup_first_join_the_same() {
+    let db = LookupDb::new("operand-order");
+    let mut e = db.engine();
+    let want = rows(
+        &mut e,
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels ON production.id = labels.id ORDER BY production.id",
+    );
+    for sql in [
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels ON labels.id = production.id ORDER BY production.id",
+        "SELECT production.id, labels.label FROM labels \
+         JOIN production ON production.id = labels.id ORDER BY production.id",
+        "SELECT production.id, labels.label FROM labels \
+         JOIN production USING (id) ORDER BY production.id",
+    ] {
+        assert_eq!(rows(&mut e, sql), want, "{sql}");
+    }
+}
+
+#[test]
+fn using_with_several_columns_is_unsupported_with_the_reason() {
+    let db = LookupDb::new("using-several");
+    let mut e = db.engine();
+    let err = e
+        .run_query("SELECT production.id FROM production JOIN labels USING (id, label)")
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Parse, "{err}");
+    assert!(err.message.contains("USING with several columns"), "{err}");
+}
+
+#[test]
+fn a_lookup_filter_with_using_still_keeps_the_matching_rows() {
+    let db = LookupDb::new("using-filter");
+    let mut e = db.engine();
+    let got = rows(
+        &mut e,
+        "SELECT production.id FROM production JOIN labels USING (id) \
+         WHERE labels.label = 'two'",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(2)]]);
+}

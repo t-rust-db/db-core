@@ -7,6 +7,9 @@
 //! DuckDB with the Parquet file read directly and the SQLite file attached,
 //! and diffs the two outputs.
 //!
+//! Cells print as `Cell`'s own `Display`: these queries sum nothing, so
+//! reals match DuckDB's text without a fixed precision.
+//!
 //! Usage: `column_join_oracle <path.parquet> <lookup.db> <sql>`
 
 use std::env;
@@ -15,13 +18,6 @@ use std::process::ExitCode;
 
 use db_core::engine::resolve::CrossModeEngine;
 use db_core::engine::{Cell, Engine};
-
-fn format_cell(c: &Cell) -> String {
-    match c {
-        Cell::Real(x) => format!("{x:.2}"),
-        other => other.to_string(),
-    }
-}
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -48,7 +44,7 @@ fn main() -> ExitCode {
     };
 
     for row in &result.rows {
-        let line: Vec<String> = row.iter().map(format_cell).collect();
+        let line: Vec<String> = row.iter().map(Cell::to_string).collect();
         println!("{}", line.join(","));
     }
     ExitCode::SUCCESS

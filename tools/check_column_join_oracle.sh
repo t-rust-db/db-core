@@ -64,6 +64,25 @@ QUERIES=(
   "SELECT count(*) FROM $J_REG WHERE regions.zone = 'B'"
   "SELECT count(*) FROM $L_REG WHERE regions.zone IS NULL"
   "SELECT production.region, count(regions.zone), count(*) FROM $L_REG GROUP BY production.region ORDER BY production.region"
+  # JOIN ... USING (k): one key column, the FROM table's value for an
+  # unqualified k, inner and left (#771)
+  "SELECT production.id, ids.label FROM __P__ JOIN __ids__ USING (id) ORDER BY production.id"
+  "SELECT id, ids.label FROM __P__ LEFT JOIN __ids__ USING (id) ORDER BY id LIMIT 6"
+  "SELECT count(*) FROM __P__ LEFT JOIN __ids__ USING (id) WHERE ids.label IS NULL"
+  "SELECT production.id FROM __P__ JOIN __ids__ USING (id) WHERE ids.label IN ('one', 'last') ORDER BY production.id"
+  "SELECT region, count(*) FROM __P__ JOIN __ids__ USING (id) GROUP BY region ORDER BY region"
+  "SELECT id, count(*) FROM __P__ JOIN __ids__ USING (id) WHERE id > 1 GROUP BY id ORDER BY id"
+  "SELECT id FROM __P__ LEFT JOIN __ids__ USING (id) WHERE id < 5 AND ids.label IS NULL ORDER BY id"
+  # the ON operands in either order
+  "SELECT production.id, ids.label FROM __P__ JOIN __ids__ ON ids.id = production.id ORDER BY production.id"
+  "SELECT production.id, ids.label FROM __P__ LEFT JOIN __ids__ ON ids.id = production.id ORDER BY production.id LIMIT 6"
+  "SELECT production.id, ids.label FROM __ids__ JOIN __P__ ON production.id = ids.id ORDER BY production.id"
+  "SELECT production.id, ids.label FROM __ids__ JOIN __P__ USING (id) ORDER BY production.id"
+  # SELECT *: every column of each table in the order written, the USING
+  # key once
+  "SELECT * FROM __P__ JOIN __ids__ USING (id) ORDER BY id"
+  "SELECT * FROM __P__ JOIN __ids__ ON production.id = ids.id ORDER BY production.id"
+  "SELECT * FROM __P__ JOIN __regions__ ON production.region = regions.region WHERE production.id < 6 ORDER BY production.id"
   # a star join over both lookup tables
   "SELECT production.id, ids.label, regions.zone FROM __P__ JOIN __ids__ ON production.id = ids.id JOIN __regions__ ON production.region = regions.region ORDER BY production.id"
   "SELECT production.id, ids.label, regions.zone FROM __P__ JOIN __ids__ ON production.id = ids.id JOIN __regions__ ON production.region = regions.region WHERE regions.zone = 'A' AND ids.weight >= 10 ORDER BY production.id"

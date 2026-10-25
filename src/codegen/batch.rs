@@ -999,6 +999,7 @@ struct JoinStep {
 }
 
 fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
+    let from_name = table_name(from)?;
     from.joins
         .iter()
         .map(|j| {
@@ -1008,8 +1009,30 @@ fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
                 ));
             };
             let (left_col, right_col) = match &j.constraint {
-                Some(JoinConstraint::On(expr)) => extract_equi_join(expr)
-                    .ok_or_else(|| PlanError::UnknownColumn("JOIN ON must be col = col".into()))?,
+                Some(JoinConstraint::On(expr)) => {
+                    let (left, right) = extract_equi_join(expr).ok_or_else(|| {
+                        PlanError::UnknownColumn("JOIN ON must be col = col".into())
+                    })?;
+                    // `ON j.k = f.k` names the joined table first: the
+                    // pair is `(FROM column, joined column)` either way.
+                    let owners = (split_qualified(&left).0, split_qualified(&right).0);
+                    if owners == (Some(table.as_str()), Some(from_name)) {
+                        (right, left)
+                    } else {
+                        (left, right)
+                    }
+                }
+                // `USING (k)` is `ON <from>.k = <joined>.k` (#771): the
+                // `FROM` table's value is the one an unqualified `k`
+                // names, as in SQLite and DuckDB.
+                Some(JoinConstraint::Using(columns)) => match columns.as_slice() {
+                    [key] => (format!("{from_name}.{key}"), format!("{table}.{key}")),
+                    _ => {
+                        return Err(PlanError::UnknownColumn(
+                            "USING takes exactly one key column".into(),
+                        ))
+                    }
+                },
                 None if j.op == JoinOp::Cross => (String::new(), String::new()),
                 _ => {
                     return Err(PlanError::UnknownColumn(
@@ -4182,6 +4205,31 @@ mod tests {
         assert_eq!(
             compile_join(&bad, BuildSourceKind::InMemory),
             Err(PlanError::UnknownColumn("c.id".into()))
+        );
+    }
+
+    /// #771: `USING (k)` plans as `ON <from>.k = <joined>.k`, and `ON`
+    /// plans the same with its operands in either order.
+    #[test]
+    fn compile_join_reads_using_and_either_operand_order_as_the_same_equality() {
+        let plan = |sql: &str| compile_join(&sql::parse(sql).unwrap(), BuildSourceKind::InMemory);
+        let on = plan(
+            "SELECT orders.id, regions.budget FROM orders JOIN regions ON orders.k = regions.k",
+        );
+        assert!(on.is_ok(), "{on:?}");
+        assert_eq!(
+            plan("SELECT orders.id, regions.budget FROM orders JOIN regions USING (k)"),
+            on
+        );
+        assert_eq!(
+            plan(
+                "SELECT orders.id, regions.budget FROM orders JOIN regions ON regions.k = orders.k"
+            ),
+            on
+        );
+        assert_eq!(
+            plan("SELECT orders.id, regions.budget FROM orders LEFT JOIN regions USING (k)"),
+            plan("SELECT orders.id, regions.budget FROM orders LEFT JOIN regions ON orders.k = regions.k")
         );
     }
 

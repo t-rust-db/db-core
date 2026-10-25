@@ -132,11 +132,19 @@ fn references_only(expr: &Expr, table: &str) -> bool {
     }
 }
 
-/// `(probe column, lookup column)` of `join`'s `ON a.x = b.y`, where the
-/// lookup column is the one qualified with `table`.
+/// `(probe column, lookup column)` of `join`'s `ON a.x = b.y` (the lookup
+/// column is the one qualified with `table`) or `USING (k)`.
 fn join_keys(join: &Join, table: &str) -> Option<(String, String)> {
-    let Some(JoinConstraint::On(on)) = &join.constraint else {
-        return None;
+    let on = match &join.constraint {
+        Some(JoinConstraint::On(on)) => on,
+        // `USING (k)` names the same column on both sides.
+        Some(JoinConstraint::Using(columns)) => {
+            return match columns.as_slice() {
+                [key] => Some((key.clone(), key.clone())),
+                _ => None,
+            };
+        }
+        None => return None,
     };
     let ExprKind::Binary {
         op: BinaryOp::Eq,
@@ -389,6 +397,20 @@ mod tests {
                    WHERE event_def.name IN ('a', 'c') AND event_def.name <> 'zz'";
         // keys 5 and 900: groups 0 and 9, ON written lookup-first
         assert_eq!(surviving_groups(sql, "in"), Some(2));
+    }
+
+    #[test]
+    fn using_and_either_on_operand_order_prune_the_same_row_groups() {
+        for (join, label) in [
+            ("JOIN event_def USING (event_id)", "using"),
+            (
+                "JOIN event_def ON event_def.event_id = events.event_id",
+                "on-swapped",
+            ),
+        ] {
+            let sql = format!("SELECT 1 FROM events {join} WHERE event_def.name = 'b'");
+            assert_eq!(surviving_groups(&sql, label), Some(1), "{sql}");
+        }
     }
 
     #[test]

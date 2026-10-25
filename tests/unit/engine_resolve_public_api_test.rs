@@ -130,6 +130,32 @@ fn joins_warn_log_lines_against_a_sqlite_hosts_lookup_table() {
     }
 }
 
+/// #771: `SELECT *` over a stream/SQLite join lists `log`'s columns and
+/// then the lookup table's, instead of failing with "emit has no registers".
+#[test]
+fn star_expands_over_both_tables_of_a_stream_sqlite_join() {
+    let db = HostsDb::new("star");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let result = run_query(
+        &driving,
+        &lookup,
+        "SELECT * FROM log JOIN hosts ON log.hostname = hosts.name WHERE severity >= 'WARN'",
+    )
+    .expect("star over a cross-mode join");
+
+    let columns = &result.columns;
+    assert!(columns.iter().any(|c| c == "hostname"), "{columns:?}");
+    assert_eq!(
+        columns.iter().rev().take(2).collect::<Vec<_>>(),
+        ["region", "name"],
+        "the lookup table's columns come last: {columns:?}"
+    );
+    assert!(!result.rows.is_empty());
+    assert!(result.rows.iter().all(|r| r.len() == columns.len()));
+}
+
 /// #387: the same stream/SQLite cross-mode join, but routed through
 /// `CrossModeEngine`'s `Engine` impl instead of the free functions --
 /// `run_query`/`explain_opcodes` must agree with the free-function path

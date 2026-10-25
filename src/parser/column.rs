@@ -1086,9 +1086,15 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 Some(JoinConstraint::On(expr)) => {
                     extract_equi_join(expr)?;
                 }
-                Some(JoinConstraint::Using(_)) => {
-                    return Err(unsupported(j.table.span, "USING join".into()))
+                // One key column: the planner joins on a single equality
+                // (#771). `USING (a, b)` would need a composite key.
+                Some(JoinConstraint::Using(columns)) if columns.len() != 1 => {
+                    return Err(unsupported(
+                        j.table.span,
+                        "USING with several columns: a join takes one key column".into(),
+                    ))
                 }
+                Some(JoinConstraint::Using(_)) => {}
                 None if j.op == JoinOp::Cross => {}
                 None => return Err(unsupported(j.table.span, "join without ON".into())),
             }
@@ -2157,6 +2163,30 @@ mod tests {
         assert_eq!(
             extract_equi_join(on_expr).unwrap(),
             ("orders.cust_id".to_string(), "customers.id".to_string())
+        );
+    }
+
+    /// #771: `USING (k)` with one key column parses; the planner reads it
+    /// as `ON <from>.k = <joined>.k`.
+    #[test]
+    fn parses_using_join_with_one_key_column() {
+        let q = parse("SELECT t.id FROM t LEFT JOIN u USING (k)").unwrap();
+        let join = &q.from.as_ref().unwrap().joins[0];
+        assert_eq!(join.op, JoinOp::Left);
+        assert_eq!(
+            join.constraint,
+            Some(JoinConstraint::Using(vec!["k".to_string()]))
+        );
+    }
+
+    /// #771: the join hashes on one key, so `USING (a, b)` is refused with
+    /// the reason, not as an unspecific unsupported join.
+    #[test]
+    fn using_with_several_columns_is_rejected() {
+        let err = parse("SELECT t.id FROM t JOIN u USING (a, b)").unwrap_err();
+        assert!(
+            err.to_string().contains("USING with several columns"),
+            "{err}"
         );
     }
 

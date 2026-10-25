@@ -72,8 +72,11 @@ use super::{
     OpcodeSection, PlanRow, QueryResult, TableInfo,
 };
 use crate::codegen::batch::{self as planner, split_qualified, PlanError, TableStats};
-use crate::parser::ast::{Select, TableRefKind};
+use crate::parser::ast::{
+    Expr, ExprKind, Join, JoinConstraint, ResultColumn, Select, TableRefKind,
+};
 use crate::parser::ParseError;
+use crate::parser::Span;
 use crate::storage::stream::{ColumnRequest, StreamSegment};
 use crate::vm::batch::{Batch, ScanSource, Segment as VmSegment, Value};
 use crate::vm::engine::{run_join_segments, JoinProgram, MultiJoinProgram};
@@ -288,13 +291,102 @@ fn resolve_group_by(select: Select, columns: Vec<String>) -> Result<Select, Engi
     planner::resolve_group_by(&select, &columns).map_err(plan_err)
 }
 
+/// `*` in the select list of a cross-mode join, expanded over every table
+/// of the `FROM`/`JOIN` clauses in the order written: `driving`'s
+/// `driving_columns`, then each SQLite table's own columns. A `JOIN ...
+/// USING (k)` lists `k` once, from the table written first (#771).
+fn expand_cross_mode_star(
+    mut select: Select,
+    driving: &str,
+    driving_columns: &[String],
+    lookup: &RowEngine,
+) -> Result<Select, EngineError> {
+    if !select
+        .columns
+        .iter()
+        .any(|c| matches!(c, ResultColumn::Star))
+    {
+        return Ok(select);
+    }
+    let Some(from) = select.from.as_ref() else {
+        return Ok(select);
+    };
+    let known = lookup.tables()?;
+    let using_key = |j: &Join| match &j.constraint {
+        Some(JoinConstraint::Using(columns)) => columns.first().cloned(),
+        _ => None,
+    };
+    let tables = std::iter::once((&from.first, None))
+        .chain(from.joins.iter().map(|j| (&j.table, using_key(j))));
+    let mut star: Vec<(String, String)> = Vec::new();
+    for (table, skip) in tables {
+        let Some(name) = table.name() else {
+            continue;
+        };
+        let columns: Vec<String> = if name.eq_ignore_ascii_case(driving) {
+            driving_columns.to_vec()
+        } else {
+            let info = known
+                .iter()
+                .find(|t| t.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| {
+                    EngineError::new(ErrorKind::Compile, format!("unknown lookup table: {name}"))
+                })?;
+            info.columns.iter().map(|c| c.name.clone()).collect()
+        };
+        for column in columns {
+            if skip
+                .as_ref()
+                .is_some_and(|k| k.eq_ignore_ascii_case(&column))
+            {
+                continue;
+            }
+            star.push((name.to_string(), column));
+        }
+    }
+    // A column keeps its bare name as the result header unless another
+    // table has one of that name: those stay qualified.
+    let star: Vec<ResultColumn> = star
+        .iter()
+        .map(|(table, column)| {
+            let unique = star
+                .iter()
+                .filter(|(_, c)| c.eq_ignore_ascii_case(column))
+                .count()
+                == 1;
+            ResultColumn::Expr {
+                expr: Expr {
+                    kind: ExprKind::Column {
+                        table: Some(table.clone()),
+                        catalog: None,
+                        name: column.clone(),
+                    },
+                    span: Span::UNKNOWN,
+                },
+                alias: unique.then(|| column.clone()),
+            }
+        })
+        .collect();
+    select.columns = select
+        .columns
+        .into_iter()
+        .flat_map(|c| match c {
+            ResultColumn::Star => star.clone(),
+            other => vec![other],
+        })
+        .collect();
+    Ok(select)
+}
+
 /// [`resolve_group_by`] for a cross-mode join: `log`'s columns plus those
-/// of every SQLite table the query names.
+/// of every SQLite table the query names. Also expands `*` first.
 fn resolve_cross_mode_group_by(
     select: Select,
+    driving: &str,
     driving_columns: Vec<String>,
     lookup: &RowEngine,
 ) -> Result<Select, EngineError> {
+    let select = expand_cross_mode_star(select, driving, &driving_columns, lookup)?;
     if select.group_by.is_empty() {
         return Ok(select);
     }
@@ -321,7 +413,8 @@ pub fn run_query(
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
-    let select = resolve_cross_mode_group_by(parse(sql)?, driving.columns(), lookup)?;
+    let select =
+        resolve_cross_mode_group_by(parse(sql)?, super::stream::TABLE, driving.columns(), lookup)?;
     let table = super::stream::TABLE;
     if join_count(&select) > 1 {
         let plan = plan_multi_join(&select, table, lookup)?;
@@ -350,8 +443,12 @@ pub fn run_column_query(
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
     let stmt = single_statement(sql)?;
-    let select =
-        resolve_cross_mode_group_by(driving.parse_join(&stmt)?, driving.columns(), lookup)?;
+    let select = resolve_cross_mode_group_by(
+        driving.parse_join(&stmt)?,
+        driving.table_name(),
+        driving.columns(),
+        lookup,
+    )?;
     let table = driving.table_name();
     let pruning = prune::probe_pruning(&select, lookup)?;
     // A lookup filter that matches no row leaves an inner join empty:
@@ -394,8 +491,12 @@ fn explain_column_plan(
     sql: &str,
 ) -> Result<Vec<PlanRow>, EngineError> {
     let stmt = single_statement(sql)?;
-    let select =
-        resolve_cross_mode_group_by(driving.parse_join(&stmt)?, driving.columns(), lookup)?;
+    let select = resolve_cross_mode_group_by(
+        driving.parse_join(&stmt)?,
+        driving.table_name(),
+        driving.columns(),
+        lookup,
+    )?;
     check_single_join_explain(&select)?;
     let table = driving.table_name();
     let (lookup_table, plan) = plan_join(&select, table, lookup)?;
@@ -470,8 +571,12 @@ fn explain_column_opcodes(
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
     let stmt = single_statement(sql)?;
-    let select =
-        resolve_cross_mode_group_by(driving.parse_join(&stmt)?, driving.columns(), lookup)?;
+    let select = resolve_cross_mode_group_by(
+        driving.parse_join(&stmt)?,
+        driving.table_name(),
+        driving.columns(),
+        lookup,
+    )?;
     check_single_join_explain(&select)?;
     let table = driving.table_name();
     let (_, plan) = plan_join(&select, table, lookup)?;
@@ -986,7 +1091,8 @@ fn explain_opcodes_query(
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
-    let select = resolve_cross_mode_group_by(parse(sql)?, driving.columns(), lookup)?;
+    let select =
+        resolve_cross_mode_group_by(parse(sql)?, super::stream::TABLE, driving.columns(), lookup)?;
     if select.from.as_ref().is_some_and(|f| f.joins.len() > 1) {
         return Err(EngineError::new(
             ErrorKind::Unsupported,
