@@ -57,6 +57,9 @@
 //! (`StreamEngine::segments_in_range`) rather than one side being
 //! naturally bounded (a SQLite table) and the other left unbounded.
 
+#[cfg(feature = "engine-column")]
+mod prune;
+
 use std::sync::Arc;
 
 #[cfg(feature = "engine-column")]
@@ -350,16 +353,33 @@ pub fn run_column_query(
     let select =
         resolve_cross_mode_group_by(driving.parse_join(&stmt)?, driving.columns(), lookup)?;
     let table = driving.table_name();
+    let pruning = prune::probe_pruning(&select, lookup)?;
+    // A lookup filter that matches no row leaves an inner join empty:
+    // probe nothing rather than the whole file.
     if join_count(&select) > 1 {
         let plan = plan_multi_join(&select, table, lookup)?;
-        return driving.with_probe_segments(&plan.left_columns, |segments| {
-            execute_multi_join(segments, lookup, &select, &plan)
-        });
+        return driving.with_probe_segments(
+            &plan.left_columns,
+            pruning.predicate.as_ref(),
+            |mut segments| {
+                if pruning.empty {
+                    segments.clear();
+                }
+                execute_multi_join(segments, lookup, &select, &plan)
+            },
+        );
     }
     let (lookup_table, plan) = plan_join(&select, table, lookup)?;
-    driving.with_probe_segments(&plan.left_columns, |segments| {
-        execute_join(segments, lookup, &select, &lookup_table, &plan)
-    })
+    driving.with_probe_segments(
+        &plan.left_columns,
+        pruning.predicate.as_ref(),
+        |mut segments| {
+            if pruning.empty {
+                segments.clear();
+            }
+            execute_join(segments, lookup, &select, &lookup_table, &plan)
+        },
+    )
 }
 
 #[cfg(feature = "engine-column")]

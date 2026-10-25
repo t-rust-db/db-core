@@ -151,7 +151,9 @@ impl BatchEngine {
 
     /// Runs `f` over one segment per row group, loading `columns` (`t.col`
     /// names as the join plan qualifies them) eagerly: the probe side of a
-    /// cross-mode join. The segments borrow the file view opened here, so
+    /// cross-mode join. A row group that `prune`'s footer statistics prove
+    /// cannot match is left out (the join's own filters still run). The
+    /// segments borrow the file view opened here, so
     /// they only live for the call.
     #[cfg(all(
         feature = "engine-row",
@@ -161,11 +163,12 @@ impl BatchEngine {
     pub(crate) fn with_probe_segments<T>(
         &self,
         columns: &[String],
+        prune: Option<&Expr>,
         f: impl FnOnce(Vec<FileSegment<'_, '_>>) -> Result<T, EngineError>,
     ) -> Result<T, EngineError> {
         let file = self.file()?;
         let eager = Program::from_opcodes([]);
-        f(file_segments(&file, columns, None, &eager)?)
+        f(file_segments(&file, columns, prune, &eager)?)
     }
 
     /// Parses one `SELECT` for this table; see [`parse_select`].

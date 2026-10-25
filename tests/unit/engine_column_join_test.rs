@@ -222,3 +222,55 @@ fn explain_is_unsupported_for_now() {
         .unwrap_err();
     assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
 }
+
+#[test]
+fn a_filter_on_the_lookup_table_keeps_only_the_matching_probe_rows() {
+    let db = LookupDb::new("filter");
+    let mut e = db.engine();
+    let got = rows(
+        &mut e,
+        "SELECT production.id, labels.label FROM production \
+         JOIN labels ON production.id = labels.id WHERE labels.label = 'two'",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(2), text("two")]]);
+
+    // OR within one lookup table, and a filter on each side of a star join.
+    let got = rows(
+        &mut e,
+        "SELECT production.id FROM production \
+         JOIN labels ON production.id = labels.id \
+         JOIN tiers ON production.id = tiers.id \
+         WHERE (labels.label = 'one' OR labels.label = 'three') AND tiers.tier = 'gold'",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(1)]]);
+}
+
+#[test]
+fn a_lookup_filter_matching_no_row_gives_an_empty_join_even_for_aggregates() {
+    let db = LookupDb::new("filter-none");
+    let mut e = db.engine();
+    let got = rows(
+        &mut e,
+        "SELECT COUNT(*) FROM production \
+         JOIN labels ON production.id = labels.id WHERE labels.label = 'nope'",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(0)]]);
+}
+
+#[test]
+fn a_left_join_filter_on_the_lookup_table_still_sees_the_unmatched_rows() {
+    let db = LookupDb::new("left-filter");
+    let mut e = db.engine();
+    let got = rows(
+        &mut e,
+        "SELECT COUNT(*) FROM production \
+         LEFT JOIN labels ON production.id = labels.id WHERE labels.label IS NULL",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(4997)]]);
+    let got = rows(
+        &mut e,
+        "SELECT production.id FROM production \
+         LEFT JOIN labels ON production.id = labels.id WHERE labels.label = 'two'",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(2)]]);
+}
