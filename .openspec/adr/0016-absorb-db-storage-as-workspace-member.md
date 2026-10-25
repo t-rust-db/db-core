@@ -50,6 +50,20 @@ of production scanning; `test_minimal_db`'s `cfg(any(test,
 feature = "storage-test-support"))` region counts as test code for the
 panic-allow gate.
 
+## Amendment: no carve-out for the ZSTD decoder (#749)
+
+`storage::parquet::compression::zstd` stays safe Rust
+(`#![deny(unsafe_code)]`, and `storage::parquet` stays `forbid`). A
+prototype (scoped `unsafe` in the match and literal copy loops, plus an
+unchecked FSE table lookup as a ceiling probe) gained nothing end to end
+and at most 5-15% of decode time (under 5% of scan CPU) even unchecked,
+against an acceptance bar of 15% scan CPU. On column-shaped payloads the
+safe decoder is already 0.9-1.5x libzstd's user time. The remaining gap
+to DuckDB on ZSTD data is mostly not the codec (2.4x on Snappy already);
+ZSTD itself adds about 23 ms wall on the 10M-row parity set. ZSTD parity
+is accepted as a documented gap. Reopen only with a new decode design,
+not with `unsafe` in the existing loops. Measurements: #749.
+
 ## Consequences
 
 - Consumers (sqlite-rs, column-rs, trigrep): drop the `db-storage`
