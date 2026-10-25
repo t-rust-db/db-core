@@ -33382,7 +33382,7 @@
   {
     "id": "storage_ingest_lock_acquire_e4166c44",
     "file": "src/storage/ingest/lock.rs",
-    "line": 53,
+    "line": 59,
     "decision": "match file.try_lock() {\n                Ok(()) => return Ok(TableLock { _file: file }),\n                Err(TryLockError::WouldBlock) => {\n                    if attempt < ATTEMPTS {\n                        std::thread::sleep(RETRY_PAUSE);\n                    }\n                }\n                Err(TryLockError::Error(e)) => return Err(LockError::Io(e)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33392,7 +33392,7 @@
   {
     "id": "storage_ingest_lock_acquire_845447e1",
     "file": "src/storage/ingest/lock.rs",
-    "line": 56,
+    "line": 62,
     "decision": "attempt < ATTEMPTS",
     "conditions": 1,
     "vectors_required": 2,

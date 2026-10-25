@@ -16,8 +16,14 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Attempts before [`LockError::Held`], [`RETRY_PAUSE`] apart: about 50 ms,
-/// orders of magnitude longer than a fork-to-exec window.
+/// orders of magnitude longer than a fork-to-exec window. The library's own
+/// tests wait about 2 s: with far more test threads than cores (#726) a
+/// thread that is between `fork` and `exec` can be descheduled for longer
+/// than 50 ms, and its child still holds a dropped table's lock.
+#[cfg(not(test))]
 const ATTEMPTS: u32 = 10;
+#[cfg(test)]
+const ATTEMPTS: u32 = 400;
 const RETRY_PAUSE: Duration = Duration::from_millis(5);
 
 /// The lock file's name inside the table directory.
