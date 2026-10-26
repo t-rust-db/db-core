@@ -1460,3 +1460,72 @@ fn a_day_merge_keeps_the_ranges_of_stat_columns() {
     assert_eq!(files_for("sid = 200"), 1);
     assert_eq!((count(&w, "sid = 0"), count(&w, "sid = 999")), before);
 }
+
+/// #786: a join key `UINT_64` above `i64::MAX` reads as its signed bit
+/// pattern, in a flushed row group and in a record page alike, when the
+/// caller names it; without that it is still an error (#595).
+#[test]
+fn snapshot_segments_read_a_bit_pattern_join_key_in_files_and_pages() {
+    use crate::engine::column::{
+        snapshot_files, snapshot_segments, snapshot_segments_with_bit_patterns,
+    };
+    use crate::vm::engine;
+
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        schema: Some(vec![
+            ColumnSpec::new("id", ColumnType::UInt64, false),
+            ColumnSpec::new("n", ColumnType::Int64, false),
+        ]),
+        clock,
+        ..TableOptions::default()
+    });
+    for (id, n) in [(u64::MAX, 1), (5, 2)] {
+        w.append_row(
+            vec![RecordValue::UInt(id), RecordValue::Int(n)],
+            Ack::Durable,
+        )
+        .unwrap();
+    }
+    w.flush_all().unwrap();
+    w.append_row(
+        vec![RecordValue::UInt(1 << 63), RecordValue::Int(3)],
+        Ack::Durable,
+    )
+    .unwrap();
+    let snapshot = w.snapshot().unwrap();
+
+    let select = crate::parser::column::parse("SELECT logs.id FROM logs ORDER BY logs.n").unwrap();
+    let program: Program = planner::compile(&select).unwrap();
+    let columns = program.columns_to_load();
+    let files = snapshot_files(&snapshot).unwrap();
+
+    let plain = snapshot_segments(&snapshot, &files, &columns, &program).unwrap();
+    assert_eq!(plain.len(), 2, "one row group and one page");
+    assert!(engine::run(&plain, &program).is_err());
+
+    let bits = snapshot_segments_with_bit_patterns(
+        &snapshot,
+        &files,
+        &columns,
+        &program,
+        &["logs.id".to_string()],
+    )
+    .unwrap();
+    let rows: Vec<Vec<Value>> = engine::run(&bits, &program).unwrap().rows().collect();
+    assert_eq!(
+        rows,
+        [
+            vec![Value::Int(-1)],
+            vec![Value::Int(5)],
+            vec![Value::Int(i64::MIN)]
+        ]
+    );
+
+    // The whole table, as a join build side reads it.
+    let names = ["logs.id".to_string(), "logs.n".to_string()];
+    assert!(read_snapshot(&snapshot, &names).is_err());
+    let whole =
+        read_snapshot_with_bit_patterns(&snapshot, &names, &["logs.id".to_string()]).unwrap();
+    assert_eq!(whole.num_rows, 3);
+}

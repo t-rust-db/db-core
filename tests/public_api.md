@@ -676,6 +676,7 @@ pub fn db_core::engine::column::table::query_snapshot(&db_core::storage::ingest:
 pub fn db_core::engine::column::table::query_snapshot_files(&db_core::storage::ingest::snapshot::Snapshot, &str, &str) -> core::result::Result<usize, db_core::engine::EngineError>
 pub fn db_core::engine::column::table::read_snapshot(&db_core::storage::ingest::snapshot::Snapshot, &[alloc::string::String]) -> core::result::Result<db_core::vm::batch::Batch, db_core::engine::EngineError>
 pub fn db_core::engine::column::table::read_snapshot_where(&db_core::storage::ingest::snapshot::Snapshot, &[alloc::string::String], &db_core::engine::column::table::SnapshotFilter) -> core::result::Result<db_core::vm::batch::Batch, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::read_snapshot_with_bit_patterns(&db_core::storage::ingest::snapshot::Snapshot, &[alloc::string::String], &[alloc::string::String]) -> core::result::Result<db_core::vm::batch::Batch, db_core::engine::EngineError>
 pub struct db_core::engine::column::BatchEngine
 impl db_core::engine::column::BatchEngine
 pub fn db_core::engine::column::BatchEngine::from_bytes(&str, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<Self, db_core::engine::EngineError>
@@ -705,10 +706,12 @@ pub fn db_core::engine::column::SnapshotSegment<'_, '_>::load(&self) -> core::re
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::load_columns(&self, &[alloc::string::String]) -> core::result::Result<alloc::rcs::arc::Arc<db_core::vm::batch::Batch>, db_core::vm::batch::VmError>
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub fn db_core::engine::column::file_segments<'f>(&'f db_core::storage::parquet::parquet_file::ParquetFile<'f>, &[alloc::string::String], core::option::Option<&db_core::parser::ast::Expr>, &'f db_core::vm::batch::Program) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::FileSegment<'f, 'f>>, db_core::engine::EngineError>
+pub fn db_core::engine::column::file_segments_with_bit_patterns<'f>(&'f db_core::storage::parquet::parquet_file::ParquetFile<'f>, &[alloc::string::String], core::option::Option<&db_core::parser::ast::Expr>, &'f db_core::vm::batch::Program, &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::FileSegment<'f, 'f>>, db_core::engine::EngineError>
 pub fn db_core::engine::column::snapshot_files(&db_core::storage::ingest::snapshot::Snapshot) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::parquet_file::ParquetFile<'_>>, db_core::engine::EngineError>
 pub fn db_core::engine::column::snapshot_files_where<'s>(&'s db_core::storage::ingest::snapshot::Snapshot, &'s db_core::engine::column::table::SnapshotFilter) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::parquet_file::ParquetFile<'s>>, db_core::engine::EngineError>
 pub fn db_core::engine::column::snapshot_segments<'f>(&'f db_core::storage::ingest::snapshot::Snapshot, &'f [db_core::storage::parquet::parquet_file::ParquetFile<'f>], &[alloc::string::String], &'f db_core::vm::batch::Program) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::SnapshotSegment<'f, 'f>>, db_core::engine::EngineError>
 pub fn db_core::engine::column::snapshot_segments_where<'f>(&'f db_core::storage::ingest::snapshot::Snapshot, &'f [db_core::storage::parquet::parquet_file::ParquetFile<'f>], &[alloc::string::String], &'f db_core::vm::batch::Program, &db_core::engine::column::table::SnapshotFilter) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::SnapshotSegment<'f, 'f>>, db_core::engine::EngineError>
+pub fn db_core::engine::column::snapshot_segments_with_bit_patterns<'f>(&'f db_core::storage::ingest::snapshot::Snapshot, &'f [db_core::storage::parquet::parquet_file::ParquetFile<'f>], &[alloc::string::String], &'f db_core::vm::batch::Program, &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::SnapshotSegment<'f, 'f>>, db_core::engine::EngineError>
 pub mod db_core::engine::cross_mode
 pub struct db_core::engine::cross_mode::RowTableSegment
 impl db_core::engine::cross_mode::RowTableSegment
@@ -2626,6 +2629,7 @@ pub db_core::storage::column::decode::Decoded::Column(db_core::vm::column::Colum
 pub fn db_core::storage::column::decode::annotation(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize) -> db_core::storage::column::decode::Annotation
 pub fn db_core::storage::column::decode::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub fn db_core::storage::column::decode::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
+pub fn db_core::storage::column::decode::decode_column_full_bit_pattern(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub mod db_core::storage::column::memory
 pub struct db_core::storage::column::memory::MemoryFile
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::memory::MemoryFile
@@ -3815,6 +3819,7 @@ pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::erro
 pub fn db_core::storage::column::annotation(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize) -> db_core::storage::column::decode::Annotation
 pub fn db_core::storage::column::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub fn db_core::storage::column::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
+pub fn db_core::storage::column::decode_column_full_bit_pattern(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub type db_core::storage::column::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub mod db_core::storage::ingest
 pub mod db_core::storage::ingest::error

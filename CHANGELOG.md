@@ -4,11 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [0.182.0] - 2026-10-26
+## [0.183.0] - 2026-10-26
 
 ### Changed
 
 - `TableReader` keeps its parsed records across a flush (it drops what the flush took into files and parses only what comes after) and keeps a lines table's schema, so a reader in another process no longer re-parses the tail each hour or reopens every file footer per query.
+
+## [0.182.0] - 2026-10-26
+
+### Added
+
+- `snapshot_segments_with_bit_patterns`, `file_segments_with_bit_patterns` (now public), `read_snapshot_with_bit_patterns` and `decode_column_full_bit_pattern`: a caller names its join-key columns, and a `UINT_64` above `i64::MAX` in them reads as its signed bit pattern in flushed row groups and record pages, on a join's probe and build sides. Elsewhere it still errors (#786).
 
 ## [0.181.1] - 2026-10-26
 
