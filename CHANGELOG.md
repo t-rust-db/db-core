@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.186.0] - 2026-10-26
+
+### Added
+
+- `CASE` (searched and simple), `COALESCE`, `IFNULL` and `NULLIF` in the column dialect and the stream engine, with DuckDB's answers and result types: a DECIMAL stays a DECIMAL, an integer next to a float or decimal is promoted, text next to a number is an error. A branch is computed only for the rows that take it, so an overflow in a branch no row takes is not an error, and a column has one type whatever the segments (ADR 0030).
+- `TRUE` and `FALSE` literals are booleans in the column engine; they compiled to NULL.
+
 ## [0.185.0] - 2026-10-26
 
 ### Added
