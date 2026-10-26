@@ -57,7 +57,9 @@ use crate::parser::ast::{
     TableRef, TableRefKind, UnaryOp, WindowDef,
 };
 use crate::parser::ParseError;
-use crate::vm::batch::{AggFunc, AggOperand, AggPart, HiddenPart, MapOp, Opcode, Program, Value};
+use crate::vm::batch::{
+    AggFunc, AggOperand, AggPart, Branch, HiddenPart, MapOp, Opcode, Program, Value,
+};
 use std::fmt::Write as _;
 
 #[derive(Debug)]
@@ -983,6 +985,27 @@ fn render_opcode(op: &Opcode) -> String {
                 list.join(", ")
             )
         }
+        Opcode::Select {
+            dst,
+            cond,
+            then,
+            else_,
+        } => {
+            let arm = |b: &Branch| {
+                let ops: Vec<String> = b.ops.iter().map(render_opcode).collect();
+                format!(
+                    "(&[{}], {}, &{})",
+                    ops.join(", "),
+                    b.out,
+                    render_usize_slice(&b.inputs)
+                )
+            };
+            format!(
+                "Opcode::select({dst}, {cond}, {}, {})",
+                arm(then),
+                arm(else_)
+            )
+        }
         // No caller-side planner emits these three yet -- the join/semi-
         // join/window bypass shapes ([`render_joined`]/
         // [`render_semi_join`]/[`render_windowed`]) still reconstruct a
@@ -1446,6 +1469,29 @@ mod tests {
         assert_eq!(
             render_opcode(&op),
             "Opcode::InList { dst: 1, src: 0, list: std::borrow::Cow::Borrowed(&[Value::Str(std::borrow::Cow::Borrowed(\"a\")), Value::Null]), negated: true }"
+        );
+    }
+
+    #[test]
+    fn render_opcode_renders_a_select_with_its_arms() {
+        let op = Opcode::select(
+            4,
+            0,
+            (
+                &[Opcode::Map {
+                    dst: 3,
+                    op: MapOp::Add,
+                    a: 1,
+                    b: 2,
+                }],
+                3,
+                &[1, 2],
+            ),
+            (&[], 2, &[]),
+        );
+        assert_eq!(
+            render_opcode(&op),
+            "Opcode::select(4, 0, (&[Opcode::Map { dst: 3, op: MapOp::Add, a: 1, b: 2 }], 3, &[1, 2]), (&[], 2, &[]))"
         );
     }
 

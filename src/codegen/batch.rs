@@ -54,11 +54,11 @@ use crate::parser::ast::{
     TableRefKind,
 };
 use crate::vm::batch::{
-    AggFunc, AggPart, Instruction, MapOp, Opcode, Program, ScanSource, Value, ValueSource,
+    AggFunc, AggPart, Branch, Instruction, MapOp, Opcode, Program, ScanSource, Value, ValueSource,
 };
 use crate::vm::engine::JoinProgram;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// A window function kind (#74 follow-up), local to this planner --
@@ -294,7 +294,7 @@ fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
         ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
-    ) || crate::functions::is_numeric_scalar(name, arity)
+    ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::MAP_FUNCTIONS
             .iter()
             .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
@@ -1134,12 +1134,11 @@ fn literal_value(lit: &AstLiteral) -> Value {
         AstLiteral::Integer(v) => Value::Int(*v),
         AstLiteral::Float(v) => Value::Float(*v),
         AstLiteral::Str(v) => Value::Str(v.clone().into()),
-        // Blob/Null/True/False aren't part of the batch planner's literal
-        // subset (`parser::column`'s validator rejects them before this
-        // module ever runs) -- fall back to NULL rather than panicking.
-        AstLiteral::Blob(_) | AstLiteral::Null | AstLiteral::True | AstLiteral::False => {
-            Value::Null
-        }
+        AstLiteral::True => Value::Bool(true),
+        AstLiteral::False => Value::Bool(false),
+        // A blob isn't part of the batch planner's literal subset -- fall
+        // back to NULL rather than panicking.
+        AstLiteral::Blob(_) | AstLiteral::Null => Value::Null,
     }
 }
 
@@ -1505,6 +1504,102 @@ impl Ctx {
     }
 }
 
+/// `compile` as one arm of an [`Opcode::Select`] (#725): the ops it emits
+/// become the arm's own, to run on the rows that take it. Column and
+/// constant loads stay in the enclosing program, before the `Select`, so the
+/// arm reads them as inputs.
+fn branch_of(ctx: &mut Ctx, compile: impl FnOnce(&mut Ctx) -> usize) -> Branch {
+    let start = ctx.program.len();
+    let out = compile(ctx);
+    let (loads, ops): (Vec<Instruction>, Vec<Instruction>) =
+        ctx.program.split_off(start).into_iter().partition(|i| {
+            matches!(
+                i.opcode,
+                Opcode::LoadColumn { .. } | Opcode::LoadConst { .. }
+            )
+        });
+    ctx.program.extend(loads);
+    let ops: Vec<Opcode> = ops.into_iter().map(|i| i.opcode).collect();
+    let defined: HashSet<usize> = ops.iter().filter_map(opcode_dst).collect();
+    let mut inputs: Vec<usize> = ops
+        .iter()
+        .flat_map(opcode_reads)
+        .filter(|r| !defined.contains(r))
+        .collect();
+    inputs.sort_unstable();
+    inputs.dedup();
+    Branch {
+        ops: ops.into(),
+        out,
+        inputs: inputs.into(),
+    }
+}
+
+/// The register an elementwise op writes (the only kinds an arm holds).
+fn opcode_dst(op: &Opcode) -> Option<usize> {
+    match op {
+        Opcode::Map { dst, .. }
+        | Opcode::Call { dst, .. }
+        | Opcode::InList { dst, .. }
+        | Opcode::Select { dst, .. } => Some(*dst),
+        _ => None,
+    }
+}
+
+/// The registers an elementwise op reads. A nested `Select` reads its
+/// condition and, of each arm, its inputs (or its output when it has no ops).
+fn opcode_reads(op: &Opcode) -> Vec<usize> {
+    match op {
+        Opcode::Map { a, b, .. } => vec![*a, *b],
+        Opcode::Call { args, .. } => args.to_vec(),
+        Opcode::InList { src, .. } => vec![*src],
+        Opcode::Select {
+            cond, then, else_, ..
+        } => {
+            let mut reads = vec![*cond];
+            for arm in [then, else_] {
+                if arm.ops.is_empty() {
+                    reads.push(arm.out);
+                } else {
+                    reads.extend(arm.inputs.iter().copied());
+                }
+            }
+            reads
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// `COALESCE(a, b, ...)`: `a` once, then, for the rows where it is NULL,
+/// the rest as a `COALESCE` of their own.
+fn compile_coalesce(args: &[AstExpr], ctx: &mut Ctx) -> usize {
+    let first = args.first().map_or(0, |e| compile_expr(e, ctx));
+    let present = ctx.alloc();
+    ctx.push(Opcode::Map {
+        dst: present,
+        op: MapOp::IsNotNull,
+        a: first,
+        b: first,
+    });
+    let rest = args.get(1..).unwrap_or_default();
+    let else_ = branch_of(ctx, |ctx| match rest {
+        [only] => compile_expr(only, ctx),
+        _ => compile_coalesce(rest, ctx),
+    });
+    let dst = ctx.alloc();
+    ctx.push(Opcode::Select {
+        dst,
+        cond: present,
+        then: Branch {
+            ops: Cow::Borrowed(&[]),
+            out: first,
+            inputs: Cow::Borrowed(&[]),
+        },
+        else_,
+    });
+    dst
+}
+
 fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
     // `col IN (lit, ...)`, which `parser::column` lowers to an `OR` chain
     // of `=` (an `AND` chain of `<>` for `NOT IN`): one set probe per row
@@ -1571,6 +1666,34 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
             });
             dst
         }
+        // A lowered `CASE` (#725): the condition, and the value where it
+        // holds and where it does not, each computed only for its rows.
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(list),
+            tail: None,
+            ..
+        } if name.eq_ignore_ascii_case(crate::functions::SELECT_FN) && list.len() == 3 => {
+            let cond = list.first().map_or(0, |e| compile_expr(e, ctx));
+            let then = branch_of(ctx, |ctx| list.get(1).map_or(0, |e| compile_expr(e, ctx)));
+            let else_ = branch_of(ctx, |ctx| list.get(2).map_or(0, |e| compile_expr(e, ctx)));
+            let dst = ctx.alloc();
+            ctx.push(Opcode::Select {
+                dst,
+                cond,
+                then,
+                else_,
+            });
+            dst
+        }
+        // `COALESCE` and `IFNULL` (#725): the first non-NULL argument, the
+        // later ones computed only for the rows that need them.
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(list),
+            tail: None,
+            ..
+        } if crate::functions::is_branch_scalar(name, list.len()) => compile_coalesce(list, ctx),
         ExprKind::FunctionCall {
             distinct: _,
             name,
@@ -3472,6 +3595,15 @@ fn render_operands(op: &Opcode) -> String {
             list,
             negated,
         } => format!("dst={dst} src={src} items={} negated={negated}", list.len()),
+        Opcode::Select {
+            dst,
+            cond,
+            then,
+            else_,
+        } => {
+            let arm = |b: &Branch| format!("r{}[{} ops]", b.out, b.ops.len());
+            format!("dst={dst} cond={cond} then={} else={}", arm(then), arm(else_))
+        }
     }
 }
 
@@ -4055,6 +4187,159 @@ mod tests {
             in_lists("SELECT id FROM t WHERE (name = 'a' OR name = 'b') OR name = 'c'").0,
             vec![(vec![s("a"), s("b"), s("c")], false)]
         );
+    }
+
+    /// The opcodes of the body `query` compiles to.
+    fn body_of(query: &str) -> Vec<Opcode> {
+        let program = compile(&crate::parser::column::parse(query).unwrap()).unwrap();
+        let (body, ..) = program.split_finalize();
+        body.to_vec()
+    }
+
+    /// The `Select`s at the top of `body`.
+    fn top_selects(body: &[Opcode]) -> Vec<&Opcode> {
+        body.iter()
+            .filter(|op| matches!(op, Opcode::Select { .. }))
+            .collect()
+    }
+
+    /// #725: a `CASE` is one `Select` whose else arm holds the next `WHEN`'s;
+    /// every column is loaded before it, outside the arms, so an arm runs
+    /// only elementwise ops.
+    #[test]
+    fn case_compiles_to_nested_selects_with_the_loads_outside_the_arms() {
+        let body = body_of("SELECT CASE WHEN a > 1 THEN b WHEN a > 0 THEN c ELSE d END FROM t");
+        let selects = top_selects(&body);
+        assert_eq!(selects.len(), 1, "{body:?}");
+        let Opcode::Select { then, else_, .. } = selects[0] else {
+            panic!("{body:?}");
+        };
+        // The first WHEN's value is a column: no ops, read as it is.
+        assert!(then.ops.is_empty());
+        // The rest is a Select of its own, inside the else arm.
+        assert!(else_
+            .ops
+            .iter()
+            .any(|op| matches!(op, Opcode::Select { .. })));
+        assert!(!else_
+            .ops
+            .iter()
+            .any(|op| matches!(op, Opcode::LoadColumn { .. } | Opcode::LoadConst { .. })));
+        let loaded: Vec<String> = body
+            .iter()
+            .filter_map(|op| match op {
+                Opcode::LoadColumn { column, .. } => Some(column.to_string()),
+                _ => None,
+            })
+            .collect();
+        for column in ["a", "b", "c", "d"] {
+            assert!(loaded.iter().any(|c| c == column), "{column} in {loaded:?}");
+        }
+        // The else arm reads what it does not compute (c, d, and the column
+        // the first condition's comparison needs).
+        assert!(!else_.inputs.is_empty());
+    }
+
+    /// #725: `COALESCE` and `IFNULL` are a `Select` on `IS NOT NULL` whose
+    /// then arm is the first argument, as it is, and whose else arm is the
+    /// rest; `NULLIF` a `Select`. None is a `Call`.
+    #[test]
+    fn coalesce_and_nullif_compile_to_selects() {
+        for (query, nested) in [
+            ("SELECT COALESCE(a, b, 0) FROM t", true),
+            ("SELECT IFNULL(a, 0) FROM t", false),
+            ("SELECT NULLIF(a, 0) FROM t", false),
+        ] {
+            let body = body_of(query);
+            let selects = top_selects(&body);
+            assert_eq!(selects.len(), 1, "{query}: {body:?}");
+            assert!(!body.iter().any(|op| matches!(op, Opcode::Call { .. })));
+            let Opcode::Select { else_, .. } = selects[0] else {
+                panic!("{body:?}");
+            };
+            assert_eq!(
+                else_
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Opcode::Select { .. })),
+                nested,
+                "{query}"
+            );
+        }
+        let body = body_of("SELECT IFNULL(a, 0) FROM t");
+        assert!(body.iter().any(|op| matches!(
+            op,
+            Opcode::Map {
+                op: MapOp::IsNotNull,
+                ..
+            }
+        )));
+    }
+
+    /// #725: a `CASE` or `COALESCE` over an aggregate is evaluated by
+    /// `Combine`'s projection, and a column in a branch that is neither
+    /// aggregated nor grouped is refused like `amount * 2`.
+    #[test]
+    fn a_case_over_an_aggregate_is_projected_and_an_ungrouped_branch_refused() {
+        let program = compile(
+            &crate::parser::column::parse(
+                "SELECT region, CASE WHEN sum(amount) > 1 THEN 'many' ELSE 'few' END, COALESCE(max(amount), 0) FROM t GROUP BY region",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let (_, combine, ..) = program.split_finalize();
+        let Some(Opcode::Combine { project, .. }) = combine else {
+            panic!("{program:?}");
+        };
+        // The CASE and the COALESCE are one Select each.
+        assert_eq!(top_selects(project).len(), 2, "{project:?}");
+        let refused = crate::parser::column::parse(
+            "SELECT region, CASE WHEN amount > 1 THEN 1 END FROM t GROUP BY region",
+        )
+        .map(|select| compile(&select));
+        assert!(refused.is_err() || refused.is_ok_and(|r| r.is_err()));
+    }
+
+    fn selects_in(select: &Select) -> usize {
+        let program = compile(select).unwrap();
+        let (body, ..) = program.split_finalize();
+        body.iter()
+            .filter(|op| matches!(op, Opcode::Select { .. }))
+            .count()
+    }
+
+    // codegen_batch_compile_expr_d8f9ad56 (the `__select` arm of
+    // `compile_expr`): `name.eq_ignore_ascii_case(SELECT_FN) && list.len() == 3`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_d8f9ad56__v1_a_select_call_of_three_is_a_select() {
+        let select = sql::parse("SELECT __select(a > 1, b, c) FROM t").unwrap();
+        assert_eq!(selects_in(&select), 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_d8f9ad56__v2_a_select_call_of_two_is_an_ordinary_call() {
+        // The validator refuses two arguments, so cut one from a valid call
+        // (in a `WHERE`, which the planner does not check by name).
+        let mut select = sql::parse("SELECT a FROM t WHERE __select(a > 1, b, c)").unwrap();
+        let Some(ExprKind::FunctionCall {
+            args: FunctionArgs::List(args),
+            ..
+        }) = select.where_clause.as_mut().map(|w| &mut w.kind)
+        else {
+            panic!("a call");
+        };
+        args.pop();
+        assert_eq!(selects_in(&select), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_d8f9ad56__v3_another_function_is_an_ordinary_call() {
+        let select = sql::parse("SELECT round(a) FROM t").unwrap();
+        assert_eq!(selects_in(&select), 0);
     }
 
     // codegen_batch_in_list_chain_1c58189f (`in_list_chain`):
@@ -6000,6 +6285,10 @@ mod tests {
             "ilike",
             "round",
             "abs",
+            "coalesce",
+            "ifnull",
+            "nullif",
+            "__select",
             "ROUND",
             "sqrt",
             "length",
