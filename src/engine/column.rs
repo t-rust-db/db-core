@@ -2721,4 +2721,107 @@ mod tests {
         );
         assert!(!segments.iter().any(|s| s.row_group_index == 0));
     }
+
+    /// A file with a `UINT_64` column `sid` (5, `u64::MAX`) and an `INT64`
+    /// column `n`, for the #600 bit-pattern reads below.
+    fn u64_file() -> Vec<u8> {
+        use crate::storage::parquet::writer::{
+            ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+        };
+        let schema = vec![
+            ColumnSpec::new("sid", ColumnType::UInt64, false),
+            ColumnSpec::new("n", ColumnType::Int64, false),
+        ];
+        let mut w = ParquetWriter::new(Vec::new(), schema, WriterOptions::default()).unwrap();
+        w.write_columns(vec![
+            ColumnValues::UInt64(vec![Some(5), Some(u64::MAX)]),
+            ColumnValues::Int64(vec![Some(1), Some(2)]),
+        ])
+        .unwrap();
+        w.finish().unwrap().0
+    }
+
+    /// `load_leaf`/`load_leaf_at` at leaf `index`, with `bit_pattern`: the
+    /// values when they come back as [`Value`]s, `None` when typed.
+    fn load_both(
+        index: usize,
+        pt: PhysicalType,
+        bit_pattern: bool,
+    ) -> (Option<Vec<Value>>, Option<Vec<Value>>) {
+        use super::{load_leaf, load_leaf_at, Loaded};
+        let bytes = u64_file();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let values = |l: Result<Loaded, _>| match l
+            .map_err(|e: crate::storage::parquet::FileError| e.to_string())
+        {
+            Ok(Loaded::Values(v)) => Some(v),
+            Ok(Loaded::Typed(_)) => None,
+            Err(e) => {
+                assert!(e.contains("18446744073709551615"), "{e}");
+                Some(Vec::new())
+            }
+        };
+        (
+            values(load_leaf(&rg, index, pt, bit_pattern)),
+            values(load_leaf_at(&rg, index, pt, &[0, 1], bit_pattern)),
+        )
+    }
+
+    /// #600: `bit_pattern && annotation == UInt64`, leaf A false -- without
+    /// the flag a `UINT_64` above `i64::MAX` is still an error (#595).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_57155792__v1_flag_off_keeps_the_error() {
+        // An error shows as the empty stand-in `values` returns.
+        assert_eq!(
+            load_both(0, PhysicalType::Int64, false),
+            (Some(Vec::new()), Some(Vec::new()))
+        );
+    }
+
+    /// Leaf A true, leaf B false: the flag on a column that is not `UINT_64`
+    /// reads it as usual (typed).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_57155792__v2_flag_on_plain_column_reads_typed() {
+        assert_eq!(load_both(1, PhysicalType::Int64, true), (None, None));
+    }
+
+    /// Both true: the `UINT_64` reads as its signed bit pattern.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_57155792__v3_flag_on_uint64_reads_the_bit_pattern() {
+        let want = Some(vec![Value::Int(5), Value::Int(-1)]);
+        assert_eq!(
+            load_both(0, PhysicalType::Int64, true),
+            (want.clone(), want)
+        );
+    }
+
+    /// The same three vectors for `load_leaf_at`'s own decision (#600).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_at_57155792__v1_flag_off_keeps_the_error() {
+        assert_eq!(
+            load_both(0, PhysicalType::Int64, false),
+            (Some(Vec::new()), Some(Vec::new()))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_at_57155792__v2_flag_on_plain_column_reads_typed() {
+        assert_eq!(load_both(1, PhysicalType::Int64, true), (None, None));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_at_57155792__v3_flag_on_uint64_reads_the_bit_pattern() {
+        let want = Some(vec![Value::Int(5), Value::Int(-1)]);
+        assert_eq!(
+            load_both(0, PhysicalType::Int64, true),
+            (want.clone(), want)
+        );
+    }
 }
