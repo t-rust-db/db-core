@@ -38,7 +38,6 @@ pub mod lock;
 pub mod table;
 #[cfg(feature = "ingest")]
 mod tier;
-pub(crate) use tier::column_bounds;
 
 pub use error::IngestError;
 #[cfg(feature = "ingest")]

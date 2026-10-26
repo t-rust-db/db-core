@@ -29,7 +29,7 @@ use super::{
     Value, VmError,
 };
 use crate::parser::ast::{Expr, Literal};
-use crate::storage::ingest::column_bounds;
+use crate::storage::ingest::manifest::column_bounds;
 use crate::storage::ingest::snapshot::{cast, physical_type};
 use crate::storage::ingest::{
     FileEntry, KeyBound, KeyRange, PageBody, RowPage, SessionKey, Snapshot,

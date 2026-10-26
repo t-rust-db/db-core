@@ -54,6 +54,11 @@ use super::layout::{Area, LayoutKind, SessionKey};
 use super::record::{type_from_name, type_name};
 use crate::json_path::{parse_object, JsonValue};
 use crate::storage::parquet::schema::ColumnSpec;
+#[cfg(any(
+    feature = "ingest",
+    all(feature = "ingest-read", feature = "engine-column")
+))]
+use crate::storage::parquet::schema::ColumnValues;
 use crate::storage::stream::detect::Format;
 
 /// The manifest's file name inside the table directory.
@@ -102,6 +107,46 @@ impl KeyRange {
             KeyBound::Str(s) => !s.chars().any(|c| c == '"' || c == '\\' || c.is_control()),
         };
         plain(&self.min) && plain(&self.max)
+    }
+}
+
+/// The smallest and largest non-null value of `values` as key bounds:
+/// `Some(None)` if all are NULL, `None` for a type or value a bound
+/// cannot hold (a float, an unsigned value above `i64::MAX`).
+#[cfg(any(
+    feature = "ingest",
+    all(feature = "ingest-read", feature = "engine-column")
+))]
+pub(crate) fn column_bounds(values: &ColumnValues) -> Option<Option<(KeyBound, KeyBound)>> {
+    fn ints<T: Copy>(
+        values: &[Option<T>],
+        int: impl Fn(T) -> Option<i64>,
+    ) -> Option<Option<(KeyBound, KeyBound)>> {
+        let mut range: Option<(i64, i64)> = None;
+        for v in values.iter().flatten() {
+            let v = int(*v)?;
+            range = Some(range.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
+        }
+        Some(range.map(|(lo, hi)| (KeyBound::Int(lo), KeyBound::Int(hi))))
+    }
+    match values {
+        ColumnValues::Int32(v) => ints(v, |x| Some(i64::from(x))),
+        ColumnValues::Int64(v)
+        | ColumnValues::TimestampMicros(v)
+        | ColumnValues::TimestampNanos(v) => ints(v, Some),
+        ColumnValues::UInt8(v) => ints(v, |x| Some(i64::from(x))),
+        ColumnValues::UInt16(v) => ints(v, |x| Some(i64::from(x))),
+        ColumnValues::UInt32(v) => ints(v, |x| Some(i64::from(x))),
+        ColumnValues::UInt64(v) => ints(v, |x| i64::try_from(x).ok()),
+        ColumnValues::Utf8(v) => {
+            let lo = v.iter().flatten().min();
+            let hi = v.iter().flatten().max();
+            Some(
+                lo.zip(hi)
+                    .map(|(lo, hi)| (KeyBound::Str(lo.clone()), KeyBound::Str(hi.clone()))),
+            )
+        }
+        _ => None,
     }
 }
 

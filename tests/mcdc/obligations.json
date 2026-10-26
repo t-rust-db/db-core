@@ -33982,7 +33982,7 @@
   {
     "id": "storage_ingest_manifest_writable_9466371b",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 100,
+    "line": 105,
     "decision": "match b {\n            KeyBound::Int(_) => true,\n            KeyBound::Str(s) => !s.chars().any(|c| c == '\"' || c == '\\\\' || c.is_control()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33990,9 +33990,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_manifest_column_bounds_627e6f10",
+    "file": "src/storage/ingest/manifest.rs",
+    "line": 132,
+    "decision": "match values {\n        ColumnValues::Int32(v) => ints(v, |x| Some(i64::from(x))),\n        ColumnValues::Int64(v)\n        | ColumnValues::TimestampMicros(v)\n        | ColumnValues::TimestampNanos(v) => ints(v, Some),\n        ColumnValues::UInt8(v) => ints(v, |x| Some(i64::from(x))),\n        ColumnValues::UInt16(v) => ints(v, |x| Some(i64::from(x))),\n        ColumnValues::UInt32(v) => ints(v, |x| Some(i64::from(x))),\n        ColumnValues::UInt64(v) => ints(v, |x| i64::try_from(x).ok()),\n        ColumnValues::Utf8(v) => {\n            let lo = v.iter().flatten().min();\n            let hi = v.iter().flatten().max();\n            Some(\n                lo.zip(hi)\n                    .map(|(lo, hi)| (KeyBound::Str(lo.clone()), KeyBound::Str(hi.clone()))),\n            )\n        }\n        _ => None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "storage_ingest_manifest_fmt_1380111b",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 167,
+    "line": 212,
     "decision": "match self {\n            ManifestError::Io(e) => write!(f, \"manifest: {e}\"),\n            ManifestError::Malformed(why) => write!(f, \"manifest: malformed: {why}\"),\n            ManifestError::Invariant(why) => write!(f, \"manifest: invariant broken: {why}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34002,7 +34012,7 @@
   {
     "id": "storage_ingest_manifest_check_c6d8b3d1",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 223,
+    "line": 268,
     "decision": "self.dropped_lsn > self.flushed_lsn",
     "conditions": 1,
     "vectors_required": 2,
@@ -34012,7 +34022,7 @@
   {
     "id": "storage_ingest_manifest_check_05cabde0",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 233,
+    "line": 278,
     "decision": "match (self.layout, file.area) {\n                (LayoutKind::Flat, Area::Data) => true,\n                (LayoutKind::Tiered, area @ (Area::Archive | Area::Live | Area::Staging)) => {\n                    let rank = match area {\n                        Area::Archive => 0,\n                        Area::Live => 1,\n                        _ => 2,\n                    };\n                    let in_order = rank >= tier;\n                    tier = rank;\n                    in_order\n                }\n                _ => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34022,7 +34032,7 @@
   {
     "id": "storage_ingest_manifest_check_55217fb9",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 236,
+    "line": 281,
     "decision": "match area {\n                        Area::Archive => 0,\n                        Area::Live => 1,\n                        _ => 2,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34032,7 +34042,7 @@
   {
     "id": "storage_ingest_manifest_check_062007c4",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 247,
+    "line": 292,
     "decision": "!allowed",
     "conditions": 1,
     "vectors_required": 2,
@@ -34042,7 +34052,7 @@
   {
     "id": "storage_ingest_manifest_check_37d65e68",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 255,
+    "line": 300,
     "decision": "file.lsn_lo != next",
     "conditions": 1,
     "vectors_required": 2,
@@ -34052,7 +34062,7 @@
   {
     "id": "storage_ingest_manifest_check_fe9f2813",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 265,
+    "line": 310,
     "decision": "span != Some(file.rows)",
     "conditions": 1,
     "vectors_required": 2,
@@ -34062,7 +34072,7 @@
   {
     "id": "storage_ingest_manifest_check_79f880d4",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 274,
+    "line": 319,
     "decision": "covered != self.flushed_lsn",
     "conditions": 1,
     "vectors_required": 2,
@@ -34072,7 +34082,7 @@
   {
     "id": "storage_ingest_manifest_dropping_85406495",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 304,
+    "line": 349,
     "decision": "let Some(last) = dropped.last()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34082,7 +34092,7 @@
   {
     "id": "storage_ingest_manifest_to_json_e2db0276",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 314,
+    "line": 359,
     "decision": "self.session_key.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34092,7 +34102,7 @@
   {
     "id": "storage_ingest_manifest_to_json_65ff1571",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 316,
+    "line": 361,
     "decision": "self.evolved",
     "conditions": 1,
     "vectors_required": 2,
@@ -34102,7 +34112,7 @@
   {
     "id": "storage_ingest_manifest_to_json_93c556cd",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 318,
+    "line": 363,
     "decision": "self.files.iter().any(keys)",
     "conditions": 1,
     "vectors_required": 2,
@@ -34112,7 +34122,7 @@
   {
     "id": "storage_ingest_manifest_to_json_2fe3378d",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 320,
+    "line": 365,
     "decision": "self.schema.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34122,7 +34132,7 @@
   {
     "id": "storage_ingest_manifest_to_json_cc197593",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 330,
+    "line": 375,
     "decision": "let Some(schema) = &self.schema",
     "conditions": 1,
     "vectors_required": 2,
@@ -34132,7 +34142,7 @@
   {
     "id": "storage_ingest_manifest_to_json_3366051e",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 333,
+    "line": 378,
     "decision": "i > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -34142,7 +34152,7 @@
   {
     "id": "storage_ingest_manifest_to_json_56405734",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 345,
+    "line": 390,
     "decision": "self.dropped_lsn > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -34152,7 +34162,7 @@
   {
     "id": "storage_ingest_manifest_to_json_a9616f53",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 348,
+    "line": 393,
     "decision": "let Some(key) = &self.session_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -34162,7 +34172,7 @@
   {
     "id": "storage_ingest_manifest_to_json_65ff1571_2",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 353,
+    "line": 398,
     "decision": "self.evolved",
     "conditions": 1,
     "vectors_required": 2,
@@ -34172,7 +34182,7 @@
   {
     "id": "storage_ingest_manifest_to_json_3366051e_2",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 359,
+    "line": 404,
     "decision": "i > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -34182,7 +34192,7 @@
   {
     "id": "storage_ingest_manifest_parse_fcf4b1fc",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 383,
+    "line": 428,
     "decision": "!rest.trim().is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -34192,7 +34202,7 @@
   {
     "id": "storage_ingest_manifest_parse_015ab3a2",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 388,
+    "line": 433,
     "decision": "!(1..=SESSION_VERSION).contains(&version)",
     "conditions": 1,
     "vectors_required": 2,
@@ -34202,7 +34212,7 @@
   {
     "id": "storage_ingest_manifest_parse_26b45337",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 394,
+    "line": 439,
     "decision": "version == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -34212,7 +34222,7 @@
   {
     "id": "storage_ingest_manifest_parse_eae5a938",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 402,
+    "line": 447,
     "decision": "match version {\n            RECORDS_VERSION => Some(schema(&fields)?),\n            KEYS_VERSION | EVOLVED_VERSION | SESSION_VERSION\n                if fields.iter().any(|(k, _)| k == \"schema\") =>\n            {\n                Some(schema(&fields)?)\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34222,7 +34232,7 @@
   {
     "id": "storage_ingest_manifest_parse_b08f5d3f",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 405,
+    "line": 450,
     "decision": "fields.iter().any(|(k, _)| k == \"schema\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -34232,7 +34242,7 @@
   {
     "id": "storage_ingest_manifest_parse_b27c6f70",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 412,
+    "line": 457,
     "decision": "fields.iter().any(|(k, _)| k == \"dropped_lsn\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -34242,7 +34252,7 @@
   {
     "id": "storage_ingest_manifest_parse_2f421138",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 417,
+    "line": 462,
     "decision": "version == SESSION_VERSION",
     "conditions": 1,
     "vectors_required": 2,
@@ -34252,7 +34262,7 @@
   {
     "id": "storage_ingest_manifest_parse_5034f38c",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 422,
+    "line": 467,
     "decision": "match version {\n            EVOLVED_VERSION => true,\n            SESSION_VERSION => fields.iter().any(|(k, _)| k == \"evolved\"),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34262,7 +34272,7 @@
   {
     "id": "storage_ingest_manifest_read_3e97dd0c",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 450,
+    "line": 495,
     "decision": "match fs::read_to_string(table.join(MANIFEST_FILE)) {\n            Ok(text) => Manifest::parse(&text).map(Some),\n            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),\n            Err(e) => Err(ManifestError::Io(e)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34272,7 +34282,7 @@
   {
     "id": "storage_ingest_manifest_read_20fc5e15",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 452,
+    "line": 497,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -34282,7 +34292,7 @@
   {
     "id": "storage_ingest_manifest_write_keys_c7754951",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 474,
+    "line": 519,
     "decision": "match b {\n        KeyBound::Int(i) => i.to_string(),\n        KeyBound::Str(s) => format!(\"\\\"{s}\\\"\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34292,7 +34302,7 @@
   {
     "id": "storage_ingest_manifest_write_keys_10b8f03e",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 480,
+    "line": 525,
     "decision": "first",
     "conditions": 1,
     "vectors_required": 2,
@@ -34302,7 +34312,7 @@
   {
     "id": "storage_ingest_manifest_write_keys_3a1b111f",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 489,
+    "line": 534,
     "decision": "!first",
     "conditions": 1,
     "vectors_required": 2,
@@ -34312,7 +34322,7 @@
   {
     "id": "storage_ingest_manifest_write_range_d36c01aa",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 495,
+    "line": 540,
     "decision": "match range {\n        Some((lo, hi)) => out.push_str(&format!(\",\\\"{name}_min\\\":{lo},\\\"{name}_max\\\":{hi}\")),\n        None => out.push_str(&format!(\",\\\"{name}_min\\\":null,\\\"{name}_max\\\":null\")),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34322,7 +34332,7 @@
   {
     "id": "storage_ingest_manifest_into_object_d05c2e47",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 516,
+    "line": 561,
     "decision": "match self {\n            Json::Object(fields) => Ok(fields),\n            _ => Err(malformed(\"expected an object\")),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34332,7 +34342,7 @@
   {
     "id": "storage_ingest_manifest_owned_at_dc90c9aa",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 535,
+    "line": 580,
     "decision": "match value {\n        JsonValue::Null => Json::Null,\n        JsonValue::Int(v) => Json::Int(*v),\n        JsonValue::Str(s) => Json::Str((*s).to_string()),\n        JsonValue::Object(fields) => Json::Object(\n            fields\n                .iter()\n                .map(|(k, v)| Ok(((*k).to_string(), owned_at(v, arrays)?)))\n                .collect::<Result<Vec<_>, ManifestError>>()?,\n        ),\n        JsonValue::Array(text) => {\n            let arrays = arrays\n                .checked_add(1)\n                .filter(|a| *a <= MAX_ARRAY_DEPTH)\n                .ok_or_else(|| malformed(\"arrays nested too deeply\"))?;\n            Json::Array(array_of_objects(text, arrays)?)\n        }\n        JsonValue::Bool(b) => Json::Bool(*b),\n        JsonValue::Float(_) => Json::Other,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34342,7 +34352,7 @@
   {
     "id": "storage_ingest_manifest_int_f6fe9a4b",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 579,
+    "line": 624,
     "decision": "match field(fields, name)? {\n        Json::Int(v) => Ok(v),\n        _ => Err(ManifestError::Malformed(format!(\n            \"{name} is not an integer\"\n        ))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34352,7 +34362,7 @@
   {
     "id": "storage_ingest_manifest_string_9d48722e",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 593,
+    "line": 638,
     "decision": "match field(fields, name)? {\n        Json::Str(s) if !s.contains('\\\\') => Ok(s),\n        _ => Err(ManifestError::Malformed(format!(\n            \"{name} is not a plain string\"\n        ))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34362,7 +34372,7 @@
   {
     "id": "storage_ingest_manifest_string_427a91e8",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 594,
+    "line": 639,
     "decision": "!s.contains('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -34372,7 +34382,7 @@
   {
     "id": "storage_ingest_manifest_range_389645b1",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 604,
+    "line": 649,
     "decision": "match (lo, hi) {\n        (Json::Int(lo), Json::Int(hi)) => Ok(Some((lo, hi))),\n        (Json::Null, Json::Null) => Ok(None),\n        _ => Err(ManifestError::Malformed(format!(\"{name} range\"))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34382,7 +34392,7 @@
   {
     "id": "storage_ingest_manifest_key_ranges_7319c889",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 624,
+    "line": 669,
     "decision": "version < KEYS_VERSION || !fields.iter().any(|(k, _)| k == \"keys\")",
     "conditions": 2,
     "vectors_required": 3,
@@ -34392,7 +34402,7 @@
   {
     "id": "storage_ingest_manifest_key_ranges_4dda6d7f",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 635,
+    "line": 680,
     "decision": "match bounds {\n                (Json::Int(lo), Json::Int(hi)) => (KeyBound::Int(lo), KeyBound::Int(hi)),\n                (Json::Str(lo), Json::Str(hi)) if !lo.contains('\\\\') && !hi.contains('\\\\') => {\n                    (KeyBound::Str(lo), KeyBound::Str(hi))\n                }\n                _ => return Err(ManifestError::Malformed(format!(\"key range of {column}\"))),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34402,7 +34412,7 @@
   {
     "id": "storage_ingest_manifest_key_ranges_581bc309",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 637,
+    "line": 682,
     "decision": "!lo.contains('\\\\') && !hi.contains('\\\\')",
     "conditions": 2,
     "vectors_required": 3,
@@ -34412,7 +34422,7 @@
   {
     "id": "storage_ingest_manifest_file_entry_26b45337",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 661,
+    "line": 706,
     "decision": "version == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -34422,7 +34432,7 @@
   {
     "id": "storage_ingest_manifest_array_of_objects_7fc5a244",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 687,
+    "line": 732,
     "decision": "let Some(after) = rest.strip_prefix(']')",
     "conditions": 1,
     "vectors_required": 2,
@@ -34432,7 +34442,7 @@
   {
     "id": "storage_ingest_manifest_array_of_objects_f97d8cca",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 695,
+    "line": 740,
     "decision": "let Some(next) = after.strip_prefix(',')",
     "conditions": 1,
     "vectors_required": 2,
@@ -34442,7 +34452,7 @@
   {
     "id": "storage_ingest_manifest_end_of_array_3751695c",
     "file": "src/storage/ingest/manifest.rs",
-    "line": 707,
+    "line": 752,
     "decision": "after.trim().is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35880,19 +35890,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_tier_column_bounds_627e6f10",
-    "file": "src/storage/ingest/tier.rs",
-    "line": 93,
-    "decision": "match values {\n        ColumnValues::Int32(v) => ints(v, |x| Some(i64::from(x))),\n        ColumnValues::Int64(v)\n        | ColumnValues::TimestampMicros(v)\n        | ColumnValues::TimestampNanos(v) => ints(v, Some),\n        ColumnValues::UInt8(v) => ints(v, |x| Some(i64::from(x))),\n        ColumnValues::UInt16(v) => ints(v, |x| Some(i64::from(x))),\n        ColumnValues::UInt32(v) => ints(v, |x| Some(i64::from(x))),\n        ColumnValues::UInt64(v) => ints(v, |x| i64::try_from(x).ok()),\n        ColumnValues::Utf8(v) => {\n            let lo = v.iter().flatten().min();\n            let hi = v.iter().flatten().max();\n            Some(\n                lo.zip(hi)\n                    .map(|(lo, hi)| (KeyBound::Str(lo.clone()), KeyBound::Str(hi.clone()))),\n            )\n        }\n        _ => None,\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
     "id": "storage_ingest_tier_row_group_9d7be1a7",
     "file": "src/storage/ingest/tier.rs",
-    "line": 159,
+    "line": 123,
     "decision": "match self.open.take() {\n            Some(open) => open,\n            None => {\n                let path = self.dir.join(format!(\"part-{}.parquet\", self.done.len()));\n                OpenFile {\n                    writer: ParquetWriter::new(\n                        BufWriter::new(File::create(&path)?),\n                        self.specs.clone(),\n                        self.options.clone(),\n                    )?,\n                    path,\n                    lsn_lo,\n                    lsn_hi,\n                    keys: vec![KeyState::Empty; self.keys.len()],\n                }\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35902,7 +35902,7 @@
   {
     "id": "storage_ingest_tier_maybe_cut_ebe977be",
     "file": "src/storage/ingest/tier.rs",
-    "line": 190,
+    "line": 154,
     "decision": "self\n            .open\n            .as_ref()\n            .is_some_and(|o| o.writer.bytes_written() >= self.max_file_size)",
     "conditions": 1,
     "vectors_required": 2,
@@ -35912,7 +35912,7 @@
   {
     "id": "storage_ingest_tier_cut_523cf254",
     "file": "src/storage/ingest/tier.rs",
-    "line": 229,
+    "line": 193,
     "decision": "match state {\n                        KeyState::Range(min, max) => Some(KeyRange {\n                            column: column.clone(),\n                            min,\n                            max,\n                        }),\n                        KeyState::Empty | KeyState::Unbounded => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35922,7 +35922,7 @@
   {
     "id": "storage_ingest_tier_widen_bounds_34b7e77c",
     "file": "src/storage/ingest/tier.rs",
-    "line": 256,
+    "line": 220,
     "decision": "match (a, b) {\n        (Some((alo, ahi)), Some((blo, bhi))) => Some((alo.min(blo), ahi.max(bhi))),\n        (a, None) => a,\n        (None, b) => b,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35932,7 +35932,7 @@
   {
     "id": "storage_ingest_tier_sort_pages_4bca5e34",
     "file": "src/storage/ingest/tier.rs",
-    "line": 320,
+    "line": 284,
     "decision": "match &p.body {\n            PageBody::Rows(rows) => Some(rows),\n            PageBody::Lines(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35942,7 +35942,7 @@
   {
     "id": "storage_ingest_tier_sort_pages_df68e20f",
     "file": "src/storage/ingest/tier.rs",
-    "line": 325,
+    "line": 289,
     "decision": "row_pages.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35952,7 +35952,7 @@
   {
     "id": "storage_ingest_tier_sort_pages_f9e6cfd1",
     "file": "src/storage/ingest/tier.rs",
-    "line": 334,
+    "line": 298,
     "decision": "match v {\n                        Value::Int(i) => Some(*i),\n                        _ => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35962,7 +35962,7 @@
   {
     "id": "storage_ingest_tier_stat_positions_396bc160",
     "file": "src/storage/ingest/tier.rs",
-    "line": 404,
+    "line": 368,
     "decision": "let Some(i) = specs.iter().position(|s| s.name == *name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -35972,7 +35972,7 @@
   {
     "id": "storage_ingest_tier_stat_positions_b606ed09",
     "file": "src/storage/ingest/tier.rs",
-    "line": 405,
+    "line": 369,
     "decision": "!positions.contains(&i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -35982,7 +35982,7 @@
   {
     "id": "storage_ingest_tier_write_sorted_42e2c3e8",
     "file": "src/storage/ingest/tier.rs",
-    "line": 425,
+    "line": 389,
     "decision": "sorted.rows <= chunk",
     "conditions": 1,
     "vectors_required": 2,
@@ -35992,7 +35992,7 @@
   {
     "id": "storage_ingest_tier_write_sorted_cc828b3c",
     "file": "src/storage/ingest/tier.rs",
-    "line": 429,
+    "line": 393,
     "decision": "lo < sorted.rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -36002,7 +36002,7 @@
   {
     "id": "storage_ingest_tier_read_values_6ade5342",
     "file": "src/storage/ingest/tier.rs",
-    "line": 488,
+    "line": 452,
     "decision": "match pt {\n        PhysicalType::Int32 => map(rg.read_int32_column(index).map_err(e)?, |v| {\n            Value::Int(i64::from(v))\n        }),\n        PhysicalType::Int64 => map(rg.read_int64_column(index).map_err(e)?, Value::Int),\n        PhysicalType::Double => map(rg.read_double_column(index).map_err(e)?, Value::Float),\n        PhysicalType::Float => map(rg.read_float_column(index).map_err(e)?, |v| {\n            Value::Float(f64::from(v))\n        }),\n        PhysicalType::Boolean => map(rg.read_boolean_column(index).map_err(e)?, Value::Bool),\n        PhysicalType::ByteArray => map(rg.read_string_column(index).map_err(e)?, |s| {\n            Value::Str(s.into())\n        }),\n        PhysicalType::Int96 | PhysicalType::FixedLenByteArray | PhysicalType::Unknown(_) => {\n            return Err(format!(\"unsupported physical type {pt:?}\"))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36012,7 +36012,7 @@
   {
     "id": "storage_ingest_tier_row_group_11ad2ae4",
     "file": "src/storage/ingest/tier.rs",
-    "line": 527,
+    "line": 491,
     "decision": "typed",
     "conditions": 1,
     "vectors_required": 2,
@@ -36022,7 +36022,7 @@
   {
     "id": "storage_ingest_tier_row_group_a8bcc2ee",
     "file": "src/storage/ingest/tier.rs",
-    "line": 532,
+    "line": 496,
     "decision": "!spec.nullable",
     "conditions": 1,
     "vectors_required": 2,
@@ -36032,7 +36032,7 @@
   {
     "id": "storage_ingest_tier_row_group_e62bf21e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 548,
+    "line": 512,
     "decision": "match leaf {\n            Some((index, pt)) => read_values(&rg, index, pt)\n                .map_err(|why| corrupt(path, why))?\n                .into_iter()\n                .map(|v| cast(v, spec.column_type))\n                .collect(),\n            None => vec![Value::Null; usize::try_from(rows).unwrap_or(0)],\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36042,7 +36042,7 @@
   {
     "id": "storage_ingest_tier_widened_specs_2cf7ecaf",
     "file": "src/storage/ingest/tier.rs",
-    "line": 571,
+    "line": 535,
     "decision": "let Some(t) = element.physical_type.and_then(column_type)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36052,7 +36052,7 @@
   {
     "id": "storage_ingest_tier_merge_day_59ef71ba",
     "file": "src/storage/ingest/tier.rs",
-    "line": 600,
+    "line": 564,
     "decision": "match schema {\n        Some(schema) => schema.to_vec(),\n        None => widened_specs(&opened.iter().map(|o| &o.1).collect::<Vec<_>>(), &[]),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36062,7 +36062,7 @@
   {
     "id": "storage_ingest_tier_merge_day_a81bcb5f",
     "file": "src/storage/ingest/tier.rs",
-    "line": 610,
+    "line": 574,
     "decision": "let Some((columns, rows)) =\n            row_group(file, fields, &entry.path, index, &specs, schema.is_some())?",
     "conditions": 1,
     "vectors_required": 2,
@@ -36072,7 +36072,7 @@
   {
     "id": "storage_ingest_tier_merge_day_93d8e9a9",
     "file": "src/storage/ingest/tier.rs",
-    "line": 618,
+    "line": 582,
     "decision": "next.saturating_sub(1) != entry.lsn_hi",
     "conditions": 1,
     "vectors_required": 2,
@@ -36082,7 +36082,7 @@
   {
     "id": "storage_ingest_tier_merge_day_7c39fb9d",
     "file": "src/storage/ingest/tier.rs",
-    "line": 634,
+    "line": 598,
     "decision": "files.done.len() > before",
     "conditions": 1,
     "vectors_required": 2,
@@ -36092,7 +36092,7 @@
   {
     "id": "storage_ingest_tier_merge_day_b511161e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 638,
+    "line": 602,
     "decision": "files.open.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36102,7 +36102,7 @@
   {
     "id": "storage_ingest_tier_close_hour_1102f3d0",
     "file": "src/storage/ingest/tier.rs",
-    "line": 692,
+    "line": 656,
     "decision": "match schema {\n        Some(schema) => schema.to_vec(),\n        None => widened_specs(&inputs.iter().map(|o| &o.1).collect::<Vec<_>>(), pages),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36112,7 +36112,7 @@
   {
     "id": "storage_ingest_tier_close_hour_aebd16f3",
     "file": "src/storage/ingest/tier.rs",
-    "line": 715,
+    "line": 679,
     "decision": "!pages.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36122,7 +36122,7 @@
   {
     "id": "storage_ingest_tier_close_hour_f59055c0",
     "file": "src/storage/ingest/tier.rs",
-    "line": 729,
+    "line": 693,
     "decision": "run.pos == run.len",
     "conditions": 1,
     "vectors_required": 2,
@@ -36132,7 +36132,7 @@
   {
     "id": "storage_ingest_tier_close_hour_f59055c0_2",
     "file": "src/storage/ingest/tier.rs",
-    "line": 743,
+    "line": 707,
     "decision": "run.pos == run.len",
     "conditions": 1,
     "vectors_required": 2,
@@ -36142,7 +36142,7 @@
   {
     "id": "storage_ingest_tier_close_hour_3a79fa78",
     "file": "src/storage/ingest/tier.rs",
-    "line": 748,
+    "line": 712,
     "decision": "match (run.chunk.get(k), b.chunk.get(k)) {\n                        (Some(x), Some(y)) => compare_across(x, run.pos, y, b.pos),\n                        _ => std::cmp::Ordering::Equal,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36152,7 +36152,7 @@
   {
     "id": "storage_ingest_tier_close_hour_c6836d5c",
     "file": "src/storage/ingest/tier.rs",
-    "line": 755,
+    "line": 719,
     "decision": "better",
     "conditions": 1,
     "vectors_required": 2,
@@ -36162,7 +36162,7 @@
   {
     "id": "storage_ingest_tier_close_hour_3856a22b",
     "file": "src/storage/ingest/tier.rs",
-    "line": 764,
+    "line": 728,
     "decision": "run.pos == run.len && load(run, &inputs, &specs, typed)?",
     "conditions": 2,
     "vectors_required": 3,
@@ -36172,7 +36172,7 @@
   {
     "id": "storage_ingest_tier_close_hour_6b6b652e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 768,
+    "line": 732,
     "decision": "picks.len() >= chunk",
     "conditions": 1,
     "vectors_required": 2,
@@ -36182,7 +36182,7 @@
   {
     "id": "storage_ingest_tier_close_hour_7494f37f",
     "file": "src/storage/ingest/tier.rs",
-    "line": 778,
+    "line": 742,
     "decision": "!picks.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36192,7 +36192,7 @@
   {
     "id": "storage_ingest_tier_load_d0b2a4ad",
     "file": "src/storage/ingest/tier.rs",
-    "line": 800,
+    "line": 764,
     "decision": "let Some((columns, rows)) =\n        row_group(file, fields, &entry.path, run.next_row_group, specs, typed)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -36202,7 +36202,7 @@
   {
     "id": "storage_ingest_tier_load_90d4b664",
     "file": "src/storage/ingest/tier.rs",
-    "line": 804,
+    "line": 768,
     "decision": "rows > 0",
     "conditions": 1,
     "vectors_required": 2,
