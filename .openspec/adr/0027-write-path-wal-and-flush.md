@@ -439,24 +439,35 @@ parses them into the held pages; the head page is re-sealed only when it
 grew. It returns a `Snapshot`, so `query_snapshot` is unchanged, and
 `TableEngine` holds one reader instead of opening a snapshot per query.
 
-**It reads the whole tail again** (as `Snapshot::open` does, and counts it in
-`ReaderStats::rebuilds`) when the held pages could be wrong:
-- the manifest's `flushed_lsn`, schema or format moved;
+**A flush does not make it read the tail again.** When `flushed_lsn` moved
+forward, the reader drops the held records at or below it: whole pages go,
+and the page the cut falls in is rebuilt from its own rows (a lines page
+from its raw lines and arrival times, a record page by slicing its columns),
+so nothing is parsed again. Pages above the cut keep their boundaries, so
+one page may be shorter than the page size, and a snapshot's pages can
+differ from a fresh open's in where they end, not in what they hold.
+
+**It reads the whole tail again** (as `Snapshot::open` does, counted in
+`ReaderStats::rebuilds`) only when the held pages could be wrong:
+- the manifest's schema or format changed;
+- a flush took more than the reader had parsed;
+- a page cannot be cut;
 - the saved segment is gone, shorter than the position, or the frame there
   is not the LSN expected, as after the writer truncated a torn tail and
-  appended again;
-- `read_from` cannot reach the next LSN.
+  appended again.
 
-A flush every hour is the worst case, so a reader refreshed within the hour
-parses each record once. The reader seals pages at the page size only, as
-`Snapshot::open` does, so after a flush it has the same pages as a fresh
-open and the property test can compare them exactly.
+A lines table's schema is kept with the reader: a refresh folds in the pages
+sealed since and the head, and computes it again from every file's footer
+only when the file list changed or records were dropped, which keeps the
+column order of a fresh read.
 
-**Measured** (event bench, record table, 1M unflushed records, Ack::Memory):
-a fresh `Snapshot::open` takes 243 ms after 1,000 more records are
-appended; `TableReader::refresh` takes 0.7 ms. The first read costs about
-the same either way.
+**Measured** (event bench, record table, Ack::Memory): with 1M unflushed
+records and 1,000 more appended, a fresh `Snapshot::open` takes 243 ms and
+`TableReader::refresh` 0.7 ms. After the first hour closes and is flushed,
+with a second hour's 1M-record tail left, a fresh open takes 254 ms (it
+parses the second hour) and a refresh 0.7 ms (it drops the first hour's
+pages). The first read costs about the same either way.
 
-**Not done:** resuming mid-page after a flush (the reader rebuilds), and
-caching `Snapshot::schema` of a lines table, which still opens every file
-footer on each call.
+When a flush takes everything the reader held, a rebuild is cheap too, since
+little is left to parse: a refresh then costs the time to free the dropped
+pages (21 ms for 1M rows, against 8 ms for a fresh open).
