@@ -380,7 +380,7 @@ mod tests {
         let events = events();
         let columns = ["events.event_id".to_string()];
         let kept = events
-            .with_probe_segments(&columns, pruning.predicate.as_ref(), |s| Ok(s.len()))
+            .with_probe_segments(&columns, pruning.predicate.as_ref(), &[], |s| Ok(s.len()))
             .unwrap();
         pruning.predicate.map(|_| kept)
     }

@@ -5811,7 +5811,9 @@ pub fn db_core::storage::row::btree::TableCursor<P>::next(&mut self) -> core::re
 pub fn db_core::storage::row::btree::TableCursor<P>::next_row(&mut self) -> core::result::Result<core::option::Option<db_core::storage::row::btree::TableRow>, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::TableCursor<P>::prev(&mut self) -> core::result::Result<core::option::Option<i64>, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::TableCursor<P>::prev_row(&mut self) -> core::result::Result<core::option::Option<db_core::storage::row::btree::TableRow>, db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::TableCursor<P>::scan_u64_range(&mut self, u64, u64, impl core::ops::function::FnMut(u64, &mut Self) -> core::result::Result<bool, db_core::storage::row::btree::BtreeError>) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::TableCursor<P>::seek(&mut self, i64) -> core::result::Result<core::option::Option<i64>, db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::TableCursor<P>::seek_ge(&mut self, i64) -> core::result::Result<core::option::Option<i64>, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::TableCursor<P>::seek_row(&mut self, i64) -> core::result::Result<core::option::Option<db_core::storage::row::btree::TableRow>, db_core::storage::row::btree::BtreeError>
 pub struct db_core::storage::row::btree::TableRow
 pub db_core::storage::row::btree::TableRow::payload: db_core::storage::row::btree::Payload

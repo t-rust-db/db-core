@@ -178,11 +178,18 @@ impl BatchEngine {
         &self,
         columns: &[String],
         prune: Option<&Expr>,
+        bit_pattern: &[String],
         f: impl FnOnce(Vec<FileSegment<'_, '_>>) -> Result<T, EngineError>,
     ) -> Result<T, EngineError> {
         let file = self.file()?;
         let eager = Program::from_opcodes([]);
-        f(file_segments(&file, columns, prune, &eager)?)
+        f(file_segments_with_bit_patterns(
+            &file,
+            columns,
+            prune,
+            &eager,
+            bit_pattern,
+        )?)
     }
 
     /// Parses one `SELECT` for this table; see [`parse_select`].
@@ -417,6 +424,12 @@ struct RowGroupSegment<'a, 'm> {
     /// (#464): lets [`Segment::order_key_bound`] answer from this row
     /// group's footer statistics for that column. `None` = unbounded.
     order_leaf: Option<(usize, PhysicalType)>,
+    /// Columns (by batch key) whose `UINT_64` values read as their signed
+    /// bit pattern instead of erroring above `i64::MAX` (#600): a join key
+    /// is only compared for equality, where the wrapped value equals a
+    /// SQLite row key stored the same way. Elsewhere such a value stays an
+    /// error (#595).
+    bit_pattern: Vec<String>,
 }
 
 /// #464: resolves a single bare-column `ORDER BY` term to its leaf so each
@@ -437,6 +450,11 @@ fn order_leaf(order_by: &[OrderingTerm], all_leaves: &[Leaf]) -> Option<(usize, 
 }
 
 impl RowGroupSegment<'_, '_> {
+    /// Whether `name` is a [`Self::bit_pattern`] column.
+    fn bits(&self, name: &str) -> bool {
+        self.bit_pattern.iter().any(|n| n == name)
+    }
+
     /// Opens this segment's row group reader, or a [`VmError::SegmentLoad`]
     /// if the row group index is out of range.
     fn row_group(&self) -> Result<RowGroupReader<'_, '_>, VmError> {
@@ -467,7 +485,7 @@ impl RowGroupSegment<'_, '_> {
     ) -> Result<Batch, VmError> {
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in leaves {
-            let decoded = load_leaf(rg, *index, *physical_type)
+            let decoded = load_leaf(rg, *index, *physical_type, self.bits(name))
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             batch = apply_loaded(batch, name, decoded);
         }
@@ -511,7 +529,7 @@ impl RowGroupSegment<'_, '_> {
         let rg = self.row_group()?;
         let mut batch = Batch::new(positions.len());
         for (name, index, physical_type) in self.leaves_named(columns)? {
-            let decoded = load_leaf_at(&rg, index, physical_type, positions)
+            let decoded = load_leaf_at(&rg, index, physical_type, positions, self.bits(&name))
                 .map_err(|e| segment_error(self.row_group_index, &name, &e))?;
             batch = apply_loaded(batch, &name, decoded);
         }
@@ -583,7 +601,7 @@ impl Segment for RowGroupSegment<'_, '_> {
             .collect();
         let mut predicate_batch = Batch::new(num_rows);
         for (name, index, physical_type) in &predicate_leaves {
-            let decoded = load_leaf(&rg, *index, *physical_type)
+            let decoded = load_leaf(&rg, *index, *physical_type, self.bits(name))
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             predicate_batch = apply_loaded(predicate_batch, name, decoded);
         }
@@ -634,7 +652,7 @@ impl Segment for RowGroupSegment<'_, '_> {
                 batch = batch.with_column(name.clone(), Vec::new());
                 continue;
             }
-            let decoded = load_leaf_at(&rg, *index, *physical_type, &indices)
+            let decoded = load_leaf_at(&rg, *index, *physical_type, &indices, self.bits(name))
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             batch = apply_loaded(batch, name, decoded);
         }
@@ -656,6 +674,17 @@ fn segment_error(row_group_index: usize, column_name: &str, e: &impl std::fmt::D
 enum Loaded {
     Typed(Decoded),
     Values(Vec<Value>),
+}
+
+/// Leaf `index`'s `UINT_64` values as their signed bit patterns (#600): a
+/// value above `i64::MAX` is a negative integer, equal to the SQLite row
+/// key stored the same way.
+fn uint64_bit_pattern(rg: &RowGroupReader<'_, '_>, index: usize) -> Result<Vec<Value>, FileError> {
+    Ok(rg
+        .read_int64_column(index)?
+        .into_iter()
+        .map(|v| v.map_or(Value::Null, Value::Int))
+        .collect())
 }
 
 /// Leaf `index`'s DECIMAL values, exact (#632).
@@ -687,11 +716,15 @@ fn load_leaf(
     rg: &RowGroupReader<'_, '_>,
     index: usize,
     physical_type: PhysicalType,
+    bit_pattern: bool,
 ) -> Result<Loaded, FileError> {
     match rg.nested_field_at(index) {
         Some(field) => map_values(rg, &field).map(Loaded::Values),
         None if annotation(rg, index) == Annotation::Decimal => {
             decimal_values(rg, index).map(Loaded::Values)
+        }
+        None if bit_pattern && annotation(rg, index) == Annotation::UInt64 => {
+            uint64_bit_pattern(rg, index).map(Loaded::Values)
         }
         None => decode_column_full(rg, index, physical_type).map(Loaded::Typed),
     }
@@ -703,9 +736,13 @@ fn load_leaf_at(
     index: usize,
     physical_type: PhysicalType,
     positions: &[u32],
+    bit_pattern: bool,
 ) -> Result<Loaded, FileError> {
     let all = match rg.nested_field_at(index) {
         Some(field) => Some(map_values(rg, &field)?),
+        None if bit_pattern && annotation(rg, index) == Annotation::UInt64 => {
+            Some(uint64_bit_pattern(rg, index)?)
+        }
         None if annotation(rg, index) == Annotation::Decimal => Some(decimal_values(rg, index)?),
         None => None,
     };
@@ -755,6 +792,7 @@ fn row_group_segments<'f>(
     all_leaves: &[Leaf],
     where_clause: Option<&Expr>,
     program: &'f Program,
+    bit_pattern: &[String],
 ) -> Vec<RowGroupSegment<'f, 'f>> {
     let leaves_by_name: HashMap<&str, (usize, PhysicalType)> = all_leaves
         .iter()
@@ -771,6 +809,7 @@ fn row_group_segments<'f>(
             columns: columns.to_vec(),
             program,
             order_leaf: None,
+            bit_pattern: bit_pattern.to_vec(),
         })
         .collect()
 }
@@ -814,14 +853,32 @@ pub fn file_segments<'f>(
     where_clause: Option<&Expr>,
     program: &'f Program,
 ) -> Result<Vec<FileSegment<'f, 'f>>, EngineError> {
+    file_segments_with_bit_patterns(file, columns, where_clause, program, &[])
+}
+
+/// [`file_segments`] where the `bit_pattern` columns (batch keys, a subset
+/// of `columns`) read a `UINT_64` above `i64::MAX` as its signed bit
+/// pattern rather than an error (#600), for join keys.
+pub(crate) fn file_segments_with_bit_patterns<'f>(
+    file: &'f ParquetFile<'f>,
+    columns: &[String],
+    where_clause: Option<&Expr>,
+    program: &'f Program,
+    bit_pattern: &[String],
+) -> Result<Vec<FileSegment<'f, 'f>>, EngineError> {
     let all_leaves = leaf_columns(file);
     let leaves = resolve_columns(&all_leaves, columns)?;
-    Ok(
-        row_group_segments(file, &leaves, &all_leaves, where_clause, program)
-            .into_iter()
-            .map(FileSegment)
-            .collect(),
+    Ok(row_group_segments(
+        file,
+        &leaves,
+        &all_leaves,
+        where_clause,
+        program,
+        bit_pattern,
     )
+    .into_iter()
+    .map(FileSegment)
+    .collect())
 }
 
 /// A segment of an ingested table (`table.rs`): a flushed row group or a
@@ -971,6 +1028,7 @@ fn segments_of<'f>(
                     columns: leaves.clone(),
                     program,
                     order_leaf: None,
+                    bit_pattern: Vec::new(),
                 },
                 fixups: fixups.clone(),
             })
@@ -1003,6 +1061,7 @@ fn table_row_groups<'f>(
         comparable,
         select.where_clause.as_ref(),
         program,
+        &[],
     )
     .into_iter()
     .map(|mut inner| {
@@ -1458,6 +1517,7 @@ impl Engine for BatchEngine {
             &self.leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         let bound_leaf = order_leaf(&select.order_by, &self.leaves);
         for segment in &mut segments {
@@ -1824,7 +1884,7 @@ mod tests {
         let file = ParquetFile::open(&file_bytes).unwrap();
         let leaves = amount_leaf();
         let program = Program::new(Vec::new());
-        let mut segments = row_group_segments(&file, &leaves, &leaves, None, &program);
+        let mut segments = row_group_segments(&file, &leaves, &leaves, None, &program, &[]);
         assert_eq!(segments.len(), 3);
         // Unbounded until the ORDER BY leaf is known.
         assert_eq!(segments[0].order_key_bound(true), None);
@@ -1864,6 +1924,7 @@ mod tests {
                 columns: leaves.clone(),
                 program: &program,
                 order_leaf: None,
+                bit_pattern: Vec::new(),
             };
             segment.load().map(|batch| batch.num_rows)
         };
@@ -1896,7 +1957,7 @@ mod tests {
         let file = engine.file().unwrap();
         let leaves = engine.leaves.clone();
         let program = Program::new(Vec::new());
-        let segments = row_group_segments(&file, &leaves, &leaves, None, &program);
+        let segments = row_group_segments(&file, &leaves, &leaves, None, &program, &[]);
         let seg = &segments[2];
         let amount = vec!["amount".to_string()];
         let key_only = seg.load_columns(&amount).unwrap();
@@ -2188,6 +2249,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert_eq!(
             segments
@@ -2213,6 +2275,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert_eq!(
             segments
@@ -2240,6 +2303,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert_eq!(
             segments
@@ -2258,7 +2322,7 @@ mod tests {
         let leaves = amount_leaf();
 
         let program = Program::new(Vec::new());
-        let segments = row_group_segments(&file, &leaves, &leaves, None, &program);
+        let segments = row_group_segments(&file, &leaves, &leaves, None, &program, &[]);
         assert_eq!(segments.len(), 2);
     }
 
@@ -2297,6 +2361,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert_eq!(
             segments
@@ -2342,6 +2407,7 @@ mod tests {
             columns: amount_leaf(),
             program: &program,
             order_leaf: None,
+            bit_pattern: Vec::new(),
         };
         assert!(seg.load().is_err());
     }
@@ -2357,6 +2423,7 @@ mod tests {
             columns: vec![("amount".to_string(), 7, PhysicalType::Double)],
             program: &program,
             order_leaf: None,
+            bit_pattern: Vec::new(),
         };
         assert!(seg.load().is_err());
     }
@@ -2390,6 +2457,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert_eq!(
             segments
@@ -2441,6 +2509,7 @@ mod tests {
                 &leaves,
                 select.where_clause.as_ref(),
                 &program,
+                &[],
             );
             assert_eq!(
                 segments
@@ -2483,6 +2552,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert!(segments.is_empty(), "no row group can satisfy amount > 500");
 
@@ -2495,6 +2565,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert_eq!(
             segments
@@ -2598,6 +2669,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert_eq!(
             segments
@@ -2640,6 +2712,7 @@ mod tests {
             &leaves,
             select.where_clause.as_ref(),
             &program,
+            &[],
         );
         assert_eq!(
             segments.len(),
@@ -2647,5 +2720,108 @@ mod tests {
             "only the big-values row group should be pruned"
         );
         assert!(!segments.iter().any(|s| s.row_group_index == 0));
+    }
+
+    /// A file with a `UINT_64` column `sid` (5, `u64::MAX`) and an `INT64`
+    /// column `n`, for the #600 bit-pattern reads below.
+    fn u64_file() -> Vec<u8> {
+        use crate::storage::parquet::writer::{
+            ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+        };
+        let schema = vec![
+            ColumnSpec::new("sid", ColumnType::UInt64, false),
+            ColumnSpec::new("n", ColumnType::Int64, false),
+        ];
+        let mut w = ParquetWriter::new(Vec::new(), schema, WriterOptions::default()).unwrap();
+        w.write_columns(vec![
+            ColumnValues::UInt64(vec![Some(5), Some(u64::MAX)]),
+            ColumnValues::Int64(vec![Some(1), Some(2)]),
+        ])
+        .unwrap();
+        w.finish().unwrap().0
+    }
+
+    /// `load_leaf`/`load_leaf_at` at leaf `index`, with `bit_pattern`: the
+    /// values when they come back as [`Value`]s, `None` when typed.
+    fn load_both(
+        index: usize,
+        pt: PhysicalType,
+        bit_pattern: bool,
+    ) -> (Option<Vec<Value>>, Option<Vec<Value>>) {
+        use super::{load_leaf, load_leaf_at, Loaded};
+        let bytes = u64_file();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let values = |l: Result<Loaded, _>| match l
+            .map_err(|e: crate::storage::parquet::FileError| e.to_string())
+        {
+            Ok(Loaded::Values(v)) => Some(v),
+            Ok(Loaded::Typed(_)) => None,
+            Err(e) => {
+                assert!(e.contains("18446744073709551615"), "{e}");
+                Some(Vec::new())
+            }
+        };
+        (
+            values(load_leaf(&rg, index, pt, bit_pattern)),
+            values(load_leaf_at(&rg, index, pt, &[0, 1], bit_pattern)),
+        )
+    }
+
+    /// #600: `bit_pattern && annotation == UInt64`, leaf A false -- without
+    /// the flag a `UINT_64` above `i64::MAX` is still an error (#595).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_57155792__v1_flag_off_keeps_the_error() {
+        // An error shows as the empty stand-in `values` returns.
+        assert_eq!(
+            load_both(0, PhysicalType::Int64, false),
+            (Some(Vec::new()), Some(Vec::new()))
+        );
+    }
+
+    /// Leaf A true, leaf B false: the flag on a column that is not `UINT_64`
+    /// reads it as usual (typed).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_57155792__v2_flag_on_plain_column_reads_typed() {
+        assert_eq!(load_both(1, PhysicalType::Int64, true), (None, None));
+    }
+
+    /// Both true: the `UINT_64` reads as its signed bit pattern.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_57155792__v3_flag_on_uint64_reads_the_bit_pattern() {
+        let want = Some(vec![Value::Int(5), Value::Int(-1)]);
+        assert_eq!(
+            load_both(0, PhysicalType::Int64, true),
+            (want.clone(), want)
+        );
+    }
+
+    /// The same three vectors for `load_leaf_at`'s own decision (#600).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_at_57155792__v1_flag_off_keeps_the_error() {
+        assert_eq!(
+            load_both(0, PhysicalType::Int64, false),
+            (Some(Vec::new()), Some(Vec::new()))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_at_57155792__v2_flag_on_plain_column_reads_typed() {
+        assert_eq!(load_both(1, PhysicalType::Int64, true), (None, None));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_at_57155792__v3_flag_on_uint64_reads_the_bit_pattern() {
+        let want = Some(vec![Value::Int(5), Value::Int(-1)]);
+        assert_eq!(
+            load_both(0, PhysicalType::Int64, true),
+            (want.clone(), want)
+        );
     }
 }
