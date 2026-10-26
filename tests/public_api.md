@@ -74,11 +74,15 @@ pub fn db_core::codegen::batch::BuildSourceKind::fmt(&self, &mut core::fmt::Form
 impl core::marker::Copy for db_core::codegen::batch::BuildSourceKind
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::BuildSourceKind
 pub enum db_core::codegen::batch::PlanError
+pub db_core::codegen::batch::PlanError::AmbiguousColumn
+pub db_core::codegen::batch::PlanError::AmbiguousColumn::name: alloc::string::String
+pub db_core::codegen::batch::PlanError::AmbiguousColumn::tables: alloc::vec::Vec<alloc::string::String>
 pub db_core::codegen::batch::PlanError::Internal(alloc::string::String)
 pub db_core::codegen::batch::PlanError::NoJoinClause
 pub db_core::codegen::batch::PlanError::ScopeClauseUnsupported
 pub db_core::codegen::batch::PlanError::StarWithAggregation
 pub db_core::codegen::batch::PlanError::UnknownColumn(alloc::string::String)
+pub db_core::codegen::batch::PlanError::UnknownStarTable(alloc::string::String)
 pub db_core::codegen::batch::PlanError::UnsupportedJoinKind(db_core::parser::ast::JoinOp)
 pub db_core::codegen::batch::PlanError::UnsupportedSelectItem(alloc::string::String)
 pub db_core::codegen::batch::PlanError::UnsupportedSemiJoin(alloc::string::String)
@@ -153,6 +157,16 @@ pub fn db_core::codegen::batch::PlanNode::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::codegen::batch::PlanNode
 pub fn db_core::codegen::batch::PlanNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::codegen::batch::PlanNode
+pub struct db_core::codegen::batch::ResolvedJoin
+pub db_core::codegen::batch::ResolvedJoin::headers: alloc::vec::Vec<alloc::string::String>
+pub db_core::codegen::batch::ResolvedJoin::select: db_core::parser::ast::Select
+impl core::clone::Clone for db_core::codegen::batch::ResolvedJoin
+pub fn db_core::codegen::batch::ResolvedJoin::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::codegen::batch::ResolvedJoin
+pub fn db_core::codegen::batch::ResolvedJoin::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::codegen::batch::ResolvedJoin
+pub fn db_core::codegen::batch::ResolvedJoin::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::codegen::batch::ResolvedJoin
 pub struct db_core::codegen::batch::SemiJoinProgram
 pub db_core::codegen::batch::SemiJoinProgram::body: db_core::vm::batch::Program
 pub db_core::codegen::batch::SemiJoinProgram::key_column: alloc::string::String
@@ -204,6 +218,7 @@ pub fn db_core::codegen::batch::explain_opcodes(&db_core::parser::ast::Select) -
 pub fn db_core::codegen::batch::has_subquery_condition(&db_core::parser::ast::Select) -> bool
 pub fn db_core::codegen::batch::output_column_names(&db_core::parser::ast::Select) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::codegen::batch::resolve_group_by(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::parser::ast::Select>
+pub fn db_core::codegen::batch::resolve_join_columns(&db_core::parser::ast::Select, &[(alloc::string::String, alloc::vec::Vec<alloc::string::String>)]) -> db_core::codegen::batch::Result<db_core::codegen::batch::ResolvedJoin>
 pub fn db_core::codegen::batch::split_qualified(&str) -> (core::option::Option<&str>, &str)
 pub type db_core::codegen::batch::Result<T> = core::result::Result<T, db_core::codegen::batch::PlanError>
 pub mod db_core::codegen::row
