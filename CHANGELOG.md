@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.181.1] - 2026-10-26
+
+### Fixed
+
+- `EXPLAIN QUERY PLAN` for a cross-mode join reports a SQLite lookup table's real row count (from `ANALYZE` statistics, or `COUNT(*)`) instead of `1 row group, ~0 rows` (#789).
+
 ## [0.181.0] - 2026-10-26
 
 ### Added
