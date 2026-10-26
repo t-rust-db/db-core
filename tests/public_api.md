@@ -8225,9 +8225,6 @@ pub db_core::vm::batch::Opcode::Call
 pub db_core::vm::batch::Opcode::Call::args: alloc::borrow::Cow<'static, [usize]>
 pub db_core::vm::batch::Opcode::Call::dst: usize
 pub db_core::vm::batch::Opcode::Call::name: alloc::borrow::Cow<'static, str>
-pub db_core::vm::batch::Opcode::Coalesce
-pub db_core::vm::batch::Opcode::Coalesce::args: alloc::borrow::Cow<'static, [usize]>
-pub db_core::vm::batch::Opcode::Coalesce::dst: usize
 pub db_core::vm::batch::Opcode::Combine
 pub db_core::vm::batch::Opcode::Combine::agg_parts: alloc::borrow::Cow<'static, [db_core::vm::batch::AggPart]>
 pub db_core::vm::batch::Opcode::Combine::distinct: bool
@@ -8289,8 +8286,8 @@ pub db_core::vm::batch::Opcode::ScanSource(db_core::vm::batch::ScanSource)
 pub db_core::vm::batch::Opcode::Select
 pub db_core::vm::batch::Opcode::Select::cond: usize
 pub db_core::vm::batch::Opcode::Select::dst: usize
-pub db_core::vm::batch::Opcode::Select::else_: usize
-pub db_core::vm::batch::Opcode::Select::then: usize
+pub db_core::vm::batch::Opcode::Select::else_: db_core::vm::batch::Branch
+pub db_core::vm::batch::Opcode::Select::then: db_core::vm::batch::Branch
 pub db_core::vm::batch::Opcode::Sort
 pub db_core::vm::batch::Opcode::Sort::hidden: usize
 pub db_core::vm::batch::Opcode::Sort::keys: alloc::borrow::Cow<'static, [(usize, bool)]>
@@ -8303,6 +8300,8 @@ pub db_core::vm::batch::Opcode::Window::order_by: alloc::borrow::Cow<'static, [(
 pub db_core::vm::batch::Opcode::Window::partition_by: alloc::borrow::Cow<'static, [usize]>
 impl db_core::vm::batch::Opcode
 pub fn db_core::vm::batch::Opcode::name(&self) -> &'static str
+impl db_core::vm::batch::Opcode
+pub const fn db_core::vm::batch::Opcode::select(usize, usize, (&'static [db_core::vm::batch::Opcode], usize, &'static [usize]), (&'static [db_core::vm::batch::Opcode], usize, &'static [usize])) -> db_core::vm::batch::Opcode
 impl core::clone::Clone for db_core::vm::batch::Opcode
 pub fn db_core::vm::batch::Opcode::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::Opcode
@@ -8464,6 +8463,17 @@ pub fn db_core::vm::column::Bitmap::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::vm::column::Bitmap
 pub fn db_core::vm::column::Bitmap::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::column::Bitmap
+pub struct db_core::vm::batch::Branch
+pub db_core::vm::batch::Branch::inputs: alloc::borrow::Cow<'static, [usize]>
+pub db_core::vm::batch::Branch::ops: alloc::borrow::Cow<'static, [db_core::vm::batch::Opcode]>
+pub db_core::vm::batch::Branch::out: usize
+impl core::clone::Clone for db_core::vm::batch::Branch
+pub fn db_core::vm::batch::Branch::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::vm::batch::Branch
+pub fn db_core::vm::batch::Branch::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::vm::batch::Branch
+pub fn db_core::vm::batch::Branch::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::vm::batch::Branch
 pub struct db_core::vm::batch::Instruction
 pub db_core::vm::batch::Instruction::comment: core::option::Option<alloc::string::String>
 pub db_core::vm::batch::Instruction::opcode: db_core::vm::batch::Opcode

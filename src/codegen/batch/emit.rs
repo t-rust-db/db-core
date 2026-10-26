@@ -57,7 +57,9 @@ use crate::parser::ast::{
     TableRef, TableRefKind, UnaryOp, WindowDef,
 };
 use crate::parser::ParseError;
-use crate::vm::batch::{AggFunc, AggOperand, AggPart, HiddenPart, MapOp, Opcode, Program, Value};
+use crate::vm::batch::{
+    AggFunc, AggOperand, AggPart, Branch, HiddenPart, MapOp, Opcode, Program, Value,
+};
 use std::fmt::Write as _;
 
 #[derive(Debug)]
@@ -988,11 +990,22 @@ fn render_opcode(op: &Opcode) -> String {
             cond,
             then,
             else_,
-        } => format!("Opcode::Select {{ dst: {dst}, cond: {cond}, then: {then}, else_: {else_} }}"),
-        Opcode::Coalesce { dst, args } => format!(
-            "Opcode::Coalesce {{ dst: {dst}, args: std::borrow::Cow::Borrowed(&{}) }}",
-            render_usize_slice(args)
-        ),
+        } => {
+            let arm = |b: &Branch| {
+                let ops: Vec<String> = b.ops.iter().map(render_opcode).collect();
+                format!(
+                    "(&[{}], {}, &{})",
+                    ops.join(", "),
+                    b.out,
+                    render_usize_slice(&b.inputs)
+                )
+            };
+            format!(
+                "Opcode::select({dst}, {cond}, {}, {})",
+                arm(then),
+                arm(else_)
+            )
+        }
         // No caller-side planner emits these three yet -- the join/semi-
         // join/window bypass shapes ([`render_joined`]/
         // [`render_semi_join`]/[`render_windowed`]) still reconstruct a
@@ -1460,22 +1473,25 @@ mod tests {
     }
 
     #[test]
-    fn render_opcode_renders_select_and_coalesce() {
-        assert_eq!(
-            render_opcode(&Opcode::Select {
-                dst: 3,
-                cond: 0,
-                then: 1,
-                else_: 2
-            }),
-            "Opcode::Select { dst: 3, cond: 0, then: 1, else_: 2 }"
+    fn render_opcode_renders_a_select_with_its_arms() {
+        let op = Opcode::select(
+            4,
+            0,
+            (
+                &[Opcode::Map {
+                    dst: 3,
+                    op: MapOp::Add,
+                    a: 1,
+                    b: 2,
+                }],
+                3,
+                &[1, 2],
+            ),
+            (&[], 2, &[]),
         );
         assert_eq!(
-            render_opcode(&Opcode::Coalesce {
-                dst: 4,
-                args: vec![0, 1, 2].into()
-            }),
-            "Opcode::Coalesce { dst: 4, args: std::borrow::Cow::Borrowed(&[0, 1, 2]) }"
+            render_opcode(&op),
+            "Opcode::select(4, 0, (&[Opcode::Map { dst: 3, op: MapOp::Add, a: 1, b: 2 }], 3, &[1, 2]), (&[], 2, &[]))"
         );
     }
 

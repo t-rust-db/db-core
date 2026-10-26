@@ -828,41 +828,78 @@ pub enum Opcode {
         /// `true` for `NOT IN`.
         negated: bool,
     },
-    /// `registers[dst][i] = registers[then][i]` where `registers[cond][i]`
-    /// is TRUE, otherwise `registers[else_][i]` (a NULL or FALSE condition
-    /// takes the else), per row (#725): what `parser::column` lowers
-    /// `CASE` to, nested one `WHEN` per `Select`. Both branches are
-    /// computed for every row, so an error in a branch not taken (an
-    /// integer overflow, a string that does not convert) is raised where
-    /// DuckDB's lazy `CASE` would not raise it. The two branches take
-    /// DuckDB's common type: an integer and a float give floats, an
-    /// integer and a decimal decimals; any other mix (text and a number)
-    /// is [`VmError::BranchTypes`], never a column of mixed types. A
-    /// branch is typed by its non-NULL values in the segment, so one that
-    /// is all NULL there (a sparse column) takes the other branch's type:
-    /// `CASE WHEN c THEN amount ELSE 0 END` gives an integer 0 in such a
-    /// segment where the others give the column's type.
+    /// `registers[dst][i]` is the `then` arm's value at row `i` where
+    /// `registers[cond][i]` is TRUE, otherwise the `else_` arm's (a NULL or
+    /// FALSE condition takes the else), per row (#725): what
+    /// `parser::column` lowers `CASE` to, nested one `WHEN` per `Select`,
+    /// and `COALESCE` through `IS NOT NULL`.
+    ///
+    /// Each arm is evaluated **only for the rows that take it**, as SQL's
+    /// `CASE` is: a [`Branch`] with ops runs them on a compacted copy of
+    /// its inputs holding just those rows, so an integer overflow or a
+    /// failed conversion in an arm no row takes is never raised, and an
+    /// arm no row takes is never run.
+    ///
+    /// The two arms take DuckDB's common type: an integer and a float give
+    /// floats, an integer and a decimal decimals; any other mix (text and a
+    /// number) is [`VmError::BranchTypes`], never a column of mixed types.
+    /// An arm without ops (a column or a literal) is typed by its whole
+    /// column; one with ops by the values it computed. `engine::run` then
+    /// gives an output column that is a `Select` one numeric type across
+    /// segments, where a segment's NULLs left a branch without a type.
     Select {
         /// Destination register.
         dst: usize,
         /// The condition.
         cond: usize,
         /// The value where the condition is TRUE.
-        then: usize,
+        then: Branch,
         /// The value otherwise.
-        else_: usize,
+        else_: Branch,
     },
-    /// `registers[dst][i]` = the first non-NULL of the `args` registers at
-    /// row `i`, NULL if all are (#725): `COALESCE` and `IFNULL`. Every
-    /// argument is computed for every row, and the arguments take a common
-    /// type as [`Opcode::Select`]'s branches do, with the same limit for a
-    /// column that is all NULL in the segment.
-    Coalesce {
-        /// Destination register.
+}
+
+impl Opcode {
+    /// An [`Opcode::Select`] over arms given as `(ops, out, inputs)`: what
+    /// generated programs build (`const PROGRAM`), so that they name only
+    /// `Opcode`.
+    #[must_use]
+    pub const fn select(
         dst: usize,
-        /// The argument registers, in order.
-        args: Cow<'static, [usize]>,
-    },
+        cond: usize,
+        then: (&'static [Opcode], usize, &'static [usize]),
+        else_: (&'static [Opcode], usize, &'static [usize]),
+    ) -> Opcode {
+        Opcode::Select {
+            dst,
+            cond,
+            then: Branch {
+                ops: Cow::Borrowed(then.0),
+                out: then.1,
+                inputs: Cow::Borrowed(then.2),
+            },
+            else_: Branch {
+                ops: Cow::Borrowed(else_.0),
+                out: else_.1,
+                inputs: Cow::Borrowed(else_.2),
+            },
+        }
+    }
+}
+
+/// One arm of an [`Opcode::Select`] (#725).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Branch {
+    /// The elementwise ops (`Map`, `Call`, `InList`, a nested `Select`)
+    /// that compute the arm, run only on the rows that take it. Empty when
+    /// the arm is a register that is already computed (a column or a
+    /// literal): `out` is then read as it is.
+    pub ops: Cow<'static, [Opcode]>,
+    /// The register holding the arm's value once `ops` have run.
+    pub out: usize,
+    /// The registers `ops` read and do not write, compacted to the rows
+    /// that take the arm before they run.
+    pub inputs: Cow<'static, [usize]>,
 }
 
 /// Where [`Opcode::ScanSource`] materializes a cross-mode join's build side
@@ -939,7 +976,6 @@ impl Opcode {
             Opcode::Call { .. } => "Call",
             Opcode::InList { .. } => "InList",
             Opcode::Select { .. } => "Select",
-            Opcode::Coalesce { .. } => "Coalesce",
         }
     }
 }
@@ -1107,6 +1143,63 @@ impl QueryOutput {
     #[must_use]
     pub fn len(&self) -> usize {
         self.num_rows()
+    }
+
+    /// Gives the numbers of output column `column` one type across every
+    /// chunk (#725): the common type of the integers, floats and decimals in
+    /// it. A `CASE` or `COALESCE` types a branch by its values, so in a
+    /// segment where a column is all NULL it yields the other branch's type
+    /// (`coalesce(amount, 0)` an integer where other segments give floats);
+    /// DuckDB types the whole column once. A column with anything else in it
+    /// (text, booleans) is left alone.
+    pub(crate) fn unify_numeric_column(
+        &mut self,
+        opcode: &'static str,
+        column: usize,
+    ) -> Result<()> {
+        let numeric = |k: BranchKind| {
+            matches!(
+                k,
+                BranchKind::Int | BranchKind::Float | BranchKind::Decimal(_)
+            )
+        };
+        let mut common: Option<BranchKind> = None;
+        let mut mixed = false;
+        for chunk in &self.chunks {
+            let Some(values) = chunk.get(column) else {
+                return Ok(());
+            };
+            for kind in values.iter().filter_map(BranchKind::of) {
+                if !numeric(kind) {
+                    return Ok(());
+                }
+                match common {
+                    None => common = Some(kind),
+                    Some(prev) if prev == kind => {}
+                    Some(prev) => match prev.common(kind) {
+                        Some(next) => {
+                            mixed = true;
+                            common = Some(next);
+                        }
+                        None => return Ok(()),
+                    },
+                }
+            }
+        }
+        if !mixed {
+            return Ok(());
+        }
+        for chunk in &mut self.chunks {
+            let Some(slot) = chunk.get_mut(column) else {
+                continue;
+            };
+            let promoted = slot
+                .iter()
+                .map(|v| promote(opcode, v, common))
+                .collect::<Result<Vec<_>>>()?;
+            *slot = Arc::new(promoted);
+        }
+        Ok(())
     }
 
     /// The chunks, in emit/segment order -- the zero-copy way to consume
@@ -1794,7 +1887,6 @@ pub(crate) fn sliceable(program: &[Opcode]) -> bool {
                 | Opcode::Call { .. }
                 | Opcode::InList { .. }
                 | Opcode::Select { .. }
-                | Opcode::Coalesce { .. }
                 | Opcode::Filter { .. }
                 | Opcode::Reduce { .. }
                 | Opcode::GroupReduce { .. }
@@ -1810,7 +1902,6 @@ pub(crate) fn sliceable(program: &[Opcode]) -> bool {
                     | Opcode::Call { .. }
                     | Opcode::InList { .. }
                     | Opcode::Select { .. }
-                    | Opcode::Coalesce { .. }
                     | Opcode::Filter { .. }
                     | Opcode::Reduce { .. }
                     | Opcode::GroupReduce { .. }
@@ -4246,6 +4337,48 @@ impl Vm {
         }
     }
 
+    /// The values of `branch` at `rows` (positions in the current
+    /// registers), and their type (#725). An arm without ops is read from
+    /// its register, typed by the whole column. One with ops runs in a VM of
+    /// its own over a copy of its inputs holding only `rows`, so it computes
+    /// nothing for a row that does not take it, and nothing at all when no
+    /// row does.
+    fn run_branch(
+        &mut self,
+        opcode: &'static str,
+        branch: &Branch,
+        rows: &[usize],
+    ) -> Result<(Vec<Value>, Option<BranchKind>)> {
+        let mismatch = || VmError::RegisterLengthMismatch { opcode };
+        if branch.ops.is_empty() {
+            self.ensure_materialized(branch.out);
+            let column = self.reg(branch.out, opcode)?;
+            let values = rows
+                .iter()
+                .map(|&i| column.get(i).cloned().ok_or_else(mismatch))
+                .collect::<Result<Vec<_>>>()?;
+            return Ok((values, values_kind(column)));
+        }
+        if rows.is_empty() {
+            return Ok((Vec::new(), None));
+        }
+        let mut sub = Vm::new();
+        for &input in branch.inputs.iter() {
+            self.ensure_materialized(input);
+            let column = self.reg(input, opcode)?;
+            let compacted = rows
+                .iter()
+                .map(|&i| column.get(i).cloned().ok_or_else(mismatch))
+                .collect::<Result<Vec<_>>>()?;
+            sub.registers.insert(input, Arc::new(compacted));
+        }
+        sub.execute(&Batch::new(rows.len()), &branch.ops)?;
+        sub.ensure_materialized(branch.out);
+        let values = sub.reg(branch.out, opcode)?.to_vec();
+        let kind = values_kind(&values);
+        Ok((values, kind))
+    }
+
     /// [`Vm::ensure_materialized`]'s constant case (#681), out of line:
     /// `ensure_materialized` is inlined at every register read, and
     /// carrying this broadcast there too cost the fused
@@ -5078,35 +5211,29 @@ impl Vm {
                 // Elementwise, like `Map`: resolve any pending selection
                 // first (see the comment on that arm).
                 self.resolve_selection(opcode)?;
-                for r in [*cond, *then, *else_] {
-                    self.ensure_materialized(r);
-                }
-                let (c, t, e) = (
-                    self.reg(*cond, opcode)?,
-                    self.reg(*then, opcode)?,
-                    self.reg(*else_, opcode)?,
-                );
-                if c.len() != t.len() || c.len() != e.len() {
-                    return Err(VmError::RegisterLengthMismatch { opcode });
-                }
-                let result = select_values(opcode, c, t, e)?;
-                self.registers.insert(*dst, Arc::new(result));
-                self.typed_registers.remove(dst);
-            }
-            Opcode::Coalesce { dst, args } => {
-                self.resolve_selection(opcode)?;
-                for &a in args.iter() {
-                    self.ensure_materialized(a);
-                }
-                let columns: Vec<&[Value]> = args
-                    .iter()
-                    .map(|&a| self.reg(a, opcode))
-                    .collect::<Result<_>>()?;
-                let num_rows = columns.first().map_or(batch.num_rows, |c| c.len());
-                if columns.iter().any(|c| c.len() != num_rows) {
-                    return Err(VmError::RegisterLengthMismatch { opcode });
-                }
-                let result = coalesce_values(opcode, &columns, num_rows)?;
+                self.ensure_materialized(*cond);
+                let (then_rows, else_rows): (Vec<usize>, Vec<usize>) = {
+                    let cond_values = self.reg(*cond, opcode)?;
+                    (0..cond_values.len()).partition(|&i| cond_values.get(i).is_some_and(as_bool))
+                };
+                let num_rows = then_rows.len().saturating_add(else_rows.len());
+                let (then_values, then_kind) = self.run_branch(opcode, then, &then_rows)?;
+                let (else_values, else_kind) = self.run_branch(opcode, else_, &else_rows)?;
+                let kind = match (then_kind, else_kind) {
+                    (Some(a), Some(b)) => Some(a.common(b).ok_or(VmError::BranchTypes {
+                        opcode,
+                        left: a.name(),
+                        right: b.name(),
+                    })?),
+                    (kind, None) | (None, kind) => kind,
+                };
+                let result = merge_branches(
+                    opcode,
+                    num_rows,
+                    (&then_rows, &then_values),
+                    (&else_rows, &else_values),
+                    kind,
+                )?;
                 self.registers.insert(*dst, Arc::new(result));
                 self.typed_registers.remove(dst);
             }
@@ -6640,27 +6767,6 @@ impl BranchKind {
     }
 }
 
-/// The common type of `columns`, `None` when they hold only NULLs. Each
-/// column is typed by its first non-NULL value: a column of the engine
-/// holds one type.
-fn common_kind(opcode: &'static str, columns: &[&[Value]]) -> Result<Option<BranchKind>> {
-    let mut common: Option<BranchKind> = None;
-    for column in columns {
-        let Some(kind) = column.iter().find_map(BranchKind::of) else {
-            continue;
-        };
-        common = match common {
-            None => Some(kind),
-            Some(prev) => Some(prev.common(kind).ok_or(VmError::BranchTypes {
-                opcode,
-                left: prev.name(),
-                right: kind.name(),
-            })?),
-        };
-    }
-    Ok(common)
-}
-
 /// `v` as a value of `kind`, the common type of its branch: an integer
 /// as a float or a decimal, a decimal as a float or one of a larger scale.
 /// A decimal that leaves `DECIMAL(38)` is [`VmError::DecimalOverflow`].
@@ -6690,37 +6796,32 @@ fn promote(opcode: &'static str, v: &Value, kind: Option<BranchKind>) -> Result<
     }
 }
 
-/// [`Opcode::Select`] over plain values.
-fn select_values(
-    opcode: &'static str,
-    cond: &[Value],
-    then: &[Value],
-    else_: &[Value],
-) -> Result<Vec<Value>> {
-    let kind = common_kind(opcode, &[then, else_])?;
-    cond.iter()
-        .zip(then)
-        .zip(else_)
-        .map(|((c, t), e)| promote(opcode, if as_bool(c) { t } else { e }, kind))
-        .collect()
+/// The type of the values of one arm: the first non-NULL one's.
+fn values_kind(values: &[Value]) -> Option<BranchKind> {
+    values.iter().find_map(BranchKind::of)
 }
 
-/// [`Opcode::Coalesce`] over plain values.
-fn coalesce_values(
+/// The rows of an [`Opcode::Select`] in order, each from the arm that took
+/// it (`(rows, values)` pairs, in row order within each), promoted to
+/// `kind`.
+fn merge_branches(
     opcode: &'static str,
-    columns: &[&[Value]],
     num_rows: usize,
+    (then_rows, then_values): (&[usize], &[Value]),
+    (else_rows, else_values): (&[usize], &[Value]),
+    kind: Option<BranchKind>,
 ) -> Result<Vec<Value>> {
-    let kind = common_kind(opcode, columns)?;
-    (0..num_rows)
-        .map(|row| {
-            let first = columns
-                .iter()
-                .filter_map(|c| c.get(row))
-                .find(|v| !matches!(v, Value::Null));
-            first.map_or(Ok(Value::Null), |v| promote(opcode, v, kind))
-        })
-        .collect()
+    let mut result = vec![Value::Null; num_rows];
+    for (rows, values) in [(then_rows, then_values), (else_rows, else_values)] {
+        for (&row, value) in rows.iter().zip(values) {
+            let slot = result.get_mut(row).ok_or(VmError::MalformedProgram {
+                opcode,
+                reason: "a branch row outside the condition".to_string(),
+            })?;
+            *slot = promote(opcode, value, kind)?;
+        }
+    }
+    Ok(result)
 }
 
 /// `a op b` for one row. Arithmetic follows DuckDB (#635): exact and
@@ -13255,8 +13356,63 @@ mod tests {
         assert_eq!(counts, vec![Value::Int(2), Value::Int(1)]);
     }
 
-    /// `Select` and `Coalesce` over the columns `c` (condition), `a`, `b`.
-    fn run_branch(columns: [(&'static str, Vec<Value>); 3], op: Opcode) -> Result<Vec<Value>> {
+    /// #725: a column the segments typed differently (an integer 0 from a
+    /// segment of NULLs, floats from the others) gets one type; text and
+    /// anything non-numeric is left alone.
+    #[test]
+    fn unify_numeric_column_gives_a_column_one_type_across_chunks() {
+        let chunks = |parts: &[Vec<Value>]| {
+            let mut out = QueryOutput::default();
+            for part in parts {
+                out.push_chunk(vec![Arc::new(part.clone())]);
+            }
+            out
+        };
+        let unified = |parts: &[Vec<Value>]| {
+            let mut out = chunks(parts);
+            out.unify_numeric_column("Select", 0).unwrap();
+            out.into_columns().remove(0)
+        };
+        assert_eq!(
+            unified(&[vec![Value::Float(1.5), Value::Null], vec![Value::Int(0)]]),
+            vec![Value::Float(1.5), Value::Null, Value::Float(0.0)]
+        );
+        assert_eq!(
+            unified(&[vec![dec(15, 1)], vec![Value::Int(0)], vec![dec(125, 2)]]),
+            vec![dec(150, 2), dec(0, 2), dec(125, 2)]
+        );
+        assert_eq!(
+            unified(&[vec![dec(15, 1)], vec![Value::Float(0.5)]]),
+            vec![Value::Float(1.5), Value::Float(0.5)]
+        );
+        // One type already, text, an incompatible mix, a missing column.
+        let same = vec![vec![Value::Int(1)], vec![Value::Int(2)]];
+        assert_eq!(unified(&same), vec![Value::Int(1), Value::Int(2)]);
+        let text = vec![vec![Value::Str("a".into())], vec![Value::Int(1)]];
+        assert_eq!(unified(&text), vec![Value::Str("a".into()), Value::Int(1)]);
+        let mut out = chunks(&same);
+        out.unify_numeric_column("Select", 7).unwrap();
+        assert_eq!(out.num_rows(), 2);
+        // An integer that does not fit the decimal's scale is an error.
+        let mut out = chunks(&[vec![Value::Int(i64::MAX)], vec![dec(1, 30)]]);
+        assert!(matches!(
+            out.unify_numeric_column("Select", 0),
+            Err(VmError::DecimalOverflow { .. })
+        ));
+    }
+
+    /// An arm that is a register already computed.
+    fn plain(out: usize) -> Branch {
+        Branch {
+            ops: Cow::Borrowed(&[]),
+            out,
+            inputs: Cow::Borrowed(&[]),
+        }
+    }
+
+    /// Runs `ops` over `columns` (`c`, `a`, `b` in registers 0, 1, 2) and
+    /// returns register 3.
+    fn run_ops(columns: [(&'static str, Vec<Value>); 3], ops: Vec<Opcode>) -> Result<Vec<Value>> {
         let rows = columns[0].1.len();
         let mut batch = Batch::new(rows);
         let mut program = Vec::new();
@@ -13267,31 +13423,56 @@ mod tests {
                 column: name.into(),
             });
         }
-        program.push(op);
+        program.extend(ops);
         let mut vm = Vm::new();
         vm.execute(&batch, &program)?;
         vm.register(3).map(<[Value]>::to_vec)
     }
 
+    /// `CASE WHEN c THEN a ELSE b END` over three columns.
     fn select(then: Vec<Value>, else_: Vec<Value>, cond: Vec<Value>) -> Result<Vec<Value>> {
-        run_branch(
+        run_ops(
             [("c", cond), ("a", then), ("b", else_)],
-            Opcode::Select {
+            vec![Opcode::Select {
                 dst: 3,
                 cond: 0,
-                then: 1,
-                else_: 2,
-            },
+                then: plain(1),
+                else_: plain(2),
+            }],
         )
     }
 
+    /// `COALESCE(a, b, c)` over three columns, as the planner builds it.
     fn coalesce(a: Vec<Value>, b: Vec<Value>, c: Vec<Value>) -> Result<Vec<Value>> {
-        run_branch(
+        let is_not_null = |dst, reg| Opcode::Map {
+            dst,
+            op: MapOp::IsNotNull,
+            a: reg,
+            b: reg,
+        };
+        // Registers: a = 0, b = 1, c = 2 as loaded by `run_ops`; the result
+        // is register 3, so the inner steps use 4 and up.
+        let inner = Opcode::Select {
+            dst: 5,
+            cond: 4,
+            then: plain(1),
+            else_: plain(2),
+        };
+        run_ops(
             [("a", a), ("b", b), ("c", c)],
-            Opcode::Coalesce {
-                dst: 3,
-                args: vec![0, 1, 2].into(),
-            },
+            vec![
+                is_not_null(6, 0),
+                Opcode::Select {
+                    dst: 3,
+                    cond: 6,
+                    then: plain(0),
+                    else_: Branch {
+                        ops: vec![is_not_null(4, 1), inner].into(),
+                        out: 5,
+                        inputs: vec![1, 2].into(),
+                    },
+                },
+            ],
         )
     }
 
@@ -13353,10 +13534,10 @@ mod tests {
         );
     }
 
-    /// The type comes from the whole column, not the rows chosen: a branch
-    /// that is never taken still decides it.
+    /// An arm that is a column or a literal is typed by the whole column,
+    /// not by the rows taken: an arm no row takes still decides the type.
     #[test]
-    fn select_types_a_branch_by_its_column_not_by_the_rows_taken() {
+    fn select_types_a_plain_arm_by_its_column_not_by_the_rows_taken() {
         let got = select(
             vec![Value::Int(1), Value::Int(2)],
             vec![Value::Float(0.5), Value::Float(0.5)],
@@ -13388,91 +13569,6 @@ mod tests {
         );
     }
 
-    /// `Select` over three registers of lengths `(cond, then, else)`.
-    fn select_over_lengths(c: usize, t: usize, e: usize) -> Result<()> {
-        let col = |n: usize| vec![Value::Bool(true); n];
-        let batch = Batch::new(c)
-            .with_column("c".to_string(), col(c))
-            .with_column("a".to_string(), col(t))
-            .with_column("b".to_string(), col(e));
-        let load = |reg: usize, column: &'static str| Opcode::LoadColumn {
-            reg,
-            column: column.into(),
-        };
-        Vm::new().execute(
-            &batch,
-            &[
-                load(0, "c"),
-                load(1, "a"),
-                load(2, "b"),
-                Opcode::Select {
-                    dst: 3,
-                    cond: 0,
-                    then: 1,
-                    else_: 2,
-                },
-            ],
-        )
-    }
-
-    // vm_batch_step_f91acf5c (`Select`'s length check):
-    // `c.len() != t.len() || c.len() != e.len()`
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__vm_batch_step_f91acf5c__v1_registers_of_one_length_select() {
-        select_over_lengths(2, 2, 2).unwrap();
-    }
-
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__vm_batch_step_f91acf5c__v2_a_then_of_another_length_is_refused() {
-        assert!(matches!(
-            select_over_lengths(2, 1, 2),
-            Err(VmError::RegisterLengthMismatch { .. })
-        ));
-    }
-
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__vm_batch_step_f91acf5c__v3_an_else_of_another_length_is_refused() {
-        assert!(matches!(
-            select_over_lengths(2, 2, 1),
-            Err(VmError::RegisterLengthMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn select_refuses_registers_of_different_lengths() {
-        let batch = Batch::new(2)
-            .with_column("c".to_string(), vec![Value::Bool(true), Value::Bool(true)])
-            .with_column("a".to_string(), vec![Value::Int(1)])
-            .with_column("b".to_string(), vec![Value::Int(2), Value::Int(3)]);
-        let program = [
-            Opcode::LoadColumn {
-                reg: 0,
-                column: "c".into(),
-            },
-            Opcode::LoadColumn {
-                reg: 1,
-                column: "a".into(),
-            },
-            Opcode::LoadColumn {
-                reg: 2,
-                column: "b".into(),
-            },
-            Opcode::Select {
-                dst: 3,
-                cond: 0,
-                then: 1,
-                else_: 2,
-            },
-        ];
-        assert!(matches!(
-            Vm::new().execute(&batch, &program),
-            Err(VmError::RegisterLengthMismatch { .. })
-        ));
-    }
-
     #[test]
     fn select_overflowing_a_decimal_is_an_error() {
         // An integer of 19 digits at scale 30 is past DECIMAL(38).
@@ -13495,6 +13591,97 @@ mod tests {
         );
     }
 
+    /// `n * i64::MAX` as the arm: an integer overflow for every `n > 1`.
+    fn overflowing_arm() -> Branch {
+        Branch {
+            ops: vec![
+                Opcode::LoadConst {
+                    reg: 4,
+                    value: Value::Int(i64::MAX),
+                },
+                Opcode::Map {
+                    dst: 5,
+                    op: MapOp::Mul,
+                    a: 1,
+                    b: 4,
+                },
+            ]
+            .into(),
+            out: 5,
+            inputs: vec![1].into(),
+        }
+    }
+
+    /// #725: an arm is computed only for the rows that take it, so an
+    /// integer overflow in an arm no row takes is never raised.
+    #[test]
+    fn an_arm_no_row_takes_is_never_computed() {
+        let n = vec![Value::Int(5), Value::Int(6)];
+        let run = |cond: Vec<Value>, then: Branch, else_: Branch| {
+            run_ops(
+                [("c", cond), ("a", n.clone()), ("b", n.clone())],
+                vec![Opcode::Select {
+                    dst: 3,
+                    cond: 0,
+                    then,
+                    else_,
+                }],
+            )
+        };
+        // The overflowing arm is the else, and no row is false.
+        assert_eq!(
+            run(
+                vec![Value::Bool(true), Value::Bool(true)],
+                plain(1),
+                overflowing_arm()
+            )
+            .unwrap(),
+            n
+        );
+        // ...and the then, with every row false or NULL.
+        assert_eq!(
+            run(
+                vec![Value::Bool(false), Value::Null],
+                overflowing_arm(),
+                plain(1)
+            )
+            .unwrap(),
+            n
+        );
+    }
+
+    /// ...but a row that does take it raises the error, and only the rows
+    /// that take an arm are computed by it.
+    #[test]
+    fn an_arm_computes_only_the_rows_that_take_it() {
+        let n = vec![Value::Int(1), Value::Int(5), Value::Int(1)];
+        let program = |cond: Vec<Value>| {
+            run_ops(
+                [("c", cond), ("a", n.clone()), ("b", n.clone())],
+                vec![Opcode::Select {
+                    dst: 3,
+                    cond: 0,
+                    then: plain(1),
+                    else_: overflowing_arm(),
+                }],
+            )
+        };
+        // The rows with n = 1 take the else: 1 * MAX does not overflow.
+        assert_eq!(
+            program(vec![
+                Value::Bool(false),
+                Value::Bool(true),
+                Value::Bool(false)
+            ])
+            .unwrap(),
+            vec![Value::Int(i64::MAX), Value::Int(5), Value::Int(i64::MAX)]
+        );
+        // The row with n = 5 takes it: overflow.
+        let err = program(vec![Value::Bool(false); 3]).unwrap_err();
+        assert!(matches!(err, VmError::IntegerOverflow { .. }), "{err:?}");
+    }
+
+    /// #725: the first non-NULL argument in each row, NULL if there is none.
     #[test]
     fn coalesce_takes_the_first_non_null_in_each_row() {
         let n = Value::Null;
@@ -13519,18 +13706,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(got, vec![dec(15, 1), dec(0, 1)]);
+        // Text next to a number is an error once a row takes each side.
         let err = coalesce(
-            vec![Value::Str("a".into())],
-            vec![Value::Int(0)],
-            vec![Value::Int(9)],
+            vec![Value::Str("a".into()), Value::Null],
+            vec![Value::Int(0), Value::Int(0)],
+            vec![Value::Int(9), Value::Int(9)],
         )
         .unwrap_err();
         assert!(matches!(err, VmError::BranchTypes { .. }), "{err:?}");
     }
 
-    /// `Select` and `Coalesce` read a selection (`Filter`) like `Map` does.
+    /// `Select` reads a selection (`Filter`) like `Map` does.
     #[test]
-    fn select_and_coalesce_see_only_the_rows_a_filter_kept() {
+    fn select_sees_only_the_rows_a_filter_kept() {
         let batch = Batch::new(3)
             .with_column(
                 "k".to_string(),
@@ -13555,21 +13743,16 @@ mod tests {
                 column: "b".into(),
             },
             Opcode::Filter { predicate: 0 },
-            Opcode::Coalesce {
-                dst: 3,
-                args: vec![1, 2].into(),
-            },
             Opcode::Select {
-                dst: 4,
+                dst: 3,
                 cond: 0,
-                then: 2,
-                else_: 1,
+                then: plain(2),
+                else_: plain(1),
             },
         ];
         let mut vm = Vm::new();
         vm.execute(&batch, &program).unwrap();
         assert_eq!(vm.register(3).unwrap(), &[Value::Int(1), Value::Int(3)]);
-        assert_eq!(vm.register(4).unwrap(), &[Value::Int(1), Value::Int(3)]);
     }
 
     /// `col IN (list)` run as [`Opcode::InList`] and as the `=`/`OR`

@@ -389,3 +389,54 @@ SELECT id, CASE WHEN n > 0 THEN s ELSE 1 END FROM null_types
 
 statement error
 SELECT coalesce(s, n) FROM null_types
+
+# 9. A branch is computed only for the rows that take it: an overflow or a
+# failed conversion in a branch no row takes is not an error, as in DuckDB.
+
+query II nosort
+SELECT id, CASE WHEN n > 100 THEN n * 9223372036854775807 ELSE n END FROM null_types ORDER BY id
+----
+1
+10
+2
+NULL
+3
+-7
+4
+3
+5
+0
+
+query II nosort
+SELECT id, CASE WHEN id > 100 THEN s = 5 ELSE false END FROM null_types ORDER BY id
+----
+1
+0
+2
+0
+3
+0
+4
+0
+5
+0
+
+query II nosort
+SELECT id, coalesce(n, id * 9223372036854775807) FROM null_types WHERE n IS NOT NULL ORDER BY id
+----
+1
+10
+3
+-7
+4
+3
+5
+0
+
+# ...but a row that does take it is an error.
+
+statement error
+SELECT id, CASE WHEN n > 5 THEN n * 9223372036854775807 ELSE n END FROM null_types
+
+statement error
+SELECT id, CASE WHEN id > 0 THEN s = 5 ELSE false END FROM null_types

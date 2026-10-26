@@ -73,24 +73,33 @@ them with DuckDB's answers.
   NULL; a simple `CASE` compares its operand with each `WHEN` value, so a
   NULL never matches), and `NULLIF(a, b)` to `CASE WHEN a = b THEN NULL ELSE
   a END`. The planner compiles `__select` to `Opcode::Select`, and
-  `COALESCE`/`IFNULL` to `Opcode::Coalesce`. Both work on the VM's values,
-  not through `Opcode::Call`, which would turn a DECIMAL into a REAL and a
-  boolean into 0/1. They take any expression, an aggregate included, so a
-  `CASE` or `COALESCE` over `SUM(x)` runs in `Combine`'s projection.
-- **Types.** The branches take DuckDB's common type: an integer and a float
+  `COALESCE`/`IFNULL` to a `Select` on `IS NOT NULL` whose then arm is the
+  first argument and whose else arm is the rest. They work on the VM's
+  values, not through `Opcode::Call`, which would turn a DECIMAL into a REAL
+  and a boolean into 0/1. They take any expression, an aggregate included,
+  so a `CASE` or `COALESCE` over `SUM(x)` runs in `Combine`'s projection.
+- **Lazy.** Each arm of a `Select` is a `Branch`: the elementwise ops that
+  compute it, and the registers they read. The VM runs them in a VM of its
+  own over a copy of those registers holding only the rows that take the
+  arm, so an integer overflow or a failed conversion in an arm no row takes
+  is not raised, as in DuckDB, and an arm no row takes is never run. Column
+  and constant loads stay in the enclosing program, so an arm that is a
+  column or a literal has no ops and costs nothing. Generated programs build
+  a `Select` with `Opcode::select`, which names only `Opcode`.
+- **Types.** The two arms take DuckDB's common type: an integer and a float
   give floats, an integer and a decimal a decimal, two decimals the larger
   scale; text next to a number, or a boolean next to a number, is a
-  `BranchTypes` error. A column of mixed types is never returned.
-- **Eager.** Every branch is computed for every row. An error in a branch
-  not taken (an integer overflow, a string that does not convert) is raised
-  where DuckDB's lazy `CASE` would not raise it. Division by zero is not an
-  error in this VM, so `CASE WHEN x = 0 THEN 0 ELSE 100 / x END` is fine.
-- **A type needs a value.** A branch is typed by its non-NULL values in the
-  segment. A column that is all NULL in one segment, next to a literal of
-  another numeric type (`coalesce(amount, 0)`), gives the literal's type
-  there, so an integer 0 where the other segments give the column's float
-  or decimal. Planning with the table's column types removes this; it is
-  the one place a segment split can change an answer.
+  `BranchTypes` error. An arm with no ops is typed by its whole column, one
+  with ops by the values it computed (an arm no row takes has no type, so
+  `CASE WHEN c THEN 1 ELSE x * 2.5 END` over rows that all take the then arm
+  is an integer column, where DuckDB's is a decimal).
+- **One type per column.** A column that is all NULL in one segment next to
+  a literal of another numeric type (`coalesce(amount, 0)`) has no type
+  there, so that segment's result is the literal's. `vm::engine::run`
+  gives each output column that is a `Select` one numeric type across the
+  chunks of every segment, so the answer does not depend on how the table
+  is split into segments. `run_streaming`, which hands out a segment at a
+  time, does not.
 - **Stream.** The severity-name rewrite (`severity >= 'WARN'`) now walks
   into function arguments, so it reaches a condition inside a `CASE`, and
   an aggregate over one.
