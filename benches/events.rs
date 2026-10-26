@@ -14,6 +14,10 @@
 //! - `csv <file>`: the same events as CSV, for the row-store baseline.
 //! - `query <dir> <sql>`: one query over the table directory, the result
 //!   as CSV on stdout and `elapsed_ms=` on stderr.
+//! - `build <dir> <predicate>`: a join build side or window input read as
+//!   `read_snapshot_where` does (#777), against the whole table: rows and
+//!   files read each way, as `key=value`.
+//! - `sid <n>`: the `session_id` of the n-th session, for the script.
 //! - `files <dir>`: the table's Parquet files, for the DuckDB baseline.
 //! - `storage <dir>`: rows, bytes and bytes per event of those files.
 //!
@@ -23,7 +27,12 @@
 //! boundaries; 20 event names, skewed (`page_view` 40%); `amount` only on
 //! `checkout`. Event time drives the table clock, so hours and days are
 //! the events' own. `CODEC` (`snappy`, the default, `zstd` or
-//! `uncompressed`) is the page codec of every file (#622).
+//! `uncompressed`) is the page codec of every file (#622). `STAT_COLUMNS`
+//! (default `day`) lists the columns that get a per-file range (#777), and
+//! `SESSION_KEY_SECS` turns on `session_key` (#599) with session ids that
+//! carry their start time in the high 32 bits; it must cover the longest
+//! session, or the answers differ from DuckDB's (a session spans about an
+//! hour at 10M events, days at 200k).
 
 #![allow(
     clippy::unwrap_used,
@@ -44,9 +53,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Instant;
 
-use db_core::engine::column::table::{query_snapshot, query_snapshot_files};
+use db_core::engine::column::table::{
+    query_snapshot, query_snapshot_files, read_snapshot, read_snapshot_where, SnapshotFilter,
+};
 use db_core::engine::Cell;
-use db_core::storage::ingest::layout::{DAY_NS, HOUR_NS};
+use db_core::storage::ingest::layout::{SessionKey, DAY_NS, HOUR_NS};
 use db_core::storage::ingest::wal::Ack;
 use db_core::storage::ingest::{
     Layout, RecordValue, Snapshot, TableOptions, TableWriter, TierOptions,
@@ -123,6 +134,21 @@ struct Session {
     user_id: i64,
 }
 
+/// A session's id: its ordinal, or with `SESSION_KEY_SECS` its start in
+/// seconds over its ordinal, as `session_key` expects.
+fn session_id(ordinal: i64, start_ns: i64) -> i64 {
+    if session_key_secs().is_some() {
+        (start_ns / 1_000_000_000) << 32 | ordinal
+    } else {
+        ordinal
+    }
+}
+
+/// `SESSION_KEY_SECS`: the table's `session_key` window, when set.
+fn session_key_secs() -> Option<u32> {
+    std::env::var("SESSION_KEY_SECS").ok()?.parse().ok()
+}
+
 /// The workload, in event-time order.
 fn events() -> impl Iterator<Item = Event> {
     let total = env("EVENTS", 10_000_000);
@@ -131,10 +157,11 @@ fn events() -> impl Iterator<Item = Event> {
     let mut pool = [Session::default(); POOL];
     let mut next_session = 0_i64;
     (0..total).map(move |i| {
+        let ts_ns = BASE_NS + (i as i128 * span as i128 / total as i128) as i64;
         let slot = &mut pool[(rng.next() % POOL as u64) as usize];
         if slot.remaining == 0 {
             *slot = Session {
-                id: next_session,
+                id: session_id(next_session, ts_ns),
                 next_request: 0,
                 remaining: 1 + rng.next() % 30,
                 user_id: (rng.next() % 100_000) as i64,
@@ -155,7 +182,7 @@ fn events() -> impl Iterator<Item = Event> {
         Event {
             session_id: slot.id,
             request_id,
-            ts_ns: BASE_NS + (i as i128 * span as i128 / total as i128) as i64,
+            ts_ns,
             name,
             user_id: slot.user_id,
             amount: (name == "checkout").then(|| (rng.next() % 100_000) as i64),
@@ -181,6 +208,10 @@ fn options() -> TableOptions {
         layout: Layout::Tiered(TierOptions {
             sort_key: vec!["session_id".into(), "request_id".into()],
             stat_columns: stat_columns(),
+            session_key: session_key_secs().map(|max_session_secs| SessionKey {
+                column: "session_id".into(),
+                max_session_secs,
+            }),
             ..TierOptions::default()
         }),
         parquet: WriterOptions {
@@ -310,6 +341,38 @@ fn query(dir: &Path, sql: &str) {
     eprintln!("files_total={}", snapshot.files().count());
 }
 
+/// A build side read with and without the filter, as a join over `dir`
+/// would: its key columns for the rows `predicate` can match.
+fn build(dir: &Path, predicate: &str) {
+    let snapshot = Snapshot::open(dir).expect("open snapshot");
+    let columns = ["session_id".to_string(), "request_id".to_string()];
+    let filter = SnapshotFilter::parse(&snapshot, "events", predicate).expect("predicate");
+    let t = Instant::now();
+    let all = read_snapshot(&snapshot, &columns).expect("read");
+    let all_ms = t.elapsed().as_secs_f64() * 1e3;
+    let t = Instant::now();
+    let some = read_snapshot_where(&snapshot, &columns, &filter).expect("read where");
+    let some_ms = t.elapsed().as_secs_f64() * 1e3;
+    let opened = db_core::engine::column::snapshot_files_where(&snapshot, &filter)
+        .expect("files")
+        .len();
+    println!("rows_all={}", all.num_rows);
+    println!("rows_filtered={}", some.num_rows);
+    println!("files_opened={opened}");
+    println!("files_total={}", snapshot.files().count());
+    println!("all_ms={all_ms:.1}");
+    println!("filtered_ms={some_ms:.1}");
+}
+
+/// The id of the n-th session.
+fn sid(n: i64) {
+    let id = events()
+        .map(|e| e.session_id)
+        .find(|id| id & 0xFFFF_FFFF == n || (session_key_secs().is_none() && *id == n))
+        .expect("session");
+    println!("{id}");
+}
+
 fn files(dir: &Path) {
     let snapshot = Snapshot::open(dir).expect("open snapshot");
     for entry in &snapshot.manifest().files {
@@ -340,10 +403,12 @@ fn main() {
         ["ingest", dir] => ingest(Path::new(dir)),
         ["csv", file] => csv(Path::new(file)),
         ["query", dir, sql] => query(Path::new(dir), sql),
+        ["build", dir, predicate] => build(Path::new(dir), predicate),
+        ["sid", n] => sid(n.parse().expect("session ordinal")),
         ["files", dir] => files(Path::new(dir)),
         ["storage", dir] => storage(Path::new(dir)),
         _ => eprintln!(
-            "usage: events ingest <dir> | csv <file> | query <dir> <sql> | files <dir> | storage <dir> \
+            "usage: events ingest <dir> | csv <file> | query <dir> <sql> | build <dir> <predicate> | sid <n> | files <dir> | storage <dir> \
              (run through tools/bench_events.sh)"
         ),
     }

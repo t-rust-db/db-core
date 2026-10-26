@@ -11,7 +11,9 @@
 #
 # Usage: tools/bench_events.sh   (EVENTS=10000000 DAYS=7 SEED=42
 # SYNC_EVERY=10000 CODEC=snappy by default; EVENTS=200000 for a quick
-# run; CODEC=zstd or uncompressed for the page codec, #622)
+# run; CODEC=zstd or uncompressed for the page codec, #622;
+# STAT_COLUMNS=day by default, empty for none; SESSION_KEY_SECS=14400 turns
+# on session_key with timestamped session ids, #599)
 set -euo pipefail
 
 export EVENTS="${EVENTS:-10000000}" DAYS="${DAYS:-7}" SEED="${SEED:-42}" SYNC_EVERY="${SYNC_EVERY:-10000}"
@@ -88,7 +90,7 @@ rm -f "$CSV"
 
 # The queries. The row store and DuckDB run the same SQL so the answers
 # compare, and every result is compared as sorted rows.
-S=$((EVENTS / 40))
+S=$("$BIN" sid $((EVENTS / 40)))
 N=1000
 LABELS=(stats replay session cross oneday)
 # One function, not an associative array: macOS's /bin/bash is 3.2.
@@ -122,6 +124,11 @@ for q in "${LABELS[@]}"; do
     fi
   done
 done
+
+# A join build side or window input, read whole and filtered (#777).
+echo "build sides..."
+"$BIN" build "$TABLE" "session_id = $S" >"$OUT/build_session.out"
+"$BIN" build "$TABLE" "day = 20740" >"$OUT/build_day.out"
 
 python3 - "$RESULTS" "$OUT" "$REPORT_MD" "$REPORT_JSON" "$SQLITE_DB" <<'PY'
 import json, os, sys
@@ -161,6 +168,10 @@ for q in ["stats", "replay", "session", "cross", "oneday"]:
     entry["dbcore"]["files_opened"] = int(err["files_opened"])
     entry["dbcore"]["files_total"] = int(err["files_total"])
     report["queries"][q] = entry
+report["build_side"] = {
+    name: {k: float(v) for k, v in kv(f"{out}/build_{name}.out").items()}
+    for name in ["session", "day"]
+}
 json.dump(report, open(json_path, "w"), indent=2)
 
 i, d = report["ingest"]["dbcore"], report["ingest"]["sqlite_bulk_load_and_index"]
@@ -193,6 +204,15 @@ lines = [
 for q, e in report["queries"].items():
     cell = lambda x: f"{x['wall_s']:.2f} / {x['peak_rss_mb']:.0f}"
     lines.append(f"| {q} | {e['rows']:,} | {cell(e['dbcore'])} | {e['dbcore']['in_process_ms']:.0f} | {e['dbcore']['files_opened']}/{e['dbcore']['files_total']} | {cell(e['duckdb'])} | {cell(e['sqlite'])} |")
+lines += [
+    "",
+    "## Join build side / window input (`read_snapshot_where`, #777)",
+    "",
+    "| predicate | rows read (all -> filtered) | files opened | ms (all -> filtered) |",
+    "|---|---:|---:|---:|",
+]
+for name, b in report["build_side"].items():
+    lines.append(f"| {name} | {b['rows_all']:,.0f} -> {b['rows_filtered']:,.0f} | {b['files_opened']:.0f}/{b['files_total']:.0f} | {b['all_ms']:.0f} -> {b['filtered_ms']:.0f} |")
 open(md_path, "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))
 PY

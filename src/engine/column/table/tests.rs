@@ -1421,3 +1421,42 @@ fn read_snapshot_where_skips_excluded_files_and_pages() {
     assert_eq!(read("sid <> 200"), 11);
     assert!(SnapshotFilter::parse(&snapshot, "logs", "sid = ").is_err());
 }
+
+/// #777: a day merge keeps a stat column's range, so the archive file is
+/// still skipped on it, and answers do not change.
+#[test]
+fn a_day_merge_keeps_the_ranges_of_stat_columns() {
+    let t = TempTable::new();
+    let mut w = stats_by_hour(&t, &["sid"]);
+    let count = |w: &TableWriter, filter: &str| {
+        rows(w, &format!("SELECT COUNT(*) FROM logs WHERE {filter}"))
+    };
+    let before = (count(&w, "sid = 0"), count(&w, "sid = 999"));
+    advance_clock(2 * DAY_NS);
+    w.flush().unwrap();
+    w.compact().unwrap();
+    let snapshot = w.snapshot().unwrap();
+    let archived: Vec<_> = snapshot
+        .manifest()
+        .files
+        .iter()
+        .filter(|f| f.area == crate::storage::ingest::Area::Archive)
+        .collect();
+    assert_eq!(archived.len(), 1, "the five hours are one day");
+    let sid = archived[0].keys.iter().find(|k| k.column == "sid").unwrap();
+    assert_eq!(
+        (&sid.min, &sid.max),
+        (&KeyBound::Int(0), &KeyBound::Int(400))
+    );
+    let files_for = |filter: &str| {
+        query_snapshot_files(
+            &snapshot,
+            "logs",
+            &format!("SELECT n FROM logs WHERE {filter}"),
+        )
+        .unwrap()
+    };
+    assert_eq!(files_for("sid = 999"), 0);
+    assert_eq!(files_for("sid = 200"), 1);
+    assert_eq!((count(&w, "sid = 0"), count(&w, "sid = 999")), before);
+}

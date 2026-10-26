@@ -435,3 +435,11 @@ the key is in the sort key (#599 measured 1 of 4 files either way).
 **Only correlated columns prune.** A column random across hours spans
 every file; the event bench (200k events, 7 days) opens 1 of 7 files for
 `day = D` with `stat_columns = ["day"]` and 7 of 7 without.
+
+**Measured (event bench, #777).** At 1M events over 7 days, `session_id = S`
+opens 2 of 7 files from the sort-key ranges alone, and the same 2 of 7 with
+`SESSION_KEY_SECS=90000`: `session_key` adds nothing where the key is in the
+sort key. A build side read with `read_snapshot_where` on `day = D` reads
+142,857 of 1,000,000 rows from 1 of 7 files. The bench has no SQL join, so
+`build` reads a build side as column-rs would (`sid <n>` finds a session's
+id, `SESSION_KEY_SECS` turns the option on).
