@@ -32,7 +32,8 @@ use crate::parser::ast::{Expr, Literal};
 use crate::storage::ingest::manifest::column_bounds;
 use crate::storage::ingest::snapshot::{cast, physical_type};
 use crate::storage::ingest::{
-    FileEntry, KeyBound, KeyRange, PageBody, RowPage, SessionKey, Snapshot,
+    FileEntry, KeyBound, KeyRange, PageBody, ReaderStats, RowPage, SessionKey, Snapshot,
+    TableReader,
 };
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::schema::{ColumnSpec, ColumnType};
@@ -612,7 +613,7 @@ fn column_names(schema: &[ColumnSpec]) -> Vec<String> {
 pub struct TableEngine {
     dir: PathBuf,
     table: String,
-    snapshot: Snapshot,
+    reader: TableReader,
     schema: Vec<ColumnSpec>,
 }
 
@@ -621,7 +622,7 @@ impl std::fmt::Debug for TableEngine {
         f.debug_struct("TableEngine")
             .field("dir", &self.dir)
             .field("table", &self.table)
-            .field("snapshot", &self.snapshot)
+            .field("reader", &self.reader)
             .finish_non_exhaustive()
     }
 }
@@ -642,14 +643,21 @@ impl TableEngine {
     /// The snapshot the last query (or the open) read.
     #[must_use]
     pub fn snapshot(&self) -> &Snapshot {
-        &self.snapshot
+        self.reader.snapshot()
     }
 
-    /// Reads a fresh snapshot.
+    /// What the reader behind the queries has done: how many records it
+    /// parsed, and how often it read the whole tail again (#593).
+    #[must_use]
+    pub fn reader_stats(&self) -> ReaderStats {
+        self.reader.stats()
+    }
+
+    /// Reads what the writer added since the last read, keeping the
+    /// records it already parsed.
     pub fn refresh(&mut self) -> Result<(), EngineError> {
-        let snapshot = Snapshot::open(&self.dir).map_err(open_error)?;
+        let snapshot = self.reader.refresh().map_err(open_error)?;
         self.schema = snapshot.schema().map_err(open_error)?;
-        self.snapshot = snapshot;
         Ok(())
     }
 
@@ -668,16 +676,16 @@ impl TableEngine {
     /// Row groups plus pages.
     fn segment_count(&self) -> usize {
         let row_groups: usize = self
-            .snapshot
+            .snapshot()
             .files()
             .filter_map(|(_, bytes)| ParquetFile::open(bytes).ok())
             .map(|f| f.num_row_groups())
             .sum();
-        row_groups.saturating_add(self.snapshot.pages().len())
+        row_groups.saturating_add(self.snapshot().pages().len())
     }
 
     fn rows(&self) -> i64 {
-        i64::try_from(self.snapshot.rows()).unwrap_or(i64::MAX)
+        i64::try_from(self.snapshot().rows()).unwrap_or(i64::MAX)
     }
 }
 
@@ -702,12 +710,12 @@ impl crate::storage::ingest::Table {
 
 impl Engine for TableEngine {
     fn open(path: &Path) -> Result<Self, EngineError> {
-        let snapshot = Snapshot::open(path).map_err(open_error)?;
-        let schema = snapshot.schema().map_err(open_error)?;
+        let reader = TableReader::open(path).map_err(open_error)?;
+        let schema = reader.snapshot().schema().map_err(open_error)?;
         Ok(TableEngine {
             dir: path.to_path_buf(),
             table: table_name(path),
-            snapshot,
+            reader,
             schema,
         })
     }
@@ -718,7 +726,7 @@ impl Engine for TableEngine {
 
     fn run_query(&mut self, sql: &str) -> Result<QueryResult, EngineError> {
         self.refresh()?;
-        query_snapshot(&self.snapshot, &self.table, sql)
+        query_snapshot(self.reader.snapshot(), &self.table, sql)
     }
 
     fn explain_plan(&self, sql: &str) -> Result<Vec<PlanRow>, EngineError> {

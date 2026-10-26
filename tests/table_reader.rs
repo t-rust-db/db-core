@@ -12,6 +12,9 @@
 //! - answers SQL the same way: `COUNT(*)`, `MIN`, `MAX` and `SUM` of `i`
 //!   say each record is there once.
 //!
+//! A long-lived `TableReader` (#593) is refreshed alongside the fresh
+//! opens and held to the same checks, and has to have read incrementally.
+//!
 //! The writer is then killed, and a last read sees every acknowledged
 //! record. `TABLE_READER_READS` overrides the default of 150 reads (more
 //! if none has seen both files and pages yet).
@@ -37,7 +40,7 @@ use std::time::{Duration, Instant};
 
 use db_core::engine::column::table::TableEngine;
 use db_core::engine::{Cell, Engine};
-use db_core::storage::ingest::Snapshot;
+use db_core::storage::ingest::{Snapshot, TableReader};
 use db_core::storage::ParquetFile;
 
 const PROBE: &str = env!("CARGO_BIN_EXE_table_probe");
@@ -157,6 +160,7 @@ fn a_reader_in_another_process_sees_every_durable_record_once() {
 
     wait_for_table(&table, &acked);
     let mut engine = TableEngine::open(&table).unwrap();
+    let mut reader = TableReader::open(&table).unwrap();
     // At least `reads()` reads, and until one has seen both flushed files
     // and pages: a loaded machine slows the writer down.
     let mut mixed = 0;
@@ -174,6 +178,13 @@ fn a_reader_in_another_process_sees_every_durable_record_once() {
             mixed += 1;
         }
         let floor = acked.load(Ordering::SeqCst);
+        let held = reader.refresh().unwrap();
+        assert!(
+            held.last_lsn() >= floor,
+            "read {read}: reader {held:?} below ack {floor}"
+        );
+        check(held);
+        let floor = acked.load(Ordering::SeqCst);
         assert!(check_sql(&mut engine) >= floor, "read {read}");
     }
 
@@ -184,6 +195,16 @@ fn a_reader_in_another_process_sees_every_durable_record_once() {
     check(&s);
     assert!(s.last_lsn() >= acked.load(Ordering::SeqCst));
     assert_eq!(check_sql(&mut engine), s.last_lsn());
+    let held = reader.refresh().unwrap();
+    check(held);
+    assert!(held.last_lsn() >= acked.load(Ordering::SeqCst));
+    // The probe flushes every 150 records, so some refreshes rebuild, but
+    // most of the many refreshes must have read only new frames.
+    let stats = reader.stats();
+    assert!(
+        stats.rebuilds < stats.refreshes,
+        "every refresh read the whole tail: {stats:?}"
+    );
     assert!(
         mixed > 0,
         "no read saw both flushed files and pages; the writer was too slow"

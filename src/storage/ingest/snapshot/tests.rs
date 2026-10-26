@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage::ingest::page::encode_record;
+use crate::storage::ingest::page::{encode_record, PageBody};
 use crate::storage::ingest::{Ack, TableOptions, TableWriter};
 use std::fs;
 use std::path::PathBuf;
@@ -269,5 +269,199 @@ fn physical_and_column_types_round_trip() {
         PhysicalType::Unknown(9),
     ] {
         assert_eq!(column_type(pt), None);
+    }
+}
+
+/// A reader's snapshot holds what a fresh [`Snapshot::open`] does.
+fn assert_same_as_fresh(reader: &TableReader, table: &Path) {
+    let fresh = Snapshot::open(table).unwrap();
+    let held = reader.snapshot();
+    assert_eq!(raws(held), raws(&fresh), "{held:?} vs {fresh:?}");
+    assert_eq!(held.last_lsn(), fresh.last_lsn());
+    assert_eq!(held.rows(), fresh.rows());
+    assert_eq!(held.manifest(), fresh.manifest());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_refresh_1d471319__v3_a_refresh_parses_only_the_records_added_since_the_last(
+) {
+    let t = TempTable::new();
+    let mut w = open(&t);
+    append(&mut w, 0..100);
+    let mut reader = TableReader::open(&t.0).unwrap();
+    assert_eq!(
+        reader.stats(),
+        ReaderStats {
+            refreshes: 1,
+            rebuilds: 1,
+            records_parsed: 100
+        }
+    );
+    append(&mut w, 100..110);
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().records_parsed, 110, "10 new, 100 kept");
+    assert_eq!(reader.stats().rebuilds, 1);
+    assert_same_as_fresh(&reader, &t.0);
+    // Nothing new: nothing parsed.
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().records_parsed, 110);
+    assert_eq!(reader.stats().refreshes, 3);
+    assert_same_as_fresh(&reader, &t.0);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_refresh_1d471319__v1_a_flush_makes_the_reader_read_the_tail_again()
+{
+    let t = TempTable::new();
+    let mut w = open(&t);
+    append(&mut w, 0..5);
+    let mut reader = TableReader::open(&t.0).unwrap();
+    w.flush_all().unwrap();
+    append(&mut w, 5..8);
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().rebuilds, 2);
+    assert_eq!(reader.snapshot().manifest().flushed_lsn, 5);
+    assert_same_as_fresh(&reader, &t.0);
+    // The three records above the flush were parsed again, then kept.
+    append(&mut w, 8..10);
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().rebuilds, 2);
+    assert_eq!(reader.stats().records_parsed, 5 + 3 + 2);
+    assert_same_as_fresh(&reader, &t.0);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_refresh_1d471319__v2_a_wal_segment_that_shrinks_is_read_again() {
+    let t = TempTable::new();
+    let mut w = open(&t);
+    append(&mut w, 0..10);
+    let mut reader = TableReader::open(&t.0).unwrap();
+    // As after the writer truncated a torn tail: the file is shorter than
+    // the position the reader saved.
+    let segment =
+        t.0.join(WAL_DIR)
+            .join(super::super::recover::segment_name(1));
+    let len = fs::metadata(&segment).unwrap().len();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&segment)
+        .unwrap()
+        .set_len(len - 5)
+        .unwrap();
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().rebuilds, 2);
+    assert_eq!(reader.snapshot().last_lsn(), 9, "the cut frame is not read");
+    assert_same_as_fresh(&reader, &t.0);
+}
+
+#[test]
+fn a_reader_follows_the_wal_across_segments() {
+    let t = TempTable::new();
+    let mut w = TableWriter::open(
+        &t.0,
+        TableOptions {
+            wal: crate::storage::ingest::WalOptions { segment_bytes: 200 },
+            ..TableOptions::default()
+        },
+    )
+    .unwrap();
+    append(&mut w, 0..3);
+    let mut reader = TableReader::open(&t.0).unwrap();
+    for from in (3..60).step_by(7) {
+        append(&mut w, from..from + 7);
+        reader.refresh().unwrap();
+        assert_same_as_fresh(&reader, &t.0);
+    }
+    assert!(fs::read_dir(t.0.join(WAL_DIR)).unwrap().count() > 3);
+    assert_eq!(reader.stats().rebuilds, 1, "never a flush, never a rebuild");
+    assert_eq!(reader.stats().records_parsed, 3 + 7 * 9);
+}
+
+#[test]
+fn a_record_table_is_read_incrementally() {
+    use crate::storage::ingest::RecordValue;
+    let t = TempTable::new();
+    let mut w = TableWriter::open(
+        &t.0,
+        TableOptions {
+            schema: Some(vec![
+                ColumnSpec::new("n", ColumnType::Int64, false),
+                ColumnSpec::new("s", ColumnType::Utf8, true),
+            ]),
+            ..TableOptions::default()
+        },
+    )
+    .unwrap();
+    let row = |n: i64| vec![RecordValue::Int(n), RecordValue::Str(format!("r{n}"))];
+    for n in 0..5 {
+        w.append_row(row(n), Ack::Durable).unwrap();
+    }
+    let mut reader = TableReader::open(&t.0).unwrap();
+    for n in 5..9 {
+        w.append_row(row(n), Ack::Durable).unwrap();
+    }
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().records_parsed, 9);
+    assert_eq!(reader.stats().rebuilds, 1);
+    let held = reader.snapshot();
+    let fresh = Snapshot::open(&t.0).unwrap();
+    assert_eq!(held.rows(), 9);
+    assert_eq!(held.pages().len(), fresh.pages().len());
+    assert_eq!(held.last_lsn(), fresh.last_lsn());
+    for (a, b) in held.pages().iter().zip(fresh.pages()) {
+        let (PageBody::Rows(a), PageBody::Rows(b)) = (&a.body, &b.body) else {
+            panic!("a record table has row pages");
+        };
+        assert_eq!(a.columns(), b.columns());
+    }
+}
+
+/// Property: a reader refreshed at random points among a writer's appends,
+/// seals, flushes and compactions always holds what a fresh open does.
+#[test]
+fn a_reader_refreshed_at_random_points_matches_a_fresh_open() {
+    for seed in 1..=3u64 {
+        let t = TempTable::new();
+        let mut rng = crate::test_rng::Rng::new(seed);
+        let mut w = TableWriter::open(
+            &t.0,
+            TableOptions {
+                wal: crate::storage::ingest::WalOptions { segment_bytes: 300 },
+                ..TableOptions::default()
+            },
+        )
+        .unwrap();
+        let mut reader = TableReader::open(&t.0).unwrap();
+        let mut next = 0usize;
+        for step in 0..120 {
+            match rng.below(10) {
+                0..=5 => {
+                    let n = 1 + usize::try_from(rng.below(6)).unwrap();
+                    append(&mut w, next..next + n);
+                    next += n;
+                }
+                6 => w.seal_head().unwrap(),
+                7 => {
+                    w.flush().unwrap();
+                }
+                8 => {
+                    w.flush_all().unwrap();
+                }
+                _ => {}
+            }
+            if rng.below(3) == 0 {
+                reader.refresh().unwrap();
+                assert_same_as_fresh(&reader, &t.0);
+            }
+            assert!(
+                reader.stats().rebuilds <= 1 + u64::try_from(step).unwrap(),
+                "seed {seed}"
+            );
+        }
+        reader.refresh().unwrap();
+        assert_same_as_fresh(&reader, &t.0);
     }
 }

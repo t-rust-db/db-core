@@ -130,6 +130,10 @@ echo "build sides..."
 "$BIN" build "$TABLE" "session_id = $S" >"$OUT/build_session.out"
 "$BIN" build "$TABLE" "day = 20740" >"$OUT/build_day.out"
 
+# A fresh read of a big unflushed tail, opened anew and incrementally (#593).
+echo "tail reader..."
+TAIL="$((EVENTS < 1000000 ? EVENTS - 1000 : 1000000))" "$BIN" tail "$OUT/tail" >"$OUT/tail.out"
+
 python3 - "$RESULTS" "$OUT" "$REPORT_MD" "$REPORT_JSON" "$SQLITE_DB" <<'PY'
 import json, os, sys
 results_path, out, md_path, json_path, sqlite_db = sys.argv[1:]
@@ -172,6 +176,7 @@ report["build_side"] = {
     name: {k: float(v) for k, v in kv(f"{out}/build_{name}.out").items()}
     for name in ["session", "day"]
 }
+report["tail_reader"] = {k: float(v) for k, v in kv(f"{out}/tail.out").items()}
 json.dump(report, open(json_path, "w"), indent=2)
 
 i, d = report["ingest"]["dbcore"], report["ingest"]["sqlite_bulk_load_and_index"]
@@ -213,6 +218,16 @@ lines += [
 ]
 for name, b in report["build_side"].items():
     lines.append(f"| {name} | {b['rows_all']:,.0f} -> {b['rows_filtered']:,.0f} | {b['files_opened']:.0f}/{b['files_total']:.0f} | {b['all_ms']:.0f} -> {b['filtered_ms']:.0f} |")
+t = report["tail_reader"]
+lines += [
+    "",
+    f"## Reader in another process, {t['tail_records']:,.0f} records in the WAL (#593)",
+    "",
+    "| | fresh `Snapshot::open` ms | long-lived `TableReader` ms |",
+    "|---|---:|---:|",
+    f"| first read | {t['fresh_open_ms']:.0f} | {t['reader_open_ms']:.0f} |",
+    f"| after 1,000 more records | {t['fresh_after_more_ms']:.0f} | {t['refresh_after_more_ms']:.1f} |",
+]
 open(md_path, "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))
 PY
