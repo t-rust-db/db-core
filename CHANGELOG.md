@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.187.0] - 2026-10-26
+
+### Added
+
+- `CrossModeEngine::open_table_sqlite`: a table directory (archive files and live pages) joins SQLite lookup tables, inner, left and star, with `EXPLAIN` and the lookup-filter row-group pruning of the Parquet case (#772). Adds a `CrossModeEngine::TableSqlite` variant.
+- `snapshot_segments_where` also skips the row groups of a file whose footer statistics prove the filter matches none of its rows (#772).
+
 ## [0.186.0] - 2026-10-26
 
 ### Added
