@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.179.0] - 2026-10-26
+
+### Added
+
+- `TableReader`: an incremental reader for a table written by another process. A refresh parses only the WAL records added since the last one, and `TableEngine` uses it, so repeated queries no longer re-parse the whole tail. A fresh read of a 1M-record tail takes 243 ms against 0.7 ms for a refresh.
+
 ## [0.178.0] - 2026-10-26
 
 ### Changed
