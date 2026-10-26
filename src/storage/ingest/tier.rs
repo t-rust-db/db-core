@@ -22,7 +22,7 @@ use super::error::IngestError;
 use super::fields::{add_field, add_page_fields, predefined_specs, schema};
 use super::flush::{bounds, convert, FlushedFile};
 use super::layout::{compare, TierOptions};
-use super::manifest::{FileEntry, KeyBound, KeyRange};
+use super::manifest::{column_bounds, FileEntry, KeyBound, KeyRange};
 use super::page::{Page, PageBody};
 use super::record::{compare_across, compare_rows, concat, gather, read_column};
 use super::snapshot::{cast, column_type};
@@ -75,49 +75,14 @@ impl KeyState {
     }
 }
 
-/// The smallest and largest non-null value of `values` as key bounds:
-/// `Some(None)` if all are NULL, `None` for a type or value a bound
-/// cannot hold (a float, an unsigned value above `i64::MAX`).
-fn column_bounds(values: &ColumnValues) -> Option<Option<(KeyBound, KeyBound)>> {
-    fn ints<T: Copy>(
-        values: &[Option<T>],
-        int: impl Fn(T) -> Option<i64>,
-    ) -> Option<Option<(KeyBound, KeyBound)>> {
-        let mut range: Option<(i64, i64)> = None;
-        for v in values.iter().flatten() {
-            let v = int(*v)?;
-            range = Some(range.map_or((v, v), |(lo, hi)| (lo.min(v), hi.max(v))));
-        }
-        Some(range.map(|(lo, hi)| (KeyBound::Int(lo), KeyBound::Int(hi))))
-    }
-    match values {
-        ColumnValues::Int32(v) => ints(v, |x| Some(i64::from(x))),
-        ColumnValues::Int64(v)
-        | ColumnValues::TimestampMicros(v)
-        | ColumnValues::TimestampNanos(v) => ints(v, Some),
-        ColumnValues::UInt8(v) => ints(v, |x| Some(i64::from(x))),
-        ColumnValues::UInt16(v) => ints(v, |x| Some(i64::from(x))),
-        ColumnValues::UInt32(v) => ints(v, |x| Some(i64::from(x))),
-        ColumnValues::UInt64(v) => ints(v, |x| i64::try_from(x).ok()),
-        ColumnValues::Utf8(v) => {
-            let lo = v.iter().flatten().min();
-            let hi = v.iter().flatten().max();
-            Some(
-                lo.zip(hi)
-                    .map(|(lo, hi)| (KeyBound::Str(lo.clone()), KeyBound::Str(hi.clone()))),
-            )
-        }
-        _ => None,
-    }
-}
-
 /// Writes an output directory's files in turn.
 struct Files {
     dir: PathBuf,
     specs: Vec<ColumnSpec>,
     options: WriterOptions,
     max_file_size: u64,
-    /// The sort key's columns: (position in `specs`, name).
+    /// The columns with a range, the sort key's and `stat_columns`:
+    /// (position in `specs`, name).
     keys: Vec<(usize, String)>,
     open: Option<OpenFile>,
     done: Vec<Output>,
@@ -133,7 +98,7 @@ impl Files {
         let mut options = parquet.clone();
         // Row groups are cut here, never by row count in the writer.
         options.row_group_rows = usize::MAX;
-        let keys = key_positions(&specs, tier)
+        let keys = stat_positions(&specs, tier)
             .into_iter()
             .filter_map(|i| Some((i, specs.get(i)?.name.clone())))
             .collect();
@@ -393,6 +358,20 @@ fn key_positions(specs: &[ColumnSpec], tier: &TierOptions) -> Vec<usize> {
         .iter()
         .filter_map(|k| specs.iter().position(|s| s.name == *k))
         .collect()
+}
+
+/// The positions in `specs` of the columns that get a range: the sort
+/// key's, then `stat_columns` not already among them.
+fn stat_positions(specs: &[ColumnSpec], tier: &TierOptions) -> Vec<usize> {
+    let mut positions = key_positions(specs, tier);
+    for name in &tier.stat_columns {
+        if let Some(i) = specs.iter().position(|s| s.name == *name) {
+            if !positions.contains(&i) {
+                positions.push(i);
+            }
+        }
+    }
+    positions
 }
 
 /// Writes `sorted` into `dir` as one file of LSNs `lsn_lo..=lsn_hi`, cut

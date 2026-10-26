@@ -408,3 +408,30 @@ safety margin and no check on append.
 `OR` predicates opening exactly the files whose window holds the key,
 a key outside every window opening none, and every answer equal to the
 unpruned one.
+
+## As built (#777)
+
+**Exact ranges for any column.** `TierOptions.stat_columns` lists columns
+outside the sort key whose min/max each file records in the manifest's
+existing `keys`, next to the sort key's (#589). The writer's one `Files`
+struct produces them, so hour flushes, staging merges and day merges all
+carry them; sorting still uses only `sort_key`. No format change and no
+version bump: a file written before a column was listed has no range for
+it and is read. A late row is never hidden, because the range is what the
+file holds, not a bound on when rows arrive.
+
+**Every reader prunes.** `query_snapshot` and the new `SnapshotFilter`
+(`snapshot_files_where`, `snapshot_segments_where`, `read_snapshot_where`)
+skip files by `may_match`, and record pages whose own column ranges, taken
+when the predicate names the column, exclude it. Lines pages and the old
+unfiltered `snapshot_files` / `snapshot_segments` / `read_snapshot` are
+unchanged. A filter only skips: the caller still applies its predicate.
+`query_snapshot_files` reports how many files a query opens.
+
+**`session_key` stays**, documented as superseded: removing it would
+strand v6 tables for older readers. Its window is lossy and redundant when
+the key is in the sort key (#599 measured 1 of 4 files either way).
+
+**Only correlated columns prune.** A column random across hours spans
+every file; the event bench (200k events, 7 days) opens 1 of 7 files for
+`day = D` with `stat_columns = ["day"]` and 7 of 7 without.

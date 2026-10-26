@@ -475,6 +475,7 @@ fn flush_timing_invariance(kind: Kind) {
                 // Retention drops rows the reference keeps.
                 retention_days: None,
                 session_key: None,
+                stat_columns: Vec::new(),
             })
         } else {
             Layout::Flat
@@ -1312,4 +1313,111 @@ fn without_a_session_key_option_no_file_is_skipped_on_the_key() {
         .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
         .count();
     assert_eq!(opened, 4);
+}
+
+/// A tiered record table with four closed hours of two rows each, hour `h`
+/// holding `sid = h * 100`, a late row of session 0 in hour 3, and two rows
+/// of session 400 in the open hour.
+fn stats_by_hour(t: &TempTable, stat_columns: &[&str]) -> TableWriter {
+    crate::test_clock::set(20_737 * DAY_NS);
+    let mut w = t.writer_with(TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            stat_columns: stat_columns.iter().map(|c| c.to_string()).collect(),
+            ..TierOptions::default()
+        }),
+        schema: Some(vec![
+            ColumnSpec::new("sid", ColumnType::Int64, false),
+            ColumnSpec::new("n", ColumnType::Int64, false),
+        ]),
+        clock,
+        ..TableOptions::default()
+    });
+    for hour in 0..5i64 {
+        let mut sids = vec![hour * 100; 2];
+        if hour == 3 {
+            sids.push(0);
+        }
+        for (n, sid) in (0i64..).zip(sids) {
+            w.append_row(
+                vec![RecordValue::Int(sid), RecordValue::Int(n)],
+                Ack::Memory,
+            )
+            .unwrap();
+        }
+        if hour < 4 {
+            advance_clock(HOUR_NS);
+            w.flush().unwrap();
+        }
+    }
+    w
+}
+
+/// #777 acceptance: a column listed in `stat_columns` prunes files by its
+/// exact range, with no contract, and never hides a late row.
+#[test]
+fn a_stat_column_prunes_files_by_its_exact_range() {
+    let t = TempTable::new();
+    let w = stats_by_hour(&t, &["sid"]);
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.files().count(), 4);
+    let schema = snapshot.schema().unwrap();
+    let opened = |filter: &str| {
+        let select = crate::parser::parse(&format!("SELECT n FROM t WHERE {filter}")).unwrap();
+        snapshot
+            .files()
+            .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
+            .count()
+    };
+    // Session 0 has a late row in hour 3's file, whose range spans 0..=300,
+    // so that file is read for every key in it.
+    assert_eq!(opened("sid = 200"), 2);
+    assert_eq!(opened("sid = 0"), 2);
+    assert_eq!(opened("sid IN (100, 200)"), 3);
+    assert_eq!(opened("sid >= 100 AND sid < 200"), 2);
+    assert_eq!(opened("sid = 999"), 0);
+    assert_eq!(opened("sid <> 200"), 4);
+    assert_eq!(opened("n = 0"), 4);
+    let count = |filter: &str| rows(&w, &format!("SELECT COUNT(*) FROM logs WHERE {filter}"));
+    assert_eq!(count("sid = 0"), vec![vec![Cell::Int(3)]], "late row");
+    assert_eq!(count("sid = 400"), vec![vec![Cell::Int(2)]], "open hour");
+}
+
+#[test]
+fn without_stat_columns_a_non_sort_column_prunes_nothing() {
+    let t = TempTable::new();
+    let w = stats_by_hour(&t, &[]);
+    let snapshot = w.snapshot().unwrap();
+    let schema = snapshot.schema().unwrap();
+    let select = crate::parser::parse("SELECT n FROM t WHERE sid = 200").unwrap();
+    let opened = snapshot
+        .files()
+        .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
+        .count();
+    assert_eq!(opened, 4);
+}
+
+/// #777 acceptance: a build side or window input read with a filter skips
+/// the files and record pages the predicate excludes.
+#[test]
+fn read_snapshot_where_skips_excluded_files_and_pages() {
+    let t = TempTable::new();
+    let w = stats_by_hour(&t, &["sid"]);
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.pages().len(), 1);
+    let columns = ["sid".to_string(), "n".to_string()];
+    let read = |predicate: &str| {
+        let filter = SnapshotFilter::parse(&snapshot, "logs", predicate).unwrap();
+        read_snapshot_where(&snapshot, &columns, &filter)
+            .unwrap()
+            .num_rows
+    };
+    assert_eq!(read_snapshot(&snapshot, &columns).unwrap().num_rows, 11);
+    // Hours 0 and 3 (the late row), not the page.
+    assert_eq!(read("sid = 0"), 5);
+    // Only the open hour's page.
+    assert_eq!(read("sid = 400"), 2);
+    assert_eq!(read("sid = 999"), 0);
+    // A shape it cannot bound reads everything.
+    assert_eq!(read("sid <> 200"), 11);
+    assert!(SnapshotFilter::parse(&snapshot, "logs", "sid = ").is_err());
 }

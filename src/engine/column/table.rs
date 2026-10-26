@@ -29,6 +29,7 @@ use super::{
     Value, VmError,
 };
 use crate::parser::ast::{Expr, Literal};
+use crate::storage::ingest::manifest::column_bounds;
 use crate::storage::ingest::snapshot::{cast, physical_type};
 use crate::storage::ingest::{
     FileEntry, KeyBound, KeyRange, PageBody, RowPage, SessionKey, Snapshot,
@@ -256,22 +257,15 @@ pub fn query_snapshot(
     table: &str,
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
-    let schema = snapshot.schema().map_err(open_error)?;
-    let stmt = single_statement(sql)?;
-    let mut select = parse_select(&stmt, table, &column_names(&schema), "this directory")?;
-    timestamp_literals(&mut select, &schema_timestamps(&schema))?;
+    let (schema, select) = parsed_select(snapshot, table, sql)?;
     let program: Program = planner::compile(&select).map_err(plan_err)?;
     let requests = resolve(&schema, &program.columns_to_load())?;
+    let keep = file_flags(snapshot, &schema, select.where_clause.as_ref());
     let files = snapshot
         .files()
-        .filter(|(entry, _)| {
-            may_match(
-                entry,
-                &schema,
-                snapshot.manifest().session_key.as_ref(),
-                select.where_clause.as_ref(),
-            )
-        })
+        .zip(keep)
+        .filter(|(_, keep)| *keep)
+        .map(|(file, _)| file)
         .map(|(entry, bytes)| {
             ParquetFile::open(bytes).map_err(|e| open_error(format!("{}: {e}", entry.path)))
         })
@@ -283,10 +277,61 @@ pub fn query_snapshot(
             table_row_groups(file, &columns, &comparable, &select, &program, &fixups)
         })
         .collect();
-    segments.extend(page_segments(snapshot, &requests));
+    segments.extend(page_segments(
+        snapshot,
+        &schema,
+        &requests,
+        select.where_clause.as_ref(),
+    ));
     let output =
         engine::run(&segments, &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
     Ok(query_result(&select, output))
+}
+
+/// How many of `snapshot`'s files [`query_snapshot`] opens for `sql`: those
+/// its `WHERE` clause may match a row of (#777).
+pub fn query_snapshot_files(
+    snapshot: &Snapshot,
+    table: &str,
+    sql: &str,
+) -> Result<usize, EngineError> {
+    let (schema, select) = parsed_select(snapshot, table, sql)?;
+    Ok(file_flags(snapshot, &schema, select.where_clause.as_ref())
+        .into_iter()
+        .filter(|keep| *keep)
+        .count())
+}
+
+fn parsed_select(
+    snapshot: &Snapshot,
+    table: &str,
+    sql: &str,
+) -> Result<(Vec<ColumnSpec>, Select), EngineError> {
+    let schema = snapshot.schema().map_err(open_error)?;
+    let stmt = single_statement(sql)?;
+    let mut select = parse_select(&stmt, table, &column_names(&schema), "this directory")?;
+    timestamp_literals(&mut select, &schema_timestamps(&schema))?;
+    Ok((schema, select))
+}
+
+/// For each file of `snapshot`, oldest first, whether `where_clause` may
+/// match a row of it.
+pub(super) fn file_flags(
+    snapshot: &Snapshot,
+    schema: &[ColumnSpec],
+    where_clause: Option<&Expr>,
+) -> Vec<bool> {
+    snapshot
+        .files()
+        .map(|(entry, _)| {
+            may_match(
+                entry,
+                schema,
+                snapshot.manifest().session_key.as_ref(),
+                where_clause,
+            )
+        })
+        .collect()
 }
 
 /// Whether `where_clause` may match a row of `entry`'s file: false when
@@ -403,14 +448,48 @@ impl prune::Bounds for (&[KeyRange], &[ColumnSpec]) {
     }
 }
 
-/// One segment per page of `snapshot`, loading `requests`.
+/// A record page's column ranges, taken when a predicate names the column
+/// (a page keeps none), with the table's columns, as pruning bounds.
+impl prune::Bounds for (&RowPage, &[ColumnSpec]) {
+    fn bounds(
+        &self,
+        column: &str,
+        literal: &Literal,
+    ) -> Option<(
+        Option<prune::StatValue>,
+        Option<prune::StatValue>,
+        prune::StatValue,
+    )> {
+        let (rows, schema) = *self;
+        let at = rows.schema().iter().position(|s| s.name == column)?;
+        let (min, max) = column_bounds(rows.columns().get(at)?)??;
+        let range = KeyRange {
+            column: column.to_string(),
+            min,
+            max,
+        };
+        prune::Bounds::bounds(&(std::slice::from_ref(&range), schema), column, literal)
+    }
+}
+
+/// One segment per page of `snapshot`, loading `requests`, without the
+/// record pages whose column ranges prove `where_clause` matches none of
+/// their rows. A lines page has no ranges and is always read.
 pub(super) fn page_segments(
     snapshot: &Snapshot,
+    schema: &[ColumnSpec],
     requests: &[Request],
+    where_clause: Option<&Expr>,
 ) -> Vec<TableSegment<'static, 'static>> {
     snapshot
         .pages()
         .iter()
+        .filter(|page| match (&page.body, where_clause) {
+            (PageBody::Rows(rows), Some(w)) => {
+                !prune::definitely_empty_in(w, &(rows.as_ref(), schema))
+            }
+            _ => true,
+        })
         .map(|page| match &page.body {
             PageBody::Lines(segment) => TableSegment::Page {
                 segment: Arc::clone(segment),
@@ -435,9 +514,62 @@ pub fn read_snapshot(snapshot: &Snapshot, columns: &[String]) -> Result<Batch, E
     let files = super::snapshot_files(snapshot)?;
     let program = Program::from_opcodes([]);
     let segments = super::snapshot_segments(snapshot, &files, columns, &program)?;
+    merge_segments(&segments, columns)
+}
+
+/// A predicate over a table's columns, parsed once, that readers use to
+/// skip the files and record pages it excludes (#777): by the manifest
+/// ranges of the sort key and `stat_columns`, and a page's own column
+/// ranges. It only skips; the caller still applies the predicate to the
+/// rows it gets.
+pub struct SnapshotFilter {
+    schema: Vec<ColumnSpec>,
+    expr: Expr,
+}
+
+impl SnapshotFilter {
+    /// `predicate` as a `WHERE` clause over `snapshot`'s table `table`.
+    pub fn parse(snapshot: &Snapshot, table: &str, predicate: &str) -> Result<Self, EngineError> {
+        let schema = snapshot.schema().map_err(open_error)?;
+        let stmt = single_statement(&format!("SELECT * FROM {table} WHERE {predicate}"))?;
+        let mut select = parse_select(&stmt, table, &column_names(&schema), "this directory")?;
+        timestamp_literals(&mut select, &schema_timestamps(&schema))?;
+        let expr = select
+            .where_clause
+            .ok_or_else(|| open_error("the predicate is empty"))?;
+        Ok(SnapshotFilter { schema, expr })
+    }
+
+    pub(super) fn schema(&self) -> &[ColumnSpec] {
+        &self.schema
+    }
+
+    pub(super) fn expr(&self) -> &Expr {
+        &self.expr
+    }
+}
+
+/// [`read_snapshot`] without the files and record pages `filter` excludes
+/// (#777): for a join build side or window input whose key predicate is
+/// known, the rows that can match it, and possibly others.
+pub fn read_snapshot_where(
+    snapshot: &Snapshot,
+    columns: &[String],
+    filter: &SnapshotFilter,
+) -> Result<Batch, EngineError> {
+    let files = super::snapshot_files_where(snapshot, filter)?;
+    let program = Program::from_opcodes([]);
+    let segments = super::snapshot_segments_where(snapshot, &files, columns, &program, filter)?;
+    merge_segments(&segments, columns)
+}
+
+fn merge_segments(
+    segments: &[super::SnapshotSegment<'_, '_>],
+    columns: &[String],
+) -> Result<Batch, EngineError> {
     let mut merged: Vec<Vec<Value>> = vec![Vec::new(); columns.len()];
     let mut rows = 0usize;
-    for segment in &segments {
+    for segment in segments {
         let mut batch = Arc::unwrap_or_clone(
             segment
                 .load()
