@@ -133,6 +133,23 @@ fn fixed_column<T: Copy + Default, const N: usize>(
     }
 }
 
+/// [`decode_column_full`] where a `UINT_64` above `i64::MAX` reads as its
+/// signed bit pattern instead of an error (#786): for a join key, which is
+/// only compared for equality against a key stored the same way. Any other
+/// column decodes as [`decode_column_full`] does.
+pub fn decode_column_full_bit_pattern(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+) -> Result<Decoded, FileError> {
+    if annotation(rg, index) == Annotation::UInt64 {
+        return rg
+            .read_int64_column(index)
+            .map(|col| Decoded::Column(int_column(col)));
+    }
+    decode_column_full(rg, index, physical_type)
+}
+
 /// Decodes one column for every row of `rg` -- the whole-row-group path
 /// shared by the eager load and the predicate phase of the two-phase load
 /// (ADR-0026). Every physical type decodes straight into a typed [`Column`]
@@ -1067,5 +1084,37 @@ mod tests {
             );
             assert_eq!(positional.is_null(i), full.is_null(pos as usize));
         }
+    }
+
+    /// #786: a join key `UINT_64` above `i64::MAX` decodes as its signed
+    /// bit pattern; the plain decoder still errors (#595) and another
+    /// column decodes as ever.
+    #[test]
+    fn the_bit_pattern_decoder_reads_a_uint64_above_i64_max_as_negative() {
+        use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+        use crate::storage::parquet::writer::{ParquetWriter, WriterOptions};
+        use crate::storage::parquet::ParquetFile;
+        let schema = vec![
+            ColumnSpec::new("sid", ColumnType::UInt64, false),
+            ColumnSpec::new("n", ColumnType::Int64, false),
+        ];
+        let mut w = ParquetWriter::new(Vec::new(), schema, WriterOptions::default()).unwrap();
+        w.write_columns(vec![
+            ColumnValues::UInt64(vec![Some(5), Some(1 << 63), Some(u64::MAX)]),
+            ColumnValues::Int64(vec![Some(1), Some(2), Some(3)]),
+        ])
+        .unwrap();
+        let bytes = w.finish().unwrap().0;
+        let file = ParquetFile::open(&bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+
+        assert!(decode_column_full(&rg, 0, PhysicalType::Int64).is_err());
+        let Decoded::Column(col) =
+            decode_column_full_bit_pattern(&rg, 0, PhysicalType::Int64).unwrap();
+        let got: Vec<Value> = (0..col.len()).map(|i| col.get(i)).collect();
+        assert_eq!(got, [Value::Int(5), Value::Int(i64::MIN), Value::Int(-1)]);
+        let Decoded::Column(plain) =
+            decode_column_full_bit_pattern(&rg, 1, PhysicalType::Int64).unwrap();
+        assert_eq!(plain.get(2), Value::Int(3));
     }
 }

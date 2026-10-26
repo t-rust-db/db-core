@@ -15,7 +15,10 @@ pub mod vfs;
 #[cfg(all(feature = "ingest-read", feature = "engine-column"))]
 pub(crate) use decode::hex;
 #[cfg(feature = "vm-batch")]
-pub use decode::{annotation, decode_column_at, decode_column_full, Annotation, Decoded};
+pub use decode::{
+    annotation, decode_column_at, decode_column_full, decode_column_full_bit_pattern, Annotation,
+    Decoded,
+};
 pub use memory::MemoryVfs;
 pub use posix::PosixVfs;
 pub use vfs::{MmapRegion, Vfs, VfsFile};

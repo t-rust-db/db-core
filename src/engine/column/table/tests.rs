@@ -1521,4 +1521,11 @@ fn snapshot_segments_read_a_bit_pattern_join_key_in_files_and_pages() {
             vec![Value::Int(i64::MIN)]
         ]
     );
+
+    // The whole table, as a join build side reads it.
+    let names = ["logs.id".to_string(), "logs.n".to_string()];
+    assert!(read_snapshot(&snapshot, &names).is_err());
+    let whole =
+        read_snapshot_with_bit_patterns(&snapshot, &names, &["logs.id".to_string()]).unwrap();
+    assert_eq!(whole.num_rows, 3);
 }

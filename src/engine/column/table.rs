@@ -522,6 +522,26 @@ pub fn read_snapshot(snapshot: &Snapshot, columns: &[String]) -> Result<Batch, E
     merge_segments(&segments, columns)
 }
 
+/// [`read_snapshot`] where the `bit_pattern` columns (keys of `columns`)
+/// read a `UINT_64` above `i64::MAX` as its signed bit pattern instead of
+/// an error (#786): the join keys of a build side or window input.
+pub fn read_snapshot_with_bit_patterns(
+    snapshot: &Snapshot,
+    columns: &[String],
+    bit_pattern: &[String],
+) -> Result<Batch, EngineError> {
+    let files = super::snapshot_files(snapshot)?;
+    let program = Program::from_opcodes([]);
+    let segments = super::snapshot_segments_with_bit_patterns(
+        snapshot,
+        &files,
+        columns,
+        &program,
+        bit_pattern,
+    )?;
+    merge_segments(&segments, columns)
+}
+
 /// A predicate over a table's columns, parsed once, that readers use to
 /// skip the files and record pages it excludes (#777): by the manifest
 /// ranges of the sort key and `stat_columns`, and a page's own column
