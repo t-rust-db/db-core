@@ -3560,6 +3560,14 @@ fn scan_detail(table: &str, stats: TableStats) -> String {
         .source
         .as_deref()
         .map_or(String::new(), |src| format!(" [{src}]"));
+    // A SQLite table has no row groups (#789): the count alone.
+    if stats
+        .source
+        .as_deref()
+        .is_some_and(|src| src.starts_with("sqlite "))
+    {
+        return format!("SCAN {table} (~{} rows){label}", stats.rows);
+    }
     format!(
         "SCAN {table} ({groups} row group{}, ~{} rows){label}",
         if groups == 1 { "" } else { "s" },
