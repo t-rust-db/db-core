@@ -1,4 +1,5 @@
 use super::*;
+use crate::engine::column::take_values;
 use crate::engine::Cell;
 use crate::storage::ingest::layout::{DAY_NS, HOUR_NS};
 use crate::storage::ingest::{

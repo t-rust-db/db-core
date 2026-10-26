@@ -1,18 +1,19 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
-//! Row-group pruning for a Parquet probe side from filters on its SQLite
-//! lookup tables (#598).
+//! Row-group pruning for a Parquet probe side from filters on its build
+//! tables: SQLite lookup tables (#598) and, in a join of several column
+//! tables, the built Parquet tables (#782).
 //!
 //! `events JOIN event_def ON events.event_id = event_def.event_id WHERE
-//! event_def.name = 'x'` filters the *lookup* table, so footer statistics
+//! event_def.name = 'x'` filters the *build* table, so footer statistics
 //! of `events` cannot see the filter. For an `INNER JOIN` a probe row
-//! survives only if its key is among the keys of the lookup rows that pass
-//! the filter, so this module scans the lookup table with the filter and
+//! survives only if its key is among the keys of the build rows that pass
+//! the filter, so this module scans the build table with the filter and
 //! hands the probe file `event_id = k1 OR event_id = k2 ...` to prune row
 //! groups with. The query's own `WHERE` still runs after the join: the
 //! predicate here only drops row groups that cannot contribute.
 //!
-//! Only conjuncts of the `WHERE` that name one lookup table's columns
+//! Only conjuncts of the `WHERE` that name one build table's columns
 //! (qualified) and nothing else are used, and a `LEFT JOIN`'s table is
 //! never used: its unmatched probe rows must survive.
 
@@ -20,15 +21,14 @@ use std::borrow::Cow;
 
 use super::{plan_err, requalify, split_qualified};
 use crate::codegen::batch as planner;
-use crate::engine::cross_mode::{self, RowTableSegment};
-use crate::engine::row::RowEngine;
+use crate::engine::cross_mode::RowTableSegment;
 use crate::engine::{EngineError, ErrorKind};
 use crate::parser::ast::{
     BinaryOp, Expr, ExprKind, Join, JoinConstraint, JoinOp, Literal, ResultColumn, Select,
     TableRefKind,
 };
 use crate::parser::Span;
-use crate::vm::batch::Value;
+use crate::vm::batch::{Batch, Value};
 use crate::vm::engine;
 
 /// Most keys listed as `key = v OR ...`; past it integer keys prune as
@@ -45,8 +45,12 @@ pub(super) struct Pruning {
     pub empty: bool,
 }
 
-/// The pruning `select`'s `WHERE` implies on the probe file's row groups.
-pub(super) fn probe_pruning(select: &Select, lookup: &RowEngine) -> Result<Pruning, EngineError> {
+/// The pruning `select`'s `WHERE` implies on the probe file's row groups;
+/// `load` materializes a build table's columns (SQLite or Parquet).
+pub(super) fn probe_pruning(
+    select: &Select,
+    load: &impl Fn(&str, &[String]) -> Result<Batch, EngineError>,
+) -> Result<Pruning, EngineError> {
     let mut pruning = Pruning::default();
     let (Some(from), Some(where_clause)) = (&select.from, &select.where_clause) else {
         return Ok(pruning);
@@ -67,7 +71,7 @@ pub(super) fn probe_pruning(select: &Select, lookup: &RowEngine) -> Result<Pruni
         if filters.is_empty() {
             continue;
         }
-        let keys = lookup_keys(select, lookup, table, &lookup_col, &filters)?;
+        let keys = lookup_keys(select, load, table, &lookup_col, &filters)?;
         match key_predicate(&probe_col, &keys) {
             KeyPredicate::Empty => pruning.empty = true,
             KeyPredicate::Unknown => {}
@@ -170,10 +174,10 @@ fn column_of(expr: &Expr) -> Option<(Option<&str>, &str)> {
 
 /// The values of `key` over the rows of `table` that pass every filter,
 /// found by running `SELECT table.key FROM table WHERE filters` over the
-/// materialized lookup table with the batch VM.
+/// materialized build table with the batch VM.
 fn lookup_keys(
     select: &Select,
-    lookup: &RowEngine,
+    load: &impl Fn(&str, &[String]) -> Result<Batch, EngineError>,
     table: &str,
     key: &str,
     filters: &[&Expr],
@@ -207,7 +211,7 @@ fn lookup_keys(
         .iter()
         .map(|n| split_qualified(n).1.to_string())
         .collect();
-    let batch = cross_mode::scan_table_as_batch(lookup, table, &raw)?;
+    let batch = load(table, &raw)?;
     let segment = RowTableSegment::new(requalify(batch, &raw, &qualified));
     let output =
         engine::run(&[segment], &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
@@ -373,7 +377,10 @@ mod tests {
     /// How many row groups of `events` survive `sql`'s pruning.
     fn surviving_groups(sql: &str, label: &str) -> Option<usize> {
         let lookup = lookup(label);
-        let pruning = probe_pruning(&parse(sql), &lookup.1).unwrap();
+        let load = |t: &str, raw: &[String]| {
+            crate::engine::cross_mode::scan_table_as_batch(&lookup.1, t, raw)
+        };
+        let pruning = probe_pruning(&parse(sql), &load).unwrap();
         if pruning.empty {
             return Some(0);
         }

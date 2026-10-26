@@ -3275,7 +3275,6 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
     // No FROM is a legitimate (table-less) SELECT: empty name, no joins.
     let from_name = from.map(table_name).transpose()?.unwrap_or_default();
     let joins = from.map(extract_joins).transpose()?.unwrap_or_default();
-    let join = joins.first();
 
     // Semi-joins compile with `where_clause` stripped, mirroring
     // `compile_semi_join` (the `IN` subquery isn't a VM predicate).
@@ -3291,16 +3290,17 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
     let columns_to_load = program.as_ref().map(Program::columns_to_load);
 
     // A join's own EXPLAIN needs the driving and lookup sides labelled separately.
-    let mut main_cols: Vec<String> = match (&columns_to_load, join) {
-        (Some(cols), Some(_)) => cols
+    let mut main_cols: Vec<String> = match (&columns_to_load, joins.is_empty()) {
+        (Some(cols), false) => cols
             .iter()
             .filter(|n| split_qualified(n).0.is_none_or(|t| t == from_name))
             .cloned()
             .collect(),
-        (Some(cols), None) => cols.clone(),
+        (Some(cols), true) => cols.clone(),
         (None, _) => referenced_columns(select)?,
     };
-    if let Some(j) = join {
+    // Every join's key on the driving side (a star, #782, has several).
+    for j in &joins {
         push_unique(&mut main_cols, j.left_col.clone());
     }
     if let Some(AstExpr {
@@ -3345,32 +3345,34 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
                 ),
             );
         }
-    } else if let Some(join) = join {
-        let mut right_cols: Vec<String> = columns_to_load
-            .as_ref()
-            .map(|cols| {
-                cols.iter()
-                    .filter(|n| split_qualified(n).0 == Some(join.table.as_str()))
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        push_unique(&mut right_cols, join.right_col.clone());
-        let right_scan = b.push(0, scan_detail(&join.table, stats(&join.table)));
-        if !right_cols.is_empty() {
-            b.push(
-                right_scan,
-                format!("LOAD COLUMNS: {}", right_cols.join(", ")),
-            );
+    } else {
+        for join in &joins {
+            let mut right_cols: Vec<String> = columns_to_load
+                .as_ref()
+                .map(|cols| {
+                    cols.iter()
+                        .filter(|n| split_qualified(n).0 == Some(join.table.as_str()))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            push_unique(&mut right_cols, join.right_col.clone());
+            let right_scan = b.push(0, scan_detail(&join.table, stats(&join.table)));
+            if !right_cols.is_empty() {
+                b.push(
+                    right_scan,
+                    format!("LOAD COLUMNS: {}", right_cols.join(", ")),
+                );
+            }
+            let kind = match join.op {
+                JoinOp::Inner => "HASH JOIN",
+                JoinOp::Left => "LEFT HASH JOIN",
+                JoinOp::Right => "RIGHT HASH JOIN",
+                JoinOp::Full => "FULL HASH JOIN",
+                JoinOp::Cross => "CROSS JOIN",
+            };
+            b.push(0, format!("{kind}: {} = {}", join.left_col, join.right_col));
         }
-        let kind = match join.op {
-            JoinOp::Inner => "HASH JOIN",
-            JoinOp::Left => "LEFT HASH JOIN",
-            JoinOp::Right => "RIGHT HASH JOIN",
-            JoinOp::Full => "FULL HASH JOIN",
-            JoinOp::Cross => "CROSS JOIN",
-        };
-        b.push(0, format!("{kind}: {} = {}", join.left_col, join.right_col));
     }
 
     if has_window {
