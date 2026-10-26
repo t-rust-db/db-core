@@ -23,7 +23,7 @@
 
 use std::fmt;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -32,7 +32,7 @@ use super::fields::{add_field, add_page_fields, predefined_specs};
 use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, HeadPage, Page};
 use super::record::{check_row, decode_row, pad_row};
-use super::recover::read_tail;
+use super::recover::{read_from, read_tail, WalPos};
 use super::wal::{Record, WAL_DIR};
 use crate::storage::column::{MmapRegion, Vfs, VfsFile};
 use crate::storage::parquet::footer::PhysicalType;
@@ -50,7 +50,7 @@ const ATTEMPTS: u32 = 20;
 pub struct Snapshot {
     manifest: Manifest,
     /// One per `manifest.files`, same order.
-    files: Vec<MmapRegion>,
+    files: Vec<Arc<MmapRegion>>,
     pages: Vec<Page>,
 }
 
@@ -70,12 +70,7 @@ impl Snapshot {
     /// no lock and writes nothing.
     pub fn open(table: &Path) -> Result<Snapshot, IngestError> {
         for _ in 0..ATTEMPTS {
-            let manifest = Manifest::read(table)?.ok_or_else(|| {
-                IngestError::Io(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("{}: no manifest.json, not a table", table.display()),
-                ))
-            })?;
+            let manifest = read_manifest(table)?;
             let Some(records) = read_tail(&table.join(WAL_DIR), manifest.flushed_lsn)? else {
                 std::thread::sleep(Duration::from_millis(1));
                 continue;
@@ -106,7 +101,7 @@ impl Snapshot {
         let files = manifest
             .files
             .iter()
-            .map(|f| PosixVfs.open(&table.join(&f.path))?.mmap())
+            .map(|f| Ok(Arc::new(PosixVfs.open(&table.join(&f.path))?.mmap()?)))
             .collect::<io::Result<Vec<_>>>()?;
         Ok(Snapshot {
             manifest,
@@ -125,7 +120,7 @@ impl Snapshot {
         self.manifest
             .files
             .iter()
-            .zip(self.files.iter().map(|m| &**m))
+            .zip(self.files.iter().map(|m| &***m))
     }
 
     /// The table's line format.
@@ -190,36 +185,274 @@ pub(crate) fn pages_from_records(
     schema: Option<&[ColumnSpec]>,
     records: Vec<Record>,
 ) -> Result<Vec<Page>, IngestError> {
-    let parser = DetectedParser::for_format(format);
-    let source = Source::new(SourceKind::Stdin, &table.to_string_lossy());
-    let seal = |head: &HeadPage| {
-        head.snapshot(&source, &parser)
+    let mut builder = PageBuilder::new(table, format, schema);
+    for record in records {
+        builder.push(record)?;
+    }
+    builder.pages()
+}
+
+/// Records turned into pages one at a time: full pages are sealed and kept,
+/// the rest stays in a head that is re-sealed (and cached) only when it has
+/// grown, so a reader that adds records pays for the head, not the tail.
+pub(crate) struct PageBuilder {
+    parser: DetectedParser,
+    source: Source,
+    schema: Option<Arc<[ColumnSpec]>>,
+    head: HeadPage,
+    sealed: Vec<Page>,
+    /// `head` as a page, until the next record.
+    head_page: Option<Page>,
+}
+
+impl PageBuilder {
+    pub(crate) fn new(table: &Path, format: Format, schema: Option<&[ColumnSpec]>) -> PageBuilder {
+        let schema: Option<Arc<[ColumnSpec]>> = schema.map(Arc::from);
+        PageBuilder {
+            parser: DetectedParser::for_format(format),
+            source: Source::new(SourceKind::Stdin, &table.to_string_lossy()),
+            head: schema
+                .clone()
+                .map_or_else(HeadPage::default, HeadPage::for_records),
+            schema,
+            sealed: Vec::new(),
+            head_page: None,
+        }
+    }
+
+    fn seal(&self) -> Result<Page, IngestError> {
+        self.head
+            .snapshot(&self.source, &self.parser)
             .ok_or_else(|| IngestError::Corrupt("the parser rejected a page".to_string()))
-    };
-    let mut head = schema.map_or_else(HeadPage::default, |s| HeadPage::for_records(Arc::from(s)));
-    let mut pages = Vec::new();
-    for (lsn, payload) in records {
+    }
+
+    /// Appends WAL record `(lsn, payload)`, which follows the last one.
+    pub(crate) fn push(&mut self, (lsn, payload): Record) -> Result<(), IngestError> {
         let corrupt = || IngestError::Corrupt(format!("WAL record {lsn} is not a record"));
         let (observed, body) = decode_record(&payload).ok_or_else(corrupt)?;
-        match schema {
+        match &self.schema {
             Some(schema) => {
                 let row = decode_row(body)
                     .map(|row| pad_row(schema, row))
                     .filter(|row| check_row(schema, row).is_none())
                     .ok_or_else(corrupt)?;
-                head.push_row(lsn, observed, row);
+                self.head.push_row(lsn, observed, row);
             }
-            None => head.push(lsn, observed, body),
+            None => self.head.push(lsn, observed, body),
         }
-        if head.is_full() {
-            pages.push(seal(&head)?);
-            head.clear();
+        self.head_page = None;
+        if self.head.is_full() {
+            let page = self.seal()?;
+            self.sealed.push(page);
+            self.head.clear();
         }
+        Ok(())
     }
-    if head.len() > 0 {
-        pages.push(seal(&head)?);
+
+    /// Every page so far, the head last.
+    pub(crate) fn pages(&mut self) -> Result<Vec<Page>, IngestError> {
+        let mut pages = self.sealed.clone();
+        if self.head.len() > 0 {
+            if self.head_page.is_none() {
+                self.head_page = Some(self.seal()?);
+            }
+            pages.extend(self.head_page.clone());
+        }
+        Ok(pages)
     }
-    Ok(pages)
+}
+
+/// What a [`TableReader`] has done, for tests and benches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReaderStats {
+    /// Refreshes that returned a snapshot.
+    pub refreshes: u64,
+    /// Refreshes that read the whole WAL tail again: the first, and those
+    /// after a flush moved on or the saved position no longer held.
+    pub rebuilds: u64,
+    /// WAL records parsed into pages, over all refreshes.
+    pub records_parsed: u64,
+}
+
+/// A long-lived reader of a table directory from another process (#593).
+/// Like [`Snapshot::open`] it takes no lock and writes nothing, but it
+/// keeps what it parsed: a refresh reads only the WAL frames written since
+/// the last one, and maps only files that are new.
+///
+/// The held pages stay valid while the manifest's `flushed_lsn`, schema
+/// and format are as they were; when one moves, a refresh reads the whole
+/// tail again, as [`Snapshot::open`] does. A flush every hour is the
+/// worst case, so a reader refreshed within the hour parses each record
+/// once.
+pub struct TableReader {
+    dir: PathBuf,
+    /// The manifest the held pages and `pos` were read at.
+    manifest: Manifest,
+    builder: PageBuilder,
+    pos: Option<WalPos>,
+    /// The LSN after the last record parsed.
+    next_lsn: u64,
+    /// Mapped files by path, kept while the manifest lists them.
+    mapped: Vec<(String, Arc<MmapRegion>)>,
+    snapshot: Snapshot,
+    stats: ReaderStats,
+}
+
+impl fmt::Debug for TableReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TableReader")
+            .field("dir", &self.dir)
+            .field("snapshot", &self.snapshot)
+            .field("stats", &self.stats)
+            .finish()
+    }
+}
+
+impl TableReader {
+    /// Opens the table at `dir` and reads it once.
+    pub fn open(dir: &Path) -> Result<TableReader, IngestError> {
+        let mut stats = ReaderStats::default();
+        let (manifest, builder, pos, next_lsn) = Self::rebuild(dir, &mut stats)?;
+        let mut reader = TableReader {
+            dir: dir.to_path_buf(),
+            snapshot: Snapshot {
+                manifest: manifest.clone(),
+                files: Vec::new(),
+                pages: Vec::new(),
+            },
+            manifest,
+            builder,
+            pos,
+            next_lsn,
+            mapped: Vec::new(),
+            stats,
+        };
+        reader.assemble()?;
+        Ok(reader)
+    }
+
+    /// The snapshot the last refresh (or the open) took.
+    #[must_use]
+    pub fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+
+    /// What the reader has done so far.
+    #[must_use]
+    pub fn stats(&self) -> ReaderStats {
+        self.stats
+    }
+
+    /// Reads whatever the writer has added since the last call and returns
+    /// the new snapshot.
+    pub fn refresh(&mut self) -> Result<&Snapshot, IngestError> {
+        for _ in 0..ATTEMPTS {
+            let manifest = read_manifest(&self.dir)?;
+            if !self.holds(&manifest) || !self.advance()? {
+                let (manifest, builder, pos, next_lsn) = Self::rebuild(&self.dir, &mut self.stats)?;
+                self.manifest = manifest;
+                self.builder = builder;
+                self.pos = pos;
+                self.next_lsn = next_lsn;
+            } else {
+                self.manifest = manifest;
+            }
+            match self.assemble() {
+                Ok(()) => return Ok(&self.snapshot),
+                // A compaction replaced a file and its grace period is
+                // over: a newer manifest no longer lists it.
+                Err(IngestError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(IngestError::Corrupt(format!(
+            "the WAL or a listed file does not match the manifest after {ATTEMPTS} reads"
+        )))
+    }
+
+    /// Whether the held pages are still the records above `manifest`'s
+    /// `flushed_lsn`, read the way it says to.
+    fn holds(&self, manifest: &Manifest) -> bool {
+        manifest.flushed_lsn == self.manifest.flushed_lsn
+            && manifest.schema == self.manifest.schema
+            && manifest.format == self.manifest.format
+    }
+
+    /// Reads the frames after the saved position into the held pages;
+    /// false if the position no longer holds.
+    fn advance(&mut self) -> Result<bool, IngestError> {
+        let Some((records, pos)) = read_from(&self.dir.join(WAL_DIR), self.next_lsn, self.pos)?
+        else {
+            return Ok(false);
+        };
+        for record in records {
+            self.next_lsn = record.0.saturating_add(1);
+            self.builder.push(record)?;
+            self.stats.records_parsed = self.stats.records_parsed.saturating_add(1);
+        }
+        self.pos = pos.or(self.pos);
+        Ok(true)
+    }
+
+    /// The manifest, a builder with every record above its `flushed_lsn`,
+    /// the position the read stopped at and the next LSN.
+    fn rebuild(
+        dir: &Path,
+        stats: &mut ReaderStats,
+    ) -> Result<(Manifest, PageBuilder, Option<WalPos>, u64), IngestError> {
+        for _ in 0..ATTEMPTS {
+            let manifest = read_manifest(dir)?;
+            let first = manifest.flushed_lsn.saturating_add(1);
+            let Some((records, pos)) = read_from(&dir.join(WAL_DIR), first, None)? else {
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            };
+            let mut builder = PageBuilder::new(dir, manifest.format, manifest.schema.as_deref());
+            let mut next = first;
+            for record in records {
+                next = record.0.saturating_add(1);
+                builder.push(record)?;
+                stats.records_parsed = stats.records_parsed.saturating_add(1);
+            }
+            stats.rebuilds = stats.rebuilds.saturating_add(1);
+            return Ok((manifest, builder, pos, next));
+        }
+        Err(IngestError::Corrupt(format!(
+            "the WAL or a listed file does not match the manifest after {ATTEMPTS} reads"
+        )))
+    }
+
+    /// Takes the snapshot of the held manifest and pages, mapping only
+    /// the files not mapped yet.
+    fn assemble(&mut self) -> Result<(), IngestError> {
+        let mut mapped = Vec::with_capacity(self.manifest.files.len());
+        for entry in &self.manifest.files {
+            let region = match self.mapped.iter().find(|(path, _)| *path == entry.path) {
+                Some((_, region)) => Arc::clone(region),
+                None => Arc::new(PosixVfs.open(&self.dir.join(&entry.path))?.mmap()?),
+            };
+            mapped.push((entry.path.clone(), region));
+        }
+        self.mapped = mapped;
+        self.snapshot = Snapshot {
+            manifest: self.manifest.clone(),
+            files: self.mapped.iter().map(|(_, r)| Arc::clone(r)).collect(),
+            pages: self.builder.pages()?,
+        };
+        self.stats.refreshes = self.stats.refreshes.saturating_add(1);
+        Ok(())
+    }
+}
+
+fn read_manifest(table: &Path) -> Result<Manifest, IngestError> {
+    Manifest::read(table)?.ok_or_else(|| {
+        IngestError::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{}: no manifest.json, not a table", table.display()),
+        ))
+    })
 }
 
 /// The column type a flushed file's field of physical type `pt` has.

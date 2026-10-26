@@ -427,3 +427,36 @@ Feature split and client packaging: ADR 0029.
   `ObservedTimestamp`, `severity` ↔ `SeverityNumber`, `message` ↔
   `Body`, Tier-3 ↔ `Attributes`, `source`/`resource` ↔ `Resource`), so
   OTel input needs aliasing only.
+
+## As built (#593): the incremental reader
+
+`TableReader` is a long-lived reader of another process's table: lock-free
+and read-only like `Snapshot::open`, but it keeps the pages it parsed, the
+mapped files (by path, while the manifest lists them) and the WAL position
+(segment and byte offset after the last complete frame). `refresh()` reads
+the manifest, then only the frames after that position (`read_from`), and
+parses them into the held pages; the head page is re-sealed only when it
+grew. It returns a `Snapshot`, so `query_snapshot` is unchanged, and
+`TableEngine` holds one reader instead of opening a snapshot per query.
+
+**It reads the whole tail again** (as `Snapshot::open` does, and counts it in
+`ReaderStats::rebuilds`) when the held pages could be wrong:
+- the manifest's `flushed_lsn`, schema or format moved;
+- the saved segment is gone, shorter than the position, or the frame there
+  is not the LSN expected, as after the writer truncated a torn tail and
+  appended again;
+- `read_from` cannot reach the next LSN.
+
+A flush every hour is the worst case, so a reader refreshed within the hour
+parses each record once. The reader seals pages at the page size only, as
+`Snapshot::open` does, so after a flush it has the same pages as a fresh
+open and the property test can compare them exactly.
+
+**Measured** (event bench, record table, 1M unflushed records, Ack::Memory):
+a fresh `Snapshot::open` takes 243 ms after 1,000 more records are
+appended; `TableReader::refresh` takes 0.7 ms. The first read costs about
+the same either way.
+
+**Not done:** resuming mid-page after a flush (the reader rebuilds), and
+caching `Snapshot::schema` of a lines table, which still opens every file
+footer on each call.
