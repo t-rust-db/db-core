@@ -881,8 +881,31 @@ impl Segment for SnapshotSegment<'_, '_> {
 pub fn snapshot_files(
     snapshot: &crate::storage::ingest::Snapshot,
 ) -> Result<Vec<ParquetFile<'_>>, EngineError> {
-    snapshot
-        .files()
+    open_files(snapshot.files())
+}
+
+/// The files of `snapshot` that `filter` may match a row of, oldest first,
+/// opened (#777). A file it skips holds no row the predicate accepts.
+#[cfg(feature = "ingest-read")]
+pub fn snapshot_files_where<'s>(
+    snapshot: &'s crate::storage::ingest::Snapshot,
+    filter: &'s table::SnapshotFilter,
+) -> Result<Vec<ParquetFile<'s>>, EngineError> {
+    let keep = table::file_flags(snapshot, filter.schema(), Some(filter.expr()));
+    open_files(
+        snapshot
+            .files()
+            .zip(keep)
+            .filter(|(_, keep)| *keep)
+            .map(|(file, _)| file),
+    )
+}
+
+#[cfg(feature = "ingest-read")]
+fn open_files<'s>(
+    files: impl Iterator<Item = (&'s crate::storage::ingest::FileEntry, &'s [u8])>,
+) -> Result<Vec<ParquetFile<'s>>, EngineError> {
+    files
         .map(|(entry, bytes)| {
             ParquetFile::open(bytes)
                 .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", entry.path)))
@@ -908,6 +931,31 @@ pub fn snapshot_segments<'f>(
     columns: &[String],
     program: &'f Program,
 ) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
+    segments_of(snapshot, files, columns, program, None)
+}
+
+/// [`snapshot_segments`] without the record pages `filter` proves hold no
+/// row it accepts (#777). Pass the files of [`snapshot_files_where`] for
+/// the same `filter`.
+#[cfg(feature = "ingest-read")]
+pub fn snapshot_segments_where<'f>(
+    snapshot: &'f crate::storage::ingest::Snapshot,
+    files: &'f [ParquetFile<'f>],
+    columns: &[String],
+    program: &'f Program,
+    filter: &table::SnapshotFilter,
+) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
+    segments_of(snapshot, files, columns, program, Some(filter.expr()))
+}
+
+#[cfg(feature = "ingest-read")]
+fn segments_of<'f>(
+    snapshot: &'f crate::storage::ingest::Snapshot,
+    files: &'f [ParquetFile<'f>],
+    columns: &[String],
+    program: &'f Program,
+    where_clause: Option<&Expr>,
+) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
     let schema = snapshot
         .schema()
         .map_err(|e| EngineError::new(ErrorKind::Open, e))?;
@@ -929,7 +977,7 @@ pub fn snapshot_segments<'f>(
         }));
     }
     segments.extend(
-        table::page_segments(snapshot, &requests)
+        table::page_segments(snapshot, &schema, &requests, where_clause)
             .into_iter()
             .map(SnapshotSegment),
     );

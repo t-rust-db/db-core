@@ -620,6 +620,9 @@ pub fn db_core::compare::compare(&db_core::value::Value, &db_core::value::Value,
 pub mod db_core::engine
 pub mod db_core::engine::column
 pub mod db_core::engine::column::table
+pub struct db_core::engine::column::table::SnapshotFilter
+impl db_core::engine::column::table::SnapshotFilter
+pub fn db_core::engine::column::table::SnapshotFilter::parse(&db_core::storage::ingest::snapshot::Snapshot, &str, &str) -> core::result::Result<Self, db_core::engine::EngineError>
 pub struct db_core::engine::column::table::TableEngine
 impl db_core::engine::column::table::TableEngine
 pub fn db_core::engine::column::table::TableEngine::path(&self) -> &std::path::Path
@@ -638,7 +641,9 @@ pub fn db_core::engine::column::table::TableEngine::run_query(&mut self, &str) -
 pub fn db_core::engine::column::table::TableEngine::stats(&self) -> db_core::engine::FileStats
 pub fn db_core::engine::column::table::TableEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
 pub fn db_core::engine::column::table::query_snapshot(&db_core::storage::ingest::snapshot::Snapshot, &str, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::query_snapshot_files(&db_core::storage::ingest::snapshot::Snapshot, &str, &str) -> core::result::Result<usize, db_core::engine::EngineError>
 pub fn db_core::engine::column::table::read_snapshot(&db_core::storage::ingest::snapshot::Snapshot, &[alloc::string::String]) -> core::result::Result<db_core::vm::batch::Batch, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::read_snapshot_where(&db_core::storage::ingest::snapshot::Snapshot, &[alloc::string::String], &db_core::engine::column::table::SnapshotFilter) -> core::result::Result<db_core::vm::batch::Batch, db_core::engine::EngineError>
 pub struct db_core::engine::column::BatchEngine
 impl db_core::engine::column::BatchEngine
 pub fn db_core::engine::column::BatchEngine::from_bytes(&str, impl core::convert::Into<alloc::rcs::arc::Arc<[u8]>>) -> core::result::Result<Self, db_core::engine::EngineError>
@@ -669,7 +674,9 @@ pub fn db_core::engine::column::SnapshotSegment<'_, '_>::load_columns(&self, &[a
 pub fn db_core::engine::column::SnapshotSegment<'_, '_>::order_key_bound(&self, bool) -> core::option::Option<db_core::vm::batch::Value>
 pub fn db_core::engine::column::file_segments<'f>(&'f db_core::storage::parquet::parquet_file::ParquetFile<'f>, &[alloc::string::String], core::option::Option<&db_core::parser::ast::Expr>, &'f db_core::vm::batch::Program) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::FileSegment<'f, 'f>>, db_core::engine::EngineError>
 pub fn db_core::engine::column::snapshot_files(&db_core::storage::ingest::snapshot::Snapshot) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::parquet_file::ParquetFile<'_>>, db_core::engine::EngineError>
+pub fn db_core::engine::column::snapshot_files_where<'s>(&'s db_core::storage::ingest::snapshot::Snapshot, &'s db_core::engine::column::table::SnapshotFilter) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::parquet_file::ParquetFile<'s>>, db_core::engine::EngineError>
 pub fn db_core::engine::column::snapshot_segments<'f>(&'f db_core::storage::ingest::snapshot::Snapshot, &'f [db_core::storage::parquet::parquet_file::ParquetFile<'f>], &[alloc::string::String], &'f db_core::vm::batch::Program) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::SnapshotSegment<'f, 'f>>, db_core::engine::EngineError>
+pub fn db_core::engine::column::snapshot_segments_where<'f>(&'f db_core::storage::ingest::snapshot::Snapshot, &'f [db_core::storage::parquet::parquet_file::ParquetFile<'f>], &[alloc::string::String], &'f db_core::vm::batch::Program, &db_core::engine::column::table::SnapshotFilter) -> core::result::Result<alloc::vec::Vec<db_core::engine::column::SnapshotSegment<'f, 'f>>, db_core::engine::EngineError>
 pub mod db_core::engine::cross_mode
 pub struct db_core::engine::cross_mode::RowTableSegment
 impl db_core::engine::cross_mode::RowTableSegment
@@ -3898,6 +3905,7 @@ pub db_core::storage::ingest::layout::TierOptions::row_group_max_rows: usize
 pub db_core::storage::ingest::layout::TierOptions::session_key: core::option::Option<db_core::storage::ingest::layout::SessionKey>
 pub db_core::storage::ingest::layout::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::ingest::layout::TierOptions::spill_rows: usize
+pub db_core::storage::ingest::layout::TierOptions::stat_columns: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for db_core::storage::ingest::layout::TierOptions
 pub fn db_core::storage::ingest::layout::TierOptions::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::ingest::layout::TierOptions
@@ -4568,6 +4576,7 @@ pub db_core::storage::ingest::TierOptions::row_group_max_rows: usize
 pub db_core::storage::ingest::TierOptions::session_key: core::option::Option<db_core::storage::ingest::layout::SessionKey>
 pub db_core::storage::ingest::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::ingest::TierOptions::spill_rows: usize
+pub db_core::storage::ingest::TierOptions::stat_columns: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for db_core::storage::ingest::layout::TierOptions
 pub fn db_core::storage::ingest::layout::TierOptions::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::ingest::layout::TierOptions

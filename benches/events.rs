@@ -44,7 +44,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Instant;
 
-use db_core::engine::column::table::query_snapshot;
+use db_core::engine::column::table::{query_snapshot, query_snapshot_files};
 use db_core::engine::Cell;
 use db_core::storage::ingest::layout::{DAY_NS, HOUR_NS};
 use db_core::storage::ingest::wal::Ack;
@@ -180,6 +180,7 @@ fn options() -> TableOptions {
         schema: Some(schema()),
         layout: Layout::Tiered(TierOptions {
             sort_key: vec!["session_id".into(), "request_id".into()],
+            stat_columns: stat_columns(),
             ..TierOptions::default()
         }),
         parquet: WriterOptions {
@@ -189,6 +190,17 @@ fn options() -> TableOptions {
         clock,
         ..TableOptions::default()
     }
+}
+
+/// The columns outside the sort key that get a per-file range: `STAT_COLUMNS`
+/// (comma-separated, empty for none), `day` when unset. A column that is
+/// random across hours, like `user_id`, spans every file and prunes nothing.
+fn stat_columns() -> Vec<String> {
+    let list = std::env::var("STAT_COLUMNS").unwrap_or_else(|_| "day".into());
+    list.split(',')
+        .filter(|c| !c.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 /// The page codec `CODEC` names; Snappy when unset.
@@ -286,6 +298,7 @@ fn query(dir: &Path, sql: &str) {
     let snapshot = Snapshot::open(dir).expect("open snapshot");
     let result = query_snapshot(&snapshot, "events", sql).expect("query");
     let elapsed = start.elapsed();
+    let opened = query_snapshot_files(&snapshot, "events", sql).expect("count files");
     let mut out = BufWriter::new(std::io::stdout().lock());
     for row in &result.rows {
         let line: Vec<String> = row.iter().map(cell).collect();
@@ -293,6 +306,8 @@ fn query(dir: &Path, sql: &str) {
     }
     out.flush().unwrap();
     eprintln!("elapsed_ms={:.1}", elapsed.as_secs_f64() * 1e3);
+    eprintln!("files_opened={opened}");
+    eprintln!("files_total={}", snapshot.files().count());
 }
 
 fn files(dir: &Path) {

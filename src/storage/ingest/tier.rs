@@ -78,7 +78,7 @@ impl KeyState {
 /// The smallest and largest non-null value of `values` as key bounds:
 /// `Some(None)` if all are NULL, `None` for a type or value a bound
 /// cannot hold (a float, an unsigned value above `i64::MAX`).
-fn column_bounds(values: &ColumnValues) -> Option<Option<(KeyBound, KeyBound)>> {
+pub(crate) fn column_bounds(values: &ColumnValues) -> Option<Option<(KeyBound, KeyBound)>> {
     fn ints<T: Copy>(
         values: &[Option<T>],
         int: impl Fn(T) -> Option<i64>,
@@ -117,7 +117,8 @@ struct Files {
     specs: Vec<ColumnSpec>,
     options: WriterOptions,
     max_file_size: u64,
-    /// The sort key's columns: (position in `specs`, name).
+    /// The columns with a range, the sort key's and `stat_columns`:
+    /// (position in `specs`, name).
     keys: Vec<(usize, String)>,
     open: Option<OpenFile>,
     done: Vec<Output>,
@@ -133,7 +134,7 @@ impl Files {
         let mut options = parquet.clone();
         // Row groups are cut here, never by row count in the writer.
         options.row_group_rows = usize::MAX;
-        let keys = key_positions(&specs, tier)
+        let keys = stat_positions(&specs, tier)
             .into_iter()
             .filter_map(|i| Some((i, specs.get(i)?.name.clone())))
             .collect();
@@ -393,6 +394,20 @@ fn key_positions(specs: &[ColumnSpec], tier: &TierOptions) -> Vec<usize> {
         .iter()
         .filter_map(|k| specs.iter().position(|s| s.name == *k))
         .collect()
+}
+
+/// The positions in `specs` of the columns that get a range: the sort
+/// key's, then `stat_columns` not already among them.
+fn stat_positions(specs: &[ColumnSpec], tier: &TierOptions) -> Vec<usize> {
+    let mut positions = key_positions(specs, tier);
+    for name in &tier.stat_columns {
+        if let Some(i) = specs.iter().position(|s| s.name == *name) {
+            if !positions.contains(&i) {
+                positions.push(i);
+            }
+        }
+    }
+    positions
 }
 
 /// Writes `sorted` into `dir` as one file of LSNs `lsn_lo..=lsn_hi`, cut
