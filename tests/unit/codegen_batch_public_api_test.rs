@@ -328,3 +328,36 @@ fn join_columns_headers_are_taken_before_qualification() {
     let (headers, _) = resolved("SELECT SUM(y) FROM a JOIN b ON a.id = b.id").unwrap();
     assert_eq!(headers, ["SUM(y)"]);
 }
+
+#[test]
+fn join_columns_qualifies_every_expression_shape() {
+    let (headers, items) = resolved(
+        "SELECT (y), x FROM a JOIN b ON a.id = b.id \
+         WHERE x BETWEEN 1 AND 9 AND y IN (1, 2) AND y LIKE 'a%' AND x > 0",
+    )
+    .unwrap();
+    assert_eq!(headers, ["y", "x"]);
+    assert!(
+        items.iter().all(|i| !i.contains("table: None")),
+        "{items:?}"
+    );
+    let (headers, _) = resolved(
+        "SELECT y, COUNT(DISTINCT x) FILTER (WHERE y > 0) FROM a JOIN b ON a.id = b.id GROUP BY y",
+    )
+    .unwrap();
+    assert_eq!(headers, ["y", "COUNT(DISTINCT x)"]);
+}
+
+#[test]
+fn join_columns_group_by_resolves_and_keeps_headers() {
+    let (headers, _) =
+        resolved("SELECT y, SUM(x) FROM a JOIN b ON a.id = b.id GROUP BY y ORDER BY y").unwrap();
+    assert_eq!(headers, ["y", "SUM(x)"]);
+}
+
+#[test]
+fn join_columns_wraps_a_planner_error() {
+    let err = JoinColumnsError::from(PlanError::NoJoinClause);
+    assert_eq!(err, JoinColumnsError::Plan(PlanError::NoJoinClause));
+    assert_eq!(err.to_string(), PlanError::NoJoinClause.to_string());
+}
