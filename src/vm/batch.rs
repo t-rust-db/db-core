@@ -13,6 +13,7 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
+use super::hll::Hll;
 use super::int_key_table::{murmur_finalize, HashGroupTable, IntKeyTable};
 use crate::value::len_to_i64;
 pub use crate::vm::column::{Bitmap, Column};
@@ -48,6 +49,10 @@ pub enum AggFunc {
     /// planner lowers `AVG(x)` into this and a `COUNT(x)`; no SQL name
     /// parses to it.
     AvgSum,
+    /// `approx_count_distinct(x)` (#603): a HyperLogLog estimate of the
+    /// distinct non-null values. Its partial is the encoded sketch
+    /// ([`Value::Bytes`]), which `Combine` merges and finalizes.
+    ApproxCountDistinct,
 }
 
 impl AggFunc {
@@ -65,6 +70,7 @@ impl AggFunc {
             AggFunc::Min => "MIN",
             AggFunc::Max => "MAX",
             AggFunc::AvgSum => "SUM",
+            AggFunc::ApproxCountDistinct => "APPROX_COUNT_DISTINCT",
         }
     }
 
@@ -77,6 +83,7 @@ impl AggFunc {
             "AVG" => Some(AggFunc::Avg),
             "MIN" => Some(AggFunc::Min),
             "MAX" => Some(AggFunc::Max),
+            "APPROX_COUNT_DISTINCT" => Some(AggFunc::ApproxCountDistinct),
             _ => None,
         }
     }
@@ -104,6 +111,11 @@ pub enum Value {
     /// unique keys, a value may be NULL. Read from a Parquet MAP column;
     /// queried with `m['k']` and the map functions.
     Map(Arc<MapEntries>),
+    /// An `approx_count_distinct` partial (#603): an encoded HyperLogLog
+    /// sketch. Only ever a slot between a segment's `GroupReduce`/`Reduce`
+    /// and `Combine`, which merges the sketches and finalizes them to the
+    /// estimate -- never a column a query can read.
+    Bytes(Arc<[u8]>),
     /// An exact `DECIMAL` (#632): `unscaled / 10^scale`, as a Parquet
     /// DECIMAL or a record table's column stores it. Equal to another
     /// decimal of the same value whatever their scales (`1.50 == 1.5`).
@@ -132,6 +144,7 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::Map(a), Value::Map(b)) => a == b,
+            (Value::Bytes(a), Value::Bytes(b)) => a == b,
             (
                 Value::Decimal {
                     unscaled: a,
@@ -245,6 +258,8 @@ impl fmt::Display for Value {
             Value::Bool(v) => write!(f, "{v}"),
             Value::Str(v) => write!(f, "{v}"),
             Value::Null => write!(f, "NULL"),
+            // A sketch partial is never shown; its size is all there is to say.
+            Value::Bytes(bytes) => write!(f, "<sketch {} bytes>", bytes.len()),
             Value::Decimal { unscaled, scale } => {
                 f.write_str(&crate::value::format_decimal(*unscaled, *scale))
             }
@@ -485,6 +500,10 @@ pub enum AggPart {
     Min,
     /// A partial `MAX`: merged by keeping the larger value.
     Max,
+    /// An `approx_count_distinct` partial (#603): an encoded HyperLogLog
+    /// sketch, merged register-wise and replaced by its estimate once
+    /// everything is merged.
+    ApproxCountDistinct,
     /// `(sum_index, count_index)` into the emitted row, combined at the end.
     Avg(usize, usize),
     /// A partial `SUM`/`COUNT`/`MIN`/`MAX`, merged the same as its plain
@@ -901,6 +920,8 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
         Value::Null => crate::value::Value::Null,
         // The row functions have no map type: its rendered text.
         Value::Map(_) => crate::value::Value::Text(v.to_string().into()),
+        // A sketch partial never reaches a row function.
+        Value::Bytes(_) => crate::value::Value::Null,
         // SQLite reads a DECIMAL as REAL (its affinity), so the row
         // functions see the nearest float.
         Value::Decimal { unscaled, scale } => {
@@ -2712,6 +2733,10 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
             5u8.hash(state);
             entries.hash(state);
         }
+        Value::Bytes(bytes) => {
+            7u8.hash(state);
+            bytes.hash(state);
+        }
         // One hash per value, whatever the scale (#632): `PartialEq` says
         // `1.50 == 1.5`.
         Value::Decimal { unscaled, scale } => {
@@ -2755,6 +2780,7 @@ pub(crate) fn hash_one_value(value: &Value) -> u64 {
         Value::Null => murmur_finalize(TAG_NULL),
         // Rare as a key: the rendered entries, kept apart from strings.
         Value::Map(_) => murmur_finalize(hash_str_bytes(value.to_string().as_bytes()) ^ TAG_MAP),
+        Value::Bytes(bytes) => murmur_finalize(hash_str_bytes(bytes) ^ TAG_MAP),
         // The canonical form, so `1.50` and `1.5` (equal) hash alike.
         Value::Decimal { unscaled, scale } => {
             let (u, s) = decimal_canonical(*unscaled, *scale);
@@ -3562,9 +3588,29 @@ enum Extremes {
     /// Ordered by `total_cmp`, as [`numeric_cmp`] orders floats.
     Float(f64, f64),
     Boxed(Value, Value),
+    /// `approx_count_distinct`'s sketch (#603), in the slot no other
+    /// aggregate of the same accumulator uses, so `RunningAgg` stays its
+    /// size.
+    Sketch(Box<Hll>),
 }
 
 impl RunningAgg {
+    /// Folds one value into the `approx_count_distinct` sketch (#603);
+    /// `Null` is skipped, as `COUNT(x)` skips it.
+    fn push_sketch(&mut self, value: &Value) {
+        if matches!(value, Value::Null) {
+            return;
+        }
+        let hash = hash_one_value(value);
+        if let Extremes::Sketch(sketch) = &mut self.extremes {
+            sketch.insert(hash);
+        } else {
+            let mut sketch = Hll::default();
+            sketch.insert(hash);
+            self.extremes = Extremes::Sketch(Box::new(sketch));
+        }
+    }
+
     /// Folds one more row into this group's accumulator. `value` is
     /// `None` for `COUNT(*)` (no source column -- only `row_count`
     /// matters); `Some` for every other case, `Value::Null` included.
@@ -3587,7 +3633,7 @@ impl RunningAgg {
     /// primitives seen so far first.
     fn push_extreme(&mut self, value: &Value) {
         let (mut min, mut max) = match std::mem::take(&mut self.extremes) {
-            Extremes::Empty => (value.clone(), value.clone()),
+            Extremes::Empty | Extremes::Sketch(_) => (value.clone(), value.clone()),
             Extremes::Int(min, max) => (Value::Int(min), Value::Int(max)),
             Extremes::Float(min, max) => (Value::Float(min), Value::Float(max)),
             Extremes::Boxed(min, max) => (min, max),
@@ -3732,16 +3778,22 @@ impl RunningAgg {
                 Value::Float(self.total() / count)
             }
             AggFunc::Min => match &self.extremes {
-                Extremes::Empty => Value::Null,
+                Extremes::Empty | Extremes::Sketch(_) => Value::Null,
                 Extremes::Int(min, _) => Value::Int(*min),
                 Extremes::Float(min, _) => Value::Float(*min),
                 Extremes::Boxed(min, _) => min.clone(),
             },
             AggFunc::Max => match &self.extremes {
-                Extremes::Empty => Value::Null,
+                Extremes::Empty | Extremes::Sketch(_) => Value::Null,
                 Extremes::Int(_, max) => Value::Int(*max),
                 Extremes::Float(_, max) => Value::Float(*max),
                 Extremes::Boxed(_, max) => max.clone(),
+            },
+            // The partial, not the estimate: `Combine` merges it across
+            // segments, then finalizes (#603).
+            AggFunc::ApproxCountDistinct => match &self.extremes {
+                Extremes::Sketch(sketch) => Value::Bytes(sketch.encode().into()),
+                _ => Value::Bytes(Hll::default().encode().into()),
             },
         })
     }
@@ -3778,6 +3830,7 @@ pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
             Value::Int(_) | Value::Float(_) | Value::Decimal { .. } => 2,
             Value::Str(_) => 3,
             Value::Map(_) => 4,
+            Value::Bytes(_) => 5,
         }
     }
     if let Some(order) = numeric_cmp(a, b) {
@@ -3787,6 +3840,7 @@ pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Str(x), Value::Str(y)) => x.cmp(y),
         (Value::Map(x), Value::Map(y)) => x.cmp(y),
+        (Value::Bytes(x), Value::Bytes(y)) => x.cmp(y),
         _ => rank(a).cmp(&rank(b)),
     }
 }
@@ -3903,10 +3957,14 @@ fn fold_group_row(
             g
         }
     };
-    for (i, (_func, src)) in aggs.iter().enumerate() {
+    for (i, (func, src)) in aggs.iter().enumerate() {
         match src {
             Some(s) => with_value_source(*s, probe_columns, probe_row, bt, build_row, |value| {
-                accumulators[i][group].push(Some(value));
+                if *func == AggFunc::ApproxCountDistinct {
+                    accumulators[i][group].push_sketch(value);
+                } else {
+                    accumulators[i][group].push(Some(value));
+                }
             }),
             None => accumulators[i][group].push(None),
         }
@@ -5338,6 +5396,17 @@ impl Vm {
                 }
             };
             match src {
+                // #603: the sketch takes every value as a `Value`, typed
+                // column or not.
+                Some(reg) if *func == AggFunc::ApproxCountDistinct => {
+                    let values = self.reg(*reg, opcode)?;
+                    if values.len() != base_len {
+                        return Err(VmError::RegisterLengthMismatch { opcode });
+                    }
+                    for (row, group) in row_group.iter().enumerate() {
+                        accs[*group].push_sketch(&values[physical(row)]);
+                    }
+                }
                 Some(reg) => match self.typed_registers.get(reg).map(Arc::clone) {
                     // #477: read straight from the typed column's
                     // packed `data`/`valid` for `Int`/`Float` --
@@ -6312,6 +6381,9 @@ fn reduce_count_star(func: AggFunc, num_rows: usize) -> Value {
 /// so the caller falls back to [`reduce_values`] over the materialized
 /// register.
 fn typed_reduce_values(func: AggFunc, column: &Column) -> Option<Result<Value>> {
+    if func == AggFunc::ApproxCountDistinct {
+        return None;
+    }
     let mut acc = RunningAgg::default();
     match column {
         Column::Int { data, valid } => {
@@ -6399,7 +6471,11 @@ fn keep_str_extremes(min: &mut Option<String>, max: &mut Option<String>, text: &
 fn reduce_values(func: AggFunc, values: &[Value]) -> Result<Value> {
     let mut acc = RunningAgg::default();
     for value in values {
-        acc.push(Some(value));
+        if func == AggFunc::ApproxCountDistinct {
+            acc.push_sketch(value);
+        } else {
+            acc.push(Some(value));
+        }
     }
     acc.finalize(func, false, "Reduce")
 }

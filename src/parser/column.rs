@@ -506,7 +506,7 @@ fn extract_equi_join(expr: &AstExpr) -> Result<(String, String)> {
 fn is_known_agg_name(name: &str) -> bool {
     matches!(
         name.to_ascii_uppercase().as_str(),
-        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX"
+        "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "APPROX_COUNT_DISTINCT"
     )
 }
 

@@ -342,6 +342,7 @@ fn render_agg_part(part: &AggPart) -> String {
         AggPart::Count => "AggPart::Count".to_string(),
         AggPart::Min => "AggPart::Min".to_string(),
         AggPart::Max => "AggPart::Max".to_string(),
+        AggPart::ApproxCountDistinct => "AggPart::ApproxCountDistinct".to_string(),
         AggPart::Avg(sum, count) => format!("AggPart::Avg({sum}, {count})"),
         AggPart::Hidden(kind) => {
             format!("AggPart::Hidden(HiddenPart::{})", render_hidden_part(*kind))
@@ -1061,6 +1062,7 @@ fn render_agg_func(func: AggFunc) -> &'static str {
         AggFunc::Min => "Min",
         AggFunc::Max => "Max",
         AggFunc::AvgSum => "AvgSum",
+        AggFunc::ApproxCountDistinct => "ApproxCountDistinct",
     }
 }
 
@@ -1075,7 +1077,7 @@ fn render_value(value: &Value) -> String {
         ),
         Value::Null => "Value::Null".to_string(),
         // Programs hold literals only; a map is only ever column data.
-        Value::Map(_) => "Value::Null".to_string(),
+        Value::Map(_) | Value::Bytes(_) => "Value::Null".to_string(),
         Value::Decimal { unscaled, scale } => {
             format!("Value::Decimal {{ unscaled: {unscaled}, scale: {scale} }}")
         }

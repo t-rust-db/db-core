@@ -37,6 +37,7 @@ use super::batch::{
     agg_cmp, apply_map_op, chunk_len, hash_columns_by_row, mix_hash, AggOperand, AggPart, Chunk,
     HiddenPart, MapOp, QueryOutput, Result, SlotState, Value, VmError, HASH_SEED,
 };
+use super::hll::Hll;
 use super::int_key_table::IntKeyTable;
 
 /// What `Combine` does to one emitted slot (column) when two partial rows
@@ -55,6 +56,8 @@ pub(crate) enum SlotOp {
     Min,
     /// Partial `MAX`: the larger as `f64`; a `Null` side yields the other.
     Max,
+    /// `approx_count_distinct`'s sketch (#603): merged register-wise.
+    Sketch,
     /// `AVG`'s sum slot: merged like [`SlotOp::Sum`].
     AvgSum,
     /// `AVG`'s count slot: added as `f64` (only ever divided into by the
@@ -97,6 +100,7 @@ pub(crate) fn slot_ops(parts: &[AggPart], num_slots: usize) -> Result<Vec<SlotOp
                         AggPart::Count | AggPart::Hidden(HiddenPart::Count) => SlotOp::Count,
                         AggPart::Min | AggPart::Hidden(HiddenPart::Min) => SlotOp::Min,
                         AggPart::Max | AggPart::Hidden(HiddenPart::Max) => SlotOp::Max,
+                        AggPart::ApproxCountDistinct => SlotOp::Sketch,
                         AggPart::Avg(..) | AggPart::Expr(..) => SlotOp::Key,
                     };
                 }
@@ -174,6 +178,15 @@ pub(crate) fn merge_slot(op: SlotOp, into: &mut Value, from: &Value) -> Result<(
         // a segment with no rows contributes `Null`, which never wins.
         SlotOp::Min => keep_partial_extreme(into, from, std::cmp::Ordering::Less),
         SlotOp::Max => keep_partial_extreme(into, from, std::cmp::Ordering::Greater),
+        // A register-wise `max`: the same sketch whatever the merge order
+        // (#603). `Null` is a segment that saw no rows.
+        SlotOp::Sketch => {
+            if let Some(from) = decode_sketch(from)? {
+                let mut merged = decode_sketch(into)?.unwrap_or_default();
+                merged.merge(&from);
+                *into = Value::Bytes(merged.encode().into());
+            }
+        }
         // Previously a no-op (db-core#404): with more than one segment,
         // `AVG` silently returned the first segment's local average. The
         // per-segment count is a `Value::Int` in real execution but is
@@ -182,6 +195,33 @@ pub(crate) fn merge_slot(op: SlotOp, into: &mut Value, from: &Value) -> Result<(
         SlotOp::AvgCount => *into = Value::Float(partial_f64(into)? + partial_f64(from)?),
     }
     Ok(())
+}
+
+/// An `approx_count_distinct` partial slot as a sketch; `None` for `Null`
+/// (a segment with no rows). Anything else is a planner bug.
+fn decode_sketch(v: &Value) -> Result<Option<Hll>> {
+    match v {
+        Value::Null => Ok(None),
+        Value::Bytes(bytes) => {
+            Hll::decode(bytes)
+                .map(Some)
+                .ok_or_else(|| VmError::MalformedProgram {
+                    opcode: "Combine",
+                    reason: "a partial approx_count_distinct is not a valid sketch".to_string(),
+                })
+        }
+        other => Err(VmError::MalformedProgram {
+            opcode: "Combine",
+            reason: format!("a partial approx_count_distinct is not a sketch: {other}"),
+        }),
+    }
+}
+
+/// A merged `approx_count_distinct` slot as its estimate; no rows is `0`.
+pub(crate) fn finish_sketch(v: &Value) -> Result<Value> {
+    Ok(Value::Int(
+        decode_sketch(v)?.map_or(0, |sketch| sketch.estimate()),
+    ))
 }
 
 /// Replaces `into` with `from` when `from` is further in direction `want`
@@ -1006,6 +1046,18 @@ fn output_columns(parts: &[AggPart], mut acc: Vec<Vec<Value>>) -> Result<Vec<Vec
             // column is consumed (the cursor still advances past it) but
             // never pushed to `out`; only an `Expr` part reads it.
             AggPart::Hidden(_) => {
+                cursor = cursor.saturating_add(1);
+            }
+            // The merged sketch becomes its estimate (#603).
+            AggPart::ApproxCountDistinct => {
+                if let Some(column) = acc.get_mut(cursor) {
+                    out.push(
+                        std::mem::take(column)
+                            .iter()
+                            .map(finish_sketch)
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                }
                 cursor = cursor.saturating_add(1);
             }
             // No acc column of its own -- both operands name a slot

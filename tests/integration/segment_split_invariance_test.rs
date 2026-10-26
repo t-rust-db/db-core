@@ -1411,3 +1411,145 @@ fn integer_sum_overflow_is_an_error_and_avg_is_not() {
         );
     }
 }
+
+/// #603: `approx_count_distinct` merges sketches across segments, so the
+/// estimate is the same under every split -- and exact at this size, where
+/// the sketch is sparse and a hash collision of two registers is the only
+/// way to lose a value.
+#[test]
+fn batch_approx_count_distinct_is_segment_split_invariant() {
+    let (grp, amt) = distinct_dataset();
+    let cases: [(&str, Vec<Vec<Value>>); 3] = [
+        (
+            "SELECT grp, approx_count_distinct(amt) FROM t GROUP BY grp ORDER BY grp",
+            vec![
+                vec![Value::Str("a".into()), Value::Int(2)],
+                vec![Value::Str("b".into()), Value::Int(3)],
+                vec![Value::Str("c".into()), Value::Int(1)],
+            ],
+        ),
+        // Beside the exact aggregates, which keep seeing every row.
+        (
+            "SELECT approx_count_distinct(amt), count(DISTINCT amt), grp, count(*), sum(amt) \
+             FROM t GROUP BY grp ORDER BY grp",
+            vec![
+                vec![
+                    Value::Int(2),
+                    Value::Int(2),
+                    Value::Str("a".into()),
+                    Value::Int(4),
+                    Value::Int(4),
+                ],
+                vec![
+                    Value::Int(3),
+                    Value::Int(3),
+                    Value::Str("b".into()),
+                    Value::Int(4),
+                    Value::Int(11),
+                ],
+                vec![
+                    Value::Int(1),
+                    Value::Int(1),
+                    Value::Str("c".into()),
+                    Value::Int(4),
+                    Value::Int(10),
+                ],
+            ],
+        ),
+        (
+            "SELECT approx_count_distinct(amt), count(amt) FROM t",
+            vec![vec![Value::Int(5), Value::Int(9)]],
+        ),
+    ];
+    for (sql, expected) in cases {
+        assert_split_invariant(sql, grp.len(), ("grp", &grp), ("amt", &amt));
+        assert_eq!(
+            run_batch(sql, &[5, 7], ("grp", &grp), ("amt", &amt)),
+            expected,
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn batch_approx_count_distinct_over_no_rows_and_nulls_is_zero() {
+    let (grp, amt) = distinct_dataset();
+    assert_eq!(
+        run_batch(
+            "SELECT approx_count_distinct(amt), count(*) FROM t WHERE grp = 'z'",
+            &[5, 7],
+            ("grp", &grp),
+            ("amt", &amt),
+        ),
+        vec![vec![Value::Int(0), Value::Int(0)]]
+    );
+    assert!(run_batch(
+        "SELECT grp, approx_count_distinct(amt) FROM t WHERE grp = 'z' GROUP BY grp",
+        &[5, 7],
+        ("grp", &grp),
+        ("amt", &amt),
+    )
+    .is_empty());
+    let nulls = vec![Value::Null; 4];
+    assert_eq!(
+        run_batch(
+            "SELECT approx_count_distinct(amt) FROM t",
+            &[2, 2],
+            ("grp", &grp[..4]),
+            ("amt", &nulls),
+        ),
+        vec![vec![Value::Int(0)]]
+    );
+}
+
+/// #603: against exact counts on generated data, grouped and not, the
+/// estimate stays within the documented 2 % bound at precision 14, and a
+/// serial scan (one segment) and a parallel one (many) agree exactly.
+#[test]
+fn batch_approx_count_distinct_stays_within_two_percent_of_exact() {
+    // 200k rows; a group's values repeat, so rows >> distinct values.
+    let n = 200_000usize;
+    let grp: Vec<Value> = (0..n)
+        .map(|i| Value::Str(["a", "b", "c"][i % 3].into()))
+        .collect();
+    let amt: Vec<Value> = (0..n)
+        .map(|i| Value::Int(((i * 7919) % 60_000) as i64))
+        .collect();
+    let sql = "SELECT grp, approx_count_distinct(amt), count(DISTINCT amt) \
+               FROM t GROUP BY grp ORDER BY grp";
+    let split = [n / 7, n / 5, n / 3, n - n / 7 - n / 5 - n / 3];
+    let serial = run_batch(sql, &[n], ("grp", &grp), ("amt", &amt));
+    let parallel = run_batch(sql, &split, ("grp", &grp), ("amt", &amt));
+    assert_eq!(serial, parallel, "serial and parallel estimates differ");
+    assert_eq!(serial.len(), 3);
+    for row in &serial {
+        let (Value::Int(est), Value::Int(exact)) = (&row[1], &row[2]) else {
+            panic!("not integers: {row:?}");
+        };
+        let err = (*est - *exact).abs() as f64 / *exact as f64;
+        assert!(err <= 0.02, "{row:?}: error {err}");
+    }
+    let sql = "SELECT approx_count_distinct(amt), count(DISTINCT amt) FROM t";
+    let total = run_batch(sql, &split, ("grp", &grp), ("amt", &amt));
+    let (Value::Int(est), Value::Int(exact)) = (&total[0][0], &total[0][1]) else {
+        panic!("not integers: {total:?}");
+    };
+    assert_eq!(*exact, 60_000);
+    assert!(
+        (*est - *exact).abs() as f64 / *exact as f64 <= 0.02,
+        "{est}"
+    );
+}
+
+#[test]
+fn batch_approx_count_distinct_is_refused_inside_expressions() {
+    for sql in [
+        "SELECT approx_count_distinct(amt) + 1 FROM t",
+        "SELECT grp FROM t GROUP BY grp HAVING approx_count_distinct(amt) > 1",
+    ] {
+        assert!(
+            compile(&parse(sql).unwrap()).is_err(),
+            "{sql} should not compile"
+        );
+    }
+}
