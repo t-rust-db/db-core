@@ -10,7 +10,10 @@
 //! Cells print as `Cell`'s own `Display`: these queries sum nothing, so
 //! reals match DuckDB's text without a fixed precision.
 //!
-//! Usage: `column_join_oracle <path.parquet> <lookup.db> <sql>`
+//! The first argument may name several Parquet files, comma-separated
+//! (#782): a query joining two of them probes with the larger.
+//!
+//! Usage: `column_join_oracle <path.parquet>[,<more.parquet>...] <lookup.db> <sql>`
 
 use std::env;
 use std::path::Path;
@@ -22,18 +25,18 @@ use db_core::engine::{Cell, Engine};
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let [_, parquet, lookup, sql] = args.as_slice() else {
-        eprintln!("usage: column_join_oracle <path.parquet> <lookup.db> <sql>");
+        eprintln!("usage: column_join_oracle <path.parquet>[,<more.parquet>...] <lookup.db> <sql>");
         return ExitCode::FAILURE;
     };
 
-    let mut engine =
-        match CrossModeEngine::open_column_sqlite(Path::new(parquet), Path::new(lookup)) {
-            Ok(e) => e,
-            Err(err) => {
-                eprintln!("open {parquet} + {lookup}: {err}");
-                return ExitCode::FAILURE;
-            }
-        };
+    let files: Vec<&Path> = parquet.split(',').map(Path::new).collect();
+    let mut engine = match CrossModeEngine::open_column_tables_sqlite(&files, Path::new(lookup)) {
+        Ok(e) => e,
+        Err(err) => {
+            eprintln!("open {parquet} + {lookup}: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     let result = match engine.run_query(sql) {
         Ok(r) => r,

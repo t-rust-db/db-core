@@ -39,7 +39,18 @@
 //! key must be a column of `log` (no lookup table is joined against
 //! another lookup table's payload). See [`resolve_multi_sides`] and
 //! [`crate::codegen::batch::compile_cross_mode_multi_join`].
-//! `EXPLAIN`/`explain_opcodes` don't support this shape yet.
+//! The stream/SQLite `EXPLAIN`/`explain_opcodes` don't support this shape
+//! yet; the Parquet/SQLite ones do (#782).
+//!
+//! #782 lets a Parquet/SQLite star join name a second *Parquet* table
+//! next to the SQLite ones ([`run_column_tables_query`],
+//! [`CrossModeEngine::open_column_tables_sqlite`]). Which Parquet table
+//! probes is decided per query (`sides::choose_probe`): the largest by
+//! footer row count that the query is a star around, whatever order it is
+//! written in, so the other is the one read into memory; a `LEFT JOIN`
+//! keeps the `FROM` table as the probe. A filter on a built Parquet table
+//! prunes the probe's row groups through the same key set a SQLite lookup
+//! filter does (`prune`).
 //!
 //! [`run_stream_stream_query`]/[`explain_stream_stream_plan`] (ADR-0022,
 //! #372) join two stream sources instead: both are the same table `log`,
@@ -59,6 +70,8 @@
 
 #[cfg(feature = "engine-column")]
 mod prune;
+#[cfg(feature = "engine-column")]
+mod sides;
 
 use std::sync::Arc;
 
@@ -118,6 +131,7 @@ fn resolve_sides(
     select: &Select,
     driving: &str,
     lookup: &RowEngine,
+    built: &[String],
 ) -> Result<String, EngineError> {
     let from = select
         .from
@@ -173,10 +187,11 @@ fn resolve_sides(
         ));
     };
 
-    let known = lookup
-        .tables()?
-        .into_iter()
-        .any(|t| t.name.eq_ignore_ascii_case(lookup_name));
+    let known = built.iter().any(|b| b.eq_ignore_ascii_case(lookup_name))
+        || lookup
+            .tables()?
+            .into_iter()
+            .any(|t| t.name.eq_ignore_ascii_case(lookup_name));
     if !known {
         return Err(EngineError::new(
             ErrorKind::Compile,
@@ -200,6 +215,7 @@ fn resolve_multi_sides(
     select: &Select,
     driving: &str,
     lookup: &RowEngine,
+    built: &[String],
 ) -> Result<Vec<String>, EngineError> {
     let from = select
         .from
@@ -240,7 +256,8 @@ fn resolve_multi_sides(
                 ),
             ));
         }
-        let is_known = known.iter().any(|t| t.name.eq_ignore_ascii_case(join_name));
+        let is_known = built.iter().any(|b| b.eq_ignore_ascii_case(join_name))
+            || known.iter().any(|t| t.name.eq_ignore_ascii_case(join_name));
         if !is_known {
             return Err(EngineError::new(
                 ErrorKind::Compile,
@@ -298,6 +315,16 @@ fn resolve_cross_mode_group_by(
     driving_columns: Vec<String>,
     lookup: &RowEngine,
 ) -> Result<Resolved, EngineError> {
+    resolve_cross_mode_tables(select, &[(driving.to_string(), driving_columns)], lookup)
+}
+
+/// [`resolve_cross_mode_group_by`] where several tables are not SQLite's:
+/// `column_tables` are each Parquet table's name and columns (#782).
+fn resolve_cross_mode_tables(
+    select: Select,
+    column_tables: &[(String, Vec<String>)],
+    lookup: &RowEngine,
+) -> Result<Resolved, EngineError> {
     let known = lookup.tables()?;
     let mut tables: Vec<(String, Vec<String>)> = Vec::new();
     for name in select
@@ -306,8 +333,11 @@ fn resolve_cross_mode_group_by(
         .flat_map(|f| std::iter::once(&f.first).chain(f.joins.iter().map(|j| &j.table)))
         .filter_map(|t| t.name())
     {
-        let columns = if name.eq_ignore_ascii_case(driving) {
-            driving_columns.clone()
+        let columns = if let Some((_, columns)) = column_tables
+            .iter()
+            .find(|(table, _)| name.eq_ignore_ascii_case(table))
+        {
+            columns.clone()
         } else {
             let info = known
                 .iter()
@@ -345,20 +375,111 @@ pub fn run_query(
     let Resolved { select, headers } =
         resolve_cross_mode_group_by(parse(sql)?, super::stream::TABLE, driving.columns(), lookup)?;
     let table = super::stream::TABLE;
+    let load = |t: &str, raw: &[String]| cross_mode::scan_table_as_batch(lookup, t, raw);
     if join_count(&select) > 1 {
-        let plan = plan_multi_join(&select, table, lookup)?;
+        let plan = plan_multi_join(&select, table, lookup, &[])?;
         let requests = driving.column_requests(&plan.left_columns)?;
-        return execute_multi_join(driving.segments(&requests), lookup, headers, &plan);
+        return execute_multi_join(driving.segments(&requests), &load, headers, &plan);
     }
-    let (lookup_table, plan) = plan_join(&select, table, lookup)?;
+    let (lookup_table, plan) = plan_join(&select, table, lookup, &[])?;
     let requests = driving.column_requests(&plan.left_columns)?;
     execute_join(
         driving.segments(&requests),
-        lookup,
+        &load,
         headers,
         &lookup_table,
         &plan,
     )
+}
+
+/// The parts of a Parquet/SQLite query every entry point shares: the
+/// resolved `SELECT` (the probe table first in its `FROM`), the headers it
+/// had before names were resolved, and which of the session's Parquet
+/// tables probe and build (indexes into the caller's `tables`).
+#[cfg(feature = "engine-column")]
+struct ColumnQuery {
+    select: Select,
+    headers: Vec<String>,
+    probe: usize,
+    builds: Vec<usize>,
+}
+
+/// Parses and resolves `stmt` over the Parquet `tables` and the SQLite
+/// `lookup`, and picks the probe: the only Parquet table the query names,
+/// or, for several, the largest one it can be a star around (see [`sides`]).
+#[cfg(feature = "engine-column")]
+fn plan_column_query(
+    tables: &[&BatchEngine],
+    lookup: &RowEngine,
+    stmt: &str,
+) -> Result<ColumnQuery, EngineError> {
+    let first = tables.first().ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Compile,
+            "a Parquet/SQLite join needs a Parquet table",
+        )
+    })?;
+    let mut parsed = first.parse_join(stmt)?;
+    for table in tables.iter().skip(1) {
+        table.resolve_timestamp_literals(&mut parsed)?;
+    }
+    let columns: Vec<(String, Vec<String>)> = tables
+        .iter()
+        .map(|t| (t.table_name().to_string(), t.columns()))
+        .collect();
+    let Resolved { select, headers } = resolve_cross_mode_tables(parsed, &columns, lookup)?;
+    let (select, probe) = sides::choose_probe(select, tables)?;
+    let named: Vec<&str> = select
+        .from
+        .iter()
+        .flat_map(|f| std::iter::once(&f.first).chain(f.joins.iter().map(|j| &j.table)))
+        .filter_map(|t| t.name())
+        .collect();
+    let builds = tables
+        .iter()
+        .enumerate()
+        .filter(|(i, t)| {
+            *i != probe && named.iter().any(|n| n.eq_ignore_ascii_case(t.table_name()))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    Ok(ColumnQuery {
+        select,
+        headers,
+        probe,
+        builds,
+    })
+}
+
+/// Materializes the build table `table` (the `raw` column names): the built
+/// Parquet file of that name, or else the SQLite table (#782). The columns
+/// the query joins on (`keys`) read a `UINT_64` above `i64::MAX` as its signed
+/// bit pattern, as the probe's do (#600).
+#[cfg(feature = "engine-column")]
+fn load_build_table(
+    lookup: &RowEngine,
+    built: &[&BatchEngine],
+    keys: &[String],
+    table: &str,
+    raw: &[String],
+) -> Result<Batch, EngineError> {
+    match built
+        .iter()
+        .find(|b| b.table_name().eq_ignore_ascii_case(table))
+    {
+        Some(engine) => {
+            let bit_pattern: Vec<String> = raw
+                .iter()
+                .filter(|c| {
+                    keys.iter()
+                        .any(|k| split_qualified(k).1.eq_ignore_ascii_case(c))
+                })
+                .cloned()
+                .collect();
+            engine.read_table(raw, &bit_pattern)
+        }
+        None => cross_mode::scan_table_as_batch(lookup, table, raw),
+    }
 }
 
 /// Runs a cross-mode `SELECT` whose probe side is a Parquet file: the
@@ -371,19 +492,47 @@ pub fn run_column_query(
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
+    run_column_tables_query(&[driving], lookup, sql)
+}
+
+/// [`run_column_query`] over several Parquet files (#782): a star join of
+/// two Parquet tables and SQLite lookup tables, e.g. `events JOIN
+/// transactions ON ... JOIN channels ON ...`. The Parquet table with the
+/// most rows (by its footer) probes, whatever order the query writes them
+/// in; the other is read into memory next to the SQLite tables. A filter
+/// on a built table prunes the probe's row groups, as a SQLite one does.
+#[cfg(feature = "engine-column")]
+pub fn run_column_tables_query(
+    tables: &[&BatchEngine],
+    lookup: &RowEngine,
+    sql: &str,
+) -> Result<QueryResult, EngineError> {
     let stmt = single_statement(sql)?;
-    let Resolved { select, headers } = resolve_cross_mode_group_by(
-        driving.parse_join(&stmt)?,
-        driving.table_name(),
-        driving.columns(),
-        lookup,
-    )?;
+    let ColumnQuery {
+        select,
+        headers,
+        probe,
+        builds,
+    } = plan_column_query(tables, lookup, &stmt)?;
+    let driving = tables.get(probe).ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Compile,
+            "the chosen probe table is not in the session",
+        )
+    })?;
+    let built: Vec<&BatchEngine> = builds
+        .iter()
+        .filter_map(|&i| tables.get(i).copied())
+        .collect();
+    let built_names: Vec<String> = built.iter().map(|b| b.table_name().to_string()).collect();
+    let keys = join_named_columns(&select);
+    let load = |t: &str, raw: &[String]| load_build_table(lookup, &built, &keys, t, raw);
     let table = driving.table_name();
-    let pruning = prune::probe_pruning(&select, lookup)?;
-    // A lookup filter that matches no row leaves an inner join empty:
+    let pruning = prune::probe_pruning(&select, &load)?;
+    // A build filter that matches no row leaves an inner join empty:
     // probe nothing rather than the whole file.
     if join_count(&select) > 1 {
-        let plan = plan_multi_join(&select, table, lookup)?;
+        let plan = plan_multi_join(&select, table, lookup, &built_names)?;
         return driving.with_probe_segments(
             &plan.left_columns,
             pruning.predicate.as_ref(),
@@ -392,11 +541,11 @@ pub fn run_column_query(
                 if pruning.empty {
                     segments.clear();
                 }
-                execute_multi_join(segments, lookup, headers, &plan)
+                execute_multi_join(segments, &load, headers, &plan)
             },
         );
     }
-    let (lookup_table, plan) = plan_join(&select, table, lookup)?;
+    let (lookup_table, plan) = plan_join(&select, table, lookup, &built_names)?;
     driving.with_probe_segments(
         &plan.left_columns,
         pruning.predicate.as_ref(),
@@ -405,7 +554,7 @@ pub fn run_column_query(
             if pruning.empty {
                 segments.clear();
             }
-            execute_join(segments, lookup, headers, &lookup_table, &plan)
+            execute_join(segments, &load, headers, &lookup_table, &plan)
         },
     )
 }
@@ -427,44 +576,86 @@ fn sqlite_scan_stats(
 
 /// `EXPLAIN QUERY PLAN` for a Parquet/SQLite join (#770), labelling each
 /// side by mode and file as [`explain_plan`] does for stream/SQLite, plus
-/// a row for the row-group pruning the `WHERE` implies on the Parquet file
-/// (see [`prune`]).
+/// a row for the row-group pruning the `WHERE` implies on the probe file
+/// (see [`prune`]). A star join (#782) shows every joined table, and, when
+/// it names several Parquet tables, which one probes.
 #[cfg(feature = "engine-column")]
 fn explain_column_plan(
-    driving: &BatchEngine,
+    tables: &[&BatchEngine],
     lookup: &RowEngine,
     lookup_file: &Path,
     sql: &str,
 ) -> Result<Vec<PlanRow>, EngineError> {
     let stmt = single_statement(sql)?;
-    let select = resolve_cross_mode_group_by(
-        driving.parse_join(&stmt)?,
-        driving.table_name(),
-        driving.columns(),
-        lookup,
-    )?
-    .select;
-    check_single_join_explain(&select)?;
+    let ColumnQuery {
+        select,
+        probe,
+        builds,
+        ..
+    } = plan_column_query(tables, lookup, &stmt)?;
+    let driving = tables.get(probe).ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Compile,
+            "the chosen probe table is not in the session",
+        )
+    })?;
+    let built: Vec<&BatchEngine> = builds
+        .iter()
+        .filter_map(|&i| tables.get(i).copied())
+        .collect();
+    let built_names: Vec<String> = built.iter().map(|b| b.table_name().to_string()).collect();
     let table = driving.table_name();
-    let (lookup_table, plan) = plan_join(&select, table, lookup)?;
-
-    let probe_stats = TableStats {
-        source: Some(format!("batch {}", driving.path().display())),
-        ..driving.table_stats()
+    let (build_tables, left_columns) = if join_count(&select) > 1 {
+        let plan = plan_multi_join(&select, table, lookup, &built_names)?;
+        let names = plan.builds.iter().map(|b| b.table_name.clone()).collect();
+        (names, plan.left_columns)
+    } else {
+        let (lookup_table, plan) = plan_join(&select, table, lookup, &built_names)?;
+        (vec![lookup_table], plan.left_columns)
     };
-    let lookup_stats = sqlite_scan_stats(lookup, &lookup_table, lookup_file)?;
-    let nodes = planner::explain(&select, |name| {
+
+    // The `SCAN` stats of every table the query names, by name.
+    let stats_of = |name: &str| -> Result<TableStats, EngineError> {
         if name.eq_ignore_ascii_case(table) {
-            probe_stats.clone()
-        } else if name.eq_ignore_ascii_case(&lookup_table) {
-            lookup_stats.clone()
-        } else {
-            TableStats {
-                row_groups: 0,
-                rows: 0,
-                source: None,
-            }
+            return Ok(TableStats {
+                source: Some(format!("batch {}", driving.path().display())),
+                ..driving.table_stats()
+            });
         }
+        if let Some(engine) = built
+            .iter()
+            .find(|b| b.table_name().eq_ignore_ascii_case(name))
+        {
+            return Ok(TableStats {
+                source: Some(format!("batch {}", engine.path().display())),
+                ..engine.table_stats()
+            });
+        }
+        if build_tables.iter().any(|b| b.eq_ignore_ascii_case(name)) {
+            return sqlite_scan_stats(lookup, name, lookup_file);
+        }
+        Ok(TableStats {
+            row_groups: 0,
+            rows: 0,
+            source: None,
+        })
+    };
+    let mut stats = Vec::new();
+    for name in std::iter::once(table).chain(build_tables.iter().map(String::as_str)) {
+        stats.push((name.to_string(), stats_of(name)?));
+    }
+    let nodes = planner::explain(&select, |name| {
+        stats
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map_or_else(
+                || TableStats {
+                    row_groups: 0,
+                    rows: 0,
+                    source: None,
+                },
+                |(_, s)| s.clone(),
+            )
     })
     .map_err(plan_err)?;
     let mut rows: Vec<PlanRow> = nodes
@@ -475,12 +666,40 @@ fn explain_column_plan(
             detail: n.detail,
         })
         .collect();
+    let next_id = |rows: &[PlanRow]| {
+        rows.iter()
+            .map(|r| r.id)
+            .max()
+            .map_or(0, |m| m.saturating_add(1))
+    };
 
-    let pruning = prune::probe_pruning(&select, lookup)?;
+    // With several Parquet tables, say which one probes and which build.
+    if !builds.is_empty() {
+        let parts: Vec<String> = std::iter::once(("PROBE", table))
+            .chain(built.iter().map(|b| ("BUILD", b.table_name())))
+            .filter_map(|(role, name)| {
+                stats
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                    .map(|(_, s)| format!("{role} {name} (~{} rows)", s.rows))
+            })
+            .collect();
+        let id = next_id(&rows);
+        rows.push(PlanRow {
+            id,
+            parent: 0,
+            detail: format!("JOIN SIDES: {}", parts.join(", ")),
+        });
+    }
+
+    let load = |t: &str, raw: &[String]| {
+        load_build_table(lookup, &built, &join_named_columns(&select), t, raw)
+    };
+    let pruning = prune::probe_pruning(&select, &load)?;
     let kept = match (pruning.empty, pruning.predicate.as_ref()) {
         (true, _) => Some(0),
         (false, Some(predicate)) => Some(driving.with_probe_segments(
-            &plan.left_columns,
+            &left_columns,
             Some(predicate),
             &[],
             |segments| Ok(segments.len()),
@@ -488,16 +707,14 @@ fn explain_column_plan(
         (false, None) => None,
     };
     if let Some(kept) = kept {
+        let id = next_id(&rows);
         rows.push(PlanRow {
-            id: rows
-                .iter()
-                .map(|r| r.id)
-                .max()
-                .map_or(0, |m| m.saturating_add(1)),
+            id,
             parent: 0,
             detail: format!(
-                "PRUNE ROW GROUPS OF {table} BY {lookup_table} FILTER ({kept} of {} kept)",
-                probe_stats.row_groups
+                "PRUNE ROW GROUPS OF {table} BY {} FILTER ({kept} of {} kept)",
+                build_tables.join(", "),
+                driving.table_stats().row_groups
             ),
         });
     }
@@ -506,61 +723,84 @@ fn explain_column_plan(
 
 /// `EXPLAIN` (bare opcode listing) for a Parquet/SQLite join (#770),
 /// mirroring [`explain_opcodes_query`] with the plan execution compiles:
-/// the SQLite build side is `"row"`, the Parquet probe and the body
-/// `"batch"`.
+/// each SQLite build side is `"row"`, the Parquet probe, any built Parquet
+/// table (#782) and the body `"batch"`.
 #[cfg(feature = "engine-column")]
 fn explain_column_opcodes(
-    driving: &BatchEngine,
+    tables: &[&BatchEngine],
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
     let stmt = single_statement(sql)?;
-    let select = resolve_cross_mode_group_by(
-        driving.parse_join(&stmt)?,
-        driving.table_name(),
-        driving.columns(),
-        lookup,
-    )?
-    .select;
-    check_single_join_explain(&select)?;
+    let ColumnQuery {
+        select,
+        probe,
+        builds,
+        ..
+    } = plan_column_query(tables, lookup, &stmt)?;
+    let driving = tables.get(probe).ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Compile,
+            "the chosen probe table is not in the session",
+        )
+    })?;
+    let built: Vec<&BatchEngine> = builds
+        .iter()
+        .filter_map(|&i| tables.get(i).copied())
+        .collect();
+    let built_names: Vec<String> = built.iter().map(|b| b.table_name().to_string()).collect();
     let table = driving.table_name();
-    let (_, plan) = plan_join(&select, table, lookup)?;
-    Ok(vec![
+    // (table, build program) per joined table, then the probe and the body.
+    let (build_sections, probe_program, body_program) = if join_count(&select) > 1 {
+        let plan = plan_multi_join(&select, table, lookup, &built_names)?;
+        let sections: Vec<(String, Vec<planner::OpcodeRow>)> = plan
+            .builds
+            .iter()
+            .map(|b| (b.table_name.clone(), planner::render_program(&b.build)))
+            .collect();
         (
-            "row",
-            planner::OpcodeSection {
-                label: "JOIN build (sqlite)".to_string(),
-                rows: planner::render_program(&plan.build),
-            },
-        ),
+            sections,
+            planner::render_program(&plan.probe),
+            planner::render_program(&plan.body),
+        )
+    } else {
+        let (name, plan) = plan_join(&select, table, lookup, &built_names)?;
         (
-            "batch",
-            planner::OpcodeSection {
-                label: format!("JOIN probe (parquet {table})"),
-                rows: planner::render_program(&plan.probe),
-            },
-        ),
-        (
-            "batch",
-            planner::OpcodeSection {
-                label: "JOIN body".to_string(),
-                rows: planner::render_program(&plan.body),
-            },
-        ),
-    ])
-}
-
-/// A star join's `EXPLAIN` is not supported, as for stream/SQLite (#394).
-#[cfg(feature = "engine-column")]
-fn check_single_join_explain(select: &Select) -> Result<(), EngineError> {
-    if join_count(select) > 1 {
-        return Err(EngineError::new(
-            ErrorKind::Unsupported,
-            "EXPLAIN for a multi-way Parquet/SQLite join is not yet \
-             supported; run the query directly instead",
-        ));
+            vec![(name, planner::render_program(&plan.build))],
+            planner::render_program(&plan.probe),
+            planner::render_program(&plan.body),
+        )
+    };
+    let mut sections: Vec<(&'static str, planner::OpcodeSection)> = Vec::new();
+    let only_one = build_sections.len() == 1;
+    for (name, rows) in build_sections {
+        let (mode, label) = if built
+            .iter()
+            .any(|b| b.table_name().eq_ignore_ascii_case(&name))
+        {
+            ("batch", format!("JOIN build (parquet {name})"))
+        } else if only_one {
+            ("row", "JOIN build (sqlite)".to_string())
+        } else {
+            ("row", format!("JOIN build (sqlite {name})"))
+        };
+        sections.push((mode, planner::OpcodeSection { label, rows }));
     }
-    Ok(())
+    sections.push((
+        "batch",
+        planner::OpcodeSection {
+            label: format!("JOIN probe (parquet {table})"),
+            rows: probe_program,
+        },
+    ));
+    sections.push((
+        "batch",
+        planner::OpcodeSection {
+            label: "JOIN body".to_string(),
+            rows: body_program,
+        },
+    ));
+    Ok(sections)
 }
 
 /// The probe-side `columns` named in a `JOIN`'s `ON`/`USING`: the columns
@@ -568,6 +808,20 @@ fn check_single_join_explain(select: &Select) -> Result<(), EngineError> {
 /// join only tests them for equality against a SQLite key stored the same
 /// way (#600).
 fn join_key_columns(select: &Select, columns: &[String]) -> Vec<String> {
+    let named = join_named_columns(select);
+    columns
+        .iter()
+        .filter(|c| {
+            named
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(c) || n.eq_ignore_ascii_case(split_qualified(c).1))
+        })
+        .cloned()
+        .collect()
+}
+
+/// The columns named in any `JOIN`'s `ON` or `USING`.
+fn join_named_columns(select: &Select) -> Vec<String> {
     let mut named: Vec<String> = Vec::new();
     for join in select.from.iter().flat_map(|f| &f.joins) {
         match &join.constraint {
@@ -578,15 +832,7 @@ fn join_key_columns(select: &Select, columns: &[String]) -> Vec<String> {
             None => {}
         }
     }
-    columns
-        .iter()
-        .filter(|c| {
-            named
-                .iter()
-                .any(|n| n.eq_ignore_ascii_case(c) || n.eq_ignore_ascii_case(split_qualified(c).1))
-        })
-        .cloned()
-        .collect()
+    named
 }
 
 fn join_count(select: &Select) -> usize {
@@ -599,8 +845,9 @@ fn plan_join(
     select: &Select,
     driving: &str,
     lookup: &RowEngine,
+    built: &[String],
 ) -> Result<(String, JoinProgram), EngineError> {
-    let lookup_table = resolve_sides(select, driving, lookup)?;
+    let lookup_table = resolve_sides(select, driving, lookup, built)?;
     let plan =
         planner::compile_join_build_side(select, &lookup_table, planner::BuildSourceKind::RowTable)
             .map_err(plan_err)?;
@@ -610,7 +857,7 @@ fn plan_join(
 /// Builds the lookup side from SQLite and probes it with `segments`.
 fn execute_join<S: VmSegment>(
     segments: Vec<S>,
-    lookup: &RowEngine,
+    load: &impl Fn(&str, &[String]) -> Result<Batch, EngineError>,
     headers: Vec<String>,
     lookup_table: &str,
     plan: &JoinProgram,
@@ -630,10 +877,11 @@ fn execute_join<S: VmSegment>(
     // Resolver<'a>` -- the qualified subset forbids the named lifetime
     // that would need (`make check-mvl-limit`).
     let resolver = |_source: &ScanSource| -> crate::vm::batch::Result<Batch> {
-        let batch = cross_mode::scan_table_as_batch(lookup, lookup_table, &raw_lookup_cols)
-            .map_err(|e| crate::vm::batch::VmError::SegmentLoad {
+        let batch = load(lookup_table, &raw_lookup_cols).map_err(|e| {
+            crate::vm::batch::VmError::SegmentLoad {
                 reason: e.to_string(),
-            })?;
+            }
+        })?;
         Ok(requalify(batch, &raw_lookup_cols, &plan.right_columns))
     };
     let source = ScanSource::RowTable {
@@ -668,15 +916,16 @@ fn plan_multi_join(
     select: &Select,
     driving: &str,
     lookup: &RowEngine,
+    built: &[String],
 ) -> Result<MultiJoinProgram, EngineError> {
-    let lookup_tables = resolve_multi_sides(select, driving, lookup)?;
+    let lookup_tables = resolve_multi_sides(select, driving, lookup, built)?;
     planner::compile_cross_mode_multi_join(select, &lookup_tables).map_err(plan_err)
 }
 
 /// [`execute_join`] for a star join.
 fn execute_multi_join<S: VmSegment>(
     segments: Vec<S>,
-    lookup: &RowEngine,
+    load: &impl Fn(&str, &[String]) -> Result<Batch, EngineError>,
     headers: Vec<String>,
     plan: &MultiJoinProgram,
 ) -> Result<QueryResult, EngineError> {
@@ -710,10 +959,8 @@ fn execute_multi_join<S: VmSegment>(
                 reason: format!("no planned build side for table `{table}`"),
             })?;
         let batch =
-            cross_mode::scan_table_as_batch(lookup, &build.table_name, raw).map_err(|e| {
-                crate::vm::batch::VmError::SegmentLoad {
-                    reason: e.to_string(),
-                }
+            load(&build.table_name, raw).map_err(|e| crate::vm::batch::VmError::SegmentLoad {
+                reason: e.to_string(),
             })?;
         Ok(requalify(batch, raw, &build.right_columns))
     };
@@ -750,7 +997,7 @@ pub fn explain_plan(
              not yet supported; run the query directly instead",
         ));
     }
-    let lookup_table = resolve_sides(&select, super::stream::TABLE, lookup)?;
+    let lookup_table = resolve_sides(&select, super::stream::TABLE, lookup, &[])?;
 
     let stream_stats = TableStats {
         source: Some(format!("stream {}", driving.path().display())),
@@ -1068,7 +1315,7 @@ fn explain_opcodes_query(
              supported; run the query directly instead",
         ));
     }
-    resolve_sides(&select, super::stream::TABLE, lookup)?;
+    resolve_sides(&select, super::stream::TABLE, lookup, &[])?;
     let plan =
         planner::compile_join(&select, planner::BuildSourceKind::RowTable).map_err(plan_err)?;
     Ok(vec![
@@ -1196,8 +1443,12 @@ pub enum CrossModeEngine {
     /// A Parquet `FROM` joined to SQLite lookup tables (#598).
     #[cfg(feature = "engine-column")]
     ColumnSqlite {
-        /// The Parquet file's engine, the probe side.
+        /// The Parquet file's engine, the probe side -- or, with `others`,
+        /// the first of the Parquet tables, one of which probes.
         driving: BatchEngine,
+        /// More Parquet tables (#782): the largest one the query is a star
+        /// around probes, and the rest build, next to the SQLite tables.
+        others: Vec<BatchEngine>,
         /// The SQLite lookup engine, the build side.
         lookup: RowEngine,
         /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
@@ -1233,6 +1484,33 @@ impl CrossModeEngine {
     pub fn open_column_sqlite(parquet: &Path, lookup_path: &Path) -> Result<Self, EngineError> {
         Ok(CrossModeEngine::ColumnSqlite {
             driving: BatchEngine::open(parquet)?,
+            others: Vec::new(),
+            lookup: RowEngine::open(lookup_path)?,
+            lookup_path: lookup_path.to_path_buf(),
+        })
+    }
+
+    /// [`CrossModeEngine::open_column_sqlite`] for several Parquet files
+    /// (#782): each is a table named after its stem. A query joining two of
+    /// them (and SQLite lookup tables) probes with the larger and builds the
+    /// other in memory. At least one file is required.
+    #[cfg(feature = "engine-column")]
+    pub fn open_column_tables_sqlite(
+        parquets: &[&Path],
+        lookup_path: &Path,
+    ) -> Result<Self, EngineError> {
+        let Some((first, rest)) = parquets.split_first() else {
+            return Err(EngineError::new(
+                ErrorKind::Open,
+                "a Parquet/SQLite engine needs at least one Parquet file",
+            ));
+        };
+        Ok(CrossModeEngine::ColumnSqlite {
+            driving: BatchEngine::open(first)?,
+            others: rest
+                .iter()
+                .map(|p| BatchEngine::open(p))
+                .collect::<Result<_, _>>()?,
             lookup: RowEngine::open(lookup_path)?,
             lookup_path: lookup_path.to_path_buf(),
         })
@@ -1270,8 +1548,17 @@ impl Engine for CrossModeEngine {
             } => run_query(driving, lookup, sql),
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
-                driving, lookup, ..
-            } => run_column_query(driving, lookup, sql),
+                driving,
+                others,
+                lookup,
+                ..
+            } => run_column_tables_query(
+                &std::iter::once(&*driving)
+                    .chain(others.iter())
+                    .collect::<Vec<&BatchEngine>>(),
+                lookup,
+                sql,
+            ),
             CrossModeEngine::StreamStream { left, right } => {
                 run_stream_stream_query(left, right, sql)
             }
@@ -1288,9 +1575,17 @@ impl Engine for CrossModeEngine {
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
                 driving,
+                others,
                 lookup,
                 lookup_path,
-            } => explain_column_plan(driving, lookup, lookup_path, sql),
+            } => explain_column_plan(
+                &std::iter::once(driving)
+                    .chain(others.iter())
+                    .collect::<Vec<&BatchEngine>>(),
+                lookup,
+                lookup_path,
+                sql,
+            ),
             CrossModeEngine::StreamStream { left, right } => {
                 explain_stream_stream_plan(left, right, sql)
             }
@@ -1304,8 +1599,17 @@ impl Engine for CrossModeEngine {
             } => explain_opcodes_query(driving, lookup, sql)?,
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
-                driving, lookup, ..
-            } => explain_column_opcodes(driving, lookup, sql)?,
+                driving,
+                others,
+                lookup,
+                ..
+            } => explain_column_opcodes(
+                &std::iter::once(driving)
+                    .chain(others.iter())
+                    .collect::<Vec<&BatchEngine>>(),
+                lookup,
+                sql,
+            )?,
             CrossModeEngine::StreamStream { left, .. } => {
                 explain_opcodes_stream_stream_query(left, sql)?
             }
@@ -1333,9 +1637,15 @@ impl Engine for CrossModeEngine {
             }
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
-                driving, lookup, ..
+                driving,
+                others,
+                lookup,
+                ..
             } => {
                 let mut tables = driving.tables()?;
+                for other in others {
+                    tables.extend(other.tables()?);
+                }
                 tables.extend(lookup.tables()?);
                 Ok(tables)
             }
