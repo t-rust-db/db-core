@@ -16,11 +16,14 @@
 //! directory the script compares: `production(id, region)`, ids 1..=5000,
 //! flushed in five files so DuckDB, which cannot read a WAL, sees every row.
 //!
-//! The first argument may name several Parquet files, comma-separated
-//! (#782): a query joining two of them probes with the larger.
+//! The first argument may name several tables, comma-separated, each a
+//! Parquet file or a table directory (#782): a query joining two of them
+//! probes with the larger. `--seed-extra-dir <dir>` writes the second
+//! directory the script compares: `extra(id, n)`, ids 1..=1000 three times
+//! each, flushed every 500 rows.
 //!
-//! Usage: `column_join_oracle <path.parquet>[,<more.parquet>...] | <table dir> <lookup.db> <sql>`
-//! or `column_join_oracle --seed-dir <dir>`
+//! Usage: `column_join_oracle <table>[,<more>...] <lookup.db> <sql>`
+//! or `column_join_oracle --seed-dir <dir>` / `--seed-extra-dir <dir>`
 
 use std::env;
 use std::path::Path;
@@ -63,11 +66,48 @@ fn seed_dir(dir: &Path) -> Result<(), String> {
     w.close().map_err(|e| e.to_string())
 }
 
+/// `extra(id, n)`: `n` in 0..3000, `id` = `n % 1000 + 1`, ordered by id then
+/// n, flushed every 500 rows.
+fn seed_extra_dir(dir: &Path) -> Result<(), String> {
+    let schema = vec![
+        ColumnSpec::new("id", ColumnType::Int64, false),
+        ColumnSpec::new("n", ColumnType::Int64, false),
+    ];
+    let mut w = TableWriter::open(
+        dir,
+        TableOptions {
+            schema: Some(schema),
+            ..TableOptions::default()
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    let mut rows: Vec<(i64, i64)> = (0..3000i64)
+        .map(|n| (n.rem_euclid(1000).saturating_add(1), n))
+        .collect();
+    rows.sort_unstable();
+    for (i, (id, n)) in rows.iter().enumerate() {
+        w.append_row(
+            vec![RecordValue::Int(*id), RecordValue::Int(*n)],
+            Ack::Durable,
+        )
+        .map_err(|e| e.to_string())?;
+        if i.saturating_add(1).checked_rem(500) == Some(0) {
+            w.flush_all().map_err(|e| e.to_string())?;
+        }
+    }
+    w.close().map_err(|e| e.to_string())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     if let [_, flag, dir] = args.as_slice() {
-        if flag == "--seed-dir" {
-            return match seed_dir(Path::new(dir)) {
+        let seed = match flag.as_str() {
+            "--seed-dir" => Some(seed_dir as fn(&Path) -> Result<(), String>),
+            "--seed-extra-dir" => Some(seed_extra_dir as fn(&Path) -> Result<(), String>),
+            _ => None,
+        };
+        if let Some(seed) = seed {
+            return match seed(Path::new(dir)) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("seed {dir}: {err}");
@@ -83,11 +123,10 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    let opened = if Path::new(parquet).is_dir() {
-        CrossModeEngine::open_table_sqlite(Path::new(parquet), Path::new(lookup))
-    } else {
-        let files: Vec<&Path> = parquet.split(',').map(Path::new).collect();
-        CrossModeEngine::open_column_tables_sqlite(&files, Path::new(lookup))
+    let tables: Vec<&Path> = parquet.split(',').map(Path::new).collect();
+    let opened = match tables.as_slice() {
+        [only] if only.is_dir() => CrossModeEngine::open_table_sqlite(only, Path::new(lookup)),
+        _ => CrossModeEngine::open_column_tables_sqlite(&tables, Path::new(lookup)),
     };
     let mut engine = match opened {
         Ok(e) => e,

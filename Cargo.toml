@@ -220,6 +220,11 @@ path = "tests/unit/engine_column_tables_join_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "storage-column-write"]
 
 [[test]]
+name = "unit_engine_snapshot_build_join"
+path = "tests/unit/engine_snapshot_build_join_test.rs"
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "storage-column-write", "ingest"]
+
+[[test]]
 name = "unit_vm_row_public_api"
 path = "tests/unit/vm_row_public_api_test.rs"
 

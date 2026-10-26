@@ -32,7 +32,12 @@ use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, Vfs
 use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
 use crate::vm::engine;
 
-#[cfg(feature = "ingest-read")]
+#[cfg(all(
+    feature = "ingest-read",
+    feature = "engine-row",
+    feature = "engine-stream",
+    feature = "vm-batch"
+))]
 use self::table::TableEngine;
 use super::{
     single_statement, Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow,
@@ -1007,6 +1012,12 @@ pub struct SnapshotSegment<'a, 'm>(TableSegment<'a, 'm>);
 #[cfg(feature = "ingest-read")]
 impl SnapshotSegment<'_, '_> {
     /// Whether this is a row group of a file, not a live page.
+    #[cfg(all(
+        feature = "ingest-read",
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
     pub(crate) fn is_row_group(&self) -> bool {
         matches!(self.0, TableSegment::RowGroup { .. })
     }
