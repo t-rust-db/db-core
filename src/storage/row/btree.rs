@@ -397,6 +397,110 @@ impl<P: PageSource> TableCursor<P> {
         }
     }
 
+    /// Positions the cursor at the first row whose rowid is `>= target`
+    /// (signed order) and returns it, or `None` if there is none. Rows
+    /// after it follow via [`Self::next`]. Resets any prior traversal
+    /// position (#600).
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "top = stack.len() - 1 after a push_page; always in bounds"
+    )]
+    pub fn seek_ge(&mut self, target: i64) -> Result<Option<i64>, BtreeError> {
+        self.stack.clear();
+        self.pages_visited = 0;
+        self.positioned_reverse = false;
+        self.push_page(self.root_page, false)?;
+        loop {
+            let top = self.stack.len().saturating_sub(1);
+            let (is_interior, num_cells, cell_ptr_base, rightmost, page_num, page) = {
+                let f = &self.stack[top];
+                (
+                    f.is_interior,
+                    f.num_cells,
+                    f.cell_ptr_base,
+                    f.rightmost,
+                    f.page_num,
+                    Rc::clone(&f.page),
+                )
+            };
+            // Leftmost cell index whose key is `>= target`.
+            let mut lo = 0usize;
+            let mut hi = num_cells;
+            while lo < hi {
+                let mid = lo.saturating_add(hi.saturating_sub(lo) / 2);
+                let cell_start =
+                    read_cell_pointer(&page, cell_ptr_offset(cell_ptr_base, mid), page_num, mid)?;
+                let key = if is_interior {
+                    let key_bytes = page.get(cell_start.saturating_add(4)..).ok_or(
+                        BtreeError::InvalidCellPointer {
+                            page_num,
+                            index: mid,
+                        },
+                    )?;
+                    let (key, _) = decode_varint(key_bytes)
+                        .map_err(|source| BtreeError::InvalidCellVarint { page_num, source })?;
+                    rowid_from_varint(key)
+                } else {
+                    decode_cell_head(&page, cell_start, page_num)?.0
+                };
+                if key >= target {
+                    hi = mid;
+                } else {
+                    lo = mid.saturating_add(1);
+                }
+            }
+            if !is_interior {
+                self.stack[top].next_cell = lo;
+                return self.advance();
+            }
+            let child = if lo < num_cells {
+                self.stack[top].next_cell = lo.saturating_add(1);
+                self.read_interior_child(top, lo)?
+            } else {
+                self.stack[top].next_cell = num_cells;
+                self.stack[top].rightmost_done = true;
+                rightmost
+            };
+            self.push_page(child, false)?;
+        }
+    }
+
+    /// Calls `f(key, self)` for every row whose rowid, read as a `u64`
+    /// bit pattern, lies in `lo..=hi`, in ascending *unsigned* order. Keys
+    /// at or above 2^63 are stored as negative `i64`s, so a range that
+    /// crosses 2^63 is two signed scans: the non-negative part first, then
+    /// the negative one (#600). `f` returns `false` to stop early.
+    pub fn scan_u64_range(
+        &mut self,
+        lo: u64,
+        hi: u64,
+        mut f: impl FnMut(u64, &mut Self) -> Result<bool, BtreeError>,
+    ) -> Result<(), BtreeError> {
+        if lo > hi {
+            return Ok(());
+        }
+        const SPLIT: u64 = 1 << 63;
+        let parts = [
+            (lo < SPLIT).then(|| (lo, hi.min(SPLIT - 1))),
+            (hi >= SPLIT).then(|| (lo.max(SPLIT), hi)),
+        ];
+        for (from, to) in parts.into_iter().flatten() {
+            // Each part is contiguous in signed order, so bound it there.
+            let to_signed = rowid_from_varint(to);
+            let mut cur = self.seek_ge(rowid_from_varint(from))?;
+            while let Some(rowid) = cur {
+                if rowid > to_signed {
+                    break;
+                }
+                if !f(rowid_to_varint(rowid), self)? {
+                    return Ok(());
+                }
+                cur = self.next()?;
+            }
+        }
+        Ok(())
+    }
+
     /// Convenience wrapper over [`Self::seek`] — see [`Self::first_row`].
     pub fn seek_row(&mut self, target_rowid: i64) -> Result<Option<TableRow>, BtreeError> {
         self.seek(target_rowid)?.map_or(Ok(None), |rowid| {
@@ -2093,6 +2197,107 @@ mod tests {
             "a6bedce1e512d6531cd02fe7a0b72bb64f229cdb254ec48d63308877004e620a"
         );
         assert!(cursor.next_row().unwrap().is_none());
+    }
+
+    /// A multi-level table keyed on `u64` values straddling 2^63 (#600).
+    fn u64_keyed_cursor() -> (
+        TableCursor<std::cell::RefCell<crate::storage::row::pager::Pager>>,
+        Vec<u64>,
+    ) {
+        let page_size = 512u32;
+        let (vfs, header) = test_minimal_db(page_size);
+        let mut pager =
+            crate::storage::row::pager::Pager::open(&vfs, Path::new("/test.db"), page_size)
+                .unwrap();
+        let root = schema::create_empty_table_root(&mut pager).unwrap();
+        let split = 1u64 << 63;
+        let mut keys: Vec<u64> = (0..300).map(|i| split - 300 + i).collect();
+        keys.extend((0..300).map(|i| split + i));
+        keys.push(u64::MAX);
+        for k in &keys {
+            table::insert_row(&mut pager, &header, root, rowid_from_varint(*k), &[7u8; 60])
+                .unwrap();
+        }
+        let cursor = TableCursor::new(std::cell::RefCell::new(pager), &header, root);
+        (cursor, keys)
+    }
+
+    fn collect_u64_range(
+        cursor: &mut TableCursor<std::cell::RefCell<crate::storage::row::pager::Pager>>,
+        lo: u64,
+        hi: u64,
+    ) -> Vec<u64> {
+        let mut got = Vec::new();
+        cursor
+            .scan_u64_range(lo, hi, |k, _| {
+                got.push(k);
+                Ok(true)
+            })
+            .unwrap();
+        got
+    }
+
+    #[test]
+    fn u64_keys_across_two_pow_63_seek_and_scan_in_unsigned_order() {
+        let (mut cursor, keys) = u64_keyed_cursor();
+        let split = 1u64 << 63;
+        // Point lookups on both sides of 2^63.
+        for k in [split - 1, split, u64::MAX] {
+            assert_eq!(
+                cursor.seek(rowid_from_varint(k)).unwrap(),
+                Some(rowid_from_varint(k))
+            );
+        }
+        assert_eq!(cursor.seek(rowid_from_varint(split + 1000)).unwrap(), None);
+        // Whole-table scan is ascending unsigned.
+        assert_eq!(collect_u64_range(&mut cursor, 0, u64::MAX), keys);
+        // A range crossing the boundary.
+        let want: Vec<u64> = keys
+            .iter()
+            .copied()
+            .filter(|k| (split - 5..=split + 5).contains(k))
+            .collect();
+        assert_eq!(collect_u64_range(&mut cursor, split - 5, split + 5), want);
+        assert_eq!(want.len(), 11);
+        // Ranges wholly on one side, an empty range, and an inverted one.
+        assert_eq!(
+            collect_u64_range(&mut cursor, split - 3, split - 1).len(),
+            3
+        );
+        assert_eq!(
+            collect_u64_range(&mut cursor, split + 297, u64::MAX).len(),
+            4
+        );
+        assert!(collect_u64_range(&mut cursor, split + 400, u64::MAX - 1).is_empty());
+        assert!(collect_u64_range(&mut cursor, 5, 4).is_empty());
+    }
+
+    #[test]
+    fn scan_u64_range_stops_when_the_callback_returns_false() {
+        let (mut cursor, _) = u64_keyed_cursor();
+        let mut n = 0;
+        cursor
+            .scan_u64_range(0, u64::MAX, |_, _| {
+                n += 1;
+                Ok(n < 3)
+            })
+            .unwrap();
+        assert_eq!(n, 3);
+    }
+
+    #[test]
+    fn seek_ge_lands_on_the_next_key_and_none_past_the_end() {
+        let (mut cursor, _) = u64_keyed_cursor();
+        // i64::MIN is the smallest signed key (= 2^63 unsigned).
+        assert_eq!(cursor.seek_ge(i64::MIN).unwrap(), Some(i64::MIN));
+        assert_eq!(cursor.next().unwrap(), Some(i64::MIN + 1));
+        assert_eq!(cursor.seek_ge(i64::MAX).unwrap(), Some(i64::MAX));
+        assert_eq!(cursor.next().unwrap(), None);
+        // -1 is u64::MAX; the next key in signed order is the lowest
+        // non-negative one, split - 300.
+        assert_eq!(cursor.seek_ge(-1).unwrap(), Some(-1));
+        assert_eq!(cursor.next().unwrap(), Some(i64::MAX - 299));
+        assert_eq!(cursor.seek_ge(i64::MIN).unwrap(), Some(i64::MIN));
     }
 
     #[test]
