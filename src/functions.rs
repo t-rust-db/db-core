@@ -1573,6 +1573,34 @@ pub(crate) fn is_numeric_scalar(name: &str, arity: usize) -> bool {
         .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
 }
 
+/// What `parser::column` lowers `CASE` to (#725): `__select(cond, then,
+/// else)`, one per `WHEN`, which the planner compiles to
+/// `Opcode::Select`. Not a function a query can usefully name; it is
+/// spelled so that no real one collides.
+#[cfg(feature = "parser-column")]
+pub(crate) const SELECT_FN: &str = "__select";
+
+/// Whether `name`/`arity` is a branching scalar of the column dialect
+/// (#725): the lowered `CASE`, `COALESCE` (two arguments or more) and
+/// `IFNULL`. `NULLIF` is lowered to a `CASE` before anything asks.
+#[cfg(feature = "parser-column")]
+pub(crate) fn is_branch_scalar(name: &str, arity: usize) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        SELECT_FN => arity == 3,
+        "coalesce" => arity >= 2,
+        "ifnull" => arity == 2,
+        _ => false,
+    }
+}
+
+/// Whether the column dialect takes any expression, an aggregate included,
+/// for each argument of `name`/`arity`: [`is_numeric_scalar`] and
+/// [`is_branch_scalar`].
+#[cfg(feature = "parser-column")]
+pub(crate) fn takes_any_expression(name: &str, arity: usize) -> bool {
+    is_numeric_scalar(name, arity) || is_branch_scalar(name, arity)
+}
+
 fn core_lookup(name: &str, arity: usize) -> Option<ScalarFn> {
     match (name, arity) {
         ("length", 1) => Some(length),

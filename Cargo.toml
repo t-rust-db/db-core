@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.185.0"
+version = "0.186.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -173,6 +173,11 @@ required-features = ["engine-stream"]
 name = "unit_engine_stream_summaries"
 path = "tests/unit/engine_stream_summaries_test.rs"
 required-features = ["engine-stream", "storage-test-support"]
+
+[[test]]
+name = "unit_engine_stream_case"
+path = "tests/unit/engine_stream_case_test.rs"
+required-features = ["engine-stream"]
 
 [[test]]
 name = "unit_engine_stream_windows"

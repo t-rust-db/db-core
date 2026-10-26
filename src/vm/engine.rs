@@ -112,13 +112,53 @@ impl Segment for InMemorySegment {
 ///   per segment and at the merge (#109) instead of materializing every
 ///   row before the final sort.
 pub fn run<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput> {
-    let output = run_page(segments, program)?;
+    let mut output = run_page(segments, program)?;
+    // #725: a `CASE`/`COALESCE` column types its branches by the values of
+    // each segment; one type for the whole column, as DuckDB gives it.
+    let (body, combine, ..) = program.split_finalize();
+    for column in branch_output_columns(&body, combine) {
+        output.unify_numeric_column("Select", column)?;
+    }
     // `LIMIT n OFFSET m` (#679): every path above kept the first `n + m`
     // rows; the first `m` are not part of the page.
     match program.instructions.last().map(|i| &i.opcode) {
         Some(Opcode::Limit { offset, .. }) if *offset > 0 => Ok(output.skip_rows(*offset)),
         _ => Ok(output),
     }
+}
+
+/// The output columns that are the result of an [`Opcode::Select`] (a
+/// `CASE`, a `COALESCE`): those `Emit`ted, by the program, or by the
+/// projection of its `Combine`. Aggregates and group keys are not.
+fn branch_output_columns(body: &[Opcode], combine: Option<&Opcode>) -> Vec<usize> {
+    let ops: &[Opcode] = match combine {
+        None => body,
+        Some(Opcode::Combine { project, .. }) if !project.is_empty() => project,
+        // A projection without aggregates or reordering: the `Emit` is the
+        // output.
+        Some(Opcode::Combine {
+            agg_parts,
+            output_order,
+            ..
+        }) if agg_parts.is_empty() && output_order.is_empty() => body,
+        Some(_) => return Vec::new(),
+    };
+    let Some(Opcode::Emit { registers }) = ops
+        .iter()
+        .rev()
+        .find(|op| matches!(op, Opcode::Emit { .. }))
+    else {
+        return Vec::new();
+    };
+    registers
+        .iter()
+        .enumerate()
+        .filter(|(_, reg)| {
+            ops.iter()
+                .any(|op| matches!(op, Opcode::Select { dst, .. } if dst == *reg))
+        })
+        .map(|(column, _)| column)
+        .collect()
 }
 
 /// [`run`] up to the end of the page: a `LIMIT n OFFSET m` keeps the first
@@ -990,6 +1030,76 @@ pub fn semi_filter(batch: &Batch, key_column: &str, allowed: &HashSet<String>) -
 
 #[cfg(test)]
 mod tests {
+    /// A `Select` into register 3, `Emit`ted as column 0 next to a plain
+    /// register at column 1.
+    fn emits_a_select() -> Vec<Opcode> {
+        let plain = |out| crate::vm::batch::Branch {
+            ops: std::borrow::Cow::Borrowed(&[]),
+            out,
+            inputs: std::borrow::Cow::Borrowed(&[]),
+        };
+        vec![
+            Opcode::Select {
+                dst: 3,
+                cond: 0,
+                then: plain(1),
+                else_: plain(2),
+            },
+            Opcode::Emit {
+                registers: vec![3, 1].into(),
+            },
+        ]
+    }
+
+    fn combine_of(
+        agg_parts: Vec<AggPart>,
+        output_order: Vec<usize>,
+        project: Vec<Opcode>,
+    ) -> Opcode {
+        Opcode::Combine {
+            agg_parts: agg_parts.into(),
+            num_group_keys: 0,
+            distinct: false,
+            output_order: output_order.into(),
+            project: project.into(),
+        }
+    }
+
+    // vm_engine_branch_output_columns_83d0052f:
+    // `agg_parts.is_empty() && output_order.is_empty()`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_branch_output_columns_83d0052f__v1_a_plain_projection_emits_its_selects() {
+        let body = emits_a_select();
+        let combine = combine_of(vec![], vec![], vec![]);
+        assert_eq!(branch_output_columns(&body, Some(&combine)), vec![0]);
+        // No Combine at all is the same.
+        assert_eq!(branch_output_columns(&body, None), vec![0]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_branch_output_columns_83d0052f__v2_a_reordering_combine_is_left_alone() {
+        let body = emits_a_select();
+        let combine = combine_of(vec![], vec![1, 0], vec![]);
+        assert!(branch_output_columns(&body, Some(&combine)).is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_branch_output_columns_83d0052f__v3_an_aggregate_has_no_select_columns() {
+        let body = emits_a_select();
+        let combine = combine_of(vec![AggPart::Sum], vec![], vec![]);
+        assert!(branch_output_columns(&body, Some(&combine)).is_empty());
+    }
+
+    /// With a projection, its `Emit` is the output, not the body's.
+    #[test]
+    fn a_projection_decides_the_output_columns() {
+        let combine = combine_of(vec![AggPart::Sum], vec![], emits_a_select());
+        assert_eq!(branch_output_columns(&[], Some(&combine)), vec![0]);
+    }
+
     use super::*;
 
     /// #643 review: one segment of several `SLICE_ROWS` slices, whose keys

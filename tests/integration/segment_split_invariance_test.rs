@@ -1628,3 +1628,76 @@ fn batch_round_over_an_aggregate_is_segment_split_invariant() {
         );
     }
 }
+
+/// #725: `CASE`, `COALESCE` and `NULLIF` over a column and over aggregates
+/// give the same answers, and the same types, under every split -- also
+/// where a segment holds only NULLs of a column that a branch mixes with a
+/// literal of another numeric type (`coalesce(amt, 0)`).
+#[test]
+fn batch_case_and_coalesce_are_segment_split_invariant() {
+    let grp: Vec<Value> = ["a"; 6].iter().map(|g| Value::Str((*g).into())).collect();
+    let amt = vec![
+        Value::Float(2.5),
+        Value::Float(-2.5),
+        Value::Float(0.5),
+        Value::Float(1.2345),
+        Value::Null,
+        Value::Float(-7.0),
+    ];
+    let text = |s: &'static str| vec![Value::Str(s.into())];
+    let floats =
+        |xs: &[f64]| -> Vec<Vec<Value>> { xs.iter().map(|f| vec![Value::Float(*f)]).collect() };
+    let cases: [(&str, Vec<Vec<Value>>); 8] = [
+        (
+            "SELECT CASE WHEN amt > 0 THEN 'pos' WHEN amt < 0 THEN 'neg' ELSE 'none' END FROM t",
+            ["pos", "neg", "pos", "pos", "none", "neg"]
+                .iter()
+                .map(|s| text(s))
+                .collect(),
+        ),
+        (
+            "SELECT coalesce(amt, 0) FROM t",
+            floats(&[2.5, -2.5, 0.5, 1.2345, 0.0, -7.0]),
+        ),
+        (
+            "SELECT CASE WHEN amt > 0 THEN amt ELSE 0 END FROM t",
+            floats(&[2.5, 0.0, 0.5, 1.2345, 0.0, 0.0]),
+        ),
+        (
+            "SELECT nullif(amt, 0.5) FROM t WHERE amt > 0",
+            vec![
+                vec![Value::Float(2.5)],
+                vec![Value::Null],
+                vec![Value::Float(1.2345)],
+            ],
+        ),
+        (
+            "SELECT sum(CASE WHEN amt > 0 THEN 1 ELSE 0 END), count(CASE WHEN amt < 0 THEN amt END) FROM t",
+            vec![vec![Value::Int(3), Value::Int(2)]],
+        ),
+        (
+            "SELECT sum(coalesce(amt, 0)) FROM t",
+            floats(&[2.5 - 2.5 + 0.5 + 1.2345 - 7.0]),
+        ),
+        (
+            "SELECT grp, CASE WHEN sum(amt) > 0 THEN 'pos' ELSE 'neg' END, coalesce(max(amt), 0) FROM t GROUP BY grp",
+            vec![vec![
+                Value::Str("a".into()),
+                Value::Str("neg".into()),
+                Value::Float(2.5),
+            ]],
+        ),
+        (
+            "SELECT coalesce(amt, 1, 2) FROM t WHERE amt IS NULL",
+            vec![vec![Value::Int(1)]],
+        ),
+    ];
+    for (sql, expected) in cases {
+        assert_split_invariant(sql, grp.len(), ("grp", &grp), ("amt", &amt));
+        assert_eq!(
+            run_batch(sql, &[2, 4], ("grp", &grp), ("amt", &amt)),
+            expected,
+            "{sql}"
+        );
+    }
+}

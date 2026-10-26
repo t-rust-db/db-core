@@ -107,3 +107,11 @@ SELECT printf('%.20f', 0.1), printf('%!.20f', 0.1), printf('%.30e', 1.0/3), prin
 SELECT printf('%.15e', 8.4078294533149885e-75), printf('%.16e', 8.4078294533149885e-75), printf('%.17g', 5.2295200268936635e-170)
 SELECT printf('%.0e', 450.0), printf('%.0e', 2.5), printf('%.1e', 1.25), printf('%e', 677241850.0), printf('%e', 14486750.0 * 10 + 5)
 SELECT printf('%#.19f', -6.168746456732363e-21), printf('%.19f', -6.168746456732363e-21), printf('%#.1f', -0.04), printf('%#.2e', -1e-300)
+-- CASE and the COALESCE family on the row engine (#725): no ELSE, NULL
+-- conditions and operands, mixed branch types, laziness
+SELECT CASE WHEN 1 THEN 'a' END, CASE WHEN 0 THEN 'a' END, CASE WHEN NULL THEN 'a' ELSE 'b' END
+SELECT CASE NULL WHEN NULL THEN 'm' ELSE 'n' END, CASE 1 WHEN 1 THEN 'one' WHEN 1 THEN 'dup' END, CASE 2 WHEN 1 THEN 'x' END
+SELECT CASE WHEN 1 THEN 1 ELSE 2.5 END, CASE WHEN 0 THEN 1 ELSE 2.5 END, typeof(CASE WHEN 1 THEN 1 ELSE 'x' END)
+SELECT coalesce(NULL, NULL, 3), coalesce(NULL, 'a', 1), ifnull(NULL, 2.5), ifnull(1, 1 / 0)
+SELECT nullif(1, 1), nullif(1, 2), nullif('a', 'A'), nullif(NULL, 1), nullif(1, NULL), nullif(1, 1.0)
+SELECT coalesce(1, abs(-9223372036854775807 - 2)), CASE WHEN 1 THEN 1 ELSE abs(-9223372036854775807 - 2) END

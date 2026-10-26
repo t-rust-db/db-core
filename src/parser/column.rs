@@ -270,7 +270,10 @@ fn resolve_expr_aliases(expr: &mut AstExpr, aliases: &HashMap<String, String>) {
 /// Lowers every `x IN (a, b, ...)` and `x NOT IN (a, b, ...)` in `select` to
 /// an `OR` chain of equalities and an `AND` chain of inequalities (#716),
 /// and every `x [NOT] BETWEEN lo AND hi` to two comparisons (#717), so the
-/// planner, the VM and the stream engine only ever see comparisons.
+/// planner, the VM and the stream engine only ever see comparisons. A
+/// `CASE` becomes nested `__select(cond, then, else)` calls, a simple one
+/// comparing its operand with each `WHEN` value, and `NULLIF(a, b)` the
+/// `CASE WHEN a = b THEN NULL ELSE a END` (#725).
 /// Three-valued logic gives DuckDB's NULL behaviour: `x IN (1, NULL)` is
 /// TRUE or NULL, `x NOT IN (1, NULL)` is never TRUE, a NULL `x` is NULL.
 /// It runs before validation, which checks some positions (HAVING, an
@@ -416,8 +419,90 @@ fn lower_in_between_expr(expr: &mut AstExpr) -> Result<()> {
         {
             *expr = lower_between(span, *subject, *lo, *hi, negated);
         }
+    } else if matches!(expr.kind, ExprKind::Case { .. }) {
+        let span = expr.span;
+        let kind = std::mem::replace(&mut expr.kind, ExprKind::Literal(AstLiteral::Null));
+        if let ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } = kind
+        {
+            *expr = lower_case(span, operand.map(|o| *o), whens, else_.map(|e| *e));
+        }
+    } else if let ExprKind::FunctionCall {
+        name,
+        args: FunctionArgs::List(list),
+        tail: None,
+        ..
+    } = &mut expr.kind
+    {
+        if name.eq_ignore_ascii_case("nullif") && list.len() == 2 {
+            let (b, a) = (list.pop(), list.pop());
+            if let (Some(a), Some(b)) = (a, b) {
+                let span = expr.span;
+                let null = AstExpr {
+                    span,
+                    kind: ExprKind::Literal(AstLiteral::Null),
+                };
+                let equal = AstExpr {
+                    span,
+                    kind: ExprKind::Binary {
+                        op: AstBinOp::Eq,
+                        lhs: Box::new(a.clone()),
+                        rhs: Box::new(b),
+                    },
+                };
+                *expr = select_call(span, equal, null, a);
+            }
+        }
     }
     Ok(())
+}
+
+/// `__select(cond, then, otherwise)` (see [`crate::functions::SELECT_FN`]).
+fn select_call(span: Span, cond: AstExpr, then: AstExpr, otherwise: AstExpr) -> AstExpr {
+    AstExpr {
+        span,
+        kind: ExprKind::FunctionCall {
+            name: crate::functions::SELECT_FN.to_string(),
+            distinct: false,
+            args: FunctionArgs::List(vec![cond, then, otherwise]),
+            tail: None,
+        },
+    }
+}
+
+/// `CASE [operand] WHEN c1 THEN r1 WHEN c2 THEN r2 ... [ELSE e] END` as
+/// `__select(c1, r1, __select(c2, r2, ... e))`, a missing `ELSE` being NULL.
+/// A simple `CASE` compares `operand` with each `WHEN` value, so a NULL
+/// operand or value never matches, as in DuckDB. The operand is repeated,
+/// like an `IN` subject (see [`lower_in_between_expr`]).
+fn lower_case(
+    span: Span,
+    operand: Option<AstExpr>,
+    whens: Vec<(AstExpr, AstExpr)>,
+    else_: Option<AstExpr>,
+) -> AstExpr {
+    let mut result = else_.unwrap_or(AstExpr {
+        span,
+        kind: ExprKind::Literal(AstLiteral::Null),
+    });
+    for (cond, then) in whens.into_iter().rev() {
+        let cond = match &operand {
+            Some(operand) => AstExpr {
+                span: cond.span,
+                kind: ExprKind::Binary {
+                    op: AstBinOp::Eq,
+                    lhs: Box::new(operand.clone()),
+                    rhs: Box::new(cond),
+                },
+            },
+            None => cond,
+        };
+        result = select_call(span, cond, then, result);
+    }
+    result
 }
 
 /// `subject BETWEEN lo AND hi` as `subject >= lo AND subject <= hi`, or,
@@ -658,7 +743,7 @@ pub(crate) fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
         ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
-    ) || crate::functions::is_numeric_scalar(name, arity)
+    ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::MAP_FUNCTIONS
             .iter()
             .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
@@ -687,7 +772,7 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                 args,
                 tail: None,
                 ..
-            } if crate::functions::is_numeric_scalar(name, arg_count(args)) => {
+            } if crate::functions::takes_any_expression(name, arg_count(args)) => {
                 validate_expr(expr, true)
             }
             ExprKind::FunctionCall {
@@ -1013,8 +1098,9 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
             args: FunctionArgs::List(args),
             tail: None,
         } if is_known_scalar_function(name, args.len()) => {
-            // Only a numeric scalar may wrap an aggregate (#788).
-            let allow = allow_agg && crate::functions::is_numeric_scalar(name, args.len());
+            // Only a numeric or branching scalar may wrap an aggregate
+            // (#788, #725).
+            let allow = allow_agg && crate::functions::takes_any_expression(name, args.len());
             args.iter_mut().try_for_each(|a| validate_expr(a, allow))
         }
         other => Err(unsupported(
@@ -1617,6 +1703,108 @@ mod tests {
             format!("{expr}"),
             "map_get_ci(h, 'k') >= 'a' AND map_get_ci(h, 'k') <= 'b'"
         );
+    }
+
+    /// #725: `CASE` is `__select(cond, then, else)`, one per `WHEN`, NULL
+    /// for a missing `ELSE`, in every position an expression sits.
+    #[test]
+    fn case_is_lowered_to_nested_selects_everywhere() {
+        let where_of = |sql: &str| format!("{}", parse(sql).unwrap().where_clause.unwrap());
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE CASE WHEN a > 1 THEN b ELSE c END"),
+            "__select(a > 1, b, c)"
+        );
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE CASE WHEN a > 1 THEN b END"),
+            "__select(a > 1, b, NULL)"
+        );
+        assert_eq!(
+            where_of(
+                "SELECT a FROM t WHERE CASE WHEN a > 1 THEN 1 WHEN a > 0 THEN 2 ELSE 3 END = 2"
+            ),
+            "__select(a > 1, 1, __select(a > 0, 2, 3)) = 2"
+        );
+        // A simple CASE compares its operand with each WHEN value.
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE CASE a WHEN 1 THEN 'x' WHEN NULL THEN 'y' END = 'x'"),
+            "__select(a = 1, 'x', __select(a = NULL, 'y', NULL)) = 'x'"
+        );
+        // Under another CASE, an IN list and a BETWEEN.
+        assert_eq!(
+            where_of(
+                "SELECT a FROM t WHERE CASE WHEN a IN (1, 2) THEN a BETWEEN 0 AND 5 ELSE false END"
+            ),
+            "__select(a = 1 OR a = 2, a >= 0 AND a <= 5, FALSE)"
+        );
+
+        let select = parse(
+            "SELECT sum(CASE WHEN a > 0 THEN 1 ELSE 0 END) FROM t GROUP BY b HAVING CASE WHEN sum(a) > 1 THEN true ELSE false END",
+        )
+        .unwrap();
+        assert_eq!(
+            format!("{}", select.having.unwrap()),
+            "__select(sum(a) > 1, TRUE, FALSE)"
+        );
+        let ResultColumn::Expr { expr, .. } = &select.columns[0] else {
+            panic!("expected an expression column");
+        };
+        assert_eq!(format!("{expr}"), "sum(__select(a > 0, 1, 0))");
+    }
+
+    /// #725: `NULLIF(a, b)` is `CASE WHEN a = b THEN NULL ELSE a END`;
+    /// `COALESCE` and `IFNULL` stay calls the planner compiles itself.
+    #[test]
+    fn nullif_is_lowered_and_coalesce_is_kept() {
+        let where_of = |sql: &str| format!("{}", parse(sql).unwrap().where_clause.unwrap());
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE NULLIF(a, 0) > 1"),
+            "__select(a = 0, NULL, a) > 1"
+        );
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE COALESCE(a, b, 0) > 1"),
+            "COALESCE(a, b, 0) > 1"
+        );
+        assert_eq!(
+            where_of("SELECT a FROM t WHERE IFNULL(a, 0) > 1"),
+            "IFNULL(a, 0) > 1"
+        );
+        // One argument is not a COALESCE of the dialect.
+        assert!(parse("SELECT a FROM t WHERE COALESCE(a) > 1").is_err());
+        // A branching scalar may wrap an aggregate, like ROUND (#788).
+        assert!(parse("SELECT COALESCE(sum(a), 0) FROM t").is_ok());
+        assert!(parse("SELECT CASE WHEN sum(a) > 1 THEN 1 ELSE 0 END FROM t").is_ok());
+        // ...but not in a WHERE.
+        assert!(parse("SELECT a FROM t WHERE COALESCE(sum(a), 0) > 1").is_err());
+    }
+
+    // parser_column_lower_in_between_expr_4b4fcdd9 (the NULLIF arm):
+    // `name.eq_ignore_ascii_case("nullif") && list.len() == 2`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_between_expr_4b4fcdd9__v1_nullif_of_two_is_lowered() {
+        let where_clause = parse("SELECT a FROM t WHERE nullif(a, 0) > 1")
+            .unwrap()
+            .where_clause
+            .unwrap();
+        assert_eq!(format!("{where_clause}"), "__select(a = 0, NULL, a) > 1");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_between_expr_4b4fcdd9__v2_nullif_of_one_is_left_to_be_refused()
+    {
+        // Not lowered, and no such function in the dialect.
+        assert!(parse("SELECT a FROM t WHERE nullif(a) > 1").is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_between_expr_4b4fcdd9__v3_another_function_is_kept() {
+        let where_clause = parse("SELECT a FROM t WHERE abs(a) > 1")
+            .unwrap()
+            .where_clause
+            .unwrap();
+        assert_eq!(format!("{where_clause}"), "abs(a) > 1");
     }
 
     /// #716: an `IN` list is left alone where it is not the column
@@ -2803,6 +2991,17 @@ mod tests {
         assert!(!dbg.contains("table: Some(\"i\")"), "{dbg}");
     }
 
+    /// #725: `CASE` is in the subset now; its operand, conditions and
+    /// results are resolved like any other expression's columns.
+    #[test]
+    fn alias_resolves_inside_a_case() {
+        let q = assert_alias_resolved(
+            "SELECT CASE o.a WHEN o.b THEN o.c ELSE o.d END FROM orders o WHERE CASE WHEN o.e > 1 THEN o.f ELSE o.g END",
+        );
+        let dbg = format!("{q:?}");
+        assert!(dbg.contains("table: Some(\"orders\")"), "{dbg}");
+    }
+
     #[test]
     fn alias_resolution_walks_shapes_the_subset_then_rejects() {
         // Resolution runs before validation, so these arms of
@@ -2811,7 +3010,6 @@ mod tests {
         // outcome, the walk is the point.
         for sql in [
             "SELECT o.id FROM orders o WHERE o.name LIKE o.p ESCAPE '\\'",
-            "SELECT CASE o.a WHEN o.b THEN o.c ELSE o.d END FROM orders o",
             "SELECT CAST(o.a AS INTEGER) FROM orders o",
             "SELECT o.id FROM orders o WHERE o.a COLLATE NOCASE = 'x'",
             "SELECT o.id FROM orders o WHERE o.a IS o.b",
