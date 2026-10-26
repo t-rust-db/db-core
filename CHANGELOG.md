@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.185.0] - 2026-10-26
+
+### Added
+
+- A Parquet/SQLite star join may name a second Parquet table: the larger one probes, the smaller builds in memory, and a filter on the built table prunes the probe's row groups. `EXPLAIN` covers star joins and shows which side probes (#782).
+
 ## [0.184.0] - 2026-10-26
 
 ### Added
