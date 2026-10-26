@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.186.0"
+version = "0.187.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -210,6 +210,11 @@ path = "tests/unit/engine_column_join_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch"]
 
 [[test]]
+name = "unit_engine_table_join"
+path = "tests/unit/engine_table_join_test.rs"
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "ingest"]
+
+[[test]]
 name = "unit_engine_column_tables_join"
 path = "tests/unit/engine_column_tables_join_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "storage-column-write"]
@@ -326,7 +331,7 @@ required-features = ["storage-column-write", "engine-column"]
 
 [[example]]
 name = "column_join_oracle"
-required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch"]
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "ingest"]
 
 [[example]]
 name = "row_oracle"

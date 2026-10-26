@@ -14,7 +14,7 @@
 //! rows of its left side, so with one in the query the `FROM` table alone
 //! may probe and nothing is rewritten.
 
-use crate::engine::column::BatchEngine;
+use super::ColumnSource;
 use crate::engine::{EngineError, ErrorKind};
 use crate::parser::ast::{
     BinaryOp, Expr, ExprKind, FromClause, Join, JoinConstraint, JoinOp, Select, TableRef,
@@ -25,7 +25,7 @@ use crate::parser::ast::{
 /// one Parquet table is returned as it is.
 pub(super) fn choose_probe(
     select: Select,
-    tables: &[&BatchEngine],
+    tables: &[ColumnSource<'_>],
 ) -> Result<(Select, usize), EngineError> {
     let Some(from) = &select.from else {
         return Ok((select, 0));
