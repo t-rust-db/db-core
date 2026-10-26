@@ -644,6 +644,28 @@ fn explain_labels_each_side_by_source_mode_and_file() {
     );
 }
 
+/// #789: the stream probe reports the lookup table's real row count too.
+#[test]
+fn explain_plan_reports_the_stream_probes_lookup_row_count() {
+    let db = HostsDb::new("explain-rows");
+    let driving = StreamEngine::open(Path::new(LOG_FIXTURE)).expect("open log fixture");
+    let lookup = RowEngine::open(db.path()).expect("open hosts db");
+
+    let plan = explain_plan(
+        &driving,
+        &lookup,
+        db.path(),
+        "SELECT log.hostname, hosts.region FROM log JOIN hosts ON log.hostname = hosts.name",
+    )
+    .expect("explain cross-mode join");
+    let scan = plan
+        .iter()
+        .map(|n| n.detail.as_str())
+        .find(|d| d.starts_with("SCAN hosts"))
+        .expect("a SQLite SCAN line");
+    assert!(scan.starts_with("SCAN hosts (~2 rows) [sqlite "), "{scan}");
+}
+
 // --- Windowed stream-to-stream joins (ADR-0022, #372) ---
 
 fn temp_log(name: &str, text: &str) -> PathBuf {

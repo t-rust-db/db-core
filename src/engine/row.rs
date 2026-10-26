@@ -279,6 +279,35 @@ impl RowEngine {
             .ok_or_else(|| EngineError::new(ErrorKind::Compile, format!("no such table: {table}")))
     }
 
+    /// How many rows `table` holds, for a cross-mode `EXPLAIN` (#789): the
+    /// row count `ANALYZE` recorded in `sqlite_stat1` when there is one
+    /// (no scan), else an exact `COUNT(*)`.
+    #[cfg(any(feature = "vm-batch", test))]
+    pub(crate) fn table_row_count(&self, table: &str) -> Result<i64, EngineError> {
+        let catalog = self.catalog()?;
+        let analyzed = self
+            .stats_by_table(&catalog.0)
+            .get(table)
+            .and_then(Stats::table_rows);
+        if let Some(rows) = analyzed {
+            return Ok(i64::try_from(rows).unwrap_or(i64::MAX));
+        }
+        let sql = format!("SELECT COUNT(*) FROM \"{}\"", table.replace('"', "\"\""));
+        let select = Self::parse_select_or_err(&sql)?;
+        match self
+            .run_select(&select, &sql, &catalog)?
+            .rows
+            .first()
+            .and_then(|r| r.first())
+        {
+            Some(Cell::Int(n)) => Ok(*n),
+            other => Err(EngineError::new(
+                ErrorKind::Execute,
+                format!("COUNT(*) over `{table}` returned {other:?}, not an integer"),
+            )),
+        }
+    }
+
     /// Runs `f` with this engine's shared pager and header -- the only
     /// storage access `engine::cross_mode`'s adapter needs for a read-only
     /// whole-table scan.

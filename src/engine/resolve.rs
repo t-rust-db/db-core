@@ -410,6 +410,21 @@ pub fn run_column_query(
     )
 }
 
+/// What `EXPLAIN`'s `SCAN` line reports for a SQLite lookup table (#789):
+/// its real row count, and no row groups -- a SQLite table has none, which
+/// the renderer drops from the line for a `sqlite` source.
+fn sqlite_scan_stats(
+    lookup: &RowEngine,
+    table: &str,
+    lookup_file: &Path,
+) -> Result<TableStats, EngineError> {
+    Ok(TableStats {
+        row_groups: 0,
+        rows: lookup.table_row_count(table)?,
+        source: Some(format!("sqlite {}", lookup_file.display())),
+    })
+}
+
 /// `EXPLAIN QUERY PLAN` for a Parquet/SQLite join (#770), labelling each
 /// side by mode and file as [`explain_plan`] does for stream/SQLite, plus
 /// a row for the row-group pruning the `WHERE` implies on the Parquet file
@@ -437,11 +452,7 @@ fn explain_column_plan(
         source: Some(format!("batch {}", driving.path().display())),
         ..driving.table_stats()
     };
-    let lookup_stats = TableStats {
-        row_groups: 1,
-        rows: 0,
-        source: Some(format!("sqlite {}", lookup_file.display())),
-    };
+    let lookup_stats = sqlite_scan_stats(lookup, &lookup_table, lookup_file)?;
     let nodes = planner::explain(&select, |name| {
         if name.eq_ignore_ascii_case(table) {
             probe_stats.clone()
@@ -745,11 +756,7 @@ pub fn explain_plan(
         source: Some(format!("stream {}", driving.path().display())),
         ..driving.table_stats()
     };
-    let lookup_stats = TableStats {
-        row_groups: 1,
-        rows: 0,
-        source: Some(format!("sqlite {}", lookup_file.display())),
-    };
+    let lookup_stats = sqlite_scan_stats(lookup, &lookup_table, lookup_file)?;
 
     let nodes = planner::explain(&select, |table| {
         if table.eq_ignore_ascii_case(super::stream::TABLE) {
