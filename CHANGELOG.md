@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.184.0] - 2026-10-26
+
+### Added
+
+- Column dialect and batch VM: `ROUND(x)`, `ROUND(x, n)` and `ABS(x)`, including over aggregates such as `ROUND(SUM(x) / 100.0, 2)`; they match sqlite3 on half-way cases (2.5, −2.5) and NULL (#788).
+
 ## [0.183.0] - 2026-10-26
 
 ### Changed

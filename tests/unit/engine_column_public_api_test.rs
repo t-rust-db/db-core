@@ -313,6 +313,44 @@ fn explain_opcodes_returns_the_sections_the_engine_runs() {
     );
 }
 
+/// #788: `ROUND` over Parquet, plain and around an aggregate -- the shape
+/// `ROUND(SUM(amount) / 100.0, 2)` the column dialect used to refuse as an
+/// unknown function.
+#[test]
+fn round_works_over_a_parquet_column_and_around_an_aggregate() {
+    let mut e = BatchEngine::open(Path::new(FIXTURE)).unwrap();
+    let raw = e
+        .run_query("SELECT amount FROM production ORDER BY id")
+        .unwrap()
+        .rows;
+    let rounded = e
+        .run_query("SELECT round(amount, 1) FROM production ORDER BY id")
+        .unwrap()
+        .rows;
+    assert_eq!(raw.len(), rounded.len());
+    for (r, got) in raw.iter().zip(&rounded) {
+        let Cell::Real(x) = r[0] else {
+            panic!("amount is not a REAL: {:?}", r[0]);
+        };
+        assert_eq!(got[0], Cell::Real((x * 10.0).round() / 10.0));
+    }
+    let total: f64 = raw
+        .iter()
+        .map(|r| match r[0] {
+            Cell::Real(x) => x,
+            _ => 0.0,
+        })
+        .sum();
+    let got = e
+        .run_query("SELECT round(sum(amount) / 100.0, 2) FROM production")
+        .unwrap()
+        .rows;
+    assert_eq!(
+        got,
+        vec![vec![Cell::Real(((total / 100.0) * 100.0).round() / 100.0)]]
+    );
+}
+
 #[test]
 fn explain_rejects_what_run_query_rejects() {
     let e = open();

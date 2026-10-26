@@ -1557,6 +1557,22 @@ fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
 }
 
 /// The functions ported from sqlite-rs (#64, #68, #90) and #307's.
+/// The numeric scalars the column dialect and batch VM take over the row
+/// engine's kernels (#788), by name and arity: unlike `json_extract` and
+/// friends, they accept any expression for an argument, an aggregate
+/// included (`ROUND(SUM(x) / 100.0, 2)`). The parser's and the planner's
+/// allow-lists both read this one table.
+#[cfg(feature = "parser-column")]
+pub(crate) const NUMERIC_SCALARS: [(&str, usize); 3] = [("round", 1), ("round", 2), ("abs", 1)];
+
+/// Whether `name`/`arity` is one of [`NUMERIC_SCALARS`].
+#[cfg(feature = "parser-column")]
+pub(crate) fn is_numeric_scalar(name: &str, arity: usize) -> bool {
+    NUMERIC_SCALARS
+        .iter()
+        .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
+}
+
 fn core_lookup(name: &str, arity: usize) -> Option<ScalarFn> {
     match (name, arity) {
         ("length", 1) => Some(length),

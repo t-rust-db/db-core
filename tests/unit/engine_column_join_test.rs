@@ -239,6 +239,55 @@ fn explain_plan_labels_both_sides_by_mode_and_file() {
     );
 }
 
+/// #788: `ROUND`/`ABS` work in a Parquet ⋈ SQLite join -- over a probe
+/// column, over a lookup column's join, and wrapped round an aggregate.
+#[test]
+fn numeric_scalars_work_in_a_parquet_sqlite_join() {
+    let db = LookupDb::new("round-join");
+    let mut e = db.engine();
+    let raw = rows(
+        &mut e,
+        "SELECT production.amount FROM production \
+         JOIN labels ON production.id = labels.id ORDER BY production.id",
+    );
+    let half_away = |x: f64, places: i32| {
+        let scale = 10f64.powi(places);
+        (x * scale).round() / scale
+    };
+    let want: Vec<Vec<Cell>> = raw
+        .iter()
+        .map(|r| match &r[0] {
+            Cell::Real(x) => vec![Cell::Real(half_away(*x, 1)), Cell::Real(x.abs())],
+            other => panic!("amount is not a REAL: {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT round(production.amount, 1), abs(production.amount) FROM production \
+             JOIN labels ON production.id = labels.id ORDER BY production.id",
+        ),
+        want
+    );
+
+    // The money shape: a rounded aggregate over the join.
+    let total: f64 = raw
+        .iter()
+        .map(|r| match &r[0] {
+            Cell::Real(x) => *x,
+            other => panic!("{other:?}"),
+        })
+        .sum();
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT round(sum(production.amount) / 100.0, 2) FROM production \
+             JOIN labels ON production.id = labels.id",
+        ),
+        vec![vec![Cell::Real(half_away(total / 100.0, 2))]]
+    );
+}
+
 /// #789: the SQLite side's `SCAN` line reports the table's real size and
 /// no row groups, with or without `ANALYZE` statistics, whatever the case
 /// the query spells the table in.

@@ -654,13 +654,14 @@ fn validate_window_call(
 /// list -- mirrors `codegen::batch::is_known_scalar_function`, kept as a
 /// separate copy (like [`window_shape`] already is for window functions)
 /// so this validator doesn't depend on the planner.
-fn is_known_scalar_function(name: &str, arity: usize) -> bool {
+pub(crate) fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
         ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
-    ) || crate::vm::map_fns::MAP_FUNCTIONS
-        .iter()
-        .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
+    ) || crate::functions::is_numeric_scalar(name, arity)
+        || crate::vm::map_fns::MAP_FUNCTIONS
+            .iter()
+            .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
 }
 
 fn arg_count(args: &FunctionArgs) -> usize {
@@ -678,6 +679,17 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
         // doesn't change how `expr` itself validates below.
         ResultColumn::Expr { expr, alias: _ } => match &expr.kind {
             ExprKind::Column { .. } => column_name(expr).map(|_| ()),
+            // #788: a numeric scalar takes any expression, aggregates
+            // included, so it validates as one (the strict
+            // column-or-literal check below is for the extract functions).
+            ExprKind::FunctionCall {
+                name,
+                args,
+                tail: None,
+                ..
+            } if crate::functions::is_numeric_scalar(name, arg_count(args)) => {
+                validate_expr(expr, true)
+            }
             ExprKind::FunctionCall {
                 name,
                 distinct,
@@ -1001,7 +1013,9 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
             args: FunctionArgs::List(args),
             tail: None,
         } if is_known_scalar_function(name, args.len()) => {
-            args.iter_mut().try_for_each(|a| validate_expr(a, false))
+            // Only a numeric scalar may wrap an aggregate (#788).
+            let allow = allow_agg && crate::functions::is_numeric_scalar(name, args.len());
+            args.iter_mut().try_for_each(|a| validate_expr(a, allow))
         }
         other => Err(unsupported(
             expr.span,
@@ -1909,6 +1923,33 @@ mod tests {
 
     /// #633: `COUNT(DISTINCT x)` parses in the select list and `ORDER BY`;
     /// every other `DISTINCT` aggregate is refused by name.
+    /// #788: `round`/`abs` take any expression, an aggregate included,
+    /// but only where an aggregate is valid, and only at their own arities.
+    #[test]
+    fn numeric_scalars_take_expressions_and_aggregates_where_those_are_valid() {
+        for sql in [
+            "SELECT ROUND(amount) FROM t",
+            "SELECT round(amount * 2, 1) FROM t",
+            "SELECT abs(amount - 3) FROM t",
+            "SELECT ROUND(SUM(amount) / 100.0, 2) FROM t",
+            "SELECT region, round(avg(amount), 1) FROM t GROUP BY region",
+            "SELECT abs(min(amount) - max(amount)) FROM t",
+            "SELECT amount FROM t WHERE round(amount) = 3",
+        ] {
+            assert!(parse(sql).is_ok(), "{sql}");
+        }
+        for (sql, why) in [
+            ("SELECT round(amount, 1, 2) FROM t", "arity 3"),
+            ("SELECT abs(amount, 1) FROM t", "arity 2"),
+            (
+                "SELECT amount FROM t WHERE round(SUM(amount)) > 1",
+                "aggregate in WHERE",
+            ),
+        ] {
+            assert!(parse(sql).is_err(), "{sql}: {why}");
+        }
+    }
+
     #[test]
     fn count_distinct_is_the_one_distinct_aggregate() {
         for ok in [
@@ -2508,15 +2549,15 @@ mod tests {
     }
 
     /// MC/DC vector (obligation `parser_column_validate_expr_a300f79e`): leaf B
-    /// (`is_known_agg_name`) false -- a scalar function in the SELECT
-    /// list skips the aggregate arm and lands on the column grammar's
-    /// generic "unsupported expression form" rejection (scalar functions
-    /// are not part of this grammar yet), not the "not allowed here"
+    /// (`is_known_agg_name`) false -- a scalar function outside the batch
+    /// list (`length`; `abs` joined it in #788) in the SELECT list skips
+    /// the aggregate arm and lands on the column grammar's generic
+    /// "unsupported expression form" rejection, not the "not allowed here"
     /// aggregate error.
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__parser_column_validate_expr_a300f79e__v3_scalar_function_skips_the_aggregate_arm() {
-        let err = parse("SELECT abs(amount) * 2 FROM t").unwrap_err();
+        let err = parse("SELECT length(region) * 2 FROM t").unwrap_err();
         let text = format!("{err:?}");
         assert!(text.contains("unsupported expression form"), "{text}");
         assert!(!text.contains("not allowed here"), "{text}");
