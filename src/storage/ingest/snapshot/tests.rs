@@ -276,7 +276,10 @@ fn physical_and_column_types_round_trip() {
 fn assert_same_as_fresh(reader: &TableReader, table: &Path) {
     let fresh = Snapshot::open(table).unwrap();
     let held = reader.snapshot();
-    assert_eq!(raws(held), raws(&fresh), "{held:?} vs {fresh:?}");
+    // The same records; a flush may have cut a page short, so the pages'
+    // boundaries can differ from a fresh read's.
+    assert_eq!(raws(held).0, raws(&fresh).0, "{held:?} vs {fresh:?}");
+    assert_covers(held);
     assert_eq!(held.last_lsn(), fresh.last_lsn());
     assert_eq!(held.rows(), fresh.rows());
     assert_eq!(held.manifest(), fresh.manifest());
@@ -284,8 +287,7 @@ fn assert_same_as_fresh(reader: &TableReader, table: &Path) {
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__storage_ingest_snapshot_refresh_1d471319__v3_a_refresh_parses_only_the_records_added_since_the_last(
-) {
+fn a_refresh_parses_only_the_records_added_since_the_last() {
     let t = TempTable::new();
     let mut w = open(&t);
     append(&mut w, 0..100);
@@ -311,9 +313,7 @@ fn mcdc__storage_ingest_snapshot_refresh_1d471319__v3_a_refresh_parses_only_the_
 }
 
 #[test]
-#[allow(non_snake_case)]
-fn mcdc__storage_ingest_snapshot_refresh_1d471319__v1_a_flush_makes_the_reader_read_the_tail_again()
-{
+fn a_flush_moves_the_reader_on_without_parsing_again() {
     let t = TempTable::new();
     let mut w = open(&t);
     append(&mut w, 0..5);
@@ -321,20 +321,171 @@ fn mcdc__storage_ingest_snapshot_refresh_1d471319__v1_a_flush_makes_the_reader_r
     w.flush_all().unwrap();
     append(&mut w, 5..8);
     reader.refresh().unwrap();
-    assert_eq!(reader.stats().rebuilds, 2);
+    assert_eq!(reader.stats().rebuilds, 1);
     assert_eq!(reader.snapshot().manifest().flushed_lsn, 5);
+    assert_eq!(reader.stats().records_parsed, 5 + 3, "only the new ones");
     assert_same_as_fresh(&reader, &t.0);
-    // The three records above the flush were parsed again, then kept.
     append(&mut w, 8..10);
     reader.refresh().unwrap();
-    assert_eq!(reader.stats().rebuilds, 2);
+    assert_eq!(reader.stats().rebuilds, 1);
     assert_eq!(reader.stats().records_parsed, 5 + 3 + 2);
     assert_same_as_fresh(&reader, &t.0);
 }
 
+/// [`append`] without a sync per record: one for the lot.
+fn append_fast(w: &mut TableWriter, range: std::ops::Range<usize>) {
+    for i in range {
+        w.append(line(i).as_bytes(), Ack::Memory).unwrap();
+    }
+    w.sync().unwrap();
+}
+
+/// The ranges the snapshot's files and pages cover, from LSN 1 to its last.
+fn assert_covers(s: &Snapshot) {
+    let mut ranges: Vec<(u64, u64)> = s
+        .files()
+        .map(|(entry, _)| (entry.lsn_lo, entry.lsn_hi))
+        .collect();
+    ranges.extend(s.pages().iter().map(|p| (p.lsn_lo, p.lsn_hi)));
+    assert_contiguous(&ranges, s.last_lsn());
+}
+
+/// A flush that falls inside a page the reader sealed cuts that page: the
+/// records above the flush are kept, not parsed again.
+#[test]
+fn a_flush_inside_a_sealed_page_cuts_it_without_parsing_again() {
+    let t = TempTable::new();
+    let mut w = open(&t);
+    // The writer's first page is 1000 rows; the reader's is 4096.
+    append_fast(&mut w, 0..1000);
+    w.seal_head().unwrap();
+    append_fast(&mut w, 1000..5000);
+    let mut reader = TableReader::open(&t.0).unwrap();
+    assert_eq!(reader.snapshot().pages().len(), 2, "4096 sealed, 904 head");
+    w.flush().unwrap();
+    append_fast(&mut w, 5000..5010);
+    reader.refresh().unwrap();
+    let held = reader.snapshot();
+    assert_eq!(held.manifest().flushed_lsn, 1000);
+    assert_eq!(reader.stats().rebuilds, 1);
+    assert_eq!(reader.stats().records_parsed, 5000 + 10);
+    assert_eq!(held.pages().first().map(|p| p.lsn_lo), Some(1001));
+    assert_covers(held);
+    let fresh = Snapshot::open(&t.0).unwrap();
+    assert_eq!(raws(held).0, raws(&fresh).0);
+    assert_eq!(held.rows(), fresh.rows());
+    // Then the rest, head included: everything is flushed.
+    w.flush_all().unwrap();
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().rebuilds, 1);
+    assert!(reader.snapshot().pages().is_empty());
+    assert_eq!(
+        raws(reader.snapshot()).0,
+        raws(&Snapshot::open(&t.0).unwrap()).0
+    );
+}
+
+#[test]
+fn a_flush_inside_a_record_page_cuts_it_without_parsing_again() {
+    use crate::storage::ingest::RecordValue;
+    let t = TempTable::new();
+    let mut w = TableWriter::open(
+        &t.0,
+        TableOptions {
+            schema: Some(vec![ColumnSpec::new("n", ColumnType::Int64, false)]),
+            ..TableOptions::default()
+        },
+    )
+    .unwrap();
+    let add = |w: &mut TableWriter, range: std::ops::Range<i64>| {
+        for n in range {
+            w.append_row(vec![RecordValue::Int(n)], Ack::Memory)
+                .unwrap();
+        }
+        // A reader sees only what the writer has written out.
+        w.sync().unwrap();
+    };
+    add(&mut w, 0..1000);
+    w.seal_head().unwrap();
+    add(&mut w, 1000..5000);
+    let mut reader = TableReader::open(&t.0).unwrap();
+    w.flush().unwrap();
+    add(&mut w, 5000..5010);
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().rebuilds, 1);
+    assert_eq!(reader.stats().records_parsed, 5010);
+    let held = reader.snapshot();
+    assert_covers(held);
+    let values = |s: &Snapshot| -> Vec<(i64, Option<i64>)> {
+        s.pages()
+            .iter()
+            .flat_map(|p| {
+                let PageBody::Rows(rows) = &p.body else {
+                    panic!("a record table has row pages");
+                };
+                let crate::storage::parquet::schema::ColumnValues::Int64(n) = &rows.columns()[0]
+                else {
+                    panic!("n is an Int64");
+                };
+                rows.observed_ts_ns()
+                    .iter()
+                    .copied()
+                    .zip(n.iter().copied())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let fresh = Snapshot::open(&t.0).unwrap();
+    assert_eq!(values(held), values(&fresh));
+    assert_eq!(values(held).len(), 5010 - 1000);
+}
+
+/// A lines table's schema is kept between refreshes, and equals a fresh
+/// one, column order included, after new pages, a flush and a compaction.
+#[test]
+fn a_lines_schema_is_kept_and_matches_a_fresh_one() {
+    let t = TempTable::new();
+    let mut w = open(&t);
+    let add = |w: &mut TableWriter, line: &str| {
+        w.append(line.as_bytes(), Ack::Durable).unwrap();
+    };
+    add(&mut w, r#"{"a":1}"#);
+    let mut reader = TableReader::open(&t.0).unwrap();
+    let check = |reader: &mut TableReader| {
+        let held = reader.refresh().unwrap().schema().unwrap();
+        assert_eq!(held, Snapshot::open(&t.0).unwrap().schema().unwrap());
+        held
+    };
+    add(&mut w, r#"{"b":"x"}"#);
+    assert!(check(&mut reader).iter().any(|c| c.name == "b"));
+    add(&mut w, r#"{"a":2.5,"c":true}"#);
+    assert!(check(&mut reader).iter().any(|c| c.name == "c"));
+    w.flush_all().unwrap();
+    add(&mut w, r#"{"d":1}"#);
+    check(&mut reader);
+    add(&mut w, r#"{"e":1}"#);
+    w.flush_all().unwrap();
+    check(&mut reader);
+    // The cached schema is not recomputed from the files: with a file's
+    // bytes ruined in place, a refresh still has it, and a fresh read does
+    // not.
+    let entry = reader.snapshot().manifest().files[0].clone();
+    let path = t.0.join(&entry.path);
+    let len = fs::metadata(&path).unwrap().len();
+    {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(&vec![0u8; usize::try_from(len).unwrap()])
+            .unwrap();
+    }
+    let kept = reader.refresh().unwrap().schema().unwrap();
+    assert!(kept.iter().any(|c| c.name == "a"));
+    assert!(Snapshot::open(&t.0).unwrap().schema().is_err());
+}
+
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__storage_ingest_snapshot_refresh_1d471319__v2_a_wal_segment_that_shrinks_is_read_again() {
+fn a_wal_segment_that_shrinks_is_read_again() {
     let t = TempTable::new();
     let mut w = open(&t);
     append(&mut w, 0..10);
@@ -450,6 +601,11 @@ fn a_reader_refreshed_at_random_points_matches_a_fresh_open() {
                 8 => {
                     w.flush_all().unwrap();
                 }
+                // Past the page size, so flushes cut sealed pages.
+                _ if rng.below(3) == 0 => {
+                    append_fast(&mut w, next..next + 4500);
+                    next += 4500;
+                }
                 _ => {}
             }
             if rng.below(3) == 0 {
@@ -464,4 +620,116 @@ fn a_reader_refreshed_at_random_points_matches_a_fresh_open() {
         reader.refresh().unwrap();
         assert_same_as_fresh(&reader, &t.0);
     }
+}
+
+/// A reader over a lines table with five records, flushed, and two more.
+fn flushed_reader(t: &TempTable) -> (TableWriter, TableReader) {
+    let mut w = open(t);
+    append(&mut w, 0..5);
+    w.flush_all().unwrap();
+    append(&mut w, 5..7);
+    let reader = TableReader::open(&t.0).unwrap();
+    (w, reader)
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_resume_6e526766__v1_an_unchanged_manifest_resumes() {
+    let t = TempTable::new();
+    let (_w, mut reader) = flushed_reader(&t);
+    let manifest = reader.manifest.clone();
+    assert!(reader.resume(&manifest).unwrap());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_resume_6e526766__v2_a_changed_schema_reads_the_tail_again() {
+    let t = TempTable::new();
+    let (_w, mut reader) = flushed_reader(&t);
+    let mut manifest = reader.manifest.clone();
+    manifest.schema = Some(vec![ColumnSpec::new("n", ColumnType::Int64, false)]);
+    assert!(!reader.resume(&manifest).unwrap());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_resume_6e526766__v3_a_changed_format_reads_the_tail_again() {
+    let t = TempTable::new();
+    let (_w, mut reader) = flushed_reader(&t);
+    let mut manifest = reader.manifest.clone();
+    manifest.format = Format::Logfmt;
+    assert!(!reader.resume(&manifest).unwrap());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_resume_6e526766__v4_a_flush_that_went_back_reads_the_tail_again() {
+    let t = TempTable::new();
+    let (_w, mut reader) = flushed_reader(&t);
+    let mut manifest = reader.manifest.clone();
+    manifest.flushed_lsn = 3;
+    assert!(!reader.resume(&manifest).unwrap());
+}
+
+#[test]
+fn a_flush_past_what_was_parsed_reads_the_tail_again() {
+    let t = TempTable::new();
+    let mut w = open(&t);
+    // The reader has parsed nothing when the writer appends and flushes all
+    // of it, so it holds nothing to cut.
+    let mut reader = TableReader::open(&t.0).unwrap();
+    assert_eq!(reader.snapshot().last_lsn(), 0);
+    append(&mut w, 0..4);
+    w.flush_all().unwrap();
+    reader.refresh().unwrap();
+    assert_eq!(reader.stats().rebuilds, 2);
+    assert_same_as_fresh(&reader, &t.0);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_lines_schema_1db64256__v1_a_stale_cache_is_computed_again() {
+    let t = TempTable::new();
+    let (_w, mut reader) = flushed_reader(&t);
+    reader.schema_stale = true;
+    let fresh = Snapshot::open(&t.0).unwrap();
+    assert_eq!(
+        reader.lines_schema(&fresh).unwrap(),
+        fresh.schema().unwrap()
+    );
+    assert!(!reader.schema_stale);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_lines_schema_1db64256__v2_other_files_compute_the_schema_again() {
+    let t = TempTable::new();
+    let (_w, mut reader) = flushed_reader(&t);
+    assert!(!reader.schema_stale);
+    // A snapshot of the same pages over no files: the cache was computed
+    // over a file, so it does not apply.
+    let held = reader.snapshot();
+    let mut manifest = held.manifest().clone();
+    manifest.files.clear();
+    let without = Snapshot {
+        manifest,
+        files: Vec::new(),
+        pages: held.pages().to_vec(),
+        schema: None,
+    };
+    let schema = reader.lines_schema(&without).unwrap();
+    assert_eq!(schema, without.schema().unwrap());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_snapshot_lines_schema_1db64256__v3_the_same_files_reuse_the_cache() {
+    let t = TempTable::new();
+    let (_w, mut reader) = flushed_reader(&t);
+    assert!(!reader.schema_stale);
+    let fresh = Snapshot::open(&t.0).unwrap();
+    assert_eq!(
+        reader.lines_schema(&fresh).unwrap(),
+        fresh.schema().unwrap()
+    );
 }

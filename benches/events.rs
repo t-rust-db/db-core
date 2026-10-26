@@ -374,20 +374,21 @@ fn row(e: &Event) -> Vec<RecordValue> {
     ]
 }
 
-/// A big unflushed tail read fresh and incrementally (#593).
+/// A big unflushed tail read fresh and incrementally (#593), then again
+/// after the hour flushed and a second hour's tail is left.
 fn tail(dir: &Path) {
     std::fs::remove_dir_all(dir).ok();
     let (tail, more) = (env("TAIL", 1_000_000), env("TAIL_MORE", 1_000));
     let mut writer = TableWriter::open(dir, options()).expect("open table");
     let mut source = events();
-    let mut append = |n: u64| {
+    let mut append = |writer: &mut TableWriter, n: u64| {
         for e in source.by_ref().take(n as usize) {
             writer.append_row(row(&e), Ack::Memory).expect("append");
         }
         writer.sync().expect("sync");
     };
     let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
-    append(tail);
+    append(&mut writer, tail);
     let t = Instant::now();
     let fresh = Snapshot::open(dir).expect("open snapshot");
     println!("tail_records={}", fresh.rows());
@@ -395,7 +396,7 @@ fn tail(dir: &Path) {
     let t = Instant::now();
     let mut reader = TableReader::open(dir).expect("open reader");
     println!("reader_open_ms={:.1}", ms(t));
-    append(more);
+    append(&mut writer, more);
     let t = Instant::now();
     let fresh = Snapshot::open(dir).expect("open snapshot");
     println!("fresh_after_more_ms={:.1}", ms(t));
@@ -403,7 +404,23 @@ fn tail(dir: &Path) {
     let held = reader.refresh().expect("refresh");
     println!("refresh_after_more_ms={:.1}", ms(t));
     assert_eq!(held.rows(), fresh.rows());
+    // The next hour fills; when the first closes and is flushed, the reader
+    // drops those records and keeps the second hour's, which a fresh read
+    // would parse again.
+    NOW.fetch_add(HOUR_NS, Ordering::SeqCst);
+    append(&mut writer, tail);
+    reader.refresh().expect("refresh");
+    writer.flush().expect("flush");
+    append(&mut writer, more);
+    let t = Instant::now();
+    let fresh = Snapshot::open(dir).expect("open snapshot");
+    println!("fresh_after_flush_ms={:.1}", ms(t));
+    let t = Instant::now();
+    let held = reader.refresh().expect("refresh");
+    println!("refresh_after_flush_ms={:.1}", ms(t));
+    assert_eq!(held.rows(), fresh.rows());
     println!("records_parsed={}", reader.stats().records_parsed);
+    println!("rebuilds={}", reader.stats().rebuilds);
 }
 
 /// The id of the n-th session.

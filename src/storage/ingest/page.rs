@@ -188,6 +188,38 @@ impl HeadPage {
         })
     }
 
+    /// The first row's LSN; `None` when the head is empty.
+    pub(crate) fn lsn_lo(&self) -> Option<u64> {
+        (self.len() > 0).then_some(self.lsn_lo)
+    }
+
+    /// Drops the first `n` rows (they were flushed), keeping the rest.
+    pub(crate) fn drop_front(&mut self, n: usize) {
+        let n = n.min(self.len());
+        if n == 0 {
+            return;
+        }
+        if n == self.len() {
+            self.clear();
+            return;
+        }
+        let cut = self
+            .bytes
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b == b'\n')
+            .nth(n.saturating_sub(1))
+            .map_or(self.bytes.len(), |(i, _)| i.saturating_add(1));
+        self.bytes.drain(..cut);
+        self.observed.drain(..n);
+        self.lsn_lo = self
+            .lsn_lo
+            .saturating_add(u64::try_from(n).unwrap_or(u64::MAX));
+        if let Some(rows) = &mut self.rows {
+            *rows = rows.tail_from(n);
+        }
+    }
+
     /// Empties the head.
     pub(crate) fn clear(&mut self) {
         self.bytes.clear();

@@ -392,6 +392,16 @@ impl RowPage {
         }
     }
 
+    /// The page without its first `n` rows.
+    pub(crate) fn tail_from(&self, n: usize) -> RowPage {
+        let order: Vec<usize> = (n..self.len()).collect();
+        RowPage {
+            schema: Arc::clone(&self.schema),
+            observed: self.observed.get(n..).unwrap_or_default().to_vec(),
+            columns: self.columns.iter().map(|c| gather(c, &order)).collect(),
+        }
+    }
+
     /// Rows in the page.
     pub fn len(&self) -> usize {
         self.observed.len()
@@ -574,7 +584,6 @@ pub(crate) fn engine_values(
 }
 
 /// `values` at the positions in `order` (each in range).
-#[cfg(feature = "ingest")]
 pub(crate) fn gather(values: &ColumnValues, order: &[usize]) -> ColumnValues {
     fn pick<T: Clone>(v: &[Option<T>], order: &[usize]) -> Vec<Option<T>> {
         order.iter().map(|&i| v.get(i).cloned().flatten()).collect()
