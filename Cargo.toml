@@ -322,6 +322,10 @@ required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch"]
 name = "row_oracle"
 required-features = ["engine-row"]
 
+[[example]]
+name = "row_keys_oracle"
+required-features = ["engine-row"]
+
 [[bin]]
 name = "wal_probe"
 path = "tests/helpers/wal_probe.rs"

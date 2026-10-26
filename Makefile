@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bench-events test-full check-row-functions-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help bench-events test-full check-row-functions-oracle check-row-keys-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -245,6 +245,9 @@ check-grammar-sync: ## Local-only: grammar.ebnf's SQLITE-RS ONLY section agrees 
 check-row-functions-oracle: ## Local-only: row engine scalar functions agree with sqlite3 3.53.4 (Homebrew's, on PATH) -- tools/row_functions_cases*.sql (#651)
 	@for f in tools/row_functions_cases*.sql; do python3 tools/check_row_functions_oracle.py $$f || exit 1; done
 	@python3 tools/check_row_functions_oracle.py --random 5000
+
+check-row-keys-oracle: ## Local-only: row keys on both sides of 2^63 read back as signed values, in signed order, in the sqlite3 binary; integrity_check passes (tools/check_row_keys_oracle.sh, #787)
+	@tools/check_row_keys_oracle.sh
 
 # #566: the Parquet writer's interoperability check -- files it writes
 # (examples/parquet_write_oracle.rs: every type, nulls, edge values, both
