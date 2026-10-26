@@ -1529,3 +1529,44 @@ fn snapshot_segments_read_a_bit_pattern_join_key_in_files_and_pages() {
         read_snapshot_with_bit_patterns(&snapshot, &names, &["logs.id".to_string()]).unwrap();
     assert_eq!(whole.num_rows, 3);
 }
+
+/// #772: `snapshot_segments_where` leaves out the row groups of a file whose
+/// footer statistics prove they hold no row the filter accepts, and keeps
+/// every record page: a plain `snapshot_segments` loads them all.
+#[test]
+fn snapshot_segments_where_skips_row_groups_by_footer_statistics() {
+    use crate::engine::column::{snapshot_files_where, snapshot_segments, snapshot_segments_where};
+
+    crate::test_clock::set(20_737 * DAY_NS);
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            sort_key: vec!["id".to_string()],
+            row_group_max_rows: 5,
+            delete_grace_ns: 0,
+            ..TierOptions::default()
+        }),
+        schema: Some(vec![ColumnSpec::new("id", ColumnType::Int64, false)]),
+        clock,
+        ..TableOptions::default()
+    });
+    for id in 0..20i64 {
+        w.append_row(vec![RecordValue::Int(id)], Ack::Memory)
+            .unwrap();
+    }
+    advance_clock(HOUR_NS);
+    w.flush().unwrap();
+    w.append_row(vec![RecordValue::Int(100)], Ack::Durable)
+        .unwrap();
+    let snapshot = w.snapshot().unwrap();
+
+    let filter = SnapshotFilter::parse(&snapshot, "logs", "id >= 7 AND id <= 8").unwrap();
+    let files = snapshot_files_where(&snapshot, &filter).unwrap();
+    let program = Program::from_opcodes([]);
+    let columns = ["id".to_string()];
+    let all = snapshot_segments(&snapshot, &files, &columns, &program).unwrap();
+    let kept = snapshot_segments_where(&snapshot, &files, &columns, &program, &filter).unwrap();
+    // Four row groups of five ids and one live page; only ids 5..=9 can match.
+    assert_eq!(all.iter().filter(|s| s.is_row_group()).count(), 4);
+    assert_eq!(kept.iter().filter(|s| s.is_row_group()).count(), 1);
+}

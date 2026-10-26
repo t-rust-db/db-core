@@ -16112,7 +16112,7 @@
   {
     "id": "engine_column_into_value_64b9c9ef",
     "file": "src/engine/column.rs",
-    "line": 1116,
+    "line": 1142,
     "decision": "match stat {\n            StatValue::Int(i) => Value::Int(i),\n            StatValue::Float(f) => Value::Float(f),\n            StatValue::Str(s) => Value::Str(s.into()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16122,7 +16122,7 @@
   {
     "id": "engine_column_compare_eb9e37d0",
     "file": "src/engine/column.rs",
-    "line": 1124,
+    "line": 1150,
     "decision": "match (a, b) {\n            (StatValue::Int(x), StatValue::Int(y)) => Some(x.cmp(y)),\n            (StatValue::Float(x), StatValue::Float(y)) => x.partial_cmp(y),\n            (StatValue::Int(x), StatValue::Float(y)) => (*x as f64).partial_cmp(y),\n            (StatValue::Float(x), StatValue::Int(y)) => x.partial_cmp(&(*y as f64)),\n            (StatValue::Str(x), StatValue::Str(y)) => Some(x.cmp(y)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16132,7 +16132,7 @@
   {
     "id": "engine_column_decode_stat_bytes_63fb2b31",
     "file": "src/engine/column.rs",
-    "line": 1145,
+    "line": 1171,
     "decision": "match annotation {\n            Annotation::Plain => {}\n            Annotation::UInt32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                return Some(StatValue::Int(i64::from(u32::from_le_bytes(arr))));\n            }\n            Annotation::UInt64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                return i64::try_from(u64::from_le_bytes(arr))\n                    .ok()\n                    .map(StatValue::Int);\n            }\n            Annotation::Decimal | Annotation::Bytes => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16142,7 +16142,7 @@
   {
     "id": "engine_column_decode_stat_bytes_94ae8332",
     "file": "src/engine/column.rs",
-    "line": 1159,
+    "line": 1185,
     "decision": "match physical_type {\n            PhysicalType::Int32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from(i32::from_le_bytes(arr))))\n            }\n            PhysicalType::Int64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from_le_bytes(arr)))\n            }\n            PhysicalType::Float => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from(f32::from_le_bytes(arr))))\n            }\n            PhysicalType::Double => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from_le_bytes(arr)))\n            }\n            PhysicalType::ByteArray => std::str::from_utf8(bytes)\n                .ok()\n                .map(str::to_string)\n                .map(StatValue::Str),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16152,7 +16152,7 @@
   {
     "id": "engine_column_literal_stat_value_46d4637c",
     "file": "src/engine/column.rs",
-    "line": 1188,
+    "line": 1214,
     "decision": "match (lit, physical_type) {\n            (Literal::Integer(i), PhysicalType::Int32 | PhysicalType::Int64) => {\n                Some(StatValue::Int(*i))\n            }\n            (Literal::Integer(i), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*i as f64))\n            }\n            (Literal::Float(f), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*f))\n            }\n            (Literal::Str(s), PhysicalType::ByteArray) => Some(StatValue::Str(s.clone())),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16162,7 +16162,7 @@
   {
     "id": "engine_column_as_column_and_literal_34999e3c",
     "file": "src/engine/column.rs",
-    "line": 1211,
+    "line": 1237,
     "decision": "match (&lhs.kind, &rhs.kind) {\n            (ExprKind::Column { name, .. }, ExprKind::Literal(lit)) => Some((name, lit, false)),\n            (ExprKind::Literal(lit), ExprKind::Column { name, .. }) => Some((name, lit, true)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16172,7 +16172,7 @@
   {
     "id": "engine_column_flip_3667ef35",
     "file": "src/engine/column.rs",
-    "line": 1219,
+    "line": 1245,
     "decision": "match op {\n            BinaryOp::Lt => BinaryOp::Gt,\n            BinaryOp::Le => BinaryOp::Ge,\n            BinaryOp::Gt => BinaryOp::Lt,\n            BinaryOp::Ge => BinaryOp::Le,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16182,7 +16182,7 @@
   {
     "id": "engine_column_bounds_ce810416",
     "file": "src/engine/column.rs",
-    "line": 1261,
+    "line": 1287,
     "decision": "self.rg.nested_field_at(index).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16192,7 +16192,7 @@
   {
     "id": "engine_column_values_0bc4d41a",
     "file": "src/engine/column.rs",
-    "line": 1280,
+    "line": 1306,
     "decision": "annotation(self.rg, index) != Annotation::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -16202,7 +16202,7 @@
   {
     "id": "engine_column_values_2a0809e3",
     "file": "src/engine/column.rs",
-    "line": 1283,
+    "line": 1309,
     "decision": "match physical_type {\n                PhysicalType::ByteArray => {\n                    let values = self.rg.read_string_column_dictionary(index).ok()??;\n                    Some(values.into_iter().map(StatValue::Str).collect())\n                }\n                PhysicalType::Int64 => {\n                    let values = self.rg.read_int64_column_dictionary(index).ok()??;\n                    Some(values.into_iter().map(StatValue::Int).collect())\n                }\n                PhysicalType::Int32 => {\n                    let values = self.rg.read_int32_column_dictionary(index).ok()??;\n                    Some(\n                        values\n                            .into_iter()\n                            .map(|v| StatValue::Int(i64::from(v)))\n                            .collect(),\n                    )\n                }\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16212,7 +16212,7 @@
   {
     "id": "engine_column_range_definitely_empty_fed29e0a",
     "file": "src/engine/column.rs",
-    "line": 1313,
+    "line": 1339,
     "decision": "match op {\n            BinaryOp::Eq => {\n                let below_min = min\n                    .and_then(|m| compare(literal, m))\n                    .is_some_and(|o| o == Ordering::Less);\n                let above_max = max\n                    .and_then(|m| compare(literal, m))\n                    .is_some_and(|o| o == Ordering::Greater);\n                below_min || above_max\n            }\n            BinaryOp::Lt => min\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o != Ordering::Less),\n            BinaryOp::Le => min\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o == Ordering::Greater),\n            BinaryOp::Gt => max\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o != Ordering::Greater),\n            BinaryOp::Ge => max\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o == Ordering::Less),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16222,7 +16222,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_a3ff3693",
     "file": "src/engine/column.rs",
-    "line": 1358,
+    "line": 1384,
     "decision": "flipped",
     "conditions": 1,
     "vectors_required": 2,
@@ -16232,7 +16232,7 @@
   {
     "id": "engine_column_definitely_empty_in_3e405a69",
     "file": "src/engine/column.rs",
-    "line": 1371,
+    "line": 1397,
     "decision": "match &expr.kind {\n            ExprKind::Paren(inner) => definitely_empty_in(inner, source),\n            ExprKind::Binary {\n                op: BinaryOp::And,\n                lhs,\n                rhs,\n            } => definitely_empty_in(lhs, source) || definitely_empty_in(rhs, source),\n            ExprKind::Binary {\n                op: BinaryOp::Or,\n                lhs,\n                rhs,\n            } => definitely_empty_in(lhs, source) && definitely_empty_in(rhs, source),\n            ExprKind::Binary { op, lhs, rhs } => comparison_definitely_empty(*op, lhs, rhs, source),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16242,7 +16242,7 @@
   {
     "id": "engine_column_is_window_column_21d3bda9",
     "file": "src/engine/column.rs",
-    "line": 1414,
+    "line": 1440,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16252,7 +16252,7 @@
   {
     "id": "engine_column_plan_err_bbf17c28",
     "file": "src/engine/column.rs",
-    "line": 1430,
+    "line": 1456,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16262,7 +16262,7 @@
   {
     "id": "engine_column_type_name_16b2089b",
     "file": "src/engine/column.rs",
-    "line": 1443,
+    "line": 1469,
     "decision": "match pt {\n        PhysicalType::Boolean => \"BOOLEAN\",\n        PhysicalType::Int32 => \"INT32\",\n        PhysicalType::Int64 => \"INT64\",\n        PhysicalType::Int96 => \"INT96\",\n        PhysicalType::Float => \"FLOAT\",\n        PhysicalType::Double => \"DOUBLE\",\n        PhysicalType::ByteArray => \"BYTE_ARRAY\",\n        PhysicalType::FixedLenByteArray => \"FIXED_LEN_BYTE_ARRAY\",\n        PhysicalType::Unknown(_) => \"\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16272,7 +16272,7 @@
   {
     "id": "engine_column_write_varint_2427714d",
     "file": "src/engine/column.rs",
-    "line": 1692,
+    "line": 1718,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16282,7 +16282,7 @@
   {
     "id": "engine_column_write_varint_a5b1bbc4",
     "file": "src/engine/column.rs",
-    "line": 1696,
+    "line": 1722,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16292,7 +16292,7 @@
   {
     "id": "engine_column_list_of_structs_field_b09c4ad2",
     "file": "src/engine/column.rs",
-    "line": 1735,
+    "line": 1761,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -16302,7 +16302,7 @@
   {
     "id": "engine_column_build_double_row_group_4ca87ac2",
     "file": "src/engine/column.rs",
-    "line": 1795,
+    "line": 1821,
     "decision": "let Some(stats) = stats_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -16312,7 +16312,7 @@
   {
     "id": "engine_column_a_string_literal_prunes_a_byte_array_column_3ad0fe2b",
     "file": "src/engine/column.rs",
-    "line": 2620,
+    "line": 2646,
     "decision": "let Some(s) = stats",
     "conditions": 1,
     "vectors_required": 2,
@@ -16322,7 +16322,7 @@
   {
     "id": "engine_column_load_both_614058e4",
     "file": "src/engine/column.rs",
-    "line": 2771,
+    "line": 2797,
     "decision": "match l\n            .map_err(|e: crate::storage::parquet::FileError| e.to_string())\n        {\n            Ok(Loaded::Values(v)) => Some(v),\n            Ok(Loaded::Typed(_)) => None,\n            Err(e) => {\n                assert!(e.contains(\"18446744073709551615\"), \"{e}\");\n                Some(Vec::new())\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16922,7 +16922,7 @@
   {
     "id": "engine_resolve_plan_err_bbf17c28",
     "file": "src/engine/resolve.rs",
-    "line": 95,
+    "line": 99,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16932,7 +16932,7 @@
   {
     "id": "engine_resolve_resolve_sides_ecf724d4",
     "file": "src/engine/resolve.rs",
-    "line": 126,
+    "line": 130,
     "decision": "from.joins.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -16942,7 +16942,7 @@
   {
     "id": "engine_resolve_resolve_sides_afe264a8",
     "file": "src/engine/resolve.rs",
-    "line": 151,
+    "line": 155,
     "decision": "from_name.eq_ignore_ascii_case(driving)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16952,7 +16952,7 @@
   {
     "id": "engine_resolve_resolve_sides_1c3d872e",
     "file": "src/engine/resolve.rs",
-    "line": 153,
+    "line": 157,
     "decision": "join_name.eq_ignore_ascii_case(driving)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16962,7 +16962,7 @@
   {
     "id": "engine_resolve_resolve_sides_144245fc",
     "file": "src/engine/resolve.rs",
-    "line": 154,
+    "line": 158,
     "decision": "join.op != crate::parser::ast::JoinOp::Inner",
     "conditions": 1,
     "vectors_required": 2,
@@ -16972,7 +16972,7 @@
   {
     "id": "engine_resolve_resolve_sides_b233fcd5",
     "file": "src/engine/resolve.rs",
-    "line": 180,
+    "line": 184,
     "decision": "!known",
     "conditions": 1,
     "vectors_required": 2,
@@ -16982,7 +16982,7 @@
   {
     "id": "engine_resolve_resolve_multi_sides_9c9e598e",
     "file": "src/engine/resolve.rs",
-    "line": 214,
+    "line": 218,
     "decision": "!from_name.eq_ignore_ascii_case(driving)",
     "conditions": 1,
     "vectors_required": 2,
@@ -16992,7 +16992,7 @@
   {
     "id": "engine_resolve_resolve_multi_sides_1c3d872e",
     "file": "src/engine/resolve.rs",
-    "line": 234,
+    "line": 238,
     "decision": "join_name.eq_ignore_ascii_case(driving)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17002,7 +17002,7 @@
   {
     "id": "engine_resolve_resolve_multi_sides_3fbe8d4e",
     "file": "src/engine/resolve.rs",
-    "line": 244,
+    "line": 248,
     "decision": "!is_known",
     "conditions": 1,
     "vectors_required": 2,
@@ -17012,7 +17012,7 @@
   {
     "id": "engine_resolve_resolve_multi_sides_3bf6e66b",
     "file": "src/engine/resolve.rs",
-    "line": 250,
+    "line": 254,
     "decision": "lookup_tables\n            .iter()\n            .any(|t: &String| t.eq_ignore_ascii_case(join_name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -17022,7 +17022,7 @@
   {
     "id": "engine_resolve_requalify_b9fe93b0",
     "file": "src/engine/resolve.rs",
-    "line": 277,
+    "line": 281,
     "decision": "let Some(values) = columns.remove(r)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17032,7 +17032,7 @@
   {
     "id": "engine_resolve_resolve_cross_mode_group_by_89a29fff",
     "file": "src/engine/resolve.rs",
-    "line": 309,
+    "line": 313,
     "decision": "name.eq_ignore_ascii_case(driving)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17042,7 +17042,7 @@
   {
     "id": "engine_resolve_resolve_cross_mode_group_by_3ca07bdf",
     "file": "src/engine/resolve.rs",
-    "line": 323,
+    "line": 327,
     "decision": "match e {\n            planner::JoinColumnsError::Plan(e) => plan_err(e),\n            other => EngineError::new(ErrorKind::Compile, other),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17052,7 +17052,7 @@
   {
     "id": "engine_resolve_run_query_82b1b600",
     "file": "src/engine/resolve.rs",
-    "line": 348,
+    "line": 352,
     "decision": "join_count(&select) > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -17060,9 +17060,129 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_run_column_query_82b1b600",
+    "id": "engine_resolve_is_row_group_3f22b514",
     "file": "src/engine/resolve.rs",
-    "line": 385,
+    "line": 391,
+    "decision": "match self {\n            ProbeSegment::File(_) => true,\n            #[cfg(feature = \"ingest-read\")]\n            ProbeSegment::Dir(s) => s.is_row_group(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_load_974c7cda",
+    "file": "src/engine/resolve.rs",
+    "line": 402,
+    "decision": "match self {\n            ProbeSegment::File(s) => s.load(),\n            #[cfg(feature = \"ingest-read\")]\n            ProbeSegment::Dir(s) => s.load(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_order_key_bound_921bddca",
+    "file": "src/engine/resolve.rs",
+    "line": 410,
+    "decision": "match self {\n            ProbeSegment::File(s) => s.order_key_bound(descending),\n            #[cfg(feature = \"ingest-read\")]\n            ProbeSegment::Dir(s) => s.order_key_bound(descending),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_load_columns_a8a9352f",
+    "file": "src/engine/resolve.rs",
+    "line": 418,
+    "decision": "match self {\n            ProbeSegment::File(s) => s.load_columns(columns),\n            #[cfg(feature = \"ingest-read\")]\n            ProbeSegment::Dir(s) => s.load_columns(columns),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_gather_at_44bc52f1",
+    "file": "src/engine/resolve.rs",
+    "line": 430,
+    "decision": "match self {\n            ProbeSegment::File(s) => s.gather_at(columns, positions),\n            #[cfg(feature = \"ingest-read\")]\n            ProbeSegment::Dir(s) => s.gather_at(columns, positions),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_parse_join_95bbc73b",
+    "file": "src/engine/resolve.rs",
+    "line": 441,
+    "decision": "match self {\n            Probe::Batch(e) => e.parse_join(sql),\n            #[cfg(feature = \"ingest-read\")]\n            Probe::Table(e) => e.parse_join(sql),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_table_name_ceb98db9",
+    "file": "src/engine/resolve.rs",
+    "line": 449,
+    "decision": "match self {\n            Probe::Batch(e) => e.table_name(),\n            #[cfg(feature = \"ingest-read\")]\n            Probe::Table(e) => e.table_name(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_columns_6202d358",
+    "file": "src/engine/resolve.rs",
+    "line": 457,
+    "decision": "match self {\n            Probe::Batch(e) => e.columns(),\n            #[cfg(feature = \"ingest-read\")]\n            Probe::Table(e) => e.columns(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_path_b05b009e",
+    "file": "src/engine/resolve.rs",
+    "line": 465,
+    "decision": "match self {\n            Probe::Batch(e) => e.path(),\n            #[cfg(feature = \"ingest-read\")]\n            Probe::Table(e) => e.path(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_table_stats_da4a131c",
+    "file": "src/engine/resolve.rs",
+    "line": 473,
+    "decision": "match self {\n            Probe::Batch(e) => e.table_stats(),\n            #[cfg(feature = \"ingest-read\")]\n            Probe::Table(e) => e.table_stats(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_row_groups_13dd869f",
+    "file": "src/engine/resolve.rs",
+    "line": 482,
+    "decision": "match self {\n            Probe::Batch(e) => e.table_stats().row_groups,\n            #[cfg(feature = \"ingest-read\")]\n            Probe::Table(e) => e.archive_row_groups(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_with_probe_segments_e05020d3",
+    "file": "src/engine/resolve.rs",
+    "line": 496,
+    "decision": "match self {\n            Probe::Batch(e) => e.with_probe_segments(columns, prune, bit_pattern, |segments| {\n                f(segments.into_iter().map(ProbeSegment::File).collect())\n            }),\n            #[cfg(feature = \"ingest-read\")]\n            Probe::Table(e) => e.with_probe_segments(columns, prune, bit_pattern, |segments| {\n                f(segments.into_iter().map(ProbeSegment::Dir).collect())\n            }),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_run_probe_query_82b1b600",
+    "file": "src/engine/resolve.rs",
+    "line": 539,
     "decision": "join_count(&select) > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -17070,9 +17190,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_run_column_query_afcf4357",
+    "id": "engine_resolve_run_probe_query_afcf4357",
     "file": "src/engine/resolve.rs",
-    "line": 392,
+    "line": 546,
     "decision": "pruning.empty",
     "conditions": 1,
     "vectors_required": 2,
@@ -17080,9 +17200,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_run_column_query_afcf4357_2",
+    "id": "engine_resolve_run_probe_query_afcf4357_2",
     "file": "src/engine/resolve.rs",
-    "line": 405,
+    "line": 559,
     "decision": "pruning.empty",
     "conditions": 1,
     "vectors_required": 2,
@@ -17092,7 +17212,7 @@
   {
     "id": "engine_resolve_explain_column_plan_91a305fc",
     "file": "src/engine/resolve.rs",
-    "line": 457,
+    "line": 611,
     "decision": "name.eq_ignore_ascii_case(table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17102,7 +17222,7 @@
   {
     "id": "engine_resolve_explain_column_plan_49e09ee9",
     "file": "src/engine/resolve.rs",
-    "line": 459,
+    "line": 613,
     "decision": "name.eq_ignore_ascii_case(&lookup_table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17110,10 +17230,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_explain_column_plan_8de1b4ca",
+    "id": "engine_resolve_explain_column_plan_ea91ee52",
     "file": "src/engine/resolve.rs",
-    "line": 480,
-    "decision": "match (pruning.empty, pruning.predicate.as_ref()) {\n        (true, _) => Some(0),\n        (false, Some(predicate)) => Some(driving.with_probe_segments(\n            &plan.left_columns,\n            Some(predicate),\n            &[],\n            |segments| Ok(segments.len()),\n        )?),\n        (false, None) => None,\n    }",
+    "line": 634,
+    "decision": "match (pruning.empty, pruning.predicate.as_ref()) {\n        (true, _) => Some(0),\n        (false, Some(predicate)) => Some(driving.with_probe_segments(\n            &plan.left_columns,\n            Some(predicate),\n            &[],\n            |segments| Ok(segments.iter().filter(|s| s.is_row_group()).count()),\n        )?),\n        (false, None) => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -17122,7 +17242,7 @@
   {
     "id": "engine_resolve_explain_column_plan_08a78031",
     "file": "src/engine/resolve.rs",
-    "line": 490,
+    "line": 644,
     "decision": "let Some(kept) = kept",
     "conditions": 1,
     "vectors_required": 2,
@@ -17132,7 +17252,7 @@
   {
     "id": "engine_resolve_check_single_join_explain_c43658ef",
     "file": "src/engine/resolve.rs",
-    "line": 556,
+    "line": 710,
     "decision": "join_count(select) > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -17142,7 +17262,7 @@
   {
     "id": "engine_resolve_join_key_columns_15d08ebc",
     "file": "src/engine/resolve.rs",
-    "line": 573,
+    "line": 727,
     "decision": "match &join.constraint {\n            Some(JoinConstraint::On(expr)) => {\n                named.extend(planner::bool_expr_columns(expr));\n            }\n            Some(JoinConstraint::Using(names)) => named.extend(names.iter().cloned()),\n            None => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17152,7 +17272,7 @@
   {
     "id": "engine_resolve_explain_plan_6d58e3a5",
     "file": "src/engine/resolve.rs",
-    "line": 746,
+    "line": 900,
     "decision": "select.from.as_ref().is_some_and(|f| f.joins.len() > 1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17162,7 +17282,7 @@
   {
     "id": "engine_resolve_explain_plan_cbd67ad2",
     "file": "src/engine/resolve.rs",
-    "line": 762,
+    "line": 916,
     "decision": "table.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17172,7 +17292,7 @@
   {
     "id": "engine_resolve_explain_plan_6d0bbb8e",
     "file": "src/engine/resolve.rs",
-    "line": 764,
+    "line": 918,
     "decision": "table.eq_ignore_ascii_case(&lookup_table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17182,7 +17302,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_ecf724d4",
     "file": "src/engine/resolve.rs",
-    "line": 796,
+    "line": 950,
     "decision": "from.joins.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -17192,7 +17312,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_0cfb5f70",
     "file": "src/engine/resolve.rs",
-    "line": 821,
+    "line": 975,
     "decision": "!from_name.eq_ignore_ascii_case(super::stream::TABLE)\n        || !join_name.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 2,
     "vectors_required": 3,
@@ -17202,7 +17322,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_b20d52d9",
     "file": "src/engine/resolve.rs",
-    "line": 847,
+    "line": 1001,
     "decision": "left_alias.eq_ignore_ascii_case(right_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17212,7 +17332,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_06064080",
     "file": "src/engine/resolve.rs",
-    "line": 854,
+    "line": 1008,
     "decision": "match select.scope.as_ref() {\n        None => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a SINCE/UNTIL window: with no \\\n                 SQLite side to bound the query, the window is what makes the \\\n                 join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) if !matches!(super::stream::resolve_scope(select), Scope::Time(_)) => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a time-based SINCE/UNTIL window \\\n                 (e.g. `SINCE 1 hour`); `LINES`/`BYTES` scopes don't bound either \\\n                 side by time and can't make the join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17222,7 +17342,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_9a3b2404",
     "file": "src/engine/resolve.rs",
-    "line": 863,
+    "line": 1017,
     "decision": "!matches!(super::stream::resolve_scope(select), Scope::Time(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -17232,7 +17352,7 @@
   {
     "id": "engine_resolve_alias_normalize_f42b0018",
     "file": "src/engine/resolve.rs",
-    "line": 885,
+    "line": 1039,
     "decision": "let Some(from) = &mut select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -17242,7 +17362,7 @@
   {
     "id": "engine_resolve_alias_normalize_567a3ca4",
     "file": "src/engine/resolve.rs",
-    "line": 887,
+    "line": 1041,
     "decision": "let Some(join) = from.joins.first_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -17252,7 +17372,7 @@
   {
     "id": "engine_resolve_materialize_segments_cdfe5103",
     "file": "src/engine/resolve.rs",
-    "line": 920,
+    "line": 1074,
     "decision": "num_rows > MAX_STREAM_STREAM_BUILD_ROWS",
     "conditions": 1,
     "vectors_required": 2,
@@ -17262,7 +17382,7 @@
   {
     "id": "engine_resolve_materialize_segments_cfd2fd17",
     "file": "src/engine/resolve.rs",
-    "line": 934,
+    "line": 1088,
     "decision": "let Some(col) = batch.columns.get(&request.key)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17272,7 +17392,7 @@
   {
     "id": "engine_resolve_explain_stream_stream_plan_3be1fe26",
     "file": "src/engine/resolve.rs",
-    "line": 1022,
+    "line": 1176,
     "decision": "table.eq_ignore_ascii_case(&left_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17282,7 +17402,7 @@
   {
     "id": "engine_resolve_explain_stream_stream_plan_6b519d7c",
     "file": "src/engine/resolve.rs",
-    "line": 1024,
+    "line": 1178,
     "decision": "table.eq_ignore_ascii_case(&right_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17292,7 +17412,7 @@
   {
     "id": "engine_resolve_explain_opcodes_query_6d58e3a5",
     "file": "src/engine/resolve.rs",
-    "line": 1064,
+    "line": 1218,
     "decision": "select.from.as_ref().is_some_and(|f| f.joins.len() > 1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17300,50 +17420,50 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_run_query_a33ca03f",
+    "id": "engine_resolve_run_query_eed89786",
     "file": "src/engine/resolve.rs",
-    "line": 1267,
-    "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => run_query(driving, lookup, sql),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => run_column_query(driving, lookup, sql),\n            CrossModeEngine::StreamStream { left, right } => {\n                run_stream_stream_query(left, right, sql)\n            }\n        }",
+    "line": 1446,
+    "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => run_query(driving, lookup, sql),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => run_column_query(driving, lookup, sql),\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite {\n                driving, lookup, ..\n            } => {\n                driving.refresh()?;\n                run_probe_query(&Probe::Table(driving), lookup, sql)\n            }\n            CrossModeEngine::StreamStream { left, right } => {\n                run_stream_stream_query(left, right, sql)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_explain_plan_7b0019a7",
+    "id": "engine_resolve_explain_plan_72270683",
     "file": "src/engine/resolve.rs",
-    "line": 1282,
-    "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_plan(driving, lookup, lookup_path, sql),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_column_plan(driving, lookup, lookup_path, sql),\n            CrossModeEngine::StreamStream { left, right } => {\n                explain_stream_stream_plan(left, right, sql)\n            }\n        }",
+    "line": 1468,
+    "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_plan(driving, lookup, lookup_path, sql),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_column_plan(&Probe::Batch(driving), lookup, lookup_path, sql),\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_column_plan(&Probe::Table(driving), lookup, lookup_path, sql),\n            CrossModeEngine::StreamStream { left, right } => {\n                explain_stream_stream_plan(left, right, sql)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_explain_opcodes_41e273ff",
+    "id": "engine_resolve_explain_opcodes_97934428",
     "file": "src/engine/resolve.rs",
-    "line": 1301,
-    "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => explain_opcodes_query(driving, lookup, sql)?,\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => explain_column_opcodes(driving, lookup, sql)?,\n            CrossModeEngine::StreamStream { left, .. } => {\n                explain_opcodes_stream_stream_query(left, sql)?\n            }\n        }",
+    "line": 1493,
+    "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => explain_opcodes_query(driving, lookup, sql)?,\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => explain_column_opcodes(&Probe::Batch(driving), lookup, sql)?,\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite {\n                driving, lookup, ..\n            } => explain_column_opcodes(&Probe::Table(driving), lookup, sql)?,\n            CrossModeEngine::StreamStream { left, .. } => {\n                explain_opcodes_stream_stream_query(left, sql)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_stats_63cfcd33",
+    "id": "engine_resolve_stats_59323afd",
     "file": "src/engine/resolve.rs",
-    "line": 1317,
-    "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, .. } => driving.stats(),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite { driving, .. } => driving.stats(),\n            CrossModeEngine::StreamStream { left, .. } => left.stats(),\n        }",
+    "line": 1513,
+    "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, .. } => driving.stats(),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite { driving, .. } => driving.stats(),\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite { driving, .. } => driving.stats(),\n            CrossModeEngine::StreamStream { left, .. } => left.stats(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_tables_009128f1",
+    "id": "engine_resolve_tables_9d93a30d",
     "file": "src/engine/resolve.rs",
-    "line": 1326,
-    "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            CrossModeEngine::StreamStream { left, right } => {\n                let mut tables = left.tables()?;\n                tables.extend(right.tables()?);\n                Ok(tables)\n            }\n        }",
+    "line": 1524,
+    "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            CrossModeEngine::StreamStream { left, right } => {\n                let mut tables = left.tables()?;\n                tables.extend(right.tables()?);\n                Ok(tables)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,

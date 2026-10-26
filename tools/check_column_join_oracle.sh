@@ -2,7 +2,10 @@
 # Local-only oracle-parity aid (#598), the join sibling of
 # check_column_oracle.sh: a Parquet table joined to SQLite lookup tables
 # through `CrossModeEngine::open_column_sqlite` against DuckDB reading the
-# same Parquet file with the same SQLite file attached. Run by hand after a
+# same Parquet file with the same SQLite file attached. The same queries
+# then run over a table directory (#772, `open_table_sqlite`), against
+# DuckDB reading its files: the directory is flushed first, as DuckDB
+# cannot read a WAL, so rows in live pages are covered by the unit tests. Run by hand after a
 # change to `engine::resolve` or its `prune` module; never in CI (a DuckDB
 # binary is a new external dependency, see check_column_oracle.sh).
 #
@@ -169,6 +172,36 @@ for template in "${ERROR_QUERIES[@]}"; do
   fi
   if duckdb -csv -noheader -c "INSTALL sqlite; LOAD sqlite; ATTACH '$lookup' AS lk (TYPE sqlite); $duck_sql" >/dev/null 2>&1; then
     echo "NOT REFUSED by duckdb (the expectation is wrong): $db_sql"
+    fail=1
+  fi
+done
+
+# The same joins over a table directory named `production` (#772): five
+# archive files of one row group each, so the key-set pruning skips whole
+# files. `SELECT *` and `production.*` list the Parquet fixture's columns,
+# which the directory (id, region) does not have.
+tabledir="$workdir/production"
+./target/release/examples/column_join_oracle --seed-dir "$tabledir"
+dir_files="$tabledir/**/*.parquet"
+for template in "${QUERIES[@]}"; do
+  case "$template" in *"SELECT *"*|*"production.*"*) continue ;; esac
+  db_sql="${template//__P__/production}"
+  db_sql="${db_sql//__ids__/ids}"
+  db_sql="${db_sql//__regions__/regions}"
+  db_sql="${db_sql//__pairs__/pairs}"
+  duck_sql="${template//__P__/read_parquet(\'$dir_files\') AS production}"
+  duck_sql="${duck_sql//__ids__/lk.ids}"
+  duck_sql="${duck_sql//__regions__/lk.regions}"
+  duck_sql="${duck_sql//__pairs__/lk.pairs}"
+
+  got="$(./target/release/examples/column_join_oracle "$tabledir" "$lookup" "$db_sql")"
+  want="$(duckdb -csv -noheader -nullvalue '' -c "INSTALL sqlite; LOAD sqlite; ATTACH '$lookup' AS lk (TYPE sqlite); $duck_sql" | grep -v '^$' || true)"
+
+  checked=$((checked + 1))
+  if [[ "$got" != "$want" ]]; then
+    echo "MISMATCH (table directory): $db_sql"
+    echo "  db-core: $got"
+    echo "  duckdb:  $want"
     fail=1
   fi
 done

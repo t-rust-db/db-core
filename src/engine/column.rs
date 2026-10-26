@@ -914,6 +914,14 @@ enum TableSegment<'a, 'm> {
 pub struct SnapshotSegment<'a, 'm>(TableSegment<'a, 'm>);
 
 #[cfg(feature = "ingest-read")]
+impl SnapshotSegment<'_, '_> {
+    /// Whether this is a row group of a file, not a live page.
+    pub(crate) fn is_row_group(&self) -> bool {
+        matches!(self.0, TableSegment::RowGroup { .. })
+    }
+}
+
+#[cfg(feature = "ingest-read")]
 impl Segment for SnapshotSegment<'_, '_> {
     fn load(&self) -> Result<Arc<Batch>, VmError> {
         self.0.load()
@@ -978,7 +986,7 @@ fn open_files<'s>(
 /// NULL, one that stores it with another type casts it, so every segment
 /// has the table's schema ([`Snapshot::schema`]). `program` drives late
 /// materialization where it has a `WHERE` (ADR 0026); an empty program
-/// loads every column eagerly. No row group is pruned.
+/// loads every column eagerly. No row group or page is pruned.
 ///
 /// [`Snapshot::schema`]: crate::storage::ingest::Snapshot::schema
 #[cfg(feature = "ingest-read")]
@@ -988,7 +996,7 @@ pub fn snapshot_segments<'f>(
     columns: &[String],
     program: &'f Program,
 ) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
-    segments_of(snapshot, files, columns, program, None, &[])
+    segments_of(snapshot, files, columns, program, None, None, &[])
 }
 
 /// [`snapshot_segments`] where the `bit_pattern` columns (keys of
@@ -1003,12 +1011,14 @@ pub fn snapshot_segments_with_bit_patterns<'f>(
     program: &'f Program,
     bit_pattern: &[String],
 ) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
-    segments_of(snapshot, files, columns, program, None, bit_pattern)
+    segments_of(snapshot, files, columns, program, None, None, bit_pattern)
 }
 
 /// [`snapshot_segments`] without the record pages `filter` proves hold no
-/// row it accepts (#777). Pass the files of [`snapshot_files_where`] for
-/// the same `filter`.
+/// row it accepts (#777), and without the row groups of the files whose
+/// footer statistics prove they hold none (#772): a column a file lacks or
+/// stores with another type is never used to prune. Pass the files of
+/// [`snapshot_files_where`] for the same `filter`.
 #[cfg(feature = "ingest-read")]
 pub fn snapshot_segments_where<'f>(
     snapshot: &'f crate::storage::ingest::Snapshot,
@@ -1017,7 +1027,15 @@ pub fn snapshot_segments_where<'f>(
     program: &'f Program,
     filter: &table::SnapshotFilter,
 ) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
-    segments_of(snapshot, files, columns, program, Some(filter.expr()), &[])
+    segments_of(
+        snapshot,
+        files,
+        columns,
+        program,
+        Some(filter.expr()),
+        Some(filter.expr()),
+        &[],
+    )
 }
 
 #[cfg(feature = "ingest-read")]
@@ -1026,7 +1044,8 @@ fn segments_of<'f>(
     files: &'f [ParquetFile<'f>],
     columns: &[String],
     program: &'f Program,
-    where_clause: Option<&Expr>,
+    row_group_where: Option<&Expr>,
+    page_where: Option<&Expr>,
     bit_pattern: &[String],
 ) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
     let schema = snapshot
@@ -1035,23 +1054,30 @@ fn segments_of<'f>(
     let requests = table::resolve(&schema, columns, bit_pattern)?;
     let mut segments: Vec<SnapshotSegment<'f, 'f>> = Vec::new();
     for file in files {
-        let (leaves, _, fixups) = table::file_plan(&leaf_columns(file), &schema, &requests);
-        segments.extend((0..file.num_row_groups()).map(|i| {
-            SnapshotSegment(TableSegment::RowGroup {
-                inner: RowGroupSegment {
-                    file,
-                    row_group_index: i,
-                    columns: leaves.clone(),
-                    program,
-                    order_leaf: None,
-                    bit_pattern: bit_pattern.to_vec(),
-                },
-                fixups: fixups.clone(),
-            })
-        }));
+        let (leaves, comparable, fixups) =
+            table::file_plan(&leaf_columns(file), &schema, &requests);
+        // Footer statistics prune through the leaves stored with the
+        // table's type only; the others never prune (#772).
+        segments.extend(
+            row_group_segments(
+                file,
+                &leaves,
+                &comparable,
+                row_group_where,
+                program,
+                bit_pattern,
+            )
+            .into_iter()
+            .map(|inner| {
+                SnapshotSegment(TableSegment::RowGroup {
+                    inner,
+                    fixups: fixups.clone(),
+                })
+            }),
+        );
     }
     segments.extend(
-        table::page_segments(snapshot, &schema, &requests, where_clause)
+        table::page_segments(snapshot, &schema, &requests, page_where)
             .into_iter()
             .map(SnapshotSegment),
     );

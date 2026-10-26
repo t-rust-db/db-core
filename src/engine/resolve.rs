@@ -64,6 +64,10 @@ use std::sync::Arc;
 
 #[cfg(feature = "engine-column")]
 use super::column::BatchEngine;
+#[cfg(feature = "engine-column")]
+use super::column::FileSegment;
+#[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+use super::column::{table::TableEngine, SnapshotSegment};
 use super::cross_mode;
 use super::row::RowEngine;
 use super::stream::StreamEngine;
@@ -361,6 +365,146 @@ pub fn run_query(
     )
 }
 
+/// A cross-mode join's column-table probe side (#598, #772): a Parquet
+/// file or a table directory. The three join entry points are written once
+/// over it.
+#[cfg(feature = "engine-column")]
+enum Probe<'e> {
+    Batch(&'e BatchEngine),
+    #[cfg(feature = "ingest-read")]
+    Table(&'e TableEngine),
+}
+
+/// A probe segment of either kind, so one join runs over both.
+#[cfg(feature = "engine-column")]
+enum ProbeSegment<'a, 'm> {
+    File(FileSegment<'a, 'm>),
+    #[cfg(feature = "ingest-read")]
+    Dir(SnapshotSegment<'a, 'm>),
+}
+
+#[cfg(feature = "engine-column")]
+impl ProbeSegment<'_, '_> {
+    /// Whether this is a row group of a file, not a live page: what a
+    /// join's footer-statistics pruning can keep or drop.
+    fn is_row_group(&self) -> bool {
+        match self {
+            ProbeSegment::File(_) => true,
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.is_row_group(),
+        }
+    }
+}
+
+#[cfg(feature = "engine-column")]
+impl VmSegment for ProbeSegment<'_, '_> {
+    fn load(&self) -> Result<Arc<Batch>, crate::vm::batch::VmError> {
+        match self {
+            ProbeSegment::File(s) => s.load(),
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.load(),
+        }
+    }
+
+    fn order_key_bound(&self, descending: bool) -> Option<Value> {
+        match self {
+            ProbeSegment::File(s) => s.order_key_bound(descending),
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.order_key_bound(descending),
+        }
+    }
+
+    fn load_columns(&self, columns: &[String]) -> Result<Arc<Batch>, crate::vm::batch::VmError> {
+        match self {
+            ProbeSegment::File(s) => s.load_columns(columns),
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.load_columns(columns),
+        }
+    }
+
+    fn gather_at(
+        &self,
+        columns: &[String],
+        positions: &[u32],
+    ) -> Option<Result<Batch, crate::vm::batch::VmError>> {
+        match self {
+            ProbeSegment::File(s) => s.gather_at(columns, positions),
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.gather_at(columns, positions),
+        }
+    }
+}
+
+#[cfg(feature = "engine-column")]
+impl Probe<'_> {
+    fn parse_join(&self, sql: &str) -> Result<Select, EngineError> {
+        match self {
+            Probe::Batch(e) => e.parse_join(sql),
+            #[cfg(feature = "ingest-read")]
+            Probe::Table(e) => e.parse_join(sql),
+        }
+    }
+
+    fn table_name(&self) -> &str {
+        match self {
+            Probe::Batch(e) => e.table_name(),
+            #[cfg(feature = "ingest-read")]
+            Probe::Table(e) => e.table_name(),
+        }
+    }
+
+    fn columns(&self) -> Vec<String> {
+        match self {
+            Probe::Batch(e) => e.columns(),
+            #[cfg(feature = "ingest-read")]
+            Probe::Table(e) => e.columns(),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Probe::Batch(e) => e.path(),
+            #[cfg(feature = "ingest-read")]
+            Probe::Table(e) => e.path(),
+        }
+    }
+
+    fn table_stats(&self) -> TableStats {
+        match self {
+            Probe::Batch(e) => e.table_stats(),
+            #[cfg(feature = "ingest-read")]
+            Probe::Table(e) => e.table_stats(),
+        }
+    }
+
+    /// Row groups of the file or the archive files, live pages left out.
+    fn row_groups(&self) -> usize {
+        match self {
+            Probe::Batch(e) => e.table_stats().row_groups,
+            #[cfg(feature = "ingest-read")]
+            Probe::Table(e) => e.archive_row_groups(),
+        }
+    }
+
+    fn with_probe_segments<T>(
+        &self,
+        columns: &[String],
+        prune: Option<&crate::parser::ast::Expr>,
+        bit_pattern: &[String],
+        f: impl FnOnce(Vec<ProbeSegment<'_, '_>>) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        match self {
+            Probe::Batch(e) => e.with_probe_segments(columns, prune, bit_pattern, |segments| {
+                f(segments.into_iter().map(ProbeSegment::File).collect())
+            }),
+            #[cfg(feature = "ingest-read")]
+            Probe::Table(e) => e.with_probe_segments(columns, prune, bit_pattern, |segments| {
+                f(segments.into_iter().map(ProbeSegment::Dir).collect())
+            }),
+        }
+    }
+}
+
 /// Runs a cross-mode `SELECT` whose probe side is a Parquet file: the
 /// file's table (named after its stem) joined to SQLite lookup tables.
 /// Same shapes as [`run_query`]: the SQLite side always builds, `JOIN` is
@@ -368,6 +512,16 @@ pub fn run_query(
 #[cfg(feature = "engine-column")]
 pub fn run_column_query(
     driving: &BatchEngine,
+    lookup: &RowEngine,
+    sql: &str,
+) -> Result<QueryResult, EngineError> {
+    run_probe_query(&Probe::Batch(driving), lookup, sql)
+}
+
+/// [`run_column_query`] over either kind of column-table probe side.
+#[cfg(feature = "engine-column")]
+fn run_probe_query(
+    driving: &Probe<'_>,
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
@@ -431,7 +585,7 @@ fn sqlite_scan_stats(
 /// (see [`prune`]).
 #[cfg(feature = "engine-column")]
 fn explain_column_plan(
-    driving: &BatchEngine,
+    driving: &Probe<'_>,
     lookup: &RowEngine,
     lookup_file: &Path,
     sql: &str,
@@ -483,7 +637,7 @@ fn explain_column_plan(
             &plan.left_columns,
             Some(predicate),
             &[],
-            |segments| Ok(segments.len()),
+            |segments| Ok(segments.iter().filter(|s| s.is_row_group()).count()),
         )?),
         (false, None) => None,
     };
@@ -497,7 +651,7 @@ fn explain_column_plan(
             parent: 0,
             detail: format!(
                 "PRUNE ROW GROUPS OF {table} BY {lookup_table} FILTER ({kept} of {} kept)",
-                probe_stats.row_groups
+                driving.row_groups()
             ),
         });
     }
@@ -510,7 +664,7 @@ fn explain_column_plan(
 /// `"batch"`.
 #[cfg(feature = "engine-column")]
 fn explain_column_opcodes(
-    driving: &BatchEngine,
+    driving: &Probe<'_>,
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
@@ -1203,6 +1357,18 @@ pub enum CrossModeEngine {
         /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
         lookup_path: PathBuf,
     },
+    /// A table directory `FROM` joined to SQLite lookup tables (#772): its
+    /// archive files and live pages are the probe side.
+    #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+    TableSqlite {
+        /// The table directory's engine, the probe side. Boxed: its reader
+        /// is much larger than the other variants' engines.
+        driving: Box<TableEngine>,
+        /// The SQLite lookup engine, the build side.
+        lookup: RowEngine,
+        /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
+        lookup_path: PathBuf,
+    },
     /// Two stream engines joined via a windowed self-join (ADR-0022).
     StreamStream {
         /// The `FROM` side's stream engine (query alias: `FROM log AS <alias>`).
@@ -1233,6 +1399,19 @@ impl CrossModeEngine {
     pub fn open_column_sqlite(parquet: &Path, lookup_path: &Path) -> Result<Self, EngineError> {
         Ok(CrossModeEngine::ColumnSqlite {
             driving: BatchEngine::open(parquet)?,
+            lookup: RowEngine::open(lookup_path)?,
+            lookup_path: lookup_path.to_path_buf(),
+        })
+    }
+
+    /// Opens a table-directory/SQLite cross-mode engine (#772): the
+    /// directory's table (named after the directory) probes SQLite lookup
+    /// tables. Each query reads a fresh snapshot, so rows still in the live
+    /// pages take part and flushing them to `archive/` changes nothing.
+    #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+    pub fn open_table_sqlite(table_dir: &Path, lookup_path: &Path) -> Result<Self, EngineError> {
+        Ok(CrossModeEngine::TableSqlite {
+            driving: Box::new(TableEngine::open(table_dir)?),
             lookup: RowEngine::open(lookup_path)?,
             lookup_path: lookup_path.to_path_buf(),
         })
@@ -1272,6 +1451,13 @@ impl Engine for CrossModeEngine {
             CrossModeEngine::ColumnSqlite {
                 driving, lookup, ..
             } => run_column_query(driving, lookup, sql),
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::TableSqlite {
+                driving, lookup, ..
+            } => {
+                driving.refresh()?;
+                run_probe_query(&Probe::Table(driving), lookup, sql)
+            }
             CrossModeEngine::StreamStream { left, right } => {
                 run_stream_stream_query(left, right, sql)
             }
@@ -1290,7 +1476,13 @@ impl Engine for CrossModeEngine {
                 driving,
                 lookup,
                 lookup_path,
-            } => explain_column_plan(driving, lookup, lookup_path, sql),
+            } => explain_column_plan(&Probe::Batch(driving), lookup, lookup_path, sql),
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::TableSqlite {
+                driving,
+                lookup,
+                lookup_path,
+            } => explain_column_plan(&Probe::Table(driving), lookup, lookup_path, sql),
             CrossModeEngine::StreamStream { left, right } => {
                 explain_stream_stream_plan(left, right, sql)
             }
@@ -1305,7 +1497,11 @@ impl Engine for CrossModeEngine {
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
                 driving, lookup, ..
-            } => explain_column_opcodes(driving, lookup, sql)?,
+            } => explain_column_opcodes(&Probe::Batch(driving), lookup, sql)?,
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::TableSqlite {
+                driving, lookup, ..
+            } => explain_column_opcodes(&Probe::Table(driving), lookup, sql)?,
             CrossModeEngine::StreamStream { left, .. } => {
                 explain_opcodes_stream_stream_query(left, sql)?
             }
@@ -1318,6 +1514,8 @@ impl Engine for CrossModeEngine {
             CrossModeEngine::StreamSqlite { driving, .. } => driving.stats(),
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite { driving, .. } => driving.stats(),
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::TableSqlite { driving, .. } => driving.stats(),
             CrossModeEngine::StreamStream { left, .. } => left.stats(),
         }
     }
@@ -1333,6 +1531,14 @@ impl Engine for CrossModeEngine {
             }
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
+                driving, lookup, ..
+            } => {
+                let mut tables = driving.tables()?;
+                tables.extend(lookup.tables()?);
+                Ok(tables)
+            }
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::TableSqlite {
                 driving, lookup, ..
             } => {
                 let mut tables = driving.tables()?;

@@ -205,6 +205,11 @@ path = "tests/unit/engine_column_join_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch"]
 
 [[test]]
+name = "unit_engine_table_join"
+path = "tests/unit/engine_table_join_test.rs"
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "ingest"]
+
+[[test]]
 name = "unit_vm_row_public_api"
 path = "tests/unit/vm_row_public_api_test.rs"
 
@@ -316,7 +321,7 @@ required-features = ["storage-column-write", "engine-column"]
 
 [[example]]
 name = "column_join_oracle"
-required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch"]
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "ingest"]
 
 [[example]]
 name = "row_oracle"

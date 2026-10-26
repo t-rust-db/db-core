@@ -697,6 +697,95 @@ impl TableEngine {
         Ok(select)
     }
 
+    /// Parses the `SELECT` of a cross-mode join whose probe side is this
+    /// table: no `FROM`-table check (the resolver sorts the sides out) and
+    /// no `JOIN` rejection, with TIMESTAMP literals resolved as for a
+    /// single-table query (#772).
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn parse_join(&self, sql: &str) -> Result<Select, EngineError> {
+        let mut select = super::planner_parse(sql)?;
+        timestamp_literals(&mut select, &schema_timestamps(&self.schema))?;
+        Ok(select)
+    }
+
+    /// The table's column names, for the resolver's `GROUP BY` lookup.
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn columns(&self) -> Vec<String> {
+        column_names(&self.schema)
+    }
+
+    /// Row groups (archive files plus live pages) and rows of the snapshot
+    /// the last query read, for a cross-mode `EXPLAIN`.
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn table_stats(&self) -> TableStats {
+        TableStats {
+            row_groups: self.segment_count(),
+            rows: self.rows(),
+            source: None,
+        }
+    }
+
+    /// Row groups of the snapshot's archive files, live pages left out: what
+    /// a join's footer-statistics pruning can keep or drop (#772).
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn archive_row_groups(&self) -> usize {
+        self.snapshot()
+            .files()
+            .filter_map(|(_, bytes)| ParquetFile::open(bytes).ok())
+            .map(|f| f.num_row_groups())
+            .sum()
+    }
+
+    /// Runs `f` over one segment per archive row group and live page of the
+    /// last snapshot, loading `columns` (`t.col` names as the join plan
+    /// qualifies them) eagerly: the probe side of a cross-mode join. An
+    /// archive row group that `prune`'s footer statistics prove cannot
+    /// match is left out; a live page, and a column a file lacks or stores
+    /// with another type, is never used to prune (#772). The `bit_pattern`
+    /// columns read a `UINT_64` above `i64::MAX` as its signed bit pattern
+    /// (#786).
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn with_probe_segments<T>(
+        &self,
+        columns: &[String],
+        prune: Option<&Expr>,
+        bit_pattern: &[String],
+        f: impl FnOnce(Vec<super::SnapshotSegment<'_, '_>>) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        let snapshot = self.snapshot();
+        let files = super::snapshot_files(snapshot)?;
+        let eager = Program::from_opcodes([]);
+        f(super::segments_of(
+            snapshot,
+            &files,
+            columns,
+            &eager,
+            prune,
+            None,
+            bit_pattern,
+        )?)
+    }
+
     /// Row groups plus pages.
     fn segment_count(&self) -> usize {
         let row_groups: usize = self
