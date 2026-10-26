@@ -374,20 +374,44 @@ fn explain_opcodes_show_the_sqlite_build_and_the_batch_probe_and_body() {
     assert!(sections.iter().all(|s| !s.rows.is_empty()));
 }
 
+/// #782: a star join's `EXPLAIN` lists every joined table and its hash
+/// join (it used to be refused).
 #[test]
-fn explain_of_a_star_join_is_unsupported_with_a_clear_message() {
+fn explain_of_a_star_join_lists_every_joined_table() {
     let db = LookupDb::new("explain-star");
     let e = db.engine();
     let sql = "SELECT production.id FROM production \
                JOIN labels ON production.id = labels.id \
                JOIN tiers ON production.id = tiers.id";
-    for err in [
-        e.explain_plan(sql).unwrap_err(),
-        e.explain_opcodes(sql).unwrap_err(),
-    ] {
-        assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
-        assert!(err.message.contains("multi-way"), "{err}");
+    let plan: Vec<String> = e
+        .explain_plan(sql)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.detail)
+        .collect();
+    for table in ["labels", "tiers"] {
+        assert!(
+            plan.iter()
+                .any(|d| d.starts_with(&format!("SCAN {table} (")) && d.contains("[sqlite ")),
+            "{table}: {plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .any(|d| d.starts_with("HASH JOIN") && d.ends_with(&format!("{table}.id"))),
+            "{table}: {plan:?}"
+        );
     }
+    let sections = e.explain_opcodes(sql).unwrap();
+    let labels: Vec<&str> = sections.iter().map(|s| s.label.as_str()).collect();
+    assert_eq!(
+        labels,
+        [
+            "JOIN build (sqlite labels)",
+            "JOIN build (sqlite tiers)",
+            "JOIN probe (parquet production)",
+            "JOIN body"
+        ]
+    );
 }
 
 #[test]

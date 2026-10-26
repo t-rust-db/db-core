@@ -192,12 +192,101 @@ impl BatchEngine {
         )?)
     }
 
+    /// This whole file as one [`Batch`] of `columns` (the names as the join
+    /// plan asks for them): the build side of a cross-mode join that has a
+    /// second column table (#782). The `bit_pattern` columns read a
+    /// `UINT_64` above `i64::MAX` as its signed bit pattern, like the
+    /// probe's join keys (#600).
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn read_table(
+        &self,
+        columns: &[String],
+        bit_pattern: &[String],
+    ) -> Result<Batch, EngineError> {
+        self.with_probe_segments(columns, None, bit_pattern, |segments| {
+            merge_segments(&segments, columns)
+        })
+    }
+
+    /// `select`'s quoted timestamps compared with this file's TIMESTAMP
+    /// columns, as integers ([`timestamp_literals`]): for a cross-mode
+    /// query that names more than one file.
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn resolve_timestamp_literals(
+        &self,
+        select: &mut Select,
+    ) -> Result<(), EngineError> {
+        timestamp_literals(select, &self.timestamps)
+    }
+
     /// Parses one `SELECT` for this table; see [`parse_select`].
     fn parse_for_table(&self, sql: &str) -> Result<Select, EngineError> {
         let mut select = parse_select(sql, &self.table, &self.column_names(), "this file")?;
         timestamp_literals(&mut select, &self.timestamps)?;
         Ok(select)
     }
+}
+
+/// `key`'s values in `batch`, removed from it; `NULL`s for a column it
+/// does not have.
+#[cfg(any(
+    feature = "ingest-read",
+    all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    )
+))]
+pub(crate) fn take_values(batch: &mut Batch, key: &str) -> Vec<Value> {
+    if let Some(values) = batch.columns.remove(key) {
+        return Arc::unwrap_or_clone(values);
+    }
+    match batch.typed_columns.remove(key) {
+        Some(column) => (0..batch.num_rows).map(|i| column.get(i)).collect(),
+        None => vec![Value::Null; batch.num_rows],
+    }
+}
+
+/// The `columns` of every segment, in segment order, as one [`Batch`].
+#[cfg(any(
+    feature = "ingest-read",
+    all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    )
+))]
+pub(crate) fn merge_segments<S: Segment>(
+    segments: &[S],
+    columns: &[String],
+) -> Result<Batch, EngineError> {
+    let mut merged: Vec<Vec<Value>> = vec![Vec::new(); columns.len()];
+    let mut rows = 0usize;
+    for segment in segments {
+        let mut batch = Arc::unwrap_or_clone(
+            segment
+                .load()
+                .map_err(|e| EngineError::new(ErrorKind::Execute, e))?,
+        );
+        rows = rows.saturating_add(batch.num_rows);
+        for (values, key) in merged.iter_mut().zip(columns) {
+            values.extend(take_values(&mut batch, key));
+        }
+    }
+    Ok(columns
+        .iter()
+        .zip(merged)
+        .fold(Batch::new(rows), |batch, (key, values)| {
+            batch.with_column(key.clone(), values)
+        }))
 }
 
 /// Parses one `SELECT` for the single table `table` with `columns`: the

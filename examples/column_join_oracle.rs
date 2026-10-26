@@ -16,7 +16,10 @@
 //! directory the script compares: `production(id, region)`, ids 1..=5000,
 //! flushed in five files so DuckDB, which cannot read a WAL, sees every row.
 //!
-//! Usage: `column_join_oracle <path.parquet | table dir> <lookup.db> <sql>`
+//! The first argument may name several Parquet files, comma-separated
+//! (#782): a query joining two of them probes with the larger.
+//!
+//! Usage: `column_join_oracle <path.parquet>[,<more.parquet>...] | <table dir> <lookup.db> <sql>`
 //! or `column_join_oracle --seed-dir <dir>`
 
 use std::env;
@@ -74,14 +77,17 @@ fn main() -> ExitCode {
         }
     }
     let [_, parquet, lookup, sql] = args.as_slice() else {
-        eprintln!("usage: column_join_oracle <path.parquet | table dir> <lookup.db> <sql>");
+        eprintln!(
+            "usage: column_join_oracle <path.parquet>[,<more.parquet>...] | <table dir> <lookup.db> <sql>"
+        );
         return ExitCode::FAILURE;
     };
 
     let opened = if Path::new(parquet).is_dir() {
         CrossModeEngine::open_table_sqlite(Path::new(parquet), Path::new(lookup))
     } else {
-        CrossModeEngine::open_column_sqlite(Path::new(parquet), Path::new(lookup))
+        let files: Vec<&Path> = parquet.split(',').map(Path::new).collect();
+        CrossModeEngine::open_column_tables_sqlite(&files, Path::new(lookup))
     };
     let mut engine = match opened {
         Ok(e) => e,

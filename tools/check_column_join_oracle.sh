@@ -111,6 +111,29 @@ QUERIES=(
   "SELECT regions.zone, count(*) FROM __P__ JOIN __ids__ ON production.id = ids.id JOIN __regions__ ON production.region = regions.region GROUP BY regions.zone ORDER BY regions.zone"
 )
 
+# Two Parquet tables (#782): `production` and a smaller `extra` written by
+# DuckDB, ids 1..1000 three times each, in row groups of 500. The larger one
+# (production) probes, the other builds, whatever order the query writes
+# them in; a filter on `extra` prunes production's row groups. __X__ is the
+# second Parquet table (`extra`); __P__ and the lookup tables are as above.
+TWO_TABLE_QUERIES=(
+  "SELECT count(*), sum(extra.n) FROM __P__ JOIN __X__ ON production.id = extra.id"
+  "SELECT count(*), sum(extra.n) FROM __X__ JOIN __P__ ON extra.id = production.id"
+  "SELECT count(*), sum(extra.n) FROM __P__ JOIN __X__ USING (id)"
+  "SELECT production.region, count(*), sum(extra.n) FROM __P__ JOIN __X__ ON production.id = extra.id GROUP BY production.region ORDER BY production.region"
+  "SELECT production.id, extra.n FROM __P__ JOIN __X__ ON production.id = extra.id WHERE extra.id = 7 ORDER BY extra.n"
+  "SELECT count(*) FROM __P__ JOIN __X__ ON production.id = extra.id WHERE extra.n < 30"
+  "SELECT count(*) FROM __P__ JOIN __X__ ON production.id = extra.id WHERE extra.n > 999999"
+  "SELECT production.region, count(extra.n) FROM __P__ JOIN __X__ ON production.id = extra.id WHERE extra.n BETWEEN 100 AND 200 GROUP BY production.region ORDER BY production.region"
+  # a LEFT JOIN keeps the FROM table's unmatched rows, and it probes
+  "SELECT count(*), count(extra.n) FROM __P__ LEFT JOIN __X__ ON production.id = extra.id"
+  "SELECT count(*), count(production.region) FROM __X__ LEFT JOIN __P__ ON extra.id = production.id"
+  # a star over the second Parquet table and a lookup table
+  "SELECT ids.label, count(*), sum(extra.n) FROM __P__ JOIN __X__ ON production.id = extra.id JOIN __ids__ ON production.id = ids.id GROUP BY ids.label ORDER BY ids.label"
+  "SELECT regions.zone, count(*), sum(extra.n) FROM __X__ JOIN __P__ ON extra.id = production.id JOIN __regions__ ON production.region = regions.region GROUP BY regions.zone ORDER BY regions.zone"
+  "SELECT ids.label, extra.n FROM __P__ JOIN __X__ ON production.id = extra.id JOIN __ids__ ON production.id = ids.id WHERE ids.label = 'two' AND extra.n < 1000 ORDER BY extra.n"
+)
+
 # Queries both engines must refuse: an unqualified column that two tables
 # have is ambiguous (unless it is the USING key), and so is an unknown one.
 # (`LEFT JOIN ... USING (a, b)` is valid in DuckDB; db-core refuses it by
@@ -127,6 +150,9 @@ workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 lookup="$workdir/lookup.db"
 sqlite3 "$lookup" "$SEED"
+
+EXTRA="$workdir/extra.parquet"
+duckdb -c "COPY (SELECT (i % 1000) + 1 AS id, i AS n FROM range(0, 3000) t(i) ORDER BY id, n) TO '$EXTRA' (FORMAT parquet, ROW_GROUP_SIZE 500, COMPRESSION uncompressed)"
 
 echo "building examples/column_join_oracle (release)..."
 cargo build --release --example column_join_oracle -q
@@ -149,6 +175,28 @@ for template in "${QUERIES[@]}"; do
   checked=$((checked + 1))
   if [[ "$got" != "$want" ]]; then
     echo "MISMATCH: $db_sql"
+    echo "  db-core: $got"
+    echo "  duckdb:  $want"
+    fail=1
+  fi
+done
+
+for template in "${TWO_TABLE_QUERIES[@]}"; do
+  db_sql="${template//__P__/production}"
+  db_sql="${db_sql//__X__/extra}"
+  db_sql="${db_sql//__ids__/ids}"
+  db_sql="${db_sql//__regions__/regions}"
+  duck_sql="${template//__P__/\'$FIXTURE\' AS production}"
+  duck_sql="${duck_sql//__X__/\'$EXTRA\' AS extra}"
+  duck_sql="${duck_sql//__ids__/lk.ids}"
+  duck_sql="${duck_sql//__regions__/lk.regions}"
+
+  got="$(./target/release/examples/column_join_oracle "$FIXTURE,$EXTRA" "$lookup" "$db_sql")"
+  want="$(duckdb -csv -noheader -nullvalue '' -c "INSTALL sqlite; LOAD sqlite; ATTACH '$lookup' AS lk (TYPE sqlite); $duck_sql" | grep -v '^$' || true)"
+
+  checked=$((checked + 1))
+  if [[ "$got" != "$want" ]]; then
+    echo "MISMATCH (two Parquet tables): $db_sql"
     echo "  db-core: $got"
     echo "  duckdb:  $want"
     fail=1

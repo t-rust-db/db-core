@@ -70,17 +70,6 @@ impl Fixup {
     }
 }
 
-/// `key`'s values in `batch`, removed from it.
-fn take_values(batch: &mut Batch, key: &str) -> Vec<Value> {
-    if let Some(values) = batch.columns.remove(key) {
-        return Arc::unwrap_or_clone(values);
-    }
-    match batch.typed_columns.remove(key) {
-        Some(column) => (0..batch.num_rows).map(|i| column.get(i)).collect(),
-        None => vec![Value::Null; batch.num_rows],
-    }
-}
-
 /// `inner`'s `columns` (those the file has), fixed up to the table's.
 fn load_fixed(
     inner: &RowGroupSegment<'_, '_>,
@@ -100,7 +89,7 @@ fn load_fixed(
     {
         let values = match fixup {
             Fixup::Null(_) => vec![Value::Null; batch.num_rows],
-            Fixup::Cast(key, t) => take_values(&mut batch, key)
+            Fixup::Cast(key, t) => super::take_values(&mut batch, key)
                 .into_iter()
                 .map(|v| cast(v, *t))
                 .collect(),
@@ -519,7 +508,7 @@ pub fn read_snapshot(snapshot: &Snapshot, columns: &[String]) -> Result<Batch, E
     let files = super::snapshot_files(snapshot)?;
     let program = Program::from_opcodes([]);
     let segments = super::snapshot_segments(snapshot, &files, columns, &program)?;
-    merge_segments(&segments, columns)
+    super::merge_segments(&segments, columns)
 }
 
 /// [`read_snapshot`] where the `bit_pattern` columns (keys of `columns`)
@@ -539,7 +528,7 @@ pub fn read_snapshot_with_bit_patterns(
         &program,
         bit_pattern,
     )?;
-    merge_segments(&segments, columns)
+    super::merge_segments(&segments, columns)
 }
 
 /// A predicate over a table's columns, parsed once, that readers use to
@@ -585,32 +574,7 @@ pub fn read_snapshot_where(
     let files = super::snapshot_files_where(snapshot, filter)?;
     let program = Program::from_opcodes([]);
     let segments = super::snapshot_segments_where(snapshot, &files, columns, &program, filter)?;
-    merge_segments(&segments, columns)
-}
-
-fn merge_segments(
-    segments: &[super::SnapshotSegment<'_, '_>],
-    columns: &[String],
-) -> Result<Batch, EngineError> {
-    let mut merged: Vec<Vec<Value>> = vec![Vec::new(); columns.len()];
-    let mut rows = 0usize;
-    for segment in segments {
-        let mut batch = Arc::unwrap_or_clone(
-            segment
-                .load()
-                .map_err(|e| EngineError::new(ErrorKind::Execute, e))?,
-        );
-        rows = rows.saturating_add(batch.num_rows);
-        for (values, key) in merged.iter_mut().zip(columns) {
-            values.extend(take_values(&mut batch, key));
-        }
-    }
-    Ok(columns
-        .iter()
-        .zip(merged)
-        .fold(Batch::new(rows), |batch, (key, values)| {
-            batch.with_column(key.clone(), values)
-        }))
+    super::merge_segments(&segments, columns)
 }
 
 /// The schema's TIMESTAMP columns and their units per second, for
@@ -710,6 +674,37 @@ impl TableEngine {
         let mut select = super::planner_parse(sql)?;
         timestamp_literals(&mut select, &schema_timestamps(&self.schema))?;
         Ok(select)
+    }
+
+    /// `select`'s quoted timestamps compared with this table's TIMESTAMP
+    /// columns, as integers: for a cross-mode query that names more than one
+    /// table (#772).
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn resolve_timestamp_literals(
+        &self,
+        select: &mut Select,
+    ) -> Result<(), EngineError> {
+        timestamp_literals(select, &schema_timestamps(&self.schema))
+    }
+
+    /// The whole table's `columns` of the last snapshot as one batch: a
+    /// cross-mode join's build side. The `bit_pattern` columns read a
+    /// `UINT_64` above `i64::MAX` as its signed bit pattern (#786).
+    #[cfg(all(
+        feature = "engine-row",
+        feature = "engine-stream",
+        feature = "vm-batch"
+    ))]
+    pub(crate) fn read_table(
+        &self,
+        columns: &[String],
+        bit_pattern: &[String],
+    ) -> Result<Batch, EngineError> {
+        read_snapshot_with_bit_patterns(self.snapshot(), columns, bit_pattern)
     }
 
     /// The table's column names, for the resolver's `GROUP BY` lookup.
