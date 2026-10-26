@@ -132,7 +132,7 @@ echo "build sides..."
 
 # A fresh read of a big unflushed tail, opened anew and incrementally (#593).
 echo "tail reader..."
-TAIL="$((EVENTS < 1000000 ? EVENTS - 1000 : 1000000))" "$BIN" tail "$OUT/tail" >"$OUT/tail.out"
+TAIL="$(((EVENTS - 3000) / 2 < 1000000 ? (EVENTS - 3000) / 2 : 1000000))" "$BIN" tail "$OUT/tail" >"$OUT/tail.out"
 
 python3 - "$RESULTS" "$OUT" "$REPORT_MD" "$REPORT_JSON" "$SQLITE_DB" <<'PY'
 import json, os, sys
@@ -227,6 +227,7 @@ lines += [
     "|---|---:|---:|",
     f"| first read | {t['fresh_open_ms']:.0f} | {t['reader_open_ms']:.0f} |",
     f"| after 1,000 more records | {t['fresh_after_more_ms']:.0f} | {t['refresh_after_more_ms']:.1f} |",
+    f"| after the first hour flushed (a second hour's tail left), and 1,000 more | {t['fresh_after_flush_ms']:.0f} | {t['refresh_after_flush_ms']:.1f} |",
 ]
 open(md_path, "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))

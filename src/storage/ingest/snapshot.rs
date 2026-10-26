@@ -30,7 +30,7 @@ use std::time::Duration;
 use super::error::IngestError;
 use super::fields::{add_field, add_page_fields, predefined_specs};
 use super::manifest::{FileEntry, Manifest};
-use super::page::{decode_record, HeadPage, Page};
+use super::page::{decode_record, HeadPage, Page, PageBody};
 use super::record::{check_row, decode_row, pad_row};
 use super::recover::{read_from, read_tail, WalPos};
 use super::wal::{Record, WAL_DIR};
@@ -52,6 +52,9 @@ pub struct Snapshot {
     /// One per `manifest.files`, same order.
     files: Vec<Arc<MmapRegion>>,
     pages: Vec<Page>,
+    /// The schema, when a reader has kept it up to date (#593): `schema`
+    /// then costs nothing.
+    schema: Option<Vec<ColumnSpec>>,
 }
 
 impl fmt::Debug for Snapshot {
@@ -107,6 +110,7 @@ impl Snapshot {
             manifest,
             files,
             pages,
+            schema: None,
         })
     }
 
@@ -159,6 +163,15 @@ impl Snapshot {
         if let Some(schema) = &self.manifest.schema {
             return Ok(schema.clone());
         }
+        match &self.schema {
+            Some(schema) => Ok(schema.clone()),
+            None => self.compute_schema(),
+        }
+    }
+
+    /// [`schema`](Snapshot::schema) of a lines table, from every file's
+    /// footer and every page.
+    fn compute_schema(&self) -> Result<Vec<ColumnSpec>, IngestError> {
         let mut specs = predefined_specs();
         for (entry, bytes) in self.files() {
             let file = ParquetFile::open(bytes)
@@ -249,6 +262,71 @@ impl PageBuilder {
         Ok(())
     }
 
+    /// Drops every record at or below `lsn`, which a flush moved into
+    /// files, and keeps the rest without parsing it again: whole pages go,
+    /// the page the cut falls in is rebuilt from its own rows. `false`
+    /// when a row cannot be carried over, and the caller reads the tail
+    /// again. Pages above the cut keep their boundaries, so one page may
+    /// now be shorter than the page size.
+    pub(crate) fn drop_through(&mut self, lsn: u64) -> bool {
+        self.head_page = None;
+        self.sealed.retain(|p| p.lsn_hi > lsn);
+        if let Some(first) = self.sealed.first() {
+            if first.lsn_lo <= lsn {
+                let skip = usize::try_from(lsn.saturating_add(1).saturating_sub(first.lsn_lo))
+                    .unwrap_or(usize::MAX);
+                let Some(cut) = self.cut_page(first, skip) else {
+                    return false;
+                };
+                if let Some(slot) = self.sealed.first_mut() {
+                    *slot = cut;
+                }
+            }
+            return true;
+        }
+        let skip = usize::try_from(lsn.saturating_add(1).saturating_sub(self.head_lsn_lo()))
+            .unwrap_or(usize::MAX);
+        self.head.drop_front(skip);
+        true
+    }
+
+    /// The first LSN of the head, `u64::MAX` when it is empty.
+    fn head_lsn_lo(&self) -> u64 {
+        self.head.lsn_lo().unwrap_or(u64::MAX)
+    }
+
+    /// `page` without its first `skip` rows, as a page of its own.
+    fn cut_page(&self, page: &Page, skip: usize) -> Option<Page> {
+        let lsn_lo = page
+            .lsn_lo
+            .saturating_add(u64::try_from(skip).unwrap_or(u64::MAX));
+        match &page.body {
+            PageBody::Rows(rows) => Some(Page {
+                lsn_lo,
+                lsn_hi: page.lsn_hi,
+                body: PageBody::Rows(Arc::new(rows.tail_from(skip))),
+            }),
+            PageBody::Lines(segment) => {
+                let observed = segment.observed_ts_ns();
+                let mut head = HeadPage::default();
+                for i in skip..segment.len() {
+                    let at = observed.get(i).copied().flatten()?;
+                    head.push(
+                        page.lsn_lo.saturating_add(u64::try_from(i).ok()?),
+                        at,
+                        segment.raw_line(i),
+                    );
+                }
+                head.snapshot(&self.source, &self.parser)
+            }
+        }
+    }
+
+    /// Pages sealed at the page size, not counting the head.
+    pub(crate) fn sealed_len(&self) -> usize {
+        self.sealed.len()
+    }
+
     /// Every page so far, the head last.
     pub(crate) fn pages(&mut self) -> Result<Vec<Page>, IngestError> {
         let mut pages = self.sealed.clone();
@@ -296,6 +374,21 @@ pub struct TableReader {
     mapped: Vec<(String, Arc<MmapRegion>)>,
     snapshot: Snapshot,
     stats: ReaderStats,
+    /// A lines table's schema as of the last refresh.
+    schema: Option<SchemaCache>,
+    /// The cached schema may hold fields of records that are gone, or
+    /// miss the order a fresh read gives: compute it again.
+    schema_stale: bool,
+}
+
+/// What a refresh keeps of a lines table's schema, so the next one folds in
+/// only what is new instead of opening every file's footer.
+struct SchemaCache {
+    specs: Vec<ColumnSpec>,
+    /// The files it was computed over.
+    files: Vec<String>,
+    /// Sealed pages already folded in; the head is folded in each time.
+    sealed_folded: usize,
 }
 
 impl fmt::Debug for TableReader {
@@ -319,6 +412,7 @@ impl TableReader {
                 manifest: manifest.clone(),
                 files: Vec::new(),
                 pages: Vec::new(),
+                schema: None,
             },
             manifest,
             builder,
@@ -326,6 +420,8 @@ impl TableReader {
             next_lsn,
             mapped: Vec::new(),
             stats,
+            schema: None,
+            schema_stale: true,
         };
         reader.assemble()?;
         Ok(reader)
@@ -348,14 +444,15 @@ impl TableReader {
     pub fn refresh(&mut self) -> Result<&Snapshot, IngestError> {
         for _ in 0..ATTEMPTS {
             let manifest = read_manifest(&self.dir)?;
-            if !self.holds(&manifest) || !self.advance()? {
+            if self.resume(&manifest)? {
+                self.manifest = manifest;
+            } else {
                 let (manifest, builder, pos, next_lsn) = Self::rebuild(&self.dir, &mut self.stats)?;
                 self.manifest = manifest;
                 self.builder = builder;
                 self.pos = pos;
                 self.next_lsn = next_lsn;
-            } else {
-                self.manifest = manifest;
+                self.schema_stale = true;
             }
             match self.assemble() {
                 Ok(()) => return Ok(&self.snapshot),
@@ -372,12 +469,30 @@ impl TableReader {
         )))
     }
 
-    /// Whether the held pages are still the records above `manifest`'s
-    /// `flushed_lsn`, read the way it says to.
-    fn holds(&self, manifest: &Manifest) -> bool {
-        manifest.flushed_lsn == self.manifest.flushed_lsn
-            && manifest.schema == self.manifest.schema
-            && manifest.format == self.manifest.format
+    /// Brings the held pages up to `manifest` without reading the tail
+    /// again: a flush that moved `flushed_lsn` forward drops the records
+    /// it took into files, then the frames after the saved position are
+    /// read. `false` when that cannot be done and the tail has to be read
+    /// again: the schema or format changed, the flush went past what was
+    /// parsed, a page cannot be cut, or the position no longer holds.
+    fn resume(&mut self, manifest: &Manifest) -> Result<bool, IngestError> {
+        let flushed = manifest.flushed_lsn;
+        if manifest.schema != self.manifest.schema
+            || manifest.format != self.manifest.format
+            || flushed < self.manifest.flushed_lsn
+        {
+            return Ok(false);
+        }
+        if flushed > self.manifest.flushed_lsn {
+            if flushed >= self.next_lsn {
+                return Ok(false);
+            }
+            if !self.builder.drop_through(flushed) {
+                return Ok(false);
+            }
+            self.schema_stale = true;
+        }
+        self.advance()
     }
 
     /// Reads the frames after the saved position into the held pages;
@@ -436,13 +551,54 @@ impl TableReader {
             mapped.push((entry.path.clone(), region));
         }
         self.mapped = mapped;
-        self.snapshot = Snapshot {
+        let mut snapshot = Snapshot {
             manifest: self.manifest.clone(),
             files: self.mapped.iter().map(|(_, r)| Arc::clone(r)).collect(),
             pages: self.builder.pages()?,
+            schema: None,
         };
+        if snapshot.manifest.schema.is_none() {
+            snapshot.schema = Some(self.lines_schema(&snapshot)?);
+        }
+        self.snapshot = snapshot;
         self.stats.refreshes = self.stats.refreshes.saturating_add(1);
         Ok(())
+    }
+}
+
+impl TableReader {
+    /// A lines table's schema over `snapshot`: the last one with the pages
+    /// sealed since and the head folded in, or computed from every file's
+    /// footer when the files changed or records were dropped.
+    fn lines_schema(&mut self, snapshot: &Snapshot) -> Result<Vec<ColumnSpec>, IngestError> {
+        let files: Vec<String> = snapshot
+            .manifest
+            .files
+            .iter()
+            .map(|f| f.path.clone())
+            .collect();
+        let sealed = self.builder.sealed_len();
+        let specs = match self.schema.take() {
+            Some(cache) if !self.schema_stale && cache.files == files => {
+                let mut specs = cache.specs;
+                for page in snapshot
+                    .pages
+                    .get(cache.sealed_folded..)
+                    .unwrap_or_default()
+                {
+                    add_page_fields(&mut specs, page);
+                }
+                specs
+            }
+            _ => snapshot.compute_schema()?,
+        };
+        self.schema_stale = false;
+        self.schema = Some(SchemaCache {
+            specs: specs.clone(),
+            files,
+            sealed_folded: sealed,
+        });
+        Ok(specs)
     }
 }
 
