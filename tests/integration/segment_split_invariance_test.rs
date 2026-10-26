@@ -1553,3 +1553,78 @@ fn batch_approx_count_distinct_is_refused_inside_expressions() {
         );
     }
 }
+
+/// #788: `ROUND`/`ABS` over a column, with sqlite3's and DuckDB's half-way
+/// rule (away from zero) and NULL in, NULL out -- the same under every
+/// split.
+#[test]
+fn batch_round_and_abs_follow_the_half_away_from_zero_rule() {
+    let grp: Vec<Value> = ["a"; 6].iter().map(|g| Value::Str((*g).into())).collect();
+    let amt = vec![
+        Value::Float(2.5),
+        Value::Float(-2.5),
+        Value::Float(0.5),
+        Value::Float(1.2345),
+        Value::Null,
+        Value::Int(-7),
+    ];
+    let cases: [(&str, Vec<Vec<Value>>); 3] = [
+        (
+            "SELECT round(amt) FROM t",
+            vec![
+                vec![Value::Float(3.0)],
+                vec![Value::Float(-3.0)],
+                vec![Value::Float(1.0)],
+                vec![Value::Float(1.0)],
+                vec![Value::Null],
+                vec![Value::Float(-7.0)],
+            ],
+        ),
+        (
+            "SELECT round(amt, 2), abs(amt) FROM t WHERE amt = 1.2345",
+            vec![vec![Value::Float(1.23), Value::Float(1.2345)]],
+        ),
+        (
+            "SELECT round(amt, 1) FROM t WHERE amt = 2.5 OR amt IS NULL",
+            vec![vec![Value::Float(2.5)], vec![Value::Null]],
+        ),
+    ];
+    for (sql, expected) in cases {
+        assert_split_invariant(sql, grp.len(), ("grp", &grp), ("amt", &amt));
+        assert_eq!(
+            run_batch(sql, &[2, 4], ("grp", &grp), ("amt", &amt)),
+            expected,
+            "{sql}"
+        );
+    }
+}
+
+/// #788: a numeric scalar wrapping aggregates -- the money-formatting
+/// shape `ROUND(SUM(x) / 100.0, 2)` -- merges the aggregate across
+/// segments and rounds the total once.
+#[test]
+fn batch_round_over_an_aggregate_is_segment_split_invariant() {
+    let (grp, amt) = distinct_dataset();
+    let cases: [(&str, Vec<Vec<Value>>); 2] = [
+        (
+            "SELECT grp, round(sum(amt) / 3.0, 2) FROM t GROUP BY grp ORDER BY grp",
+            vec![
+                vec![Value::Str("a".into()), Value::Float(1.33)],
+                vec![Value::Str("b".into()), Value::Float(3.67)],
+                vec![Value::Str("c".into()), Value::Float(3.33)],
+            ],
+        ),
+        (
+            "SELECT round(avg(amt), 1), abs(min(amt) - max(amt)) FROM t",
+            vec![vec![Value::Float(2.8), Value::Int(4)]],
+        ),
+    ];
+    for (sql, expected) in cases {
+        assert_split_invariant(sql, grp.len(), ("grp", &grp), ("amt", &amt));
+        assert_eq!(
+            run_batch(sql, &[5, 7], ("grp", &grp), ("amt", &amt)),
+            expected,
+            "{sql}"
+        );
+    }
+}

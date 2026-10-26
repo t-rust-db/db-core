@@ -294,9 +294,10 @@ fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
         ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
-    ) || crate::vm::map_fns::MAP_FUNCTIONS
-        .iter()
-        .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
+    ) || crate::functions::is_numeric_scalar(name, arity)
+        || crate::vm::map_fns::MAP_FUNCTIONS
+            .iter()
+            .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
 }
 
 fn arg_count(args: &FunctionArgs) -> usize {
@@ -338,11 +339,16 @@ fn agg_arg(_expr: &AstExpr, agg: AggFunc, args: &FunctionArgs) -> Result<Option<
 /// pre-`Filter` source-loading pass and the register-allocation pass in
 /// `compile` must agree on, so the same call resolves to the same source
 /// register in both. It walks every node `parser::column::validate_expr`
-/// lets an aggregate sit under (a scalar function's arguments are not
+/// lets an aggregate sit under (only a numeric scalar's arguments, #788, are
 /// among them).
 fn agg_expr_calls(expr: &AstExpr) -> Vec<&AstExpr> {
     match &expr.kind {
         ExprKind::FunctionCall { name, .. } if AggFunc::from_name(name).is_some() => vec![expr],
+        // A scalar's arguments (#788): `ROUND(SUM(x) / 100.0, 2)`.
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        } => list.iter().flat_map(agg_expr_calls).collect(),
         ExprKind::Binary { lhs, rhs, .. }
         | ExprKind::Is { lhs, rhs, .. }
         | ExprKind::Like {
@@ -937,8 +943,14 @@ fn classify_item(col: &ResultColumn) -> Result<Item> {
                 // other expression (`compile_expr`'s `FunctionCall` arm);
                 // anything else is rejected here, at plan time (ADR 0002),
                 // rather than silently lowering to `NULL` in `compile_expr`.
+                // One over an aggregate (#788, `ROUND(SUM(x) / 100.0, 2)`) is
+                // computed by `Combine`'s projection over the merged ones.
                 None if is_known_scalar_function(name, arg_count(args)) => {
-                    Ok(Item::Expr(expr.clone()))
+                    if expr_contains_agg(expr) {
+                        Ok(Item::AggExpr(expr.clone()))
+                    } else {
+                        Ok(Item::Expr(expr.clone()))
+                    }
                 }
                 None => Err(PlanError::UnsupportedSelectItem(format!(
                     "unknown function {name}"
@@ -5972,6 +5984,48 @@ mod tests {
         let program = compile_call("json_extract", 2);
         assert!(!has_nocase_like(&program));
         assert_eq!(call_names(&program).len(), 1);
+    }
+
+    /// #788: the parser's and the planner's scalar allow-lists are kept
+    /// as two copies; they must agree on every name and arity either
+    /// could be asked about.
+    #[test]
+    fn the_parser_and_planner_scalar_function_lists_agree() {
+        let mut names: Vec<&str> = vec![
+            "json_extract",
+            "logfmt_extract",
+            "regexp_extract",
+            "ilike",
+            "round",
+            "abs",
+            "ROUND",
+            "sqrt",
+            "length",
+            "nope",
+        ];
+        names.extend(crate::vm::map_fns::MAP_FUNCTIONS.iter().map(|(f, _)| *f));
+        for name in names {
+            for arity in 0..=4 {
+                assert_eq!(
+                    crate::parser::column::is_known_scalar_function(name, arity),
+                    is_known_scalar_function(name, arity),
+                    "{name}/{arity}"
+                );
+            }
+        }
+        for (name, arity) in crate::functions::NUMERIC_SCALARS {
+            assert!(is_known_scalar_function(name, arity), "{name}/{arity}");
+        }
+    }
+
+    /// #788: a column a rounded expression reads outside an aggregate must
+    /// still be a `GROUP BY` key; the planner refuses it as it does `amount * 2`.
+    #[test]
+    fn a_scalar_over_an_ungrouped_column_is_refused_by_the_planner() {
+        let select = sql::parse("SELECT region, round(amount) FROM t GROUP BY region").unwrap();
+        assert!(compile(&select).is_err());
+        let ok = sql::parse("SELECT region, round(avg(amount), 1) FROM t GROUP BY region").unwrap();
+        assert!(compile(&ok).is_ok());
     }
 
     fn distinct_item() -> Item {
