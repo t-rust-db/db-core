@@ -178,7 +178,7 @@ fn a_page_reads_as_the_engine_decodes_its_flushed_file() {
     page.push(8, vec![RecordValue::Null; 5]);
     assert_eq!((page.len(), page.is_empty()), (2, false));
     assert_eq!(page.observed_ts_ns(), &[7, 8]);
-    let col = |name: &str| page.engine_column(name).unwrap().unwrap();
+    let col = |name: &str| page.engine_column(name, false).unwrap().unwrap();
     assert_eq!(col("u"), [Value::Int(5), Value::Null]);
     assert_eq!(
         col("d"),
@@ -194,7 +194,7 @@ fn a_page_reads_as_the_engine_decodes_its_flushed_file() {
     assert_eq!(col("b"), [Value::Str("ab01".into()), Value::Null]);
     assert_eq!(col("f"), [Value::Float(1.5), Value::Null]);
     assert_eq!(col("u8"), [Value::Int(200), Value::Null]);
-    assert!(page.engine_column("nope").is_none());
+    assert!(page.engine_column("nope", false).is_none());
     assert!(page.cleared().is_empty());
 
     // A UINT_64 above i64::MAX is an error, as reading the file is.
@@ -202,8 +202,13 @@ fn a_page_reads_as_the_engine_decodes_its_flushed_file() {
         vec![spec("u", ColumnType::UInt64, false)].as_slice(),
     ));
     big.push(1, vec![RecordValue::UInt(u64::MAX)]);
-    let err = big.engine_column("u").unwrap().unwrap_err();
+    let err = big.engine_column("u", false).unwrap().unwrap_err();
     assert!(err.contains("18446744073709551615"), "{err}");
+    // A join key reads as the signed bit pattern instead (#786).
+    assert_eq!(
+        big.engine_column("u", true).unwrap().unwrap(),
+        [Value::Int(-1)]
+    );
 }
 
 #[test]
@@ -285,7 +290,7 @@ fn a_map_column_takes_only_a_map() {
     page.push(1, vec![RecordValue::Map(entries(&[("a", None)]))]);
     page.push(2, vec![RecordValue::Null]);
     assert_eq!(
-        page.engine_column("h").unwrap().unwrap(),
+        page.engine_column("h", false).unwrap().unwrap(),
         [Value::Map(Arc::new(vec![("a".into(), None)])), Value::Null]
     );
     // Truncated map bytes are not a row.

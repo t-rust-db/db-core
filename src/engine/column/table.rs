@@ -49,6 +49,8 @@ pub(super) struct Request {
     pub(super) key: String,
     pub(super) name: String,
     pub(super) column_type: ColumnType,
+    /// A `UINT_64` above `i64::MAX` reads as its signed bit pattern (#786).
+    pub(super) bit_pattern: bool,
 }
 
 /// What a row group must do to a loaded column to give the table's.
@@ -127,7 +129,7 @@ fn load_rows(rows: &RowPage, requests: &[Request]) -> Result<Batch, VmError> {
     requests
         .iter()
         .try_fold(Batch::new(rows.len()), |batch, r| {
-            let values = match rows.engine_column(&r.name) {
+            let values = match rows.engine_column(&r.name, r.bit_pattern) {
                 Some(values) => values.map_err(|reason| VmError::SegmentLoad {
                     reason: format!("page column `{}`: {reason}", r.name),
                 })?,
@@ -194,6 +196,7 @@ impl Segment for TableSegment<'_, '_> {
 pub(super) fn resolve(
     schema: &[ColumnSpec],
     names: &[String],
+    bit_pattern: &[String],
 ) -> Result<Vec<Request>, EngineError> {
     names
         .iter()
@@ -208,6 +211,7 @@ pub(super) fn resolve(
                 key: name.clone(),
                 name: spec.name.clone(),
                 column_type: spec.column_type,
+                bit_pattern: bit_pattern.contains(name),
             })
         })
         .collect()
@@ -260,7 +264,7 @@ pub fn query_snapshot(
 ) -> Result<QueryResult, EngineError> {
     let (schema, select) = parsed_select(snapshot, table, sql)?;
     let program: Program = planner::compile(&select).map_err(plan_err)?;
-    let requests = resolve(&schema, &program.columns_to_load())?;
+    let requests = resolve(&schema, &program.columns_to_load(), &[])?;
     let keep = file_flags(snapshot, &schema, select.where_clause.as_ref());
     let files = snapshot
         .files()
