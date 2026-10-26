@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.188.0] - 2026-10-26
+
+### Added
+
+- A Parquet/SQLite star join may name table directories as well as Parquet files: the largest table the query is a star around probes, the others build in memory, and rows in a directory's live pages take part (#782).
+
 ## [0.187.0] - 2026-10-26
 
 ### Added
