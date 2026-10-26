@@ -983,6 +983,16 @@ fn render_opcode(op: &Opcode) -> String {
                 list.join(", ")
             )
         }
+        Opcode::Select {
+            dst,
+            cond,
+            then,
+            else_,
+        } => format!("Opcode::Select {{ dst: {dst}, cond: {cond}, then: {then}, else_: {else_} }}"),
+        Opcode::Coalesce { dst, args } => format!(
+            "Opcode::Coalesce {{ dst: {dst}, args: std::borrow::Cow::Borrowed(&{}) }}",
+            render_usize_slice(args)
+        ),
         // No caller-side planner emits these three yet -- the join/semi-
         // join/window bypass shapes ([`render_joined`]/
         // [`render_semi_join`]/[`render_windowed`]) still reconstruct a
@@ -1446,6 +1456,26 @@ mod tests {
         assert_eq!(
             render_opcode(&op),
             "Opcode::InList { dst: 1, src: 0, list: std::borrow::Cow::Borrowed(&[Value::Str(std::borrow::Cow::Borrowed(\"a\")), Value::Null]), negated: true }"
+        );
+    }
+
+    #[test]
+    fn render_opcode_renders_select_and_coalesce() {
+        assert_eq!(
+            render_opcode(&Opcode::Select {
+                dst: 3,
+                cond: 0,
+                then: 1,
+                else_: 2
+            }),
+            "Opcode::Select { dst: 3, cond: 0, then: 1, else_: 2 }"
+        );
+        assert_eq!(
+            render_opcode(&Opcode::Coalesce {
+                dst: 4,
+                args: vec![0, 1, 2].into()
+            }),
+            "Opcode::Coalesce { dst: 4, args: std::borrow::Cow::Borrowed(&[0, 1, 2]) }"
         );
     }
 

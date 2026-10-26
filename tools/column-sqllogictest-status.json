@@ -1,6 +1,7 @@
 {
   "files": [
     {"file": "between_717.test", "pass": 25, "skip": 0, "fail": 0},
+    {"file": "case_725.test", "pass": 33, "skip": 0, "fail": 0},
     {"file": "codecs.test", "pass": 8, "skip": 0, "fail": 0},
     {"file": "having_644.test", "pass": 12, "skip": 0, "fail": 0},
     {"file": "in_list_716.test", "pass": 22, "skip": 0, "fail": 0},
@@ -10,5 +11,5 @@
     {"file": "types.test", "pass": 23, "skip": 4, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 165, "skip": 5, "fail": 0}
+  "total": {"pass": 198, "skip": 5, "fail": 0}
 }

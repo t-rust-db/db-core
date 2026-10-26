@@ -60,3 +60,39 @@ DuckDB's and the row dialect sqlite3's.
   `functions` sees which dialect each entry point serves.
 - The stream engine shares the column dialect: `LIKE` there is
   case-sensitive too.
+
+## As built (#725): CASE, COALESCE, IFNULL, NULLIF
+
+The row engine already evaluates all of these, lazily and with sqlite3's
+typing (the six cases added to `tools/row_functions_cases.sql` agree with
+sqlite3). The column dialect, and the stream engine through it, now takes
+them with DuckDB's answers.
+
+- **Lowering.** `parser::column` rewrites `CASE` to nested
+  `__select(cond, then, else)` calls, one per `WHEN` (a missing `ELSE` is
+  NULL; a simple `CASE` compares its operand with each `WHEN` value, so a
+  NULL never matches), and `NULLIF(a, b)` to `CASE WHEN a = b THEN NULL ELSE
+  a END`. The planner compiles `__select` to `Opcode::Select`, and
+  `COALESCE`/`IFNULL` to `Opcode::Coalesce`. Both work on the VM's values,
+  not through `Opcode::Call`, which would turn a DECIMAL into a REAL and a
+  boolean into 0/1. They take any expression, an aggregate included, so a
+  `CASE` or `COALESCE` over `SUM(x)` runs in `Combine`'s projection.
+- **Types.** The branches take DuckDB's common type: an integer and a float
+  give floats, an integer and a decimal a decimal, two decimals the larger
+  scale; text next to a number, or a boolean next to a number, is a
+  `BranchTypes` error. A column of mixed types is never returned.
+- **Eager.** Every branch is computed for every row. An error in a branch
+  not taken (an integer overflow, a string that does not convert) is raised
+  where DuckDB's lazy `CASE` would not raise it. Division by zero is not an
+  error in this VM, so `CASE WHEN x = 0 THEN 0 ELSE 100 / x END` is fine.
+- **A type needs a value.** A branch is typed by its non-NULL values in the
+  segment. A column that is all NULL in one segment, next to a literal of
+  another numeric type (`coalesce(amount, 0)`), gives the literal's type
+  there, so an integer 0 where the other segments give the column's float
+  or decimal. Planning with the table's column types removes this; it is
+  the one place a segment split can change an answer.
+- **Stream.** The severity-name rewrite (`severity >= 'WARN'`) now walks
+  into function arguments, so it reaches a condition inside a `CASE`, and
+  an aggregate over one.
+- **Also fixed.** `TRUE` and `FALSE` literals compiled to NULL in the batch
+  planner (`WHERE x = true` matched nothing); they are booleans now.

@@ -435,6 +435,12 @@ fn rewrite_severity_expr(e: &mut Expr) -> Result<()> {
         ExprKind::Unary { expr: inner, .. } | ExprKind::Paren(inner) => {
             rewrite_severity_expr(inner)
         }
+        // A call's arguments: a lowered `CASE` or `COALESCE` (#725), or an
+        // aggregate over one (`sum(CASE WHEN severity >= 'WARN' ...)`).
+        ExprKind::FunctionCall {
+            args: FunctionArgs::List(list),
+            ..
+        } => list.iter_mut().try_for_each(rewrite_severity_expr),
         _ => Ok(()),
     }
 }

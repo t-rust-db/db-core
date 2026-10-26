@@ -8225,6 +8225,9 @@ pub db_core::vm::batch::Opcode::Call
 pub db_core::vm::batch::Opcode::Call::args: alloc::borrow::Cow<'static, [usize]>
 pub db_core::vm::batch::Opcode::Call::dst: usize
 pub db_core::vm::batch::Opcode::Call::name: alloc::borrow::Cow<'static, str>
+pub db_core::vm::batch::Opcode::Coalesce
+pub db_core::vm::batch::Opcode::Coalesce::args: alloc::borrow::Cow<'static, [usize]>
+pub db_core::vm::batch::Opcode::Coalesce::dst: usize
 pub db_core::vm::batch::Opcode::Combine
 pub db_core::vm::batch::Opcode::Combine::agg_parts: alloc::borrow::Cow<'static, [db_core::vm::batch::AggPart]>
 pub db_core::vm::batch::Opcode::Combine::distinct: bool
@@ -8283,6 +8286,11 @@ pub db_core::vm::batch::Opcode::Reduce::func: db_core::vm::batch::AggFunc
 pub db_core::vm::batch::Opcode::Reduce::src: core::option::Option<usize>
 pub db_core::vm::batch::Opcode::Scan
 pub db_core::vm::batch::Opcode::ScanSource(db_core::vm::batch::ScanSource)
+pub db_core::vm::batch::Opcode::Select
+pub db_core::vm::batch::Opcode::Select::cond: usize
+pub db_core::vm::batch::Opcode::Select::dst: usize
+pub db_core::vm::batch::Opcode::Select::else_: usize
+pub db_core::vm::batch::Opcode::Select::then: usize
 pub db_core::vm::batch::Opcode::Sort
 pub db_core::vm::batch::Opcode::Sort::hidden: usize
 pub db_core::vm::batch::Opcode::Sort::keys: alloc::borrow::Cow<'static, [(usize, bool)]>
@@ -8356,6 +8364,10 @@ pub fn db_core::vm::batch::ValueSource::fmt(&self, &mut core::fmt::Formatter<'_>
 impl core::marker::Copy for db_core::vm::batch::ValueSource
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ValueSource
 pub enum db_core::vm::batch::VmError
+pub db_core::vm::batch::VmError::BranchTypes
+pub db_core::vm::batch::VmError::BranchTypes::left: &'static str
+pub db_core::vm::batch::VmError::BranchTypes::opcode: &'static str
+pub db_core::vm::batch::VmError::BranchTypes::right: &'static str
 pub db_core::vm::batch::VmError::Conversion
 pub db_core::vm::batch::VmError::Conversion::to: &'static str
 pub db_core::vm::batch::VmError::Conversion::value: alloc::string::String

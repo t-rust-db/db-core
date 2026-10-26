@@ -61,6 +61,15 @@ QUERIES=(
   "SELECT id FROM __TABLE__ WHERE id BETWEEN 1 + 1 AND 2 * 3 ORDER BY id|SELECT id FROM __TABLE__ WHERE id BETWEEN 1 + 1 AND 2 * 3 ORDER BY id"
   "SELECT count(*) FROM __TABLE__ WHERE id BETWEEN '5' AND '9'|SELECT count(*) FROM __TABLE__ WHERE id BETWEEN '5' AND '9'"
   "SELECT region, count(*) FROM __TABLE__ GROUP BY region HAVING region BETWEEN 'n' AND 'p' ORDER BY region|SELECT region, count(*) FROM __TABLE__ GROUP BY region HAVING region BETWEEN 'n' AND 'p' ORDER BY region"
+  # #725: CASE (searched, simple, nested) in the select list, WHERE and
+  # HAVING, conditional aggregation, COALESCE / IFNULL / NULLIF.
+  "SELECT id, CASE WHEN id < 5 THEN 'fizz' WHEN id < 10 THEN 'buzz' ELSE 'n' END FROM __TABLE__ WHERE id < 20 ORDER BY id|SELECT id, CASE WHEN id < 5 THEN 'fizz' WHEN id < 10 THEN 'buzz' ELSE 'n' END FROM __TABLE__ WHERE id < 20 ORDER BY id"
+  "SELECT id, CASE region WHEN 'north' THEN 1 WHEN 'south' THEN 2 ELSE 0 END FROM __TABLE__ WHERE id < 20 ORDER BY id|SELECT id, CASE region WHEN 'north' THEN 1 WHEN 'south' THEN 2 ELSE 0 END FROM __TABLE__ WHERE id < 20 ORDER BY id"
+  "SELECT count(*) FROM __TABLE__ WHERE CASE WHEN id > 100 THEN region = 'north' ELSE region = 'south' END|SELECT count(*) FROM __TABLE__ WHERE CASE WHEN id > 100 THEN region = 'north' ELSE region = 'south' END"
+  "SELECT region, sum(CASE WHEN id > 100 THEN 1 ELSE 0 END), count(CASE WHEN id > 100 THEN id END) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, sum(CASE WHEN id > 100 THEN 1 ELSE 0 END), count(CASE WHEN id > 100 THEN id END) FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT region, CASE WHEN count(*) > 1200 THEN 'big' ELSE 'small' END FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, CASE WHEN count(*) > 1200 THEN 'big' ELSE 'small' END FROM __TABLE__ GROUP BY region ORDER BY region"
+  "SELECT region, count(*) FROM __TABLE__ GROUP BY region HAVING CASE WHEN count(*) > 1200 THEN true ELSE false END ORDER BY region|SELECT region, count(*) FROM __TABLE__ GROUP BY region HAVING CASE WHEN count(*) > 1200 THEN true ELSE false END ORDER BY region"
+  "SELECT id, coalesce(NULLIF(region, 'north'), 'other'), ifnull(NULLIF(id, 3), -1) FROM __TABLE__ WHERE id < 10 ORDER BY id|SELECT id, coalesce(NULLIF(region, 'north'), 'other'), ifnull(NULLIF(id, 3), -1) FROM __TABLE__ WHERE id < 10 ORDER BY id"
   # #645: ORDER BY with several terms, mixed directions, a key the
   # SELECT list does not show, an aggregate key, and LIMIT after them.
   "SELECT region, id FROM __TABLE__ WHERE id > 4980 ORDER BY region DESC, id|SELECT region, id FROM __TABLE__ WHERE id > 4980 ORDER BY region DESC, id"
@@ -126,6 +135,11 @@ NULL_TYPES_QUERIES=(
   "SELECT id FROM __TABLE__ WHERE lvl ILIKE 'err%' ORDER BY id"
   "SELECT id FROM __TABLE__ WHERE lvl NOT ILIKE 'err%' ORDER BY id"
   "SELECT id FROM __TABLE__ WHERE s GLOB 'B' ORDER BY id"
+  "SELECT id, CASE WHEN n > 5 THEN 'big' WHEN n > 0 THEN 'small' ELSE 'other' END FROM __TABLE__ ORDER BY id"
+  "SELECT id, CASE n WHEN NULL THEN 'null' WHEN 10 THEN 'ten' ELSE 'x' END FROM __TABLE__ ORDER BY id"
+  "SELECT id, coalesce(d, 0), coalesce(n, id, 99), ifnull(s, 'unknown') FROM __TABLE__ ORDER BY id"
+  "SELECT id, CASE WHEN n > 0 THEN d ELSE 0 END FROM __TABLE__ WHERE d IS NOT NULL ORDER BY id"
+  "SELECT count(nullif(n, 0)), count(nullif(s, 'a')), count(nullif(s, 'zzz')) FROM __TABLE__"
 )
 
 cargo build --release --example column_oracle -q

@@ -1628,3 +1628,82 @@ fn batch_round_over_an_aggregate_is_segment_split_invariant() {
         );
     }
 }
+
+/// #725: `CASE`, `COALESCE` and `NULLIF` over a column and over aggregates
+/// give the same answers under every split.
+///
+/// One thing is not split-invariant, and is not tested as if it were: a
+/// column mixed with a literal of another numeric type
+/// (`coalesce(amt, 0)`, `CASE WHEN c THEN amt ELSE 0 END`) takes its type
+/// from the values of its segment, so in a segment where every value is
+/// NULL the result is the literal's type (an integer), not the column's.
+/// Those cases are checked at splits that leave a non-NULL value in each
+/// segment; a type known before execution would remove the restriction.
+#[test]
+fn batch_case_and_coalesce_are_segment_split_invariant() {
+    let grp: Vec<Value> = ["a"; 6].iter().map(|g| Value::Str((*g).into())).collect();
+    let amt = vec![
+        Value::Float(2.5),
+        Value::Float(-2.5),
+        Value::Float(0.5),
+        Value::Float(1.2345),
+        Value::Null,
+        Value::Float(-7.0),
+    ];
+    let text = |s: &'static str| vec![Value::Str(s.into())];
+    let every_split: [(&str, Vec<Vec<Value>>); 3] = [
+        (
+            "SELECT CASE WHEN amt > 0 THEN 'pos' WHEN amt < 0 THEN 'neg' ELSE 'none' END FROM t",
+            ["pos", "neg", "pos", "pos", "none", "neg"]
+                .iter()
+                .map(|s| text(s))
+                .collect(),
+        ),
+        (
+            "SELECT sum(CASE WHEN amt > 0 THEN 1 ELSE 0 END), count(CASE WHEN amt < 0 THEN amt END) FROM t",
+            vec![vec![Value::Int(3), Value::Int(2)]],
+        ),
+        (
+            "SELECT grp, CASE WHEN sum(amt) > 0 THEN 'pos' ELSE 'neg' END, coalesce(max(amt), 0) FROM t GROUP BY grp",
+            vec![vec![
+                Value::Str("a".into()),
+                Value::Str("neg".into()),
+                Value::Float(2.5),
+            ]],
+        ),
+    ];
+    for (sql, expected) in every_split {
+        assert_split_invariant(sql, grp.len(), ("grp", &grp), ("amt", &amt));
+        assert_eq!(
+            run_batch(sql, &[2, 4], ("grp", &grp), ("amt", &amt)),
+            expected,
+            "{sql}"
+        );
+    }
+    let typed_by_values: [(&str, Vec<Vec<Value>>); 2] = [
+        (
+            "SELECT coalesce(amt, 0) FROM t",
+            [2.5, -2.5, 0.5, 1.2345, 0.0, -7.0]
+                .iter()
+                .map(|f| vec![Value::Float(*f)])
+                .collect(),
+        ),
+        (
+            "SELECT nullif(amt, 0.5) FROM t WHERE amt > 0",
+            vec![
+                vec![Value::Float(2.5)],
+                vec![Value::Null],
+                vec![Value::Float(1.2345)],
+            ],
+        ),
+    ];
+    for (sql, expected) in typed_by_values {
+        for sizes in [vec![6], vec![3, 3], vec![2, 4], vec![1, 2, 3]] {
+            assert_eq!(
+                run_batch(sql, &sizes, ("grp", &grp), ("amt", &amt)),
+                expected,
+                "{sql} over {sizes:?}"
+            );
+        }
+    }
+}

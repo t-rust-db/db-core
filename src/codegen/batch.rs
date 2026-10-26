@@ -294,7 +294,7 @@ fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
         ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
-    ) || crate::functions::is_numeric_scalar(name, arity)
+    ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::MAP_FUNCTIONS
             .iter()
             .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
@@ -1134,12 +1134,11 @@ fn literal_value(lit: &AstLiteral) -> Value {
         AstLiteral::Integer(v) => Value::Int(*v),
         AstLiteral::Float(v) => Value::Float(*v),
         AstLiteral::Str(v) => Value::Str(v.clone().into()),
-        // Blob/Null/True/False aren't part of the batch planner's literal
-        // subset (`parser::column`'s validator rejects them before this
-        // module ever runs) -- fall back to NULL rather than panicking.
-        AstLiteral::Blob(_) | AstLiteral::Null | AstLiteral::True | AstLiteral::False => {
-            Value::Null
-        }
+        AstLiteral::True => Value::Bool(true),
+        AstLiteral::False => Value::Bool(false),
+        // A blob isn't part of the batch planner's literal subset -- fall
+        // back to NULL rather than panicking.
+        AstLiteral::Blob(_) | AstLiteral::Null => Value::Null,
     }
 }
 
@@ -1568,6 +1567,39 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
                 },
                 a,
                 b,
+            });
+            dst
+        }
+        // A lowered `CASE` (#725): the condition, the value where it holds
+        // and the value otherwise, as one `Select`.
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(list),
+            tail: None,
+            ..
+        } if name.eq_ignore_ascii_case(crate::functions::SELECT_FN) && list.len() == 3 => {
+            let regs: Vec<usize> = list.iter().map(|e| compile_expr(e, ctx)).collect();
+            let dst = ctx.alloc();
+            ctx.push(Opcode::Select {
+                dst,
+                cond: regs.first().copied().unwrap_or(0),
+                then: regs.get(1).copied().unwrap_or(0),
+                else_: regs.get(2).copied().unwrap_or(0),
+            });
+            dst
+        }
+        // `COALESCE` and `IFNULL` (#725): the first non-NULL argument.
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(list),
+            tail: None,
+            ..
+        } if crate::functions::is_branch_scalar(name, list.len()) => {
+            let arg_regs: Vec<usize> = list.iter().map(|a| compile_expr(a, ctx)).collect();
+            let dst = ctx.alloc();
+            ctx.push(Opcode::Coalesce {
+                dst,
+                args: arg_regs.into(),
             });
             dst
         }
@@ -3470,6 +3502,13 @@ fn render_operands(op: &Opcode) -> String {
             list,
             negated,
         } => format!("dst={dst} src={src} items={} negated={negated}", list.len()),
+        Opcode::Select {
+            dst,
+            cond,
+            then,
+            else_,
+        } => format!("dst={dst} cond={cond} then={then} else={else_}"),
+        Opcode::Coalesce { dst, args } => format!("dst={dst} args={args:?}"),
     }
 }
 
@@ -4053,6 +4092,131 @@ mod tests {
             in_lists("SELECT id FROM t WHERE (name = 'a' OR name = 'b') OR name = 'c'").0,
             vec![(vec![s("a"), s("b"), s("c")], false)]
         );
+    }
+
+    /// The opcodes of the body `query` compiles to.
+    fn body_of(query: &str) -> Vec<Opcode> {
+        let program = compile(&crate::parser::column::parse(query).unwrap()).unwrap();
+        let (body, ..) = program.split_finalize();
+        body.to_vec()
+    }
+
+    /// #725: a `CASE` is one `Select` per `WHEN`, and the columns of every
+    /// branch and condition are loaded before the first of them.
+    #[test]
+    fn case_compiles_to_one_select_per_when() {
+        let body = body_of("SELECT CASE WHEN a > 1 THEN b WHEN a > 0 THEN c ELSE d END FROM t");
+        let selects: Vec<usize> = body
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| matches!(op, Opcode::Select { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(selects.len(), 2, "{body:?}");
+        let loaded: Vec<String> = body
+            .iter()
+            .filter_map(|op| match op {
+                Opcode::LoadColumn { column, .. } => Some(column.to_string()),
+                _ => None,
+            })
+            .collect();
+        for column in ["a", "b", "c", "d"] {
+            assert!(loaded.iter().any(|c| c == column), "{column} in {loaded:?}");
+        }
+        // The inner one feeds the outer one's else.
+        let (Opcode::Select { dst: inner, .. }, Opcode::Select { else_, .. }) =
+            (&body[selects[0]], &body[selects[1]])
+        else {
+            panic!("{body:?}");
+        };
+        assert_eq!(inner, else_);
+    }
+
+    /// #725: `COALESCE` and `IFNULL` are one `Coalesce`, `NULLIF` a `Select`.
+    #[test]
+    fn coalesce_and_nullif_compile_to_their_opcodes() {
+        let coalesces = |query: &str| {
+            body_of(query)
+                .iter()
+                .filter_map(|op| match op {
+                    Opcode::Coalesce { args, .. } => Some(args.len()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(coalesces("SELECT COALESCE(a, b, 0) FROM t"), vec![3]);
+        assert_eq!(coalesces("SELECT IFNULL(a, 0) FROM t"), vec![2]);
+        let nullif = body_of("SELECT NULLIF(a, 0) FROM t");
+        assert!(nullif.iter().any(|op| matches!(op, Opcode::Select { .. })));
+        assert!(!nullif.iter().any(|op| matches!(op, Opcode::Call { .. })));
+    }
+
+    /// #725: a `CASE` or `COALESCE` over an aggregate is evaluated by
+    /// `Combine`'s projection, and a column in a branch that is neither
+    /// aggregated nor grouped is refused like `amount * 2`.
+    #[test]
+    fn a_case_over_an_aggregate_is_projected_and_an_ungrouped_branch_refused() {
+        let program = compile(
+            &crate::parser::column::parse(
+                "SELECT region, CASE WHEN sum(amount) > 1 THEN 'many' ELSE 'few' END, COALESCE(max(amount), 0) FROM t GROUP BY region",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let (_, combine, ..) = program.split_finalize();
+        let Some(Opcode::Combine { project, .. }) = combine else {
+            panic!("{program:?}");
+        };
+        assert!(project.iter().any(|op| matches!(op, Opcode::Select { .. })));
+        assert!(project
+            .iter()
+            .any(|op| matches!(op, Opcode::Coalesce { .. })));
+        let refused = crate::parser::column::parse(
+            "SELECT region, CASE WHEN amount > 1 THEN 1 END FROM t GROUP BY region",
+        )
+        .map(|select| compile(&select));
+        assert!(refused.is_err() || refused.is_ok_and(|r| r.is_err()));
+    }
+
+    fn selects_in(select: &Select) -> usize {
+        let program = compile(select).unwrap();
+        let (body, ..) = program.split_finalize();
+        body.iter()
+            .filter(|op| matches!(op, Opcode::Select { .. }))
+            .count()
+    }
+
+    // codegen_batch_compile_expr_d8f9ad56 (the `__select` arm of
+    // `compile_expr`): `name.eq_ignore_ascii_case(SELECT_FN) && list.len() == 3`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_d8f9ad56__v1_a_select_call_of_three_is_a_select() {
+        let select = sql::parse("SELECT __select(a > 1, b, c) FROM t").unwrap();
+        assert_eq!(selects_in(&select), 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_d8f9ad56__v2_a_select_call_of_two_is_an_ordinary_call() {
+        // The validator refuses two arguments, so cut one from a valid call
+        // (in a `WHERE`, which the planner does not check by name).
+        let mut select = sql::parse("SELECT a FROM t WHERE __select(a > 1, b, c)").unwrap();
+        let Some(ExprKind::FunctionCall {
+            args: FunctionArgs::List(args),
+            ..
+        }) = select.where_clause.as_mut().map(|w| &mut w.kind)
+        else {
+            panic!("a call");
+        };
+        args.pop();
+        assert_eq!(selects_in(&select), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_expr_d8f9ad56__v3_another_function_is_an_ordinary_call() {
+        let select = sql::parse("SELECT round(a) FROM t").unwrap();
+        assert_eq!(selects_in(&select), 0);
     }
 
     // codegen_batch_in_list_chain_1c58189f (`in_list_chain`):
@@ -5998,6 +6162,10 @@ mod tests {
             "ilike",
             "round",
             "abs",
+            "coalesce",
+            "ifnull",
+            "nullif",
+            "__select",
             "ROUND",
             "sqrt",
             "length",

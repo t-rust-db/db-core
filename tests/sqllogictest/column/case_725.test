@@ -1,0 +1,391 @@
+# #725: CASE (searched and simple), COALESCE, IFNULL, NULLIF. Table
+# null_types: five rows, NULLs in every typed column, a decimal and a
+# timestamp column, mixed-case and empty text. Expected results come from
+# DuckDB (make refresh-column-sqllogictest).
+
+# 1. Searched CASE: the first true WHEN wins; a NULL condition takes the
+# next WHEN or the ELSE; no ELSE is NULL.
+
+query IT nosort
+SELECT id, CASE WHEN n > 5 THEN 'big' WHEN n > 0 THEN 'small' ELSE 'other' END FROM null_types ORDER BY id
+----
+1
+big
+2
+other
+3
+other
+4
+small
+5
+other
+
+query II nosort
+SELECT id, CASE WHEN n > 5 THEN 1 ELSE 0 END FROM null_types ORDER BY id
+----
+1
+1
+2
+0
+3
+0
+4
+0
+5
+0
+
+query II nosort
+SELECT id, CASE WHEN n > 5 THEN 1 END FROM null_types ORDER BY id
+----
+1
+1
+2
+NULL
+3
+NULL
+4
+NULL
+5
+NULL
+
+query IT nosort
+SELECT id, CASE WHEN n IS NULL THEN 'null' WHEN n < 0 THEN 'neg' ELSE 'pos' END FROM null_types ORDER BY id
+----
+1
+pos
+2
+null
+3
+neg
+4
+pos
+5
+pos
+
+# 2. Simple CASE compares the operand with each WHEN value; a NULL never matches.
+
+query IT nosort
+SELECT id, CASE n WHEN 10 THEN 'ten' WHEN 3 THEN 'three' END FROM null_types ORDER BY id
+----
+1
+ten
+2
+NULL
+3
+NULL
+4
+three
+5
+NULL
+
+query IT nosort
+SELECT id, CASE n WHEN NULL THEN 'null' ELSE 'x' END FROM null_types ORDER BY id
+----
+1
+x
+2
+x
+3
+x
+4
+x
+5
+x
+
+query IT nosort
+SELECT id, CASE lvl WHEN 'WARN' THEN 'w' WHEN 'Error' THEN 'e' ELSE '?' END FROM null_types ORDER BY id
+----
+1
+e
+2
+?
+3
+w
+4
+?
+5
+?
+
+# 3. Nested CASE, and CASE in WHERE.
+
+query IT nosort
+SELECT id, CASE WHEN n > 0 THEN CASE WHEN n > 5 THEN 'big' ELSE 'small' END ELSE 'none' END FROM null_types ORDER BY id
+----
+1
+big
+2
+none
+3
+none
+4
+small
+5
+none
+
+query I nosort
+SELECT id FROM null_types WHERE CASE WHEN n > 5 THEN s = 'a' ELSE s = 'b' END ORDER BY id
+----
+1
+3
+
+query I nosort
+SELECT id FROM null_types WHERE CASE WHEN n IS NULL THEN true ELSE false END ORDER BY id
+----
+2
+
+# A TRUE / FALSE literal is a boolean, not NULL.
+
+query I nosort
+SELECT id FROM null_types WHERE CASE WHEN n > 5 THEN false ELSE true END ORDER BY id
+----
+2
+3
+4
+5
+
+# 4. Conditional aggregation, with and without GROUP BY.
+
+query II nosort
+SELECT sum(CASE WHEN n > 0 THEN 1 ELSE 0 END), count(CASE WHEN n > 0 THEN id END) FROM null_types
+----
+2
+2
+
+query TI nosort
+SELECT lvl, sum(CASE WHEN n > 0 THEN 1 ELSE 0 END) FROM null_types GROUP BY lvl ORDER BY lvl
+----
+%_x
+1
+Error
+1
+WARN
+0
+error
+0
+NULL
+0
+
+query TI nosort
+SELECT lvl, count(CASE WHEN n > 0 THEN id END) FROM null_types GROUP BY lvl ORDER BY lvl
+----
+%_x
+1
+Error
+1
+WARN
+0
+error
+0
+NULL
+0
+
+query TI nosort
+SELECT lvl, sum(n) FROM null_types GROUP BY lvl HAVING CASE WHEN sum(n) > 5 THEN true ELSE false END ORDER BY lvl
+----
+Error
+10
+
+# 5. CASE around an aggregate.
+
+query T nosort
+SELECT CASE WHEN sum(n) > 5 THEN 'many' ELSE 'few' END FROM null_types
+----
+many
+
+query TT nosort
+SELECT lvl, CASE WHEN count(*) > 1 THEN 'dup' ELSE 'one' END FROM null_types GROUP BY lvl ORDER BY lvl
+----
+%_x
+one
+Error
+one
+WARN
+one
+error
+one
+NULL
+one
+
+# 6. COALESCE, IFNULL: the first non-NULL, NULL in every position.
+
+query II nosort
+SELECT id, coalesce(n, 0) FROM null_types ORDER BY id
+----
+1
+10
+2
+0
+3
+-7
+4
+3
+5
+0
+
+query II nosort
+SELECT id, coalesce(n, id, 99) FROM null_types ORDER BY id
+----
+1
+10
+2
+2
+3
+-7
+4
+3
+5
+0
+
+query IT nosort
+SELECT id, coalesce(s, 'unknown') FROM null_types ORDER BY id
+----
+1
+a
+2
+unknown
+3
+b
+4
+B
+5
+(empty)
+
+query IT nosort
+SELECT id, coalesce(lvl, s, 'none') FROM null_types ORDER BY id
+----
+1
+Error
+2
+error
+3
+WARN
+4
+%_x
+5
+(empty)
+
+query II nosort
+SELECT id, ifnull(n, -1) FROM null_types ORDER BY id
+----
+1
+10
+2
+-1
+3
+-7
+4
+3
+5
+0
+
+query I nosort
+SELECT id FROM null_types WHERE coalesce(n, 0) > 0 ORDER BY id
+----
+1
+4
+
+query I nosort
+SELECT coalesce(sum(n), 0) FROM null_types WHERE n > 100
+----
+0
+
+# 7. NULLIF: NULL when the two are equal, otherwise the first.
+
+query II nosort
+SELECT id, nullif(n, 0) FROM null_types ORDER BY id
+----
+1
+10
+2
+NULL
+3
+-7
+4
+3
+5
+NULL
+
+query IT nosort
+SELECT id, nullif(s, 'a') FROM null_types ORDER BY id
+----
+1
+NULL
+2
+NULL
+3
+b
+4
+B
+5
+(empty)
+
+query I nosort
+SELECT nullif(NULL, 1) FROM null_types WHERE id = 1
+----
+NULL
+
+# 8. Types: a decimal stays a decimal; an integer next to a float or a
+# decimal is promoted; text next to a number is an error, never a column of
+# mixed types.
+
+query IT nosort
+SELECT id, coalesce(d, 0) FROM null_types ORDER BY id
+----
+1
+1.5
+2
+0.0
+3
+2.5
+4
+0.0
+5
+0.0
+
+query IT nosort
+SELECT id, CASE WHEN n > 0 THEN d ELSE 0 END FROM null_types ORDER BY id
+----
+1
+1.5
+2
+0.0
+3
+0.0
+4
+NULL
+5
+0.0
+
+query IT nosort
+SELECT id, CASE WHEN n > 0 THEN 1 ELSE 2.5 END FROM null_types ORDER BY id
+----
+1
+1.0
+2
+2.5
+3
+2.5
+4
+1.0
+5
+2.5
+
+query IT nosort
+SELECT id, CASE WHEN n > 0 THEN n ELSE 0.5 END FROM null_types ORDER BY id
+----
+1
+10.0
+2
+0.5
+3
+0.5
+4
+3.0
+5
+0.5
+
+statement error
+SELECT id, CASE WHEN n > 0 THEN s ELSE 1 END FROM null_types
+
+statement error
+SELECT coalesce(s, n) FROM null_types
