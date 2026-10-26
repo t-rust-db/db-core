@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.178.0] - 2026-10-26
+
+### Changed
+
+- Join name resolution moved into the planner (`codegen::batch::resolve_join_columns`), so any join caller gets the same ambiguous-column and `*`/`t.*` rules (#778).
+
 ## [0.177.0] - 2026-10-26
 
 ### Added

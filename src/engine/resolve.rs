@@ -72,11 +72,8 @@ use super::{
     OpcodeSection, PlanRow, QueryResult, TableInfo,
 };
 use crate::codegen::batch::{self as planner, split_qualified, PlanError, TableStats};
-use crate::parser::ast::{
-    Expr, ExprKind, FunctionArgs, Join, JoinConstraint, ResultColumn, Select, TableRefKind,
-};
+use crate::parser::ast::{Select, TableRefKind};
 use crate::parser::ParseError;
-use crate::parser::Span;
 use crate::storage::stream::{ColumnRequest, StreamSegment};
 use crate::vm::batch::{Batch, ScanSource, Segment as VmSegment, Value};
 use crate::vm::engine::{run_join_segments, JoinProgram, MultiJoinProgram};
@@ -292,44 +289,25 @@ fn resolve_group_by(select: Select, columns: Vec<String>) -> Result<Select, Engi
 }
 
 /// One column `*` or `t.*` can stand for.
-struct StarColumn {
-    table: String,
-    alias: Option<String>,
-    column: String,
-    /// A `USING` key on the joined side: `*` lists it once, from the table
-    /// written first.
-    merged: bool,
-}
-
-/// The columns `*` and `t.*` stand for in the select list of a cross-mode
-/// join: for each table of the `FROM`/`JOIN` clauses in the order written,
-/// `driving`'s `driving_columns` or the SQLite table's own, as
-/// `(table, alias, column, merged)`. `merged` marks a `USING` key on the
-/// joined side, which `*` lists once (from the table written first) and
-/// `t.*` still lists (#771).
-fn star_columns(
-    select: &Select,
+/// A cross-mode join's `SELECT` with its names resolved
+/// ([`planner::resolve_join_columns`]): `log`'s columns plus those of every
+/// SQLite table the query names.
+fn resolve_cross_mode_group_by(
+    select: Select,
     driving: &str,
-    driving_columns: &[String],
+    driving_columns: Vec<String>,
     lookup: &RowEngine,
-) -> Result<Vec<StarColumn>, EngineError> {
-    let Some(from) = select.from.as_ref() else {
-        return Ok(Vec::new());
-    };
+) -> Result<Resolved, EngineError> {
     let known = lookup.tables()?;
-    let merged = |j: &Join| match &j.constraint {
-        Some(JoinConstraint::Using(columns)) => columns.clone(),
-        _ => Vec::new(),
-    };
-    let tables = std::iter::once((&from.first, Vec::new()))
-        .chain(from.joins.iter().map(|j| (&j.table, merged(j))));
-    let mut all = Vec::new();
-    for (table, keys) in tables {
-        let Some(name) = table.name() else {
-            continue;
-        };
-        let columns: Vec<String> = if name.eq_ignore_ascii_case(driving) {
-            driving_columns.to_vec()
+    let mut tables: Vec<(String, Vec<String>)> = Vec::new();
+    for name in select
+        .from
+        .iter()
+        .flat_map(|f| std::iter::once(&f.first).chain(f.joins.iter().map(|j| &j.table)))
+        .filter_map(|t| t.name())
+    {
+        let columns = if name.eq_ignore_ascii_case(driving) {
+            driving_columns.clone()
         } else {
             let info = known
                 .iter()
@@ -339,348 +317,21 @@ fn star_columns(
                 })?;
             info.columns.iter().map(|c| c.name.clone()).collect()
         };
-        for column in columns {
-            let is_key = keys.iter().any(|k| k.eq_ignore_ascii_case(&column));
-            all.push(StarColumn {
-                table: name.to_string(),
-                alias: table.alias.clone(),
-                column,
-                merged: is_key,
-            });
-        }
-    }
-    Ok(all)
-}
-
-/// `*` and `t.*` in the select list of a cross-mode join, expanded over
-/// [`star_columns`] with bare column names as headers, duplicates included
-/// (`id`, `id`), as in SQLite and DuckDB; a query names one of them with
-/// its table. A `t.*` naming no table of the query is an error.
-fn expand_cross_mode_star(
-    mut select: Select,
-    driving: &str,
-    driving_columns: &[String],
-    lookup: &RowEngine,
-) -> Result<Select, EngineError> {
-    let has_star = select
-        .columns
-        .iter()
-        .any(|c| matches!(c, ResultColumn::Star | ResultColumn::TableStar { .. }));
-    if !has_star {
-        return Ok(select);
-    }
-    let all = star_columns(&select, driving, driving_columns, lookup)?;
-    let item = |e: &StarColumn| ResultColumn::Expr {
-        expr: column_expr(Some(e.table.clone()), e.column.clone()),
-        alias: Some(e.column.clone()),
-    };
-    let mut columns = Vec::with_capacity(select.columns.len());
-    for c in std::mem::take(&mut select.columns) {
-        match c {
-            ResultColumn::Star => columns.extend(all.iter().filter(|e| !e.merged).map(item)),
-            ResultColumn::TableStar { table } => {
-                let of_table: Vec<ResultColumn> = all
-                    .iter()
-                    .filter(|e| {
-                        [Some(e.table.as_str()), e.alias.as_deref()]
-                            .into_iter()
-                            .any(|n| n.is_some_and(|n| n.eq_ignore_ascii_case(&table)))
-                    })
-                    .map(item)
-                    .collect();
-                if of_table.is_empty() {
-                    return Err(EngineError::new(
-                        ErrorKind::Compile,
-                        format!("unknown table in {table}.*: {table}"),
-                    ));
-                }
-                columns.extend(of_table);
-            }
-            other => columns.push(other),
-        }
-    }
-    select.columns = columns;
-    Ok(select)
-}
-
-fn column_expr(table: Option<String>, name: String) -> Expr {
-    Expr {
-        kind: ExprKind::Column {
-            table,
-            catalog: None,
-            name,
-        },
-        span: Span::UNKNOWN,
-    }
-}
-
-/// The table an unqualified column of a cross-mode join belongs to, as in
-/// SQLite and DuckDB: the one table of the `FROM`/`JOIN` clauses that has
-/// it. Several tables having it is an ambiguity error, except for a
-/// `USING (k)` key, which is merged and means the table written first.
-/// `None` when no table has it (a select-list alias, or an unknown name
-/// the planner reports).
-fn column_owner(
-    name: &str,
-    tables: &[(String, Vec<String>)],
-    using_keys: &[String],
-) -> Result<Option<String>, EngineError> {
-    let owners: Vec<&String> = tables
-        .iter()
-        .filter(|(_, columns)| columns.iter().any(|c| c.eq_ignore_ascii_case(name)))
-        .map(|(table, _)| table)
-        .collect();
-    match owners.as_slice() {
-        [] => Ok(None),
-        [only] => Ok(Some((*only).clone())),
-        [first, ..] if using_keys.iter().any(|k| k.eq_ignore_ascii_case(name)) => {
-            Ok(Some((*first).clone()))
-        }
-        _ => Err(EngineError::new(
-            ErrorKind::Compile,
-            format!(
-                "ambiguous column name: {name} (in {}); qualify it with its table",
-                owners
-                    .iter()
-                    .map(|t| t.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        )),
-    }
-}
-
-/// Qualifies every unqualified column of `expr` with its table, so the
-/// planner never has to guess which side of the join a bare name is on.
-fn qualify_columns(
-    expr: &mut Expr,
-    owner: &impl Fn(&str) -> Result<Option<String>, EngineError>,
-) -> Result<(), EngineError> {
-    match &mut expr.kind {
-        ExprKind::Column {
-            table: table @ None,
-            name,
-            ..
-        } => {
-            *table = owner(name)?;
-        }
-        ExprKind::FunctionCall { args, tail, .. } => {
-            if let FunctionArgs::List(list) = args {
-                for e in list {
-                    qualify_columns(e, owner)?;
-                }
-            }
-            if let Some(tail) = tail {
-                if let Some(filter) = &mut tail.filter {
-                    qualify_columns(filter, owner)?;
-                }
-            }
-        }
-        ExprKind::Unary { expr: inner, .. }
-        | ExprKind::IsNull { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::Collate { expr: inner, .. }
-        | ExprKind::Paren(inner) => qualify_columns(inner, owner)?,
-        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
-            qualify_columns(lhs, owner)?;
-            qualify_columns(rhs, owner)?;
-        }
-        ExprKind::Between {
-            expr: inner,
-            lo,
-            hi,
-            ..
-        } => {
-            qualify_columns(inner, owner)?;
-            qualify_columns(lo, owner)?;
-            qualify_columns(hi, owner)?;
-        }
-        ExprKind::In {
-            expr: inner, list, ..
-        } => {
-            qualify_columns(inner, owner)?;
-            for e in list {
-                qualify_columns(e, owner)?;
-            }
-        }
-        ExprKind::Like {
-            expr: inner,
-            pattern,
-            escape,
-            ..
-        } => {
-            qualify_columns(inner, owner)?;
-            qualify_columns(pattern, owner)?;
-            if let Some(e) = escape {
-                qualify_columns(e, owner)?;
-            }
-        }
-        ExprKind::Case {
-            operand,
-            whens,
-            else_,
-        } => {
-            if let Some(o) = operand {
-                qualify_columns(o, owner)?;
-            }
-            for (when, then) in whens {
-                qualify_columns(when, owner)?;
-                qualify_columns(then, owner)?;
-            }
-            if let Some(e) = else_ {
-                qualify_columns(e, owner)?;
-            }
-        }
-        // Literals and parameters hold no column; subqueries are refused by
-        // the column validator before a select gets here.
-        _ => {}
-    }
-    Ok(())
-}
-
-/// Qualifies every unqualified column of a cross-mode join's select list,
-/// `WHERE`, `GROUP BY`, `HAVING` and `ORDER BY` with the table that has it
-/// ([`column_owner`]). Before this, a bare name silently meant the `FROM`
-/// table: `WHERE id = 10` on `a JOIN b ON a.id = b.id` filtered `a` where
-/// SQLite and DuckDB report an ambiguous column.
-fn qualify_cross_mode_columns(
-    mut select: Select,
-    driving: &str,
-    driving_columns: &[String],
-    lookup: &RowEngine,
-) -> Result<Select, EngineError> {
-    let Some(from) = select.from.as_ref() else {
-        return Ok(select);
-    };
-    let known = lookup.tables()?;
-    let mut tables: Vec<(String, Vec<String>)> = Vec::new();
-    for table in std::iter::once(&from.first).chain(from.joins.iter().map(|j| &j.table)) {
-        let Some(name) = table.name() else {
-            continue;
-        };
-        let columns = if name.eq_ignore_ascii_case(driving) {
-            driving_columns.to_vec()
-        } else {
-            known
-                .iter()
-                .find(|t| t.name.eq_ignore_ascii_case(name))
-                .map(|t| t.columns.iter().map(|c| c.name.clone()).collect())
-                .unwrap_or_default()
-        };
         tables.push((name.to_string(), columns));
     }
-    let using_keys: Vec<String> = from
-        .joins
-        .iter()
-        .flat_map(|j| match &j.constraint {
-            Some(JoinConstraint::Using(columns)) => columns.clone(),
-            _ => Vec::new(),
-        })
-        .collect();
-    let owner = |name: &str| column_owner(name, &tables, &using_keys);
-    for column in &mut select.columns {
-        if let ResultColumn::Expr { expr, alias } = column {
-            // A bare `SELECT id` keeps `id` as its header once the
-            // expression is rewritten to `production.id`.
-            if let ExprKind::Column {
-                table: None, name, ..
-            } = &expr.kind
-            {
-                alias.get_or_insert_with(|| name.clone());
-            }
-            qualify_columns(expr, &owner)?;
-        }
-    }
-    let exprs = select
-        .where_clause
-        .iter_mut()
-        .chain(select.group_by.iter_mut())
-        .chain(select.having.iter_mut());
-    for expr in exprs {
-        qualify_columns(expr, &owner)?;
-    }
-    // An `ORDER BY` term naming a select item (its alias, or the column
-    // an unaliased `t.col` item shows) stays that reference.
-    let items: Vec<String> = select
-        .columns
-        .iter()
-        .filter_map(|c| match c {
-            ResultColumn::Expr {
-                alias: Some(alias), ..
-            } => Some(alias.clone()),
-            ResultColumn::Expr {
-                expr:
-                    Expr {
-                        kind: ExprKind::Column { name, .. },
-                        ..
-                    },
-                ..
-            } => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
-    for term in &mut select.order_by {
-        let names_item = match &term.expr.kind {
-            ExprKind::Column {
-                table: None, name, ..
-            } => items.iter().any(|i| i.eq_ignore_ascii_case(name)),
-            _ => false,
-        };
-        if !names_item {
-            qualify_columns(&mut term.expr, &owner)?;
-        }
-    }
-    Ok(select)
+    let planner::ResolvedJoin { select, headers } = planner::resolve_join_columns(&select, &tables)
+        .map_err(|e| match e {
+            planner::JoinColumnsError::Plan(e) => plan_err(e),
+            other => EngineError::new(ErrorKind::Compile, other),
+        })?;
+    Ok(Resolved { select, headers })
 }
 
 /// A cross-mode join's `SELECT` with its names resolved, and the result
 /// headers it had before they were.
 struct Resolved {
     select: Select,
-    /// What [`planner::output_column_names`] gave before the columns were
-    /// qualified: `SUM(amount)` stays that, not `SUM(production.amount)`.
     headers: Vec<String>,
-}
-
-/// [`resolve_group_by`] for a cross-mode join: `log`'s columns plus those
-/// of every SQLite table the query names. Also expands `*`, and qualifies
-/// every column with its table ([`qualify_cross_mode_columns`]).
-fn resolve_cross_mode_group_by(
-    select: Select,
-    driving: &str,
-    driving_columns: Vec<String>,
-    lookup: &RowEngine,
-) -> Result<Resolved, EngineError> {
-    let select = expand_cross_mode_star(select, driving, &driving_columns, lookup)?;
-    let select = if select.group_by.is_empty() {
-        select
-    } else {
-        resolve_cross_mode_group_by_names(select, &driving_columns, lookup)?
-    };
-    let headers = planner::output_column_names(&select);
-    let select = qualify_cross_mode_columns(select, driving, &driving_columns, lookup)?;
-    Ok(Resolved { select, headers })
-}
-
-/// The `GROUP BY` half of [`resolve_cross_mode_group_by`].
-fn resolve_cross_mode_group_by_names(
-    select: Select,
-    driving_columns: &[String],
-    lookup: &RowEngine,
-) -> Result<Select, EngineError> {
-    let named: Vec<&str> = select
-        .from
-        .iter()
-        .flat_map(|f| std::iter::once(&f.first).chain(f.joins.iter().map(|j| &j.table)))
-        .filter_map(|t| t.name())
-        .collect();
-    let mut columns = driving_columns.to_vec();
-    for table in lookup.tables()? {
-        if named.iter().any(|n| n.eq_ignore_ascii_case(&table.name)) {
-            columns.extend(table.columns.into_iter().map(|c| c.name));
-        }
-    }
-    resolve_group_by(select, columns)
 }
 
 /// Runs a cross-mode `SELECT`: `log` (the stream engine's table) joined to

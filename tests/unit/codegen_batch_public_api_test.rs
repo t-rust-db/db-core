@@ -18,8 +18,8 @@
 
 use db_core::codegen::batch::{
     compile, compile_join, compile_semi_join, compile_window, expand_star, explain,
-    explain_opcodes, output_column_names, split_qualified, BuildSourceKind, PlanError, TableStats,
-    WindowFunc,
+    explain_opcodes, output_column_names, resolve_join_columns, split_qualified, BuildSourceKind,
+    JoinColumnsError, PlanError, TableStats, WindowFunc,
 };
 use db_core::parser::column::parse;
 use db_core::vm::batch::{JoinKind, MapOp, Opcode};
@@ -267,4 +267,97 @@ fn compile_accepts_a_column_alias_and_uses_it_as_the_output_header() {
     };
     assert!(compile(&select).is_ok());
     assert_eq!(output_column_names(&select), vec!["total".to_string()]);
+}
+
+// ---- resolve_join_columns (#778): join name resolution without an engine ----
+
+fn tables() -> Vec<(String, Vec<String>)> {
+    let cols = |c: &[&str]| c.iter().map(|s| s.to_string()).collect();
+    vec![
+        ("a".to_string(), cols(&["id", "x"])),
+        ("b".to_string(), cols(&["id", "y"])),
+    ]
+}
+
+fn resolved(sql: &str) -> Result<(Vec<String>, Vec<String>), JoinColumnsError> {
+    let r = resolve_join_columns(&select(sql), &tables())?;
+    let rendered = r.select.columns.iter().map(|c| format!("{c:?}")).collect();
+    Ok((r.headers, rendered))
+}
+
+#[test]
+fn join_columns_ambiguous_name_is_an_error() {
+    let err = resolved("SELECT id FROM a JOIN b ON a.id = b.id").unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "ambiguous column name: id (in a, b); qualify it with its table"
+    );
+    let err = resolved("SELECT x FROM a JOIN b ON a.id = b.id WHERE id = 1").unwrap_err();
+    assert!(matches!(err, JoinColumnsError::AmbiguousColumn { .. }));
+}
+
+#[test]
+fn join_columns_using_key_is_the_first_tables() {
+    let (headers, items) = resolved("SELECT id FROM a JOIN b USING (id)").unwrap();
+    assert_eq!(headers, ["id"]);
+    assert!(items[0].contains("\"a\""), "{items:?}");
+}
+
+#[test]
+fn join_columns_unique_name_resolves_to_its_table() {
+    let (_, items) = resolved("SELECT y FROM a JOIN b ON a.id = b.id").unwrap();
+    assert!(items[0].contains("\"b\""), "{items:?}");
+    let (_, items) = resolved("SELECT y FROM b JOIN a ON a.id = b.id").unwrap();
+    assert!(items[0].contains("\"b\""), "{items:?}");
+}
+
+#[test]
+fn join_columns_star_lists_each_table_with_bare_headers() {
+    let (headers, _) = resolved("SELECT * FROM a JOIN b ON a.id = b.id").unwrap();
+    assert_eq!(headers, ["id", "x", "id", "y"]);
+    let (headers, _) = resolved("SELECT * FROM a JOIN b USING (id)").unwrap();
+    assert_eq!(headers, ["id", "x", "y"]);
+    let (headers, _) = resolved("SELECT b.* FROM a JOIN b USING (id)").unwrap();
+    assert_eq!(headers, ["id", "y"]);
+    let err = resolved("SELECT z.* FROM a JOIN b USING (id)").unwrap_err();
+    assert_eq!(err.to_string(), "unknown table in z.*: z");
+}
+
+#[test]
+fn join_columns_headers_are_taken_before_qualification() {
+    let (headers, _) = resolved("SELECT SUM(y) FROM a JOIN b ON a.id = b.id").unwrap();
+    assert_eq!(headers, ["SUM(y)"]);
+}
+
+#[test]
+fn join_columns_qualifies_every_expression_shape() {
+    let (headers, items) = resolved(
+        "SELECT (y), x FROM a JOIN b ON a.id = b.id \
+         WHERE x BETWEEN 1 AND 9 AND y IN (1, 2) AND y LIKE 'a%' AND x > 0",
+    )
+    .unwrap();
+    assert_eq!(headers, ["y", "x"]);
+    assert!(
+        items.iter().all(|i| !i.contains("table: None")),
+        "{items:?}"
+    );
+    let (headers, _) = resolved(
+        "SELECT y, COUNT(DISTINCT x) FILTER (WHERE y > 0) FROM a JOIN b ON a.id = b.id GROUP BY y",
+    )
+    .unwrap();
+    assert_eq!(headers, ["y", "COUNT(DISTINCT x)"]);
+}
+
+#[test]
+fn join_columns_group_by_resolves_and_keeps_headers() {
+    let (headers, _) =
+        resolved("SELECT y, SUM(x) FROM a JOIN b ON a.id = b.id GROUP BY y ORDER BY y").unwrap();
+    assert_eq!(headers, ["y", "SUM(x)"]);
+}
+
+#[test]
+fn join_columns_wraps_a_planner_error() {
+    let err = JoinColumnsError::from(PlanError::NoJoinClause);
+    assert_eq!(err, JoinColumnsError::Plan(PlanError::NoJoinClause));
+    assert_eq!(err.to_string(), PlanError::NoJoinClause.to_string());
 }

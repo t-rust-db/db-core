@@ -45,6 +45,8 @@
 
 #[cfg(feature = "emit-batch")]
 pub mod emit;
+mod join_columns;
+pub use join_columns::{resolve_join_columns, JoinColumnsError, ResolvedJoin};
 
 use crate::parser::ast::{
     BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FromClause as AstFromClause,
