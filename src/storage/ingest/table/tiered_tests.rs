@@ -44,6 +44,7 @@ fn tier() -> TierOptions {
         spill_rows: usize::MAX,
         retention_days: None,
         session_key: None,
+        stat_columns: Vec::new(),
     }
 }
 

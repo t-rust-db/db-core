@@ -4,6 +4,14 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.177.0] - 2026-10-26
+
+### Added
+
+- Exact per-file key ranges for columns outside the sort key (`TierOptions.stat_columns`), pruned in every snapshot reader.
+- Filtered snapshot readers for join build sides and window input (`SnapshotFilter`, `read_snapshot_where`, `snapshot_files_where`, `snapshot_segments_where`).
+- `query_snapshot_files` reports how many files a query opens.
+
 ## [0.176.0] - 2026-10-25
 
 ### Added

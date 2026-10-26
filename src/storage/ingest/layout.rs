@@ -59,6 +59,11 @@ pub struct TierOptions {
     /// sort key. Unlike the other options it is recorded in the manifest,
     /// since readers in other processes prune with it.
     pub session_key: Option<SessionKey>,
+    /// Columns outside the sort key whose exact min/max each file records
+    /// (#777), so a predicate on them skips the files it excludes. The sort
+    /// key's columns always get a range. A file written before a column was
+    /// listed has none for it and is never skipped on it.
+    pub stat_columns: Vec<String>,
 }
 
 /// A session key column: a 64-bit integer whose high 32 bits are the
@@ -68,6 +73,9 @@ pub struct TierOptions {
 ///
 /// The bound is a contract: a row arriving later than `start +
 /// max_session_secs` is hidden from a query that filters on its key.
+/// [`TierOptions::stat_columns`] (#777) prunes by exact ranges instead,
+/// without the contract; prefer it, and use this only for a key that is
+/// outside the sort key and whose files' ranges overlap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionKey {
     /// The key column; an integer (`Int64` or `UInt64`).
@@ -88,6 +96,7 @@ impl Default for TierOptions {
             spill_rows: 1_000_000,
             retention_days: None,
             session_key: None,
+            stat_columns: Vec::new(),
         }
     }
 }

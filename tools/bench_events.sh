@@ -90,13 +90,14 @@ rm -f "$CSV"
 # compare, and every result is compared as sorted rows.
 S=$((EVENTS / 40))
 N=1000
-LABELS=(stats replay session cross)
+LABELS=(stats replay session cross oneday)
 # One function, not an associative array: macOS's /bin/bash is 3.2.
 sql_for() {
   case "$1" in
     stats) echo "SELECT day, name, count(*), sum(amount) FROM events GROUP BY day, name" ;;
     replay) echo "SELECT session_id, request_id, name FROM events WHERE session_id >= $S AND session_id < $((S + N)) ORDER BY session_id, request_id" ;;
     session) echo "SELECT request_id, name, amount FROM events WHERE session_id = $S" ;;
+    oneday) echo "SELECT name, count(*), sum(amount) FROM events WHERE day = 20740 GROUP BY name" ;;
     cross) echo "SELECT session_id, count(DISTINCT name) FROM events WHERE name = 'search' OR name = 'checkout' GROUP BY session_id HAVING count(DISTINCT name) = 2" ;;
   esac
 }
@@ -150,12 +151,15 @@ report = {
     },
     "queries": {},
 }
-for q in ["stats", "replay", "session", "cross"]:
+for q in ["stats", "replay", "session", "cross", "oneday"]:
     rows = sum(1 for _ in open(f"{out}/q_{q}_duckdb.out"))
     entry = {"rows": rows}
     for engine in ["dbcore", "duckdb", "sqlite"]:
         entry[engine] = res[f"q_{q}_{engine}"]
     entry["dbcore"]["in_process_ms"] = float(kv(f"{out}/q_{q}_dbcore.err")["elapsed_ms"])
+    err = kv(f"{out}/q_{q}_dbcore.err")
+    entry["dbcore"]["files_opened"] = int(err["files_opened"])
+    entry["dbcore"]["files_total"] = int(err["files_total"])
     report["queries"][q] = entry
 json.dump(report, open(json_path, "w"), indent=2)
 
@@ -183,12 +187,12 @@ lines = [
     "",
     "## Queries (wall s per process / peak RSS MB; db-core in-process ms)",
     "",
-    "| query | rows | db-core | db-core in-process ms | DuckDB | SQLite |",
-    "|---|---:|---:|---:|---:|---:|",
+    "| query | rows | db-core | db-core in-process ms | db-core files opened | DuckDB | SQLite |",
+    "|---|---:|---:|---:|---:|---:|---:|",
 ]
 for q, e in report["queries"].items():
     cell = lambda x: f"{x['wall_s']:.2f} / {x['peak_rss_mb']:.0f}"
-    lines.append(f"| {q} | {e['rows']:,} | {cell(e['dbcore'])} | {e['dbcore']['in_process_ms']:.0f} | {cell(e['duckdb'])} | {cell(e['sqlite'])} |")
+    lines.append(f"| {q} | {e['rows']:,} | {cell(e['dbcore'])} | {e['dbcore']['in_process_ms']:.0f} | {e['dbcore']['files_opened']}/{e['dbcore']['files_total']} | {cell(e['duckdb'])} | {cell(e['sqlite'])} |")
 open(md_path, "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))
 PY

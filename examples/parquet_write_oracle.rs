@@ -797,6 +797,7 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
             // opens.
             retention_days: Some(2),
             session_key: None,
+            stat_columns: Vec::new(),
         }),
         clock: now,
         ..TableOptions::default()
@@ -905,6 +906,7 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             spill_rows: 1_000_000,
             retention_days: None,
             session_key: None,
+            stat_columns: Vec::new(),
         }),
         clock: now,
         ..TableOptions::default()
