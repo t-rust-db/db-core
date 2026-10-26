@@ -657,6 +657,7 @@ pub fn db_core::engine::column::table::SnapshotFilter::parse(&db_core::storage::
 pub struct db_core::engine::column::table::TableEngine
 impl db_core::engine::column::table::TableEngine
 pub fn db_core::engine::column::table::TableEngine::path(&self) -> &std::path::Path
+pub fn db_core::engine::column::table::TableEngine::reader_stats(&self) -> db_core::storage::ingest::snapshot::ReaderStats
 pub fn db_core::engine::column::table::TableEngine::refresh(&mut self) -> core::result::Result<(), db_core::engine::EngineError>
 pub fn db_core::engine::column::table::TableEngine::snapshot(&self) -> &db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::engine::column::table::TableEngine::table_name(&self) -> &str
@@ -4110,6 +4111,21 @@ pub fn db_core::storage::ingest::record::RowPage::fmt(&self, &mut core::fmt::For
 pub fn db_core::storage::ingest::record::type_from_name(&str) -> core::option::Option<db_core::storage::parquet::schema::ColumnType>
 pub fn db_core::storage::ingest::record::type_name(db_core::storage::parquet::schema::ColumnType) -> alloc::string::String
 pub mod db_core::storage::ingest::snapshot
+pub struct db_core::storage::ingest::snapshot::ReaderStats
+pub db_core::storage::ingest::snapshot::ReaderStats::rebuilds: u64
+pub db_core::storage::ingest::snapshot::ReaderStats::records_parsed: u64
+pub db_core::storage::ingest::snapshot::ReaderStats::refreshes: u64
+impl core::clone::Clone for db_core::storage::ingest::snapshot::ReaderStats
+pub fn db_core::storage::ingest::snapshot::ReaderStats::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::snapshot::ReaderStats
+impl core::cmp::PartialEq for db_core::storage::ingest::snapshot::ReaderStats
+pub fn db_core::storage::ingest::snapshot::ReaderStats::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::ingest::snapshot::ReaderStats
+pub fn db_core::storage::ingest::snapshot::ReaderStats::default() -> Self
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::ReaderStats
+pub fn db_core::storage::ingest::snapshot::ReaderStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::ingest::snapshot::ReaderStats
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::snapshot::ReaderStats
 pub struct db_core::storage::ingest::snapshot::Snapshot
 impl db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
@@ -4121,6 +4137,14 @@ pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::snapshot::TableReader
+impl db_core::storage::ingest::snapshot::TableReader
+pub fn db_core::storage::ingest::snapshot::TableReader::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::TableReader, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::TableReader::refresh(&mut self) -> core::result::Result<&db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::TableReader::snapshot(&self) -> &db_core::storage::ingest::snapshot::Snapshot
+pub fn db_core::storage::ingest::snapshot::TableReader::stats(&self) -> db_core::storage::ingest::snapshot::ReaderStats
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::TableReader
+pub fn db_core::storage::ingest::snapshot::TableReader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::storage::ingest::snapshot::cast(db_core::vm::batch::Value, db_core::storage::parquet::schema::ColumnType) -> db_core::vm::batch::Value
 pub fn db_core::storage::ingest::snapshot::physical_type(db_core::storage::parquet::schema::ColumnType) -> db_core::storage::parquet::footer::PhysicalType
 pub mod db_core::storage::ingest::table
@@ -4507,6 +4531,21 @@ impl core::clone::Clone for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::page::Page
 pub fn db_core::storage::ingest::page::Page::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::ReaderStats
+pub db_core::storage::ingest::ReaderStats::rebuilds: u64
+pub db_core::storage::ingest::ReaderStats::records_parsed: u64
+pub db_core::storage::ingest::ReaderStats::refreshes: u64
+impl core::clone::Clone for db_core::storage::ingest::snapshot::ReaderStats
+pub fn db_core::storage::ingest::snapshot::ReaderStats::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::snapshot::ReaderStats
+impl core::cmp::PartialEq for db_core::storage::ingest::snapshot::ReaderStats
+pub fn db_core::storage::ingest::snapshot::ReaderStats::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::ingest::snapshot::ReaderStats
+pub fn db_core::storage::ingest::snapshot::ReaderStats::default() -> Self
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::ReaderStats
+pub fn db_core::storage::ingest::snapshot::ReaderStats::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::ingest::snapshot::ReaderStats
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::snapshot::ReaderStats
 pub struct db_core::storage::ingest::RowPage
 impl db_core::storage::ingest::record::RowPage
 pub fn db_core::storage::ingest::record::RowPage::columns(&self) -> &[db_core::storage::parquet::schema::ColumnValues]
@@ -4579,6 +4618,14 @@ impl core::default::Default for db_core::storage::ingest::table::TableOptions
 pub fn db_core::storage::ingest::table::TableOptions::default() -> Self
 impl core::fmt::Debug for db_core::storage::ingest::table::TableOptions
 pub fn db_core::storage::ingest::table::TableOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::TableReader
+impl db_core::storage::ingest::snapshot::TableReader
+pub fn db_core::storage::ingest::snapshot::TableReader::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::TableReader, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::TableReader::refresh(&mut self) -> core::result::Result<&db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::TableReader::snapshot(&self) -> &db_core::storage::ingest::snapshot::Snapshot
+pub fn db_core::storage::ingest::snapshot::TableReader::stats(&self) -> db_core::storage::ingest::snapshot::ReaderStats
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::TableReader
+pub fn db_core::storage::ingest::snapshot::TableReader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::TableWriter
 impl db_core::storage::ingest::table::TableWriter
 pub fn db_core::storage::ingest::table::TableWriter::append(&mut self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>

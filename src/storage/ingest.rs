@@ -48,7 +48,7 @@ pub use lock::{LockError, TableLock, LOCK_FILE};
 pub use manifest::{FileEntry, KeyBound, KeyRange, Manifest, ManifestError, MANIFEST_FILE};
 pub use page::{Page, PageBody};
 pub use record::{RecordValue, RowPage};
-pub use snapshot::Snapshot;
+pub use snapshot::{ReaderStats, Snapshot, TableReader};
 #[cfg(feature = "ingest")]
 pub use table::{TableOptions, TableWriter, DATA_DIR, TMP_DIR};
 #[cfg(feature = "ingest")]
