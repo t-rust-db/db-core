@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.187.0"
+version = "0.188.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -218,6 +218,11 @@ required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch",
 name = "unit_engine_column_tables_join"
 path = "tests/unit/engine_column_tables_join_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "storage-column-write"]
+
+[[test]]
+name = "unit_engine_snapshot_build_join"
+path = "tests/unit/engine_snapshot_build_join_test.rs"
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "storage-column-write", "ingest"]
 
 [[test]]
 name = "unit_vm_row_public_api"

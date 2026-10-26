@@ -42,15 +42,16 @@
 //! The stream/SQLite `EXPLAIN`/`explain_opcodes` don't support this shape
 //! yet; the Parquet/SQLite ones do (#782).
 //!
-//! #782 lets a Parquet/SQLite star join name a second *Parquet* table
-//! next to the SQLite ones ([`run_column_tables_query`],
-//! [`CrossModeEngine::open_column_tables_sqlite`]). Which Parquet table
-//! probes is decided per query (`sides::choose_probe`): the largest by
-//! footer row count that the query is a star around, whatever order it is
-//! written in, so the other is the one read into memory; a `LEFT JOIN`
-//! keeps the `FROM` table as the probe. A filter on a built Parquet table
-//! prunes the probe's row groups through the same key set a SQLite lookup
-//! filter does (`prune`).
+//! #782 lets a Parquet/SQLite star join name a second column table next
+//! to the SQLite ones ([`run_column_tables_query`],
+//! [`CrossModeEngine::open_column_tables_sqlite`]), each a Parquet file or a
+//! table directory read as a fresh snapshot. Which column table probes is
+//! decided per query (`sides::choose_probe`): the largest by row count
+//! (a file's footer, a directory's snapshot) that the query is a star
+//! around, whatever order it is written in, so the other is the one read
+//! into memory; a `LEFT JOIN` keeps the `FROM` table as the probe. A filter
+//! on a built table prunes the probe's row groups through the same key set
+//! a SQLite lookup filter does (`prune`).
 //!
 //! [`run_stream_stream_query`]/[`explain_stream_stream_plan`] (ADR-0022,
 //! #372) join two stream sources instead: both are the same table `log`,
@@ -1423,6 +1424,29 @@ fn to_engine_opcode_sections(
         .collect()
 }
 
+/// A column table of a mixed Parquet/table-directory session (#782): a
+/// Parquet file, or a table directory read as a fresh snapshot per query.
+#[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+#[derive(Debug)]
+pub enum ColumnTable {
+    /// A Parquet file, a table named after its stem.
+    File(BatchEngine),
+    /// A table directory, a table named after the directory. Boxed: its
+    /// reader is much larger than a file's engine.
+    Dir(Box<TableEngine>),
+}
+
+#[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+impl ColumnTable {
+    /// This table as a join source.
+    fn source(&self) -> ColumnSource<'_> {
+        match self {
+            ColumnTable::File(engine) => ColumnSource::File(engine),
+            ColumnTable::Dir(engine) => ColumnSource::Dir(engine),
+        }
+    }
+}
+
 /// A cross-mode engine spanning two files at once (ADR-0019/ADR-0022,
 /// #382/#387): either a stream `FROM` joined to one SQLite lookup table,
 /// or two stream engines joined via a windowed self-join. Routing only --
@@ -1479,6 +1503,22 @@ pub enum CrossModeEngine {
         /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
         lookup_path: PathBuf,
     },
+    /// Parquet files and table directories joined to SQLite lookup tables
+    /// (#782): the largest table the query is a star around probes, the
+    /// others build in memory. Built by
+    /// [`CrossModeEngine::open_column_tables_sqlite`] when a path is a
+    /// directory.
+    #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+    ColumnTablesSqlite {
+        /// The first table, one of which probes.
+        driving: ColumnTable,
+        /// The other tables.
+        others: Vec<ColumnTable>,
+        /// The SQLite lookup engine, the build side.
+        lookup: RowEngine,
+        /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
+        lookup_path: PathBuf,
+    },
     /// Two stream engines joined via a windowed self-join (ADR-0022).
     StreamStream {
         /// The `FROM` side's stream engine (query alias: `FROM log AS <alias>`).
@@ -1515,10 +1555,12 @@ impl CrossModeEngine {
         })
     }
 
-    /// [`CrossModeEngine::open_column_sqlite`] for several Parquet files
-    /// (#782): each is a table named after its stem. A query joining two of
-    /// them (and SQLite lookup tables) probes with the larger and builds the
-    /// other in memory. At least one file is required.
+    /// [`CrossModeEngine::open_column_sqlite`] for several tables (#782):
+    /// each path is a Parquet file (a table named after its stem) or, with
+    /// `ingest-read`, a table directory (named after the directory, each
+    /// query reading a fresh snapshot). A query joining two of them (and
+    /// SQLite lookup tables) probes with the larger and builds the other in
+    /// memory. At least one table is required.
     #[cfg(feature = "engine-column")]
     pub fn open_column_tables_sqlite(
         parquets: &[&Path],
@@ -1527,9 +1569,25 @@ impl CrossModeEngine {
         let Some((first, rest)) = parquets.split_first() else {
             return Err(EngineError::new(
                 ErrorKind::Open,
-                "a Parquet/SQLite engine needs at least one Parquet file",
+                "a Parquet/SQLite engine needs at least one table",
             ));
         };
+        #[cfg(feature = "ingest-read")]
+        if parquets.iter().any(|p| p.is_dir()) {
+            let open = |path: &Path| -> Result<ColumnTable, EngineError> {
+                if path.is_dir() {
+                    Ok(ColumnTable::Dir(Box::new(TableEngine::open(path)?)))
+                } else {
+                    Ok(ColumnTable::File(BatchEngine::open(path)?))
+                }
+            };
+            return Ok(CrossModeEngine::ColumnTablesSqlite {
+                driving: open(first)?,
+                others: rest.iter().map(|p| open(p)).collect::<Result<_, _>>()?,
+                lookup: RowEngine::open(lookup_path)?,
+                lookup_path: lookup_path.to_path_buf(),
+            });
+        }
         Ok(CrossModeEngine::ColumnSqlite {
             driving: BatchEngine::open(first)?,
             others: rest
@@ -1598,6 +1656,27 @@ impl Engine for CrossModeEngine {
                 driving.refresh()?;
                 run_sources_query(&[ColumnSource::Dir(driving)], lookup, sql)
             }
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::ColumnTablesSqlite {
+                driving,
+                others,
+                lookup,
+                ..
+            } => {
+                for table in std::iter::once(&mut *driving).chain(others.iter_mut()) {
+                    if let ColumnTable::Dir(engine) = table {
+                        engine.refresh()?;
+                    }
+                }
+                run_sources_query(
+                    &std::iter::once(&*driving)
+                        .chain(others.iter())
+                        .map(ColumnTable::source)
+                        .collect::<Vec<_>>(),
+                    lookup,
+                    sql,
+                )
+            }
             CrossModeEngine::StreamStream { left, right } => {
                 run_stream_stream_query(left, right, sql)
             }
@@ -1624,6 +1703,21 @@ impl Engine for CrossModeEngine {
                 lookup,
                 lookup_path,
             } => explain_column_plan(&[ColumnSource::Dir(driving)], lookup, lookup_path, sql),
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::ColumnTablesSqlite {
+                driving,
+                others,
+                lookup,
+                lookup_path,
+            } => explain_column_plan(
+                &std::iter::once(driving)
+                    .chain(others.iter())
+                    .map(ColumnTable::source)
+                    .collect::<Vec<_>>(),
+                lookup,
+                lookup_path,
+                sql,
+            ),
             CrossModeEngine::StreamStream { left, right } => {
                 explain_stream_stream_plan(left, right, sql)
             }
@@ -1646,6 +1740,20 @@ impl Engine for CrossModeEngine {
             CrossModeEngine::TableSqlite {
                 driving, lookup, ..
             } => explain_column_opcodes(&[ColumnSource::Dir(driving)], lookup, sql)?,
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::ColumnTablesSqlite {
+                driving,
+                others,
+                lookup,
+                ..
+            } => explain_column_opcodes(
+                &std::iter::once(driving)
+                    .chain(others.iter())
+                    .map(ColumnTable::source)
+                    .collect::<Vec<_>>(),
+                lookup,
+                sql,
+            )?,
             CrossModeEngine::StreamStream { left, .. } => {
                 explain_opcodes_stream_stream_query(left, sql)?
             }
@@ -1660,6 +1768,11 @@ impl Engine for CrossModeEngine {
             CrossModeEngine::ColumnSqlite { driving, .. } => driving.stats(),
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
             CrossModeEngine::TableSqlite { driving, .. } => driving.stats(),
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::ColumnTablesSqlite { driving, .. } => match driving {
+                ColumnTable::File(engine) => engine.stats(),
+                ColumnTable::Dir(engine) => engine.stats(),
+            },
             CrossModeEngine::StreamStream { left, .. } => left.stats(),
         }
     }
@@ -1692,6 +1805,23 @@ impl Engine for CrossModeEngine {
                 driving, lookup, ..
             } => {
                 let mut tables = driving.tables()?;
+                tables.extend(lookup.tables()?);
+                Ok(tables)
+            }
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::ColumnTablesSqlite {
+                driving,
+                others,
+                lookup,
+                ..
+            } => {
+                let mut tables = Vec::new();
+                for table in std::iter::once(driving).chain(others.iter()) {
+                    tables.extend(match table {
+                        ColumnTable::File(engine) => engine.tables()?,
+                        ColumnTable::Dir(engine) => engine.tables()?,
+                    });
+                }
                 tables.extend(lookup.tables()?);
                 Ok(tables)
             }

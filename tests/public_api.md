@@ -746,12 +746,22 @@ pub fn db_core::engine::predicate::CompiledPredicate::clone(&self) -> Self
 impl core::fmt::Debug for db_core::engine::predicate::CompiledPredicate
 pub fn db_core::engine::predicate::CompiledPredicate::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub mod db_core::engine::resolve
+pub enum db_core::engine::resolve::ColumnTable
+pub db_core::engine::resolve::ColumnTable::Dir(alloc::boxed::Box<db_core::engine::column::table::TableEngine>)
+pub db_core::engine::resolve::ColumnTable::File(db_core::engine::column::BatchEngine)
+impl core::fmt::Debug for db_core::engine::resolve::ColumnTable
+pub fn db_core::engine::resolve::ColumnTable::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub enum db_core::engine::resolve::CrossModeEngine
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::driving: db_core::engine::column::BatchEngine
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::lookup: db_core::engine::row::RowEngine
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::lookup_path: std::path::PathBuf
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::others: alloc::vec::Vec<db_core::engine::column::BatchEngine>
+pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite
+pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::driving: db_core::engine::resolve::ColumnTable
+pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::lookup: db_core::engine::row::RowEngine
+pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::lookup_path: std::path::PathBuf
+pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::others: alloc::vec::Vec<db_core::engine::resolve::ColumnTable>
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::driving: db_core::engine::stream::StreamEngine
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookup: db_core::engine::row::RowEngine

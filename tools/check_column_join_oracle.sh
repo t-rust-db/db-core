@@ -254,6 +254,46 @@ for template in "${QUERIES[@]}"; do
   fi
 done
 
+# The two-table queries again with a table directory on either side or both
+# (#782): `production` (the directory seeded above, id and region only, so
+# the queries never read its amount) and `extra` (a second directory).
+EXTRA_DIR="$workdir/extra"
+./target/release/examples/column_join_oracle --seed-extra-dir "$EXTRA_DIR"
+for combo in "file dir" "dir file" "dir dir"; do
+  read -r p_kind x_kind <<< "$combo"
+  if [[ "$p_kind" == file ]]; then
+    p_db="$FIXTURE"; p_duck="'$FIXTURE'"
+  else
+    p_db="$tabledir"; p_duck="read_parquet('$tabledir/**/*.parquet')"
+  fi
+  if [[ "$x_kind" == file ]]; then
+    x_db="$EXTRA"; x_duck="'$EXTRA'"
+  else
+    x_db="$EXTRA_DIR"; x_duck="read_parquet('$EXTRA_DIR/**/*.parquet')"
+  fi
+  for template in "${TWO_TABLE_QUERIES[@]}"; do
+    db_sql="${template//__P__/production}"
+    db_sql="${db_sql//__X__/extra}"
+    db_sql="${db_sql//__ids__/ids}"
+    db_sql="${db_sql//__regions__/regions}"
+    duck_sql="${template//__P__/$p_duck AS production}"
+    duck_sql="${duck_sql//__X__/$x_duck AS extra}"
+    duck_sql="${duck_sql//__ids__/lk.ids}"
+    duck_sql="${duck_sql//__regions__/lk.regions}"
+
+    got="$(./target/release/examples/column_join_oracle "$p_db,$x_db" "$lookup" "$db_sql")"
+    want="$(duckdb -csv -noheader -nullvalue '' -c "INSTALL sqlite; LOAD sqlite; ATTACH '$lookup' AS lk (TYPE sqlite); $duck_sql" | grep -v '^$' || true)"
+
+    checked=$((checked + 1))
+    if [[ "$got" != "$want" ]]; then
+      echo "MISMATCH (production: $p_kind, extra: $x_kind): $db_sql"
+      echo "  db-core: $got"
+      echo "  duckdb:  $want"
+      fail=1
+    fi
+  done
+done
+
 if [[ "$fail" -ne 0 ]]; then
   echo "check-column-join-oracle: FAILED"
   exit 1
