@@ -584,3 +584,83 @@ fn an_unqualified_column_of_one_table_resolves_to_it() {
         .unwrap_err();
     assert!(err.message.contains("unknown column: nope"), "{err}");
 }
+
+/// A Parquet file whose `sid` and `other` columns are `UINT_64`, with
+/// values on both sides of 2^63, and a SQLite `sessions` table keyed on
+/// the same values stored as signed bit patterns (#600).
+fn u64_key_files(label: &str) -> (PathBuf, LookupDb) {
+    use db_core::storage::parquet::writer::{
+        ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+    };
+    let sids: [u64; 4] = [5, i64::MAX as u64, 1 << 63, u64::MAX];
+    let schema = vec![
+        ColumnSpec::new("sid", ColumnType::UInt64, false),
+        ColumnSpec::new("other", ColumnType::UInt64, false),
+        ColumnSpec::new("n", ColumnType::Int64, false),
+    ];
+    let mut w = ParquetWriter::new(Vec::new(), schema, WriterOptions::default()).unwrap();
+    w.write_columns(vec![
+        ColumnValues::UInt64(sids.iter().map(|s| Some(*s)).collect()),
+        ColumnValues::UInt64(vec![Some(u64::MAX); 4]),
+        ColumnValues::Int64((0..4).map(Some).collect()),
+    ])
+    .unwrap();
+    let (bytes, _) = w.finish().unwrap();
+    // The table is named after the file stem, so a unique directory.
+    let mut parquet = std::env::temp_dir();
+    parquet.push(format!("db-core-u64-{label}-{}", std::process::id()));
+    std::fs::create_dir_all(&parquet).unwrap();
+    parquet.push("events.parquet");
+    std::fs::write(&parquet, bytes).unwrap();
+
+    let db = LookupDb::new(label);
+    let mut lookup = RowEngine::open(&db.0).unwrap();
+    for (sid, name) in sids.iter().zip(["five", "max_i64", "two63", "max_u64"]) {
+        lookup
+            .run_query(&format!(
+                "INSERT INTO labels VALUES ({}, '{name}')",
+                *sid as i64
+            ))
+            .unwrap();
+    }
+    (parquet, db)
+}
+
+#[test]
+fn a_uint64_join_key_above_i64_max_matches_the_signed_row_key() {
+    let (parquet, db) = u64_key_files("u64_join");
+    let mut e = CrossModeEngine::open_column_sqlite(&parquet, &db.0).unwrap();
+    let got = rows(
+        &mut e,
+        "SELECT labels.label FROM events JOIN labels ON events.sid = labels.id \
+         ORDER BY events.n",
+    )
+    .into_iter()
+    .map(|r| r[0].clone())
+    .collect::<Vec<_>>();
+    // ids 1..=3 of the seed also match no probe row; all four u64 keys do.
+    assert_eq!(
+        got,
+        vec![
+            text("five"),
+            text("max_i64"),
+            text("two63"),
+            text("max_u64")
+        ]
+    );
+    std::fs::remove_dir_all(parquet.parent().unwrap()).ok();
+}
+
+#[test]
+fn a_uint64_column_outside_the_join_key_still_errors_above_i64_max() {
+    let (parquet, db) = u64_key_files("u64_other");
+    let mut e = CrossModeEngine::open_column_sqlite(&parquet, &db.0).unwrap();
+    let err = e
+        .run_query(
+            "SELECT events.other FROM events \
+             JOIN labels ON events.sid = labels.id",
+        )
+        .expect_err("a UINT_64 above i64::MAX outside a join key stays an error (#595)");
+    assert!(err.to_string().contains("18446744073709551615"), "{err}");
+    std::fs::remove_dir_all(parquet.parent().unwrap()).ok();
+}

@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.180.0] - 2026-10-26
+
+### Added
+
+- `TableCursor::seek_ge` and `TableCursor::scan_u64_range`: lookups and range scans over row keys at or above 2^63 (stored as signed bit patterns) in unsigned order.
+- A `UINT_64` Parquet join key above `i64::MAX` reads as its signed bit pattern, so it joins to the matching SQLite row key (#600). Other reads above `i64::MAX` still error.
+
 ## [0.179.0] - 2026-10-26
 
 ### Added

@@ -15752,7 +15752,7 @@
   {
     "id": "engine_column_parse_select_c86b1298",
     "file": "src/engine/column.rs",
-    "line": 208,
+    "line": 215,
     "decision": "!from.eq_ignore_ascii_case(table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15762,7 +15762,7 @@
   {
     "id": "engine_column_parse_select_7fbb1501",
     "file": "src/engine/column.rs",
-    "line": 214,
+    "line": 221,
     "decision": "let Some(join) = select.from.as_ref().and_then(|f| f.joins.first())",
     "conditions": 1,
     "vectors_required": 2,
@@ -15772,7 +15772,7 @@
   {
     "id": "engine_column_parse_select_1093819d",
     "file": "src/engine/column.rs",
-    "line": 223,
+    "line": 230,
     "decision": "planner::has_subquery_condition(&select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15782,7 +15782,7 @@
   {
     "id": "engine_column_parse_select_006bb6a6",
     "file": "src/engine/column.rs",
-    "line": 229,
+    "line": 236,
     "decision": "select.columns.iter().any(is_window_column)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15792,7 +15792,7 @@
   {
     "id": "engine_column_leaf_columns_c237a023",
     "file": "src/engine/column.rs",
-    "line": 268,
+    "line": 275,
     "decision": "match f.element.physical_type {\n                Some(pt) => pt,\n                None if is_map(&f) => PhysicalType::ByteArray,\n                None => return None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15802,7 +15802,7 @@
   {
     "id": "engine_column_leaf_columns_ed34cf5b",
     "file": "src/engine/column.rs",
-    "line": 270,
+    "line": 277,
     "decision": "is_map(&f)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15812,7 +15812,7 @@
   {
     "id": "engine_column_timestamp_columns_ba8b8bfd",
     "file": "src/engine/column.rs",
-    "line": 286,
+    "line": 293,
     "decision": "match f.element.converted_type {\n            Some(ConvertedType::TimestampMillis) => Some((f.name, 1_000)),\n            Some(ConvertedType::TimestampMicros) => Some((f.name, 1_000_000)),\n            _ => f.element.timestamp_units.map(|units| (f.name, units)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15822,7 +15822,7 @@
   {
     "id": "engine_column_timestamp_literals_0b614eb5",
     "file": "src/engine/column.rs",
-    "line": 303,
+    "line": 310,
     "decision": "timestamps.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15832,7 +15832,7 @@
   {
     "id": "engine_column_timestamp_literals_22d9aa23",
     "file": "src/engine/column.rs",
-    "line": 306,
+    "line": 313,
     "decision": "let Some(e) = select.where_clause.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15842,7 +15842,7 @@
   {
     "id": "engine_column_timestamp_literals_a0797668",
     "file": "src/engine/column.rs",
-    "line": 309,
+    "line": 316,
     "decision": "let Some(e) = select.having.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15852,7 +15852,7 @@
   {
     "id": "engine_column_rewrite_timestamp_literals_f9b1d819",
     "file": "src/engine/column.rs",
-    "line": 319,
+    "line": 326,
     "decision": "match &e.kind {\n        ExprKind::Column { name, .. } => timestamps\n            .iter()\n            .find(|(c, _)| c.eq_ignore_ascii_case(name))\n            .map(|(_, per_second)| *per_second),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15862,7 +15862,7 @@
   {
     "id": "engine_column_rewrite_timestamp_literals_7c10cd75",
     "file": "src/engine/column.rs",
-    "line": 326,
+    "line": 333,
     "decision": "match &mut expr.kind {\n        ExprKind::Binary {\n            op:\n                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,\n            lhs,\n            rhs,\n        } => {\n            let (lhs_units, rhs_units) = (units(lhs), units(rhs));\n            for (per_second, literal) in [(lhs_units, &mut **rhs), (rhs_units, &mut **lhs)] {\n                if let (Some(per_second), ExprKind::Literal(Literal::Str(text))) =\n                    (per_second, &literal.kind)\n                {\n                    let value = timestamp_units(text, per_second).ok_or_else(|| {\n                        EngineError::new(\n                            ErrorKind::Compile,\n                            format!(\"conversion error: '{text}' is not a timestamp\"),\n                        )\n                    })?;\n                    literal.kind = ExprKind::Literal(Literal::Integer(value));\n                    break;\n                }\n            }\n            Ok(())\n        }\n        ExprKind::Binary { lhs, rhs, .. } => {\n            rewrite_timestamp_literals(lhs, timestamps)?;\n            rewrite_timestamp_literals(rhs, timestamps)\n        }\n        ExprKind::Unary { expr: inner, .. } | ExprKind::Paren(inner) => {\n            rewrite_timestamp_literals(inner, timestamps)\n        }\n        _ => Ok(()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15872,7 +15872,7 @@
   {
     "id": "engine_column_rewrite_timestamp_literals_085f83b7",
     "file": "src/engine/column.rs",
-    "line": 335,
+    "line": 342,
     "decision": "let (Some(per_second), ExprKind::Literal(Literal::Str(text))) =\n                    (per_second, &literal.kind)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15882,7 +15882,7 @@
   {
     "id": "engine_column_timestamp_units_93791c8e",
     "file": "src/engine/column.rs",
-    "line": 365,
+    "line": 372,
     "decision": "match text.split_once('.') {\n        Some((whole, fraction)) => (whole, fraction),\n        None => (text, \"\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15892,7 +15892,7 @@
   {
     "id": "engine_column_timestamp_units_3ab6b21e",
     "file": "src/engine/column.rs",
-    "line": 369,
+    "line": 376,
     "decision": "!fraction.chars().all(|c| c.is_ascii_digit())",
     "conditions": 1,
     "vectors_required": 2,
@@ -15902,7 +15902,7 @@
   {
     "id": "engine_column_timestamp_units_9ec35f02",
     "file": "src/engine/column.rs",
-    "line": 375,
+    "line": 382,
     "decision": "whole.eq_ignore_ascii_case(\"now\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -15912,7 +15912,7 @@
   {
     "id": "engine_column_timestamp_units_25058f85",
     "file": "src/engine/column.rs",
-    "line": 380,
+    "line": 387,
     "decision": "match parsed {\n        Ok(crate::value::Value::Integer(s)) => s,\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15922,7 +15922,7 @@
   {
     "id": "engine_column_timestamp_units_3e00d129",
     "file": "src/engine/column.rs",
-    "line": 387,
+    "line": 394,
     "decision": "sub.len() < digits",
     "conditions": 1,
     "vectors_required": 2,
@@ -15932,7 +15932,7 @@
   {
     "id": "engine_column_timestamp_units_6f400264",
     "file": "src/engine/column.rs",
-    "line": 390,
+    "line": 397,
     "decision": "sub.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15942,7 +15942,7 @@
   {
     "id": "engine_column_leaves_named_47db8089",
     "file": "src/engine/column.rs",
-    "line": 493,
+    "line": 511,
     "decision": "!self.columns.iter().any(|(leaf, _, _)| leaf == name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15952,7 +15952,7 @@
   {
     "id": "engine_column_order_key_bound_96ce0bd6",
     "file": "src/engine/column.rs",
-    "line": 531,
+    "line": 549,
     "decision": "descending",
     "conditions": 1,
     "vectors_required": 2,
@@ -15962,7 +15962,7 @@
   {
     "id": "engine_column_order_key_bound_54d004cc",
     "file": "src/engine/column.rs",
-    "line": 536,
+    "line": 554,
     "decision": "rg.nested_field_at(index).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15972,7 +15972,7 @@
   {
     "id": "engine_column_load_c2239b69",
     "file": "src/engine/column.rs",
-    "line": 610,
+    "line": 628,
     "decision": "let Some(values) = predicate_batch.columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -15982,7 +15982,7 @@
   {
     "id": "engine_column_load_eae013f0",
     "file": "src/engine/column.rs",
-    "line": 616,
+    "line": 634,
     "decision": "let Some(column) = predicate_batch.typed_columns.get(name.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -15992,7 +15992,7 @@
   {
     "id": "engine_column_load_6f1789ab",
     "file": "src/engine/column.rs",
-    "line": 633,
+    "line": 651,
     "decision": "indices.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16000,10 +16000,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_column_load_leaf_dab52ba8",
+    "id": "engine_column_load_leaf_a1461821",
     "file": "src/engine/column.rs",
-    "line": 691,
-    "decision": "match rg.nested_field_at(index) {\n        Some(field) => map_values(rg, &field).map(Loaded::Values),\n        None if annotation(rg, index) == Annotation::Decimal => {\n            decimal_values(rg, index).map(Loaded::Values)\n        }\n        None => decode_column_full(rg, index, physical_type).map(Loaded::Typed),\n    }",
+    "line": 721,
+    "decision": "match rg.nested_field_at(index) {\n        Some(field) => map_values(rg, &field).map(Loaded::Values),\n        None if annotation(rg, index) == Annotation::Decimal => {\n            decimal_values(rg, index).map(Loaded::Values)\n        }\n        None if bit_pattern && annotation(rg, index) == Annotation::UInt64 => {\n            uint64_bit_pattern(rg, index).map(Loaded::Values)\n        }\n        None => decode_column_full(rg, index, physical_type).map(Loaded::Typed),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -16012,7 +16012,7 @@
   {
     "id": "engine_column_load_leaf_9240b714",
     "file": "src/engine/column.rs",
-    "line": 693,
+    "line": 723,
     "decision": "annotation(rg, index) == Annotation::Decimal",
     "conditions": 1,
     "vectors_required": 2,
@@ -16020,19 +16020,39 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_column_load_leaf_at_6f918c9d",
+    "id": "engine_column_load_leaf_57155792",
     "file": "src/engine/column.rs",
-    "line": 707,
-    "decision": "match rg.nested_field_at(index) {\n        Some(field) => Some(map_values(rg, &field)?),\n        None if annotation(rg, index) == Annotation::Decimal => Some(decimal_values(rg, index)?),\n        None => None,\n    }",
+    "line": 726,
+    "decision": "bit_pattern && annotation(rg, index) == Annotation::UInt64",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_column_load_leaf_at_a7e4fddc",
+    "file": "src/engine/column.rs",
+    "line": 741,
+    "decision": "match rg.nested_field_at(index) {\n        Some(field) => Some(map_values(rg, &field)?),\n        None if bit_pattern && annotation(rg, index) == Annotation::UInt64 => {\n            Some(uint64_bit_pattern(rg, index)?)\n        }\n        None if annotation(rg, index) == Annotation::Decimal => Some(decimal_values(rg, index)?),\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
+    "id": "engine_column_load_leaf_at_57155792",
+    "file": "src/engine/column.rs",
+    "line": 743,
+    "decision": "bit_pattern && annotation(rg, index) == Annotation::UInt64",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_column_load_leaf_at_9240b714",
     "file": "src/engine/column.rs",
-    "line": 709,
+    "line": 746,
     "decision": "annotation(rg, index) == Annotation::Decimal",
     "conditions": 1,
     "vectors_required": 2,
@@ -16042,7 +16062,7 @@
   {
     "id": "engine_column_load_leaf_at_27af8ffb",
     "file": "src/engine/column.rs",
-    "line": 712,
+    "line": 749,
     "decision": "match all {\n        Some(all) => positions\n            .iter()\n            .map(|&p| {\n                usize::try_from(p)\n                    .ok()\n                    .and_then(|i| all.get(i).cloned())\n                    .ok_or(FileError::RowPositionOutOfRange(p))\n            })\n            .collect::<Result<Vec<_>, _>>()\n            .map(Loaded::Values),\n        None => decode_column_at(rg, index, physical_type, positions).map(Loaded::Typed),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16052,7 +16072,7 @@
   {
     "id": "engine_column_apply_loaded_c16b3239",
     "file": "src/engine/column.rs",
-    "line": 738,
+    "line": 775,
     "decision": "match loaded {\n        Loaded::Typed(Decoded::Column(column)) => batch.with_typed_column(name.to_string(), column),\n        Loaded::Values(values) => batch.with_column(name.to_string(), values),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16062,7 +16082,7 @@
   {
     "id": "engine_column_row_group_segments_b8f6287e",
     "file": "src/engine/column.rs",
-    "line": 764,
+    "line": 802,
     "decision": "match (where_clause, file.row_group(i)) {\n            (Some(expr), Some(rg)) => !prune::definitely_empty(expr, &rg, &leaves_by_name),\n            _ => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16072,7 +16092,7 @@
   {
     "id": "engine_column_into_value_64b9c9ef",
     "file": "src/engine/column.rs",
-    "line": 1041,
+    "line": 1100,
     "decision": "match stat {\n            StatValue::Int(i) => Value::Int(i),\n            StatValue::Float(f) => Value::Float(f),\n            StatValue::Str(s) => Value::Str(s.into()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16082,7 +16102,7 @@
   {
     "id": "engine_column_compare_eb9e37d0",
     "file": "src/engine/column.rs",
-    "line": 1049,
+    "line": 1108,
     "decision": "match (a, b) {\n            (StatValue::Int(x), StatValue::Int(y)) => Some(x.cmp(y)),\n            (StatValue::Float(x), StatValue::Float(y)) => x.partial_cmp(y),\n            (StatValue::Int(x), StatValue::Float(y)) => (*x as f64).partial_cmp(y),\n            (StatValue::Float(x), StatValue::Int(y)) => x.partial_cmp(&(*y as f64)),\n            (StatValue::Str(x), StatValue::Str(y)) => Some(x.cmp(y)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16092,7 +16112,7 @@
   {
     "id": "engine_column_decode_stat_bytes_63fb2b31",
     "file": "src/engine/column.rs",
-    "line": 1070,
+    "line": 1129,
     "decision": "match annotation {\n            Annotation::Plain => {}\n            Annotation::UInt32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                return Some(StatValue::Int(i64::from(u32::from_le_bytes(arr))));\n            }\n            Annotation::UInt64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                return i64::try_from(u64::from_le_bytes(arr))\n                    .ok()\n                    .map(StatValue::Int);\n            }\n            Annotation::Decimal | Annotation::Bytes => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16102,7 +16122,7 @@
   {
     "id": "engine_column_decode_stat_bytes_94ae8332",
     "file": "src/engine/column.rs",
-    "line": 1084,
+    "line": 1143,
     "decision": "match physical_type {\n            PhysicalType::Int32 => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from(i32::from_le_bytes(arr))))\n            }\n            PhysicalType::Int64 => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Int(i64::from_le_bytes(arr)))\n            }\n            PhysicalType::Float => {\n                let arr: [u8; 4] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from(f32::from_le_bytes(arr))))\n            }\n            PhysicalType::Double => {\n                let arr: [u8; 8] = bytes.try_into().ok()?;\n                Some(StatValue::Float(f64::from_le_bytes(arr)))\n            }\n            PhysicalType::ByteArray => std::str::from_utf8(bytes)\n                .ok()\n                .map(str::to_string)\n                .map(StatValue::Str),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16112,7 +16132,7 @@
   {
     "id": "engine_column_literal_stat_value_46d4637c",
     "file": "src/engine/column.rs",
-    "line": 1113,
+    "line": 1172,
     "decision": "match (lit, physical_type) {\n            (Literal::Integer(i), PhysicalType::Int32 | PhysicalType::Int64) => {\n                Some(StatValue::Int(*i))\n            }\n            (Literal::Integer(i), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*i as f64))\n            }\n            (Literal::Float(f), PhysicalType::Float | PhysicalType::Double) => {\n                Some(StatValue::Float(*f))\n            }\n            (Literal::Str(s), PhysicalType::ByteArray) => Some(StatValue::Str(s.clone())),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16122,7 +16142,7 @@
   {
     "id": "engine_column_as_column_and_literal_34999e3c",
     "file": "src/engine/column.rs",
-    "line": 1136,
+    "line": 1195,
     "decision": "match (&lhs.kind, &rhs.kind) {\n            (ExprKind::Column { name, .. }, ExprKind::Literal(lit)) => Some((name, lit, false)),\n            (ExprKind::Literal(lit), ExprKind::Column { name, .. }) => Some((name, lit, true)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16132,7 +16152,7 @@
   {
     "id": "engine_column_flip_3667ef35",
     "file": "src/engine/column.rs",
-    "line": 1144,
+    "line": 1203,
     "decision": "match op {\n            BinaryOp::Lt => BinaryOp::Gt,\n            BinaryOp::Le => BinaryOp::Ge,\n            BinaryOp::Gt => BinaryOp::Lt,\n            BinaryOp::Ge => BinaryOp::Le,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16142,7 +16162,7 @@
   {
     "id": "engine_column_bounds_ce810416",
     "file": "src/engine/column.rs",
-    "line": 1186,
+    "line": 1245,
     "decision": "self.rg.nested_field_at(index).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -16152,7 +16172,7 @@
   {
     "id": "engine_column_values_0bc4d41a",
     "file": "src/engine/column.rs",
-    "line": 1205,
+    "line": 1264,
     "decision": "annotation(self.rg, index) != Annotation::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -16162,7 +16182,7 @@
   {
     "id": "engine_column_values_2a0809e3",
     "file": "src/engine/column.rs",
-    "line": 1208,
+    "line": 1267,
     "decision": "match physical_type {\n                PhysicalType::ByteArray => {\n                    let values = self.rg.read_string_column_dictionary(index).ok()??;\n                    Some(values.into_iter().map(StatValue::Str).collect())\n                }\n                PhysicalType::Int64 => {\n                    let values = self.rg.read_int64_column_dictionary(index).ok()??;\n                    Some(values.into_iter().map(StatValue::Int).collect())\n                }\n                PhysicalType::Int32 => {\n                    let values = self.rg.read_int32_column_dictionary(index).ok()??;\n                    Some(\n                        values\n                            .into_iter()\n                            .map(|v| StatValue::Int(i64::from(v)))\n                            .collect(),\n                    )\n                }\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16172,7 +16192,7 @@
   {
     "id": "engine_column_range_definitely_empty_fed29e0a",
     "file": "src/engine/column.rs",
-    "line": 1238,
+    "line": 1297,
     "decision": "match op {\n            BinaryOp::Eq => {\n                let below_min = min\n                    .and_then(|m| compare(literal, m))\n                    .is_some_and(|o| o == Ordering::Less);\n                let above_max = max\n                    .and_then(|m| compare(literal, m))\n                    .is_some_and(|o| o == Ordering::Greater);\n                below_min || above_max\n            }\n            BinaryOp::Lt => min\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o != Ordering::Less),\n            BinaryOp::Le => min\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o == Ordering::Greater),\n            BinaryOp::Gt => max\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o != Ordering::Greater),\n            BinaryOp::Ge => max\n                .and_then(|m| compare(m, literal))\n                .is_some_and(|o| o == Ordering::Less),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16182,7 +16202,7 @@
   {
     "id": "engine_column_comparison_definitely_empty_a3ff3693",
     "file": "src/engine/column.rs",
-    "line": 1283,
+    "line": 1342,
     "decision": "flipped",
     "conditions": 1,
     "vectors_required": 2,
@@ -16192,7 +16212,7 @@
   {
     "id": "engine_column_definitely_empty_in_3e405a69",
     "file": "src/engine/column.rs",
-    "line": 1296,
+    "line": 1355,
     "decision": "match &expr.kind {\n            ExprKind::Paren(inner) => definitely_empty_in(inner, source),\n            ExprKind::Binary {\n                op: BinaryOp::And,\n                lhs,\n                rhs,\n            } => definitely_empty_in(lhs, source) || definitely_empty_in(rhs, source),\n            ExprKind::Binary {\n                op: BinaryOp::Or,\n                lhs,\n                rhs,\n            } => definitely_empty_in(lhs, source) && definitely_empty_in(rhs, source),\n            ExprKind::Binary { op, lhs, rhs } => comparison_definitely_empty(*op, lhs, rhs, source),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16202,7 +16222,7 @@
   {
     "id": "engine_column_is_window_column_21d3bda9",
     "file": "src/engine/column.rs",
-    "line": 1339,
+    "line": 1398,
     "decision": "match column {\n        ResultColumn::Expr {\n            expr:\n                Expr {\n                    kind: ExprKind::FunctionCall { tail, .. },\n                    ..\n                },\n            ..\n        } => matches!(tail.as_deref(), Some(t) if t.over.is_some()),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16212,7 +16232,7 @@
   {
     "id": "engine_column_plan_err_bbf17c28",
     "file": "src/engine/column.rs",
-    "line": 1355,
+    "line": 1414,
     "decision": "match e {\n        PlanError::Internal(msg) => EngineError::new(\n            ErrorKind::Execute,\n            format!(\"planner invariant violated: {msg}\"),\n        ),\n        other => EngineError::new(ErrorKind::Compile, other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16222,7 +16242,7 @@
   {
     "id": "engine_column_type_name_16b2089b",
     "file": "src/engine/column.rs",
-    "line": 1368,
+    "line": 1427,
     "decision": "match pt {\n        PhysicalType::Boolean => \"BOOLEAN\",\n        PhysicalType::Int32 => \"INT32\",\n        PhysicalType::Int64 => \"INT64\",\n        PhysicalType::Int96 => \"INT96\",\n        PhysicalType::Float => \"FLOAT\",\n        PhysicalType::Double => \"DOUBLE\",\n        PhysicalType::ByteArray => \"BYTE_ARRAY\",\n        PhysicalType::FixedLenByteArray => \"FIXED_LEN_BYTE_ARRAY\",\n        PhysicalType::Unknown(_) => \"\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -16232,7 +16252,7 @@
   {
     "id": "engine_column_write_varint_2427714d",
     "file": "src/engine/column.rs",
-    "line": 1616,
+    "line": 1676,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16242,7 +16262,7 @@
   {
     "id": "engine_column_write_varint_a5b1bbc4",
     "file": "src/engine/column.rs",
-    "line": 1620,
+    "line": 1680,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -16252,7 +16272,7 @@
   {
     "id": "engine_column_list_of_structs_field_b09c4ad2",
     "file": "src/engine/column.rs",
-    "line": 1659,
+    "line": 1719,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -16262,7 +16282,7 @@
   {
     "id": "engine_column_build_double_row_group_4ca87ac2",
     "file": "src/engine/column.rs",
-    "line": 1719,
+    "line": 1779,
     "decision": "let Some(stats) = stats_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -16272,11 +16292,21 @@
   {
     "id": "engine_column_a_string_literal_prunes_a_byte_array_column_3ad0fe2b",
     "file": "src/engine/column.rs",
-    "line": 2533,
+    "line": 2604,
     "decision": "let Some(s) = stats",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_column_load_both_614058e4",
+    "file": "src/engine/column.rs",
+    "line": 2755,
+    "decision": "match l\n            .map_err(|e: crate::storage::parquet::FileError| e.to_string())\n        {\n            Ok(Loaded::Values(v)) => Some(v),\n            Ok(Loaded::Typed(_)) => None,\n            Err(e) => {\n                assert!(e.contains(\"18446744073709551615\"), \"{e}\");\n                Some(Vec::new())\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {
@@ -17022,7 +17052,7 @@
   {
     "id": "engine_resolve_run_column_query_afcf4357",
     "file": "src/engine/resolve.rs",
-    "line": 391,
+    "line": 392,
     "decision": "pruning.empty",
     "conditions": 1,
     "vectors_required": 2,
@@ -17032,7 +17062,7 @@
   {
     "id": "engine_resolve_run_column_query_afcf4357_2",
     "file": "src/engine/resolve.rs",
-    "line": 403,
+    "line": 405,
     "decision": "pruning.empty",
     "conditions": 1,
     "vectors_required": 2,
@@ -17042,7 +17072,7 @@
   {
     "id": "engine_resolve_explain_column_plan_91a305fc",
     "file": "src/engine/resolve.rs",
-    "line": 444,
+    "line": 446,
     "decision": "name.eq_ignore_ascii_case(table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17052,7 +17082,7 @@
   {
     "id": "engine_resolve_explain_column_plan_49e09ee9",
     "file": "src/engine/resolve.rs",
-    "line": 446,
+    "line": 448,
     "decision": "name.eq_ignore_ascii_case(&lookup_table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17060,10 +17090,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_explain_column_plan_ce396362",
+    "id": "engine_resolve_explain_column_plan_8de1b4ca",
     "file": "src/engine/resolve.rs",
-    "line": 467,
-    "decision": "match (pruning.empty, pruning.predicate.as_ref()) {\n        (true, _) => Some(0),\n        (false, Some(predicate)) => Some(driving.with_probe_segments(\n            &plan.left_columns,\n            Some(predicate),\n            |segments| Ok(segments.len()),\n        )?),\n        (false, None) => None,\n    }",
+    "line": 469,
+    "decision": "match (pruning.empty, pruning.predicate.as_ref()) {\n        (true, _) => Some(0),\n        (false, Some(predicate)) => Some(driving.with_probe_segments(\n            &plan.left_columns,\n            Some(predicate),\n            &[],\n            |segments| Ok(segments.len()),\n        )?),\n        (false, None) => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -17072,7 +17102,7 @@
   {
     "id": "engine_resolve_explain_column_plan_08a78031",
     "file": "src/engine/resolve.rs",
-    "line": 476,
+    "line": 479,
     "decision": "let Some(kept) = kept",
     "conditions": 1,
     "vectors_required": 2,
@@ -17082,7 +17112,7 @@
   {
     "id": "engine_resolve_check_single_join_explain_c43658ef",
     "file": "src/engine/resolve.rs",
-    "line": 542,
+    "line": 545,
     "decision": "join_count(select) > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -17090,9 +17120,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_resolve_join_key_columns_15d08ebc",
+    "file": "src/engine/resolve.rs",
+    "line": 562,
+    "decision": "match &join.constraint {\n            Some(JoinConstraint::On(expr)) => {\n                named.extend(planner::bool_expr_columns(expr));\n            }\n            Some(JoinConstraint::Using(names)) => named.extend(names.iter().cloned()),\n            None => {}\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_resolve_explain_plan_6d58e3a5",
     "file": "src/engine/resolve.rs",
-    "line": 706,
+    "line": 735,
     "decision": "select.from.as_ref().is_some_and(|f| f.joins.len() > 1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17102,7 +17142,7 @@
   {
     "id": "engine_resolve_explain_plan_cbd67ad2",
     "file": "src/engine/resolve.rs",
-    "line": 726,
+    "line": 755,
     "decision": "table.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17112,7 +17152,7 @@
   {
     "id": "engine_resolve_explain_plan_6d0bbb8e",
     "file": "src/engine/resolve.rs",
-    "line": 728,
+    "line": 757,
     "decision": "table.eq_ignore_ascii_case(&lookup_table)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17122,7 +17162,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_ecf724d4",
     "file": "src/engine/resolve.rs",
-    "line": 760,
+    "line": 789,
     "decision": "from.joins.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -17132,7 +17172,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_0cfb5f70",
     "file": "src/engine/resolve.rs",
-    "line": 785,
+    "line": 814,
     "decision": "!from_name.eq_ignore_ascii_case(super::stream::TABLE)\n        || !join_name.eq_ignore_ascii_case(super::stream::TABLE)",
     "conditions": 2,
     "vectors_required": 3,
@@ -17142,7 +17182,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_b20d52d9",
     "file": "src/engine/resolve.rs",
-    "line": 811,
+    "line": 840,
     "decision": "left_alias.eq_ignore_ascii_case(right_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17152,7 +17192,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_06064080",
     "file": "src/engine/resolve.rs",
-    "line": 818,
+    "line": 847,
     "decision": "match select.scope.as_ref() {\n        None => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a SINCE/UNTIL window: with no \\\n                 SQLite side to bound the query, the window is what makes the \\\n                 join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) if !matches!(super::stream::resolve_scope(select), Scope::Time(_)) => {\n            return Err(EngineError::new(\n                ErrorKind::Unsupported,\n                \"a stream-to-stream join requires a time-based SINCE/UNTIL window \\\n                 (e.g. `SINCE 1 hour`); `LINES`/`BYTES` scopes don't bound either \\\n                 side by time and can't make the join finite (ADR-0022)\",\n            ));\n        }\n        Some(_) => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17162,7 +17202,7 @@
   {
     "id": "engine_resolve_resolve_stream_stream_sides_9a3b2404",
     "file": "src/engine/resolve.rs",
-    "line": 827,
+    "line": 856,
     "decision": "!matches!(super::stream::resolve_scope(select), Scope::Time(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -17172,7 +17212,7 @@
   {
     "id": "engine_resolve_alias_normalize_f42b0018",
     "file": "src/engine/resolve.rs",
-    "line": 849,
+    "line": 878,
     "decision": "let Some(from) = &mut select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -17182,7 +17222,7 @@
   {
     "id": "engine_resolve_alias_normalize_567a3ca4",
     "file": "src/engine/resolve.rs",
-    "line": 851,
+    "line": 880,
     "decision": "let Some(join) = from.joins.first_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -17192,7 +17232,7 @@
   {
     "id": "engine_resolve_materialize_segments_cdfe5103",
     "file": "src/engine/resolve.rs",
-    "line": 884,
+    "line": 913,
     "decision": "num_rows > MAX_STREAM_STREAM_BUILD_ROWS",
     "conditions": 1,
     "vectors_required": 2,
@@ -17202,7 +17242,7 @@
   {
     "id": "engine_resolve_materialize_segments_cfd2fd17",
     "file": "src/engine/resolve.rs",
-    "line": 898,
+    "line": 927,
     "decision": "let Some(col) = batch.columns.get(&request.key)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17212,7 +17252,7 @@
   {
     "id": "engine_resolve_explain_stream_stream_plan_3be1fe26",
     "file": "src/engine/resolve.rs",
-    "line": 986,
+    "line": 1015,
     "decision": "table.eq_ignore_ascii_case(&left_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17222,7 +17262,7 @@
   {
     "id": "engine_resolve_explain_stream_stream_plan_6b519d7c",
     "file": "src/engine/resolve.rs",
-    "line": 988,
+    "line": 1017,
     "decision": "table.eq_ignore_ascii_case(&right_alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17232,7 +17272,7 @@
   {
     "id": "engine_resolve_explain_opcodes_query_6d58e3a5",
     "file": "src/engine/resolve.rs",
-    "line": 1028,
+    "line": 1057,
     "decision": "select.from.as_ref().is_some_and(|f| f.joins.len() > 1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17242,7 +17282,7 @@
   {
     "id": "engine_resolve_run_query_a33ca03f",
     "file": "src/engine/resolve.rs",
-    "line": 1231,
+    "line": 1260,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => run_query(driving, lookup, sql),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => run_column_query(driving, lookup, sql),\n            CrossModeEngine::StreamStream { left, right } => {\n                run_stream_stream_query(left, right, sql)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17252,7 +17292,7 @@
   {
     "id": "engine_resolve_explain_plan_7b0019a7",
     "file": "src/engine/resolve.rs",
-    "line": 1246,
+    "line": 1275,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_plan(driving, lookup, lookup_path, sql),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving,\n                lookup,\n                lookup_path,\n            } => explain_column_plan(driving, lookup, lookup_path, sql),\n            CrossModeEngine::StreamStream { left, right } => {\n                explain_stream_stream_plan(left, right, sql)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17262,7 +17302,7 @@
   {
     "id": "engine_resolve_explain_opcodes_41e273ff",
     "file": "src/engine/resolve.rs",
-    "line": 1265,
+    "line": 1294,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => explain_opcodes_query(driving, lookup, sql)?,\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => explain_column_opcodes(driving, lookup, sql)?,\n            CrossModeEngine::StreamStream { left, .. } => {\n                explain_opcodes_stream_stream_query(left, sql)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17272,7 +17312,7 @@
   {
     "id": "engine_resolve_stats_63cfcd33",
     "file": "src/engine/resolve.rs",
-    "line": 1281,
+    "line": 1310,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, .. } => driving.stats(),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite { driving, .. } => driving.stats(),\n            CrossModeEngine::StreamStream { left, .. } => left.stats(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17282,7 +17322,7 @@
   {
     "id": "engine_resolve_tables_009128f1",
     "file": "src/engine/resolve.rs",
-    "line": 1290,
+    "line": 1319,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, lookup, ..\n            } => {\n                let mut tables = driving.tables()?;\n                tables.extend(lookup.tables()?);\n                Ok(tables)\n            }\n            CrossModeEngine::StreamStream { left, right } => {\n                let mut tables = left.tables()?;\n                tables.extend(right.tables()?);\n                Ok(tables)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40990,9 +41030,99 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_btree_seek_ge_3d6017f2",
+    "file": "src/storage/row/btree.rs",
+    "line": 429,
+    "decision": "lo < hi",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_seek_ge_7d8613b7",
+    "file": "src/storage/row/btree.rs",
+    "line": 433,
+    "decision": "is_interior",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_seek_ge_571dac9e",
+    "file": "src/storage/row/btree.rs",
+    "line": 446,
+    "decision": "key >= target",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_seek_ge_f05caacc",
+    "file": "src/storage/row/btree.rs",
+    "line": 452,
+    "decision": "!is_interior",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_seek_ge_f933deeb",
+    "file": "src/storage/row/btree.rs",
+    "line": 456,
+    "decision": "lo < num_cells",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_scan_u64_range_b7ea1cc4",
+    "file": "src/storage/row/btree.rs",
+    "line": 479,
+    "decision": "lo > hi",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_scan_u64_range_2abe9a94",
+    "file": "src/storage/row/btree.rs",
+    "line": 491,
+    "decision": "let Some(rowid) = cur",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_scan_u64_range_b5c3f0a3",
+    "file": "src/storage/row/btree.rs",
+    "line": 492,
+    "decision": "rowid > to_signed",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_scan_u64_range_657955eb",
+    "file": "src/storage/row/btree.rs",
+    "line": 495,
+    "decision": "!f(rowid_to_varint(rowid), self)?",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_btree_read_page_d01b0d15",
     "file": "src/storage/row/btree.rs",
-    "line": 412,
+    "line": 516,
     "decision": "self.pages_visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -41002,7 +41132,7 @@
   {
     "id": "storage_row_btree_push_page_abf4041c",
     "file": "src/storage/row/btree.rs",
-    "line": 432,
+    "line": 536,
     "decision": "match page_type {\n            LEAF_TABLE => false,\n            INTERIOR_TABLE => true,\n            other => {\n                return Err(BtreeError::UnexpectedPageType {\n                    page_num,\n                    page_type: other,\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41012,7 +41142,7 @@
   {
     "id": "storage_row_btree_push_page_7d8613b7",
     "file": "src/storage/row/btree.rs",
-    "line": 442,
+    "line": 546,
     "decision": "is_interior",
     "conditions": 1,
     "vectors_required": 2,
@@ -41022,7 +41152,7 @@
   {
     "id": "storage_row_btree_push_page_7d8613b7_2",
     "file": "src/storage/row/btree.rs",
-    "line": 446,
+    "line": 550,
     "decision": "is_interior",
     "conditions": 1,
     "vectors_required": 2,
@@ -41032,7 +41162,7 @@
   {
     "id": "storage_row_btree_push_page_fb38977a",
     "file": "src/storage/row/btree.rs",
-    "line": 459,
+    "line": 563,
     "decision": "reverse",
     "conditions": 1,
     "vectors_required": 2,
@@ -41042,7 +41172,7 @@
   {
     "id": "storage_row_btree_advance_5f10a4b0",
     "file": "src/storage/row/btree.rs",
-    "line": 473,
+    "line": 577,
     "decision": "match self.stack.len() {\n                0 => {\n                    self.current = None;\n                    return Ok(None);\n                }\n                n => n.saturating_sub(1),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41052,7 +41182,7 @@
   {
     "id": "storage_row_btree_advance_f05caacc",
     "file": "src/storage/row/btree.rs",
-    "line": 491,
+    "line": 595,
     "decision": "!is_interior",
     "conditions": 1,
     "vectors_required": 2,
@@ -41062,7 +41192,7 @@
   {
     "id": "storage_row_btree_advance_1f53ae14",
     "file": "src/storage/row/btree.rs",
-    "line": 492,
+    "line": 596,
     "decision": "next_cell >= num_cells",
     "conditions": 1,
     "vectors_required": 2,
@@ -41072,7 +41202,7 @@
   {
     "id": "storage_row_btree_advance_c7a8b5b5",
     "file": "src/storage/row/btree.rs",
-    "line": 500,
+    "line": 604,
     "decision": "next_cell < num_cells",
     "conditions": 1,
     "vectors_required": 2,
@@ -41082,7 +41212,7 @@
   {
     "id": "storage_row_btree_advance_ac3d3aaf",
     "file": "src/storage/row/btree.rs",
-    "line": 504,
+    "line": 608,
     "decision": "!rightmost_done",
     "conditions": 1,
     "vectors_required": 2,
@@ -41092,7 +41222,7 @@
   {
     "id": "storage_row_btree_advance_rev_5f10a4b0",
     "file": "src/storage/row/btree.rs",
-    "line": 531,
+    "line": 635,
     "decision": "match self.stack.len() {\n                0 => {\n                    self.current = None;\n                    return Ok(None);\n                }\n                n => n.saturating_sub(1),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41102,7 +41232,7 @@
   {
     "id": "storage_row_btree_advance_rev_f05caacc",
     "file": "src/storage/row/btree.rs",
-    "line": 543,
+    "line": 647,
     "decision": "!is_interior",
     "conditions": 1,
     "vectors_required": 2,
@@ -41112,7 +41242,7 @@
   {
     "id": "storage_row_btree_advance_rev_21fb2e6a",
     "file": "src/storage/row/btree.rs",
-    "line": 544,
+    "line": 648,
     "decision": "next_cell == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41122,7 +41252,7 @@
   {
     "id": "storage_row_btree_advance_rev_ac3d3aaf",
     "file": "src/storage/row/btree.rs",
-    "line": 553,
+    "line": 657,
     "decision": "!rightmost_done",
     "conditions": 1,
     "vectors_required": 2,
@@ -41132,7 +41262,7 @@
   {
     "id": "storage_row_btree_advance_rev_f467dfc9",
     "file": "src/storage/row/btree.rs",
-    "line": 556,
+    "line": 660,
     "decision": "next_cell > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41142,7 +41272,7 @@
   {
     "id": "storage_row_btree_local_payload_size_u64_53403e33",
     "file": "src/storage/row/btree.rs",
-    "line": 655,
+    "line": 759,
     "decision": "is_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -41152,7 +41282,7 @@
   {
     "id": "storage_row_btree_local_payload_size_u64_df8a15f9",
     "file": "src/storage/row/btree.rs",
-    "line": 660,
+    "line": 764,
     "decision": "payload_len <= max_local",
     "conditions": 1,
     "vectors_required": 2,
@@ -41162,7 +41292,7 @@
   {
     "id": "storage_row_btree_local_payload_size_u64_93c702c8",
     "file": "src/storage/row/btree.rs",
-    "line": 671,
+    "line": 775,
     "decision": "k <= max_local",
     "conditions": 1,
     "vectors_required": 2,
@@ -41172,7 +41302,7 @@
   {
     "id": "storage_row_btree_first_overflow_page_19a1ec7a",
     "file": "src/storage/row/btree.rs",
-    "line": 692,
+    "line": 796,
     "decision": "(local_size as u64) < payload_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -41182,7 +41312,7 @@
   {
     "id": "storage_row_btree_free_overflow_chain_1ac5105e",
     "file": "src/storage/row/btree.rs",
-    "line": 716,
+    "line": 820,
     "decision": "overflow_page != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41192,7 +41322,7 @@
   {
     "id": "storage_row_btree_free_overflow_chain_77e19db4",
     "file": "src/storage/row/btree.rs",
-    "line": 718,
+    "line": 822,
     "decision": "*visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -41202,7 +41332,7 @@
   {
     "id": "storage_row_btree_free_overflow_chain_88267fcc",
     "file": "src/storage/row/btree.rs",
-    "line": 723,
+    "line": 827,
     "decision": "!seen.insert(overflow_page)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41212,7 +41342,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_b3a61eaa",
     "file": "src/storage/row/btree.rs",
-    "line": 751,
+    "line": 855,
     "decision": "payload_len > MAX_PAYLOAD_LEN",
     "conditions": 1,
     "vectors_required": 2,
@@ -41222,7 +41352,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_5562a55e",
     "file": "src/storage/row/btree.rs",
-    "line": 764,
+    "line": 868,
     "decision": "local_size as u64 == payload_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -41232,7 +41362,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_36eb150b",
     "file": "src/storage/row/btree.rs",
-    "line": 800,
+    "line": 904,
     "decision": "remaining > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41242,7 +41372,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_60fc8c45",
     "file": "src/storage/row/btree.rs",
-    "line": 801,
+    "line": 905,
     "decision": "overflow_page == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41252,7 +41382,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_4d58f08c",
     "file": "src/storage/row/btree.rs",
-    "line": 804,
+    "line": 908,
     "decision": "!visited_overflow_pages.insert(overflow_page)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41262,7 +41392,7 @@
   {
     "id": "storage_row_btree_reassemble_payload_736e2d4a",
     "file": "src/storage/row/btree.rs",
-    "line": 811,
+    "line": 915,
     "decision": "hops > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -41272,7 +41402,7 @@
   {
     "id": "storage_row_btree_find_leaf_page_b88484d8",
     "file": "src/storage/row/btree.rs",
-    "line": 853,
+    "line": 957,
     "decision": "visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -41282,7 +41412,7 @@
   {
     "id": "storage_row_btree_find_leaf_page_f4615865",
     "file": "src/storage/row/btree.rs",
-    "line": 863,
+    "line": 967,
     "decision": "page_type == LEAF_TABLE",
     "conditions": 1,
     "vectors_required": 2,
@@ -41292,7 +41422,7 @@
   {
     "id": "storage_row_btree_find_leaf_page_f94b61a9",
     "file": "src/storage/row/btree.rs",
-    "line": 865,
+    "line": 969,
     "decision": "page_type == INTERIOR_TABLE",
     "conditions": 1,
     "vectors_required": 2,
@@ -41302,7 +41432,7 @@
   {
     "id": "storage_row_btree_find_leaf_page_960c45d3",
     "file": "src/storage/row/btree.rs",
-    "line": 870,
+    "line": 974,
     "decision": "rowid <= *key",
     "conditions": 1,
     "vectors_required": 2,
@@ -41312,7 +41442,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_77e19db4",
     "file": "src/storage/row/btree.rs",
-    "line": 917,
+    "line": 1021,
     "decision": "*visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -41322,7 +41452,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_4cefadd3",
     "file": "src/storage/row/btree.rs",
-    "line": 927,
+    "line": 1031,
     "decision": "match page_type {\n        LEAF_TABLE => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(8);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let (_, payload_len, tail_start) = decode_cell_head(&buf, cell_start, page_num)?;\n                if let Some(overflow_page) = first_overflow_page(\n                    &buf,\n                    tail_start,\n                    payload_len,\n                    usable_size,\n                    page_num,\n                    false,\n                )? {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) = collect_interior_entries(&buf, header_start, page_num)?;\n            for (child, _) in &entries {\n                free_btree_pages_inner(pager, *child, usable_size, encoding, visited)?;\n            }\n            free_btree_pages_inner(pager, rightmost, usable_size, encoding, visited)?;\n        }\n        t if t == index::LEAF_INDEX => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(8);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let (payload_len, tail_start) =\n                    index::decode_payload_len(&buf, cell_start, page_num)?;\n                if let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?\n                {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n        }\n        t if t == index::INTERIOR_INDEX => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(12);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let value_start = cell_start.saturating_add(4);\n                let (payload_len, tail_start) =\n                    index::decode_payload_len(&buf, value_start, page_num)?;\n                if let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?\n                {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n            let (entries, rightmost) = index::collect_index_interior_entries(\n                &*pager,\n                &buf,\n                header_start,\n                page_num,\n                usable_size,\n                encoding,\n            )?;\n            for (child, _, _) in &entries {\n                free_btree_pages_inner(pager, *child, usable_size, encoding, visited)?;\n            }\n            free_btree_pages_inner(pager, rightmost, usable_size, encoding, visited)?;\n        }\n        _ => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num,\n                page_type,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41332,7 +41462,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_ff42831d",
     "file": "src/storage/row/btree.rs",
-    "line": 954,
+    "line": 1058,
     "decision": "t == index::LEAF_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -41342,7 +41472,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_a108a089",
     "file": "src/storage/row/btree.rs",
-    "line": 969,
+    "line": 1073,
     "decision": "t == index::INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -41352,7 +41482,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_adcff356",
     "file": "src/storage/row/btree.rs",
-    "line": 935,
+    "line": 1039,
     "decision": "let Some(overflow_page) = first_overflow_page(\n                    &buf,\n                    tail_start,\n                    payload_len,\n                    usable_size,\n                    page_num,\n                    false,\n                )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -41362,7 +41492,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_86369887",
     "file": "src/storage/row/btree.rs",
-    "line": 962,
+    "line": 1066,
     "decision": "let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -41372,7 +41502,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_86369887_2",
     "file": "src/storage/row/btree.rs",
-    "line": 978,
+    "line": 1082,
     "decision": "let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -41382,7 +41512,7 @@
   {
     "id": "storage_row_btree_count_table_rows_inner_77e19db4",
     "file": "src/storage/row/btree.rs",
-    "line": 1031,
+    "line": 1135,
     "decision": "*visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -41392,7 +41522,7 @@
   {
     "id": "storage_row_btree_count_table_rows_inner_c26b139f",
     "file": "src/storage/row/btree.rs",
-    "line": 1041,
+    "line": 1145,
     "decision": "match page_type {\n        LEAF_TABLE => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            #[allow(\n                clippy::cast_possible_wrap,\n                reason = \"num_cells is a page's cell count, always <= u16::MAX by file-format construction\"\n            )]\n            let num_cells = num_cells as i64;\n            *total = total.saturating_add(num_cells);\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) = collect_interior_entries(&buf, header_start, page_num)?;\n            for (child, _) in &entries {\n                count_table_rows_inner(source, *child, visited, total)?;\n            }\n            count_table_rows_inner(source, rightmost, visited, total)?;\n        }\n        _ => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num,\n                page_type,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41402,7 +41532,7 @@
   {
     "id": "storage_row_btree_collect_leaf_cells_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1090,
+    "line": 1194,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -41412,7 +41542,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_ae549b74",
     "file": "src/storage/row/btree.rs",
-    "line": 1121,
+    "line": 1225,
     "decision": "cell_rowid == rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -41422,7 +41552,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_56d3df42",
     "file": "src/storage/row/btree.rs",
-    "line": 1124,
+    "line": 1228,
     "decision": "cell_rowid > rowid && insert_pos == num_cells",
     "conditions": 2,
     "vectors_required": 3,
@@ -41432,7 +41562,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1131,
+    "line": 1235,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -41442,7 +41572,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_c3fa768c",
     "file": "src/storage/row/btree.rs",
-    "line": 1132,
+    "line": 1236,
     "decision": "cell_end > buf.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41452,7 +41582,7 @@
   {
     "id": "storage_row_btree_find_leaf_cell_f5b401b0",
     "file": "src/storage/row/btree.rs",
-    "line": 1158,
+    "line": 1262,
     "decision": "cell_rowid != rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -41462,7 +41592,7 @@
   {
     "id": "storage_row_btree_find_leaf_cell_19a1ec7a",
     "file": "src/storage/row/btree.rs",
-    "line": 1162,
+    "line": 1266,
     "decision": "(local_size as u64) < payload_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -41472,7 +41602,7 @@
   {
     "id": "storage_row_btree_write_page_common_8ec7e8b9",
     "file": "src/storage/row/btree.rs",
-    "line": 1296,
+    "line": 1400,
     "decision": "needed > buf.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41482,7 +41612,7 @@
   {
     "id": "storage_row_btree_write_page_common_3b40d643",
     "file": "src/storage/row/btree.rs",
-    "line": 1325,
+    "line": 1429,
     "decision": "*off >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -41492,7 +41622,7 @@
   {
     "id": "storage_row_btree_write_page_common_0794c5c8",
     "file": "src/storage/row/btree.rs",
-    "line": 1344,
+    "line": 1448,
     "decision": "content_end >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -41502,7 +41632,7 @@
   {
     "id": "storage_row_btree_read_content_start_a5b1bbc4",
     "file": "src/storage/row/btree.rs",
-    "line": 1401,
+    "line": 1505,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41512,7 +41642,7 @@
   {
     "id": "storage_row_btree_write_content_start_4730eeed",
     "file": "src/storage/row/btree.rs",
-    "line": 1410,
+    "line": 1514,
     "decision": "value >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -41522,7 +41652,7 @@
   {
     "id": "storage_row_btree_walk_freeblocks_1108b805",
     "file": "src/storage/row/btree.rs",
-    "line": 1457,
+    "line": 1561,
     "decision": "off != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41532,7 +41662,7 @@
   {
     "id": "storage_row_btree_walk_freeblocks_907647a7",
     "file": "src/storage/row/btree.rs",
-    "line": 1459,
+    "line": 1563,
     "decision": "n > MAX_FREEBLOCKS",
     "conditions": 1,
     "vectors_required": 2,
@@ -41542,7 +41672,7 @@
   {
     "id": "storage_row_btree_add_freeblock_d839bf34",
     "file": "src/storage/row/btree.rs",
-    "line": 1503,
+    "line": 1607,
     "decision": "insert_pos > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41552,7 +41682,7 @@
   {
     "id": "storage_row_btree_add_freeblock_7486b092",
     "file": "src/storage/row/btree.rs",
-    "line": 1504,
+    "line": 1608,
     "decision": "let Some(&(prev_off, prev_size)) = blocks.get(insert_pos.saturating_sub(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -41562,7 +41692,7 @@
   {
     "id": "storage_row_btree_add_freeblock_fb958b9e",
     "file": "src/storage/row/btree.rs",
-    "line": 1505,
+    "line": 1609,
     "decision": "prev_off.saturating_add(prev_size) == new_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -41572,7 +41702,7 @@
   {
     "id": "storage_row_btree_add_freeblock_dec9e257",
     "file": "src/storage/row/btree.rs",
-    "line": 1513,
+    "line": 1617,
     "decision": "let Some(&(next_off, next_size)) = blocks.get(insert_pos)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41582,7 +41712,7 @@
   {
     "id": "storage_row_btree_add_freeblock_fa929836",
     "file": "src/storage/row/btree.rs",
-    "line": 1514,
+    "line": 1618,
     "decision": "new_start.saturating_add(new_size) == next_off",
     "conditions": 1,
     "vectors_required": 2,
@@ -41592,7 +41722,7 @@
   {
     "id": "storage_row_btree_splice_insert_cell_76dceda3",
     "file": "src/storage/row/btree.rs",
-    "line": 1545,
+    "line": 1649,
     "decision": "content_start < ptr_end || content_start.saturating_sub(ptr_end) < needed",
     "conditions": 2,
     "vectors_required": 3,
@@ -41602,7 +41732,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_2567997a",
     "file": "src/storage/row/btree.rs",
-    "line": 1589,
+    "line": 1693,
     "decision": "index >= num_cells",
     "conditions": 1,
     "vectors_required": 2,
@@ -41612,7 +41742,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_93677d86",
     "file": "src/storage/row/btree.rs",
-    "line": 1597,
+    "line": 1701,
     "decision": "has_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -41622,7 +41752,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1607,
+    "line": 1711,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -41632,7 +41762,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_5498646f",
     "file": "src/storage/row/btree.rs",
-    "line": 1619,
+    "line": 1723,
     "decision": "let Some(slice) = buf.get_mut(cell_start..cell_end)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41642,7 +41772,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_b992bc34",
     "file": "src/storage/row/btree.rs",
-    "line": 1624,
+    "line": 1728,
     "decision": "cell_start == content_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -41652,7 +41782,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_a3c31294",
     "file": "src/storage/row/btree.rs",
-    "line": 1627,
+    "line": 1731,
     "decision": "let Some(pos) = blocks.iter().position(|&(o, _)| o == new_content_start)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41662,7 +41792,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_7975dbd9",
     "file": "src/storage/row/btree.rs",
-    "line": 1633,
+    "line": 1737,
     "decision": "cell_len < MIN_FREEBLOCK_SIZE",
     "conditions": 1,
     "vectors_required": 2,
@@ -41672,7 +41802,7 @@
   {
     "id": "storage_row_btree_page1_header_start_dec9c314",
     "file": "src/storage/row/btree.rs",
-    "line": 1650,
+    "line": 1754,
     "decision": "page_num == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -41682,7 +41812,7 @@
   {
     "id": "storage_row_btree_require_interior_header_2fd27b70",
     "file": "src/storage/row/btree.rs",
-    "line": 1688,
+    "line": 1792,
     "decision": "page.len() < header_start.saturating_add(12)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41692,7 +41822,7 @@
   {
     "id": "storage_row_btree_text_cf9777d8",
     "file": "src/storage/row/btree.rs",
-    "line": 1834,
+    "line": 1938,
     "decision": "match v {\n            Value::Text(s) => s,\n            other => panic!(\"expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41702,7 +41832,7 @@
   {
     "id": "storage_row_btree_int_50ac411a",
     "file": "src/storage/row/btree.rs",
-    "line": 1841,
+    "line": 1945,
     "decision": "match v {\n            Value::Integer(i) => *i,\n            other => panic!(\"expected integer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41712,7 +41842,7 @@
   {
     "id": "storage_row_btree_blob_0fd307c4",
     "file": "src/storage/row/btree.rs",
-    "line": 1848,
+    "line": 1952,
     "decision": "match v {\n            Value::Blob(b) => b,\n            other => panic!(\"expected blob, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41722,7 +41852,7 @@
   {
     "id": "storage_row_btree_table_multipage_full_scan_matches_oracle_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 1888,
+    "line": 1992,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -41732,7 +41862,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_and_prev_walk_descending_rowid_order_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 1934,
+    "line": 2038,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -41742,7 +41872,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_matches_full_scans_final_row_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 1963,
+    "line": 2067,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -41752,7 +41882,7 @@
   {
     "id": "storage_row_btree_table_single_page_seek_binary_search_on_small_leaf_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2047,
+    "line": 2151,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -41762,7 +41892,7 @@
   {
     "id": "storage_row_btree_sha256_of_8adec907",
     "file": "src/storage/row/btree.rs",
-    "line": 2194,
+    "line": 2399,
     "decision": "msg.len() % 64 != 56",
     "conditions": 1,
     "vectors_required": 2,
@@ -41772,7 +41902,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_885fe06a",
     "file": "src/storage/row/btree.rs",
-    "line": 2401,
+    "line": 2606,
     "decision": "value < 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -41782,7 +41912,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_c6634d1d",
     "file": "src/storage/row/btree.rs",
-    "line": 2409,
+    "line": 2614,
     "decision": "value == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41792,7 +41922,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_832a894a",
     "file": "src/storage/row/btree.rs",
-    "line": 2415,
+    "line": 2620,
     "decision": "i + 1 == chunks.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41802,7 +41932,7 @@
   {
     "id": "storage_row_btree_local_payload_borrows_from_the_page_instead_of_copying_a3f083e9",
     "file": "src/storage/row/btree.rs",
-    "line": 2507,
+    "line": 2712,
     "decision": "match &row.payload {\n            Payload::Local { page, .. } => {\n                assert!(\n                    Rc::strong_count(page) >= 2,\n                    \"expected the row to share the page's Rc, not hold the only reference\"\n                );\n            }\n            Payload::Owned(_) => panic!(\"expected a borrowed Local payload, got an Owned copy\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

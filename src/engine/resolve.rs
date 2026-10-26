@@ -72,7 +72,7 @@ use super::{
     OpcodeSection, PlanRow, QueryResult, TableInfo,
 };
 use crate::codegen::batch::{self as planner, split_qualified, PlanError, TableStats};
-use crate::parser::ast::{Select, TableRefKind};
+use crate::parser::ast::{JoinConstraint, Select, TableRefKind};
 use crate::parser::ParseError;
 use crate::storage::stream::{ColumnRequest, StreamSegment};
 use crate::vm::batch::{Batch, ScanSource, Segment as VmSegment, Value};
@@ -387,6 +387,7 @@ pub fn run_column_query(
         return driving.with_probe_segments(
             &plan.left_columns,
             pruning.predicate.as_ref(),
+            &join_key_columns(&select, &plan.left_columns),
             |mut segments| {
                 if pruning.empty {
                     segments.clear();
@@ -399,6 +400,7 @@ pub fn run_column_query(
     driving.with_probe_segments(
         &plan.left_columns,
         pruning.predicate.as_ref(),
+        &join_key_columns(&select, &plan.left_columns),
         |mut segments| {
             if pruning.empty {
                 segments.clear();
@@ -469,6 +471,7 @@ fn explain_column_plan(
         (false, Some(predicate)) => Some(driving.with_probe_segments(
             &plan.left_columns,
             Some(predicate),
+            &[],
             |segments| Ok(segments.len()),
         )?),
         (false, None) => None,
@@ -547,6 +550,32 @@ fn check_single_join_explain(select: &Select) -> Result<(), EngineError> {
         ));
     }
     Ok(())
+}
+
+/// The probe-side `columns` named in a `JOIN`'s `ON`/`USING`: the columns
+/// a `UINT_64` above `i64::MAX` may read as its signed bit pattern, since a
+/// join only tests them for equality against a SQLite key stored the same
+/// way (#600).
+fn join_key_columns(select: &Select, columns: &[String]) -> Vec<String> {
+    let mut named: Vec<String> = Vec::new();
+    for join in select.from.iter().flat_map(|f| &f.joins) {
+        match &join.constraint {
+            Some(JoinConstraint::On(expr)) => {
+                named.extend(planner::bool_expr_columns(expr));
+            }
+            Some(JoinConstraint::Using(names)) => named.extend(names.iter().cloned()),
+            None => {}
+        }
+    }
+    columns
+        .iter()
+        .filter(|c| {
+            named
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(c) || n.eq_ignore_ascii_case(split_qualified(c).1))
+        })
+        .cloned()
+        .collect()
 }
 
 fn join_count(select: &Select) -> usize {
