@@ -859,7 +859,7 @@ pub fn file_segments<'f>(
 /// [`file_segments`] where the `bit_pattern` columns (batch keys, a subset
 /// of `columns`) read a `UINT_64` above `i64::MAX` as its signed bit
 /// pattern rather than an error (#600), for join keys.
-pub(crate) fn file_segments_with_bit_patterns<'f>(
+pub fn file_segments_with_bit_patterns<'f>(
     file: &'f ParquetFile<'f>,
     columns: &[String],
     where_clause: Option<&Expr>,
@@ -988,7 +988,22 @@ pub fn snapshot_segments<'f>(
     columns: &[String],
     program: &'f Program,
 ) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
-    segments_of(snapshot, files, columns, program, None)
+    segments_of(snapshot, files, columns, program, None, &[])
+}
+
+/// [`snapshot_segments`] where the `bit_pattern` columns (keys of
+/// `columns`) read a `UINT_64` above `i64::MAX` as its signed bit pattern
+/// instead of an error (#786): the join keys, which a join only compares
+/// for equality against a SQLite row key stored the same way (#600).
+#[cfg(feature = "ingest-read")]
+pub fn snapshot_segments_with_bit_patterns<'f>(
+    snapshot: &'f crate::storage::ingest::Snapshot,
+    files: &'f [ParquetFile<'f>],
+    columns: &[String],
+    program: &'f Program,
+    bit_pattern: &[String],
+) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
+    segments_of(snapshot, files, columns, program, None, bit_pattern)
 }
 
 /// [`snapshot_segments`] without the record pages `filter` proves hold no
@@ -1002,7 +1017,7 @@ pub fn snapshot_segments_where<'f>(
     program: &'f Program,
     filter: &table::SnapshotFilter,
 ) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
-    segments_of(snapshot, files, columns, program, Some(filter.expr()))
+    segments_of(snapshot, files, columns, program, Some(filter.expr()), &[])
 }
 
 #[cfg(feature = "ingest-read")]
@@ -1012,11 +1027,12 @@ fn segments_of<'f>(
     columns: &[String],
     program: &'f Program,
     where_clause: Option<&Expr>,
+    bit_pattern: &[String],
 ) -> Result<Vec<SnapshotSegment<'f, 'f>>, EngineError> {
     let schema = snapshot
         .schema()
         .map_err(|e| EngineError::new(ErrorKind::Open, e))?;
-    let requests = table::resolve(&schema, columns)?;
+    let requests = table::resolve(&schema, columns, bit_pattern)?;
     let mut segments: Vec<SnapshotSegment<'f, 'f>> = Vec::new();
     for file in files {
         let (leaves, _, fixups) = table::file_plan(&leaf_columns(file), &schema, &requests);
@@ -1028,7 +1044,7 @@ fn segments_of<'f>(
                     columns: leaves.clone(),
                     program,
                     order_leaf: None,
-                    bit_pattern: Vec::new(),
+                    bit_pattern: bit_pattern.to_vec(),
                 },
                 fixups: fixups.clone(),
             })

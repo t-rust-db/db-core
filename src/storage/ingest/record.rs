@@ -420,11 +420,18 @@ impl RowPage {
     /// Column `name` as the column engine reads it; `None` for a name not
     /// in the schema.
     #[cfg(feature = "engine-column")]
-    pub(crate) fn engine_column(&self, name: &str) -> Option<Result<Vec<Value>, String>> {
+    ///
+    /// With `bit_pattern`, a `UINT_64` above `i64::MAX` reads as its signed
+    /// bit pattern instead of an error (#786): a join key.
+    pub(crate) fn engine_column(
+        &self,
+        name: &str,
+        bit_pattern: bool,
+    ) -> Option<Result<Vec<Value>, String>> {
         let index = self.schema.iter().position(|s| s.name == name)?;
         let spec = self.schema.get(index)?;
         let values = self.columns.get(index)?;
-        Some(engine_values(values, spec.column_type))
+        Some(engine_values(values, spec.column_type, bit_pattern))
     }
 }
 
@@ -523,11 +530,14 @@ fn push_value(column: &mut ColumnValues, value: RecordValue) {
 /// `values` (of a `column_type` column) as the column engine decodes them
 /// from Parquet (`storage::column::decode`): integers and unsigned values
 /// as `Int` (a `UINT_64` above `i64::MAX` is an error, as there), a
-/// decimal as [`Decimal::to_f64`], bytes as lowercase hex.
+/// decimal as [`Decimal::to_f64`], bytes as lowercase hex. With
+/// `bit_pattern` a `UINT_64` above `i64::MAX` is its signed bit pattern
+/// instead (#786).
 #[cfg(feature = "engine-column")]
 pub(crate) fn engine_values(
     values: &ColumnValues,
     column_type: ColumnType,
+    bit_pattern: bool,
 ) -> Result<Vec<Value>, String> {
     fn map<T>(v: &[Option<T>], f: impl Fn(&T) -> Value) -> Vec<Value> {
         v.iter()
@@ -553,6 +563,7 @@ pub(crate) fn engine_values(
             .iter()
             .map(|x| match x {
                 None => Ok(Value::Null),
+                Some(u) if bit_pattern => Ok(Value::Int(u.cast_signed())),
                 Some(u) => i64::try_from(*u)
                     .map(Value::Int)
                     .map_err(|_| FileError::UnsignedOutOfRange(*u).to_string()),
