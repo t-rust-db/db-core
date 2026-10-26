@@ -46,7 +46,7 @@
 #[cfg(feature = "emit-batch")]
 pub mod emit;
 mod join_columns;
-pub use join_columns::{resolve_join_columns, ResolvedJoin};
+pub use join_columns::{resolve_join_columns, JoinColumnsError, ResolvedJoin};
 
 use crate::parser::ast::{
     BinaryOp as AstBinOp, Distinctness, Expr as AstExpr, ExprKind, FromClause as AstFromClause,
@@ -174,16 +174,6 @@ pub enum PlanError {
     /// that clause is stream-only; `codegen::stream::compile` strips it
     /// before delegating the residual query here.
     ScopeClauseUnsupported,
-    /// #778: an unqualified column that several tables of a join have
-    /// (and that no `USING` clause merges); the query must qualify it.
-    AmbiguousColumn {
-        /// The column as written.
-        name: String,
-        /// The tables that have it, in the order written.
-        tables: Vec<String>,
-    },
-    /// #778: `t.*` naming no table of the query.
-    UnknownStarTable(String),
 }
 
 impl fmt::Display for PlanError {
@@ -204,14 +194,6 @@ impl fmt::Display for PlanError {
             PlanError::Internal(reason) => write!(f, "planner invariant violated: {reason}"),
             PlanError::ScopeClauseUnsupported => {
                 write!(f, "SINCE/UNTIL is only available through the stream engine")
-            }
-            PlanError::AmbiguousColumn { name, tables } => write!(
-                f,
-                "ambiguous column name: {name} (in {}); qualify it with its table",
-                tables.join(", ")
-            ),
-            PlanError::UnknownStarTable(table) => {
-                write!(f, "unknown table in {table}.*: {table}")
             }
         }
     }

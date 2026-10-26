@@ -19,7 +19,7 @@
 use db_core::codegen::batch::{
     compile, compile_join, compile_semi_join, compile_window, expand_star, explain,
     explain_opcodes, output_column_names, resolve_join_columns, split_qualified, BuildSourceKind,
-    PlanError, TableStats, WindowFunc,
+    JoinColumnsError, PlanError, TableStats, WindowFunc,
 };
 use db_core::parser::column::parse;
 use db_core::vm::batch::{JoinKind, MapOp, Opcode};
@@ -279,7 +279,7 @@ fn tables() -> Vec<(String, Vec<String>)> {
     ]
 }
 
-fn resolved(sql: &str) -> Result<(Vec<String>, Vec<String>), PlanError> {
+fn resolved(sql: &str) -> Result<(Vec<String>, Vec<String>), JoinColumnsError> {
     let r = resolve_join_columns(&select(sql), &tables())?;
     let rendered = r.select.columns.iter().map(|c| format!("{c:?}")).collect();
     Ok((r.headers, rendered))
@@ -293,7 +293,7 @@ fn join_columns_ambiguous_name_is_an_error() {
         "ambiguous column name: id (in a, b); qualify it with its table"
     );
     let err = resolved("SELECT x FROM a JOIN b ON a.id = b.id WHERE id = 1").unwrap_err();
-    assert!(matches!(err, PlanError::AmbiguousColumn { .. }));
+    assert!(matches!(err, JoinColumnsError::AmbiguousColumn { .. }));
 }
 
 #[test]

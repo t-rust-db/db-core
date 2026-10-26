@@ -10,15 +10,61 @@
 //!   once) and `t.*` (that table's columns) with bare names as headers,
 //!   duplicates included (`id`, `id`);
 //! - qualifies an unqualified column with the one table that has it, an
-//!   [`PlanError::AmbiguousColumn`] when several do (a `USING (k)` key is
+//!   [`JoinColumnsError::AmbiguousColumn`] when several do (a `USING (k)` key is
 //!   merged and means the table written first), and leaves it alone when
 //!   none does (a select-list alias, or an unknown name the planner reports).
 
-use super::{output_column_names, resolve_group_by, PlanError, Result};
+use super::{output_column_names, resolve_group_by, PlanError};
 use crate::parser::ast::{
     Expr, ExprKind, FunctionArgs, Join, JoinConstraint, ResultColumn, Select,
 };
 use crate::parser::Span;
+use std::fmt;
+
+/// Why [`resolve_join_columns`] refused a query. A type of its own, not
+/// [`PlanError`] variants, so callers matching `PlanError` exhaustively keep
+/// compiling.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JoinColumnsError {
+    /// An unqualified column that several tables of the join have (and no
+    /// `USING` clause merges); the query must qualify it.
+    AmbiguousColumn {
+        /// The column as written.
+        name: String,
+        /// The tables that have it, in the order written.
+        tables: Vec<String>,
+    },
+    /// `t.*` naming no table of the query.
+    UnknownStarTable(String),
+    /// The planner refused the query while resolving its `GROUP BY`.
+    Plan(PlanError),
+}
+
+impl fmt::Display for JoinColumnsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            JoinColumnsError::AmbiguousColumn { name, tables } => write!(
+                f,
+                "ambiguous column name: {name} (in {}); qualify it with its table",
+                tables.join(", ")
+            ),
+            JoinColumnsError::UnknownStarTable(table) => {
+                write!(f, "unknown table in {table}.*: {table}")
+            }
+            JoinColumnsError::Plan(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for JoinColumnsError {}
+
+impl From<PlanError> for JoinColumnsError {
+    fn from(e: PlanError) -> Self {
+        JoinColumnsError::Plan(e)
+    }
+}
+
+type Result<T> = std::result::Result<T, JoinColumnsError>;
 
 /// A join's `SELECT` with its names resolved, and the result headers it had
 /// before they were.
@@ -48,8 +94,8 @@ struct StarColumn {
 ///
 /// # Errors
 ///
-/// [`PlanError::AmbiguousColumn`] for a bare name several tables have,
-/// [`PlanError::UnknownStarTable`] for a `t.*` naming no table of the query.
+/// [`JoinColumnsError::AmbiguousColumn`] for a bare name several tables have,
+/// [`JoinColumnsError::UnknownStarTable`] for a `t.*` naming no table of the query.
 pub fn resolve_join_columns(
     select: &Select,
     tables: &[(String, Vec<String>)],
@@ -149,7 +195,7 @@ fn expand_star(mut select: Select, tables: &[(String, Vec<String>)]) -> Result<S
                     .map(item)
                     .collect();
                 if of_table.is_empty() {
-                    return Err(PlanError::UnknownStarTable(table));
+                    return Err(JoinColumnsError::UnknownStarTable(table));
                 }
                 columns.extend(of_table);
             }
@@ -172,7 +218,7 @@ fn column_expr(table: Option<String>, name: String) -> Expr {
 }
 
 /// The table an unqualified column belongs to: the one table that has it.
-/// Several is [`PlanError::AmbiguousColumn`], except for a `USING (k)` key,
+/// Several is [`JoinColumnsError::AmbiguousColumn`], except for a `USING (k)` key,
 /// which is merged and means the table written first. `None` when no table
 /// has it.
 fn column_owner(
@@ -191,7 +237,7 @@ fn column_owner(
         [first, ..] if using_keys.iter().any(|k| k.eq_ignore_ascii_case(name)) => {
             Ok(Some((*first).clone()))
         }
-        _ => Err(PlanError::AmbiguousColumn {
+        _ => Err(JoinColumnsError::AmbiguousColumn {
             name: name.to_string(),
             tables: owners.into_iter().cloned().collect(),
         }),

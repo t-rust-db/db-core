@@ -319,8 +319,11 @@ fn resolve_cross_mode_group_by(
         };
         tables.push((name.to_string(), columns));
     }
-    let planner::ResolvedJoin { select, headers } =
-        planner::resolve_join_columns(&select, &tables).map_err(plan_err)?;
+    let planner::ResolvedJoin { select, headers } = planner::resolve_join_columns(&select, &tables)
+        .map_err(|e| match e {
+            planner::JoinColumnsError::Plan(e) => plan_err(e),
+            other => EngineError::new(ErrorKind::Compile, other),
+        })?;
     Ok(Resolved { select, headers })
 }
 
