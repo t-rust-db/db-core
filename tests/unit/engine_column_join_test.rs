@@ -239,6 +239,36 @@ fn explain_plan_labels_both_sides_by_mode_and_file() {
     );
 }
 
+/// #789: the SQLite side's `SCAN` line reports the table's real size and
+/// no row groups, with or without `ANALYZE` statistics, whatever the case
+/// the query spells the table in.
+#[test]
+fn explain_plan_reports_the_lookup_tables_real_row_count() {
+    let db = LookupDb::new("explain-rows");
+    let scan = |sql: &str| -> String {
+        db.engine()
+            .explain_plan(sql)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.detail)
+            .find(|d| d.contains("[sqlite "))
+            .expect("a SQLite SCAN line")
+    };
+    let labels = "SELECT production.id FROM production JOIN labels ON production.id = labels.id";
+    let line = scan(labels);
+    assert!(line.starts_with("SCAN labels (~3 rows) [sqlite "), "{line}");
+    assert!(!line.contains("row group"), "{line}");
+    let tiers = "SELECT production.id FROM production JOIN TIERS ON production.id = TIERS.id";
+    assert!(scan(tiers).contains("(~2 rows)"), "{}", scan(tiers));
+
+    // After `ANALYZE` the row count comes from `sqlite_stat1`.
+    RowEngine::open(&db.0)
+        .unwrap()
+        .run_query("ANALYZE")
+        .unwrap();
+    assert!(scan(labels).contains("(~3 rows)"), "{}", scan(labels));
+}
+
 #[test]
 fn explain_plan_reports_the_row_group_pruning_a_lookup_filter_implies() {
     let db = LookupDb::new("explain-prune");

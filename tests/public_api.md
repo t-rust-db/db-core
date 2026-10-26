@@ -8075,6 +8075,7 @@ pub fn db_core::value::format_real(f64) -> alloc::string::String
 pub mod db_core::vm
 pub mod db_core::vm::batch
 pub enum db_core::vm::batch::AggFunc
+pub db_core::vm::batch::AggFunc::ApproxCountDistinct
 pub db_core::vm::batch::AggFunc::Avg
 pub db_core::vm::batch::AggFunc::AvgSum
 pub db_core::vm::batch::AggFunc::Count
@@ -8106,6 +8107,7 @@ pub fn db_core::vm::batch::AggOperand::fmt(&self, &mut core::fmt::Formatter<'_>)
 impl core::marker::Copy for db_core::vm::batch::AggOperand
 impl core::marker::StructuralPartialEq for db_core::vm::batch::AggOperand
 pub enum db_core::vm::batch::AggPart
+pub db_core::vm::batch::AggPart::ApproxCountDistinct
 pub db_core::vm::batch::AggPart::Avg(usize, usize)
 pub db_core::vm::batch::AggPart::Count
 pub db_core::vm::batch::AggPart::DistinctKey
@@ -8318,6 +8320,7 @@ pub fn db_core::vm::batch::ScanSource::fmt(&self, &mut core::fmt::Formatter<'_>)
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ScanSource
 pub enum db_core::vm::batch::Value
 pub db_core::vm::batch::Value::Bool(bool)
+pub db_core::vm::batch::Value::Bytes(alloc::rcs::arc::Arc<[u8]>)
 pub db_core::vm::batch::Value::Decimal
 pub db_core::vm::batch::Value::Decimal::scale: u8
 pub db_core::vm::batch::Value::Decimal::unscaled: i128

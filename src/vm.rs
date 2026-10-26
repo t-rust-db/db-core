@@ -60,6 +60,8 @@ pub(crate) mod combine;
 #[cfg(feature = "vm-batch")]
 pub mod engine;
 #[cfg(feature = "vm-batch")]
+pub(crate) mod hll;
+#[cfg(feature = "vm-batch")]
 pub(crate) mod int_key_table;
 pub mod join;
 #[cfg(feature = "vm-batch")]

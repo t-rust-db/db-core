@@ -382,6 +382,12 @@ fn agg_call_source(call: &AstExpr, ctx: &mut Ctx) -> Result<Option<usize>> {
         )));
     }
     let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
+    // Its partial is a sketch no expression or `HAVING` operand can read (#603).
+    if func == AggFunc::ApproxCountDistinct {
+        return Err(PlanError::UnsupportedSelectItem(format!(
+            "{name} inside an expression or HAVING (only as a SELECT-list item)"
+        )));
+    }
     let base = agg_arg(call, func, args)?.map(|a| match a {
         AggArg::Column(name) => ctx.load_column(&name),
         AggArg::Expr(e) => compile_expr(&e, ctx),
@@ -543,6 +549,7 @@ fn push_aggregate(
         AggFunc::Count => Some(AggPart::Count),
         AggFunc::Min => Some(AggPart::Min),
         AggFunc::Max => Some(AggPart::Max),
+        AggFunc::ApproxCountDistinct => Some(AggPart::ApproxCountDistinct),
         // `AvgSum` never comes from SQL; it is `Avg`'s partial.
         AggFunc::Avg | AggFunc::AvgSum => None,
     };
@@ -3553,6 +3560,14 @@ fn scan_detail(table: &str, stats: TableStats) -> String {
         .source
         .as_deref()
         .map_or(String::new(), |src| format!(" [{src}]"));
+    // A SQLite table has no row groups (#789): the count alone.
+    if stats
+        .source
+        .as_deref()
+        .is_some_and(|src| src.starts_with("sqlite "))
+    {
+        return format!("SCAN {table} (~{} rows){label}", stats.rows);
+    }
     format!(
         "SCAN {table} ({groups} row group{}, ~{} rows){label}",
         if groups == 1 { "" } else { "s" },

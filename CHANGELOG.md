@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.181.1] - 2026-10-26
+
+### Fixed
+
+- `EXPLAIN QUERY PLAN` for a cross-mode join reports a SQLite lookup table's real row count (from `ANALYZE` statistics, or `COUNT(*)`) instead of `1 row group, ~0 rows` (#789).
+
+## [0.181.0] - 2026-10-26
+
+### Added
+
+- `approx_count_distinct(x)` (#603): HyperLogLog estimate of distinct values in the batch engine, grouped or not; about 0.8 % standard error at precision 14, deterministic across segment splits.
+
 ## [0.180.0] - 2026-10-26
 
 ### Added
