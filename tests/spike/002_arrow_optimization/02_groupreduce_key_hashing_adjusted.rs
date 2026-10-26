@@ -72,6 +72,10 @@ impl Hash for GroupKey {
                     5u8.hash(state);
                     entries.hash(state);
                 }
+                Value::Bytes(bytes) => {
+                    7u8.hash(state);
+                    bytes.hash(state);
+                }
                 Value::Decimal { unscaled, scale } => {
                     6u8.hash(state);
                     (unscaled, scale).hash(state);

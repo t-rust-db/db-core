@@ -1029,7 +1029,8 @@ fn single_ungrouped_aggregate(select: &Select) -> Option<(AggFunc, Option<String
         return None;
     }
     let agg = AggFunc::from_name(name)?;
-    if matches!(agg, AggFunc::Avg) {
+    // Evicted summaries hold no distinct-value sketch (#603).
+    if matches!(agg, AggFunc::Avg | AggFunc::ApproxCountDistinct) {
         return None;
     }
     match args {
@@ -1127,7 +1128,7 @@ fn fold_summaries_into(
         // comment), nor the planner-internal `AvgSum` -- a non-panicking
         // fallback here costs nothing and keeps this helper safe to call
         // with any `AggFunc` value.
-        AggFunc::Avg | AggFunc::AvgSum => Value::Null,
+        AggFunc::Avg | AggFunc::AvgSum | AggFunc::ApproxCountDistinct => Value::Null,
     }
 }
 
