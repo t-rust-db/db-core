@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.181.0] - 2026-10-26
+
+### Added
+
+- `approx_count_distinct(x)` (#603): HyperLogLog estimate of distinct values in the batch engine, grouped or not; about 0.8 % standard error at precision 14, deterministic across segment splits.
+
 ## [0.180.0] - 2026-10-26
 
 ### Added
