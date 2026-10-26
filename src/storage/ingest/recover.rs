@@ -195,6 +195,14 @@ pub(crate) fn replay(dir: &Path, flushed_lsn: u64) -> Result<Replay, WalError> {
     })
 }
 
+/// Where a read of the WAL stopped: the end of the last complete frame of
+/// the segment starting at `lsn_lo`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WalPos {
+    pub(crate) lsn_lo: u64,
+    pub(crate) offset: u64,
+}
+
 /// Reads the frames above `flushed_lsn` without changing anything: a
 /// reader in another process, while a writer may be appending (#572).
 /// A bad or partial frame in the last file ends the read, since the writer
@@ -206,15 +214,37 @@ pub(crate) fn read_tail(
     dir: &Path,
     flushed_lsn: u64,
 ) -> Result<Option<Vec<super::wal::Record>>, WalError> {
+    Ok(read_from(dir, flushed_lsn.saturating_add(1), None)?.map(|(records, _)| records))
+}
+
+/// The frames a read found and where it stopped.
+pub(crate) type Tail = (Vec<super::wal::Record>, Option<WalPos>);
+
+/// The frames from LSN `next` on, as [`read_tail`] reads them, and where
+/// the read stopped. With `start`, the one a previous call returned, only
+/// the bytes after it are read (#593): `next` is then the LSN after the
+/// last one that call returned. `None` when `start` no longer holds: its
+/// segment is gone or shorter than the position, or the frame there is not
+/// LSN `next`, as after the writer truncated a torn tail and appended
+/// again. The caller then reads everything again.
+pub(crate) fn read_from(
+    dir: &Path,
+    next: u64,
+    start: Option<WalPos>,
+) -> Result<Option<Tail>, WalError> {
     let all = match list(dir) {
         Ok(all) => all,
         Err(WalError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Some(Vec::new()))
+            return Ok(start.is_none().then(|| (Vec::new(), None)))
         }
         Err(e) => return Err(e),
     };
+    if start.is_some_and(|p| !all.iter().any(|s| s.lsn_lo == p.lsn_lo)) {
+        return Ok(None);
+    }
     let mut records = Vec::new();
-    let mut next = flushed_lsn.saturating_add(1);
+    let mut next = next;
+    let mut pos = None;
     for (i, segment) in all.iter().enumerate() {
         let later = all.get(i.saturating_add(1));
         // Every frame of this file is at or below what we already have.
@@ -224,11 +254,16 @@ pub(crate) fn read_tail(
         if segment.lsn_lo > next {
             return Ok(None);
         }
-        let buf = match fs::read(&segment.path) {
-            Ok(buf) => buf,
+        let from = start
+            .filter(|p| p.lsn_lo == segment.lsn_lo)
+            .map_or(0, |p| p.offset);
+        let buf = match read_file_from(&segment.path, from) {
+            Ok(Some(buf)) => buf,
+            Ok(None) => return Ok(None),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
+        let base = usize::try_from(from).unwrap_or(usize::MAX);
         let mut at = 0usize;
         while at < buf.len() {
             let Frame::Complete {
@@ -238,16 +273,22 @@ pub(crate) fn read_tail(
             } = frame::decode(&buf, at)
             else {
                 if later.is_some() {
+                    if from > 0 {
+                        return Ok(None);
+                    }
                     let reason =
                         "bad frame in a segment that was complete before the next one started";
                     return Err(corrupt(&segment.path, at, reason.to_string()));
                 }
                 break;
             };
+            if from > 0 && at == 0 && lsn != next {
+                return Ok(None);
+            }
             if lsn > next {
                 return Err(corrupt(
                     &segment.path,
-                    at,
+                    base.saturating_add(at),
                     format!("LSN {lsn} where {next} was expected"),
                 ));
             }
@@ -258,8 +299,25 @@ pub(crate) fn read_tail(
             }
             at = end;
         }
+        pos = Some(WalPos {
+            lsn_lo: segment.lsn_lo,
+            offset: u64::try_from(base.saturating_add(at)).unwrap_or(u64::MAX),
+        });
     }
-    Ok(Some(records))
+    Ok(Some((records, pos)))
+}
+
+/// `path`'s bytes from `from` on; `None` if it is shorter than `from`.
+fn read_file_from(path: &Path, from: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path)?;
+    if file.metadata()?.len() < from {
+        return Ok(None);
+    }
+    file.seek(SeekFrom::Start(from))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)?;
+    Ok(Some(buf))
 }
 
 #[cfg(feature = "ingest")]
@@ -300,5 +358,95 @@ mod tests {
     ) {
         // Room for one frame after `prev` = 1: LSN 1000 cannot follow.
         assert!(!valid_frame_after(&junk_then_frame(1000), 0, 1));
+    }
+
+    /// A wal directory with one segment of frames 1..=4 (payload `p<lsn>`),
+    /// and the byte offset after each.
+    fn four_frames(name: &str) -> (PathBuf, [u64; 4]) {
+        let dir =
+            std::env::temp_dir().join(format!("db-core-read-from-{}-{name}", std::process::id()));
+        fs::remove_dir_all(&dir).ok();
+        fs::create_dir_all(&dir).unwrap();
+        let mut buf = Vec::new();
+        let mut ends = [0u64; 4];
+        for (i, end) in ends.iter_mut().enumerate() {
+            frame::encode(&mut buf, u64::try_from(i + 1).unwrap(), b"payload").unwrap();
+            *end = u64::try_from(buf.len()).unwrap();
+        }
+        fs::write(dir.join(segment_name(1)), buf).unwrap();
+        (dir, ends)
+    }
+
+    fn lsns(read: Option<Tail>) -> Vec<u64> {
+        read.map(|(records, _)| records.iter().map(|r| r.0).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_recover_read_from_7c6cac3d__v1_a_position_whose_frame_is_not_the_next_lsn_is_refused(
+    ) {
+        let (dir, ends) = four_frames("v1");
+        // The reader believes it has LSNs 1-3, but the frame at its
+        // position is LSN 3: the file was rewritten under it.
+        let pos = WalPos {
+            lsn_lo: 1,
+            offset: ends[1],
+        };
+        assert_eq!(read_from(&dir, 4, Some(pos)).unwrap(), None);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_recover_read_from_7c6cac3d__v2_a_read_from_the_start_takes_every_frame()
+    {
+        let (dir, ends) = four_frames("v2");
+        let (records, pos) = read_from(&dir, 1, None).unwrap().unwrap();
+        assert_eq!(records.len(), 4);
+        assert_eq!(
+            pos,
+            Some(WalPos {
+                lsn_lo: 1,
+                offset: ends[3]
+            })
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_recover_read_from_7c6cac3d__v3_later_frames_of_a_resumed_read_are_not_checked_against_the_position(
+    ) {
+        let (dir, ends) = four_frames("v3");
+        let pos = WalPos {
+            lsn_lo: 1,
+            offset: ends[0],
+        };
+        assert_eq!(lsns(read_from(&dir, 2, Some(pos)).unwrap()), [2, 3, 4]);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_recover_read_from_7c6cac3d__v4_a_resumed_read_takes_the_frame_it_expects(
+    ) {
+        let (dir, ends) = four_frames("v4");
+        let pos = WalPos {
+            lsn_lo: 1,
+            offset: ends[2],
+        };
+        let (records, new) = read_from(&dir, 4, Some(pos)).unwrap().unwrap();
+        assert_eq!(records.iter().map(|r| r.0).collect::<Vec<_>>(), [4]);
+        assert_eq!(
+            new,
+            Some(WalPos {
+                lsn_lo: 1,
+                offset: ends[3]
+            })
+        );
+        // Nothing new: the position stays.
+        assert_eq!(read_from(&dir, 5, new).unwrap().unwrap(), (Vec::new(), new));
+        fs::remove_dir_all(&dir).ok();
     }
 }

@@ -17,6 +17,11 @@
 //! - `build <dir> <predicate>`: a join build side or window input read as
 //!   `read_snapshot_where` does (#777), against the whole table: rows and
 //!   files read each way, as `key=value`.
+//! - `tail <dir>`: `TAIL` (default 1M) events in the WAL of a table that
+//!   never flushes, as a tiered table's open hour is, read from another
+//!   process's side two ways (#593): a fresh `Snapshot::open` and a
+//!   long-lived `TableReader`, first and after `TAIL_MORE` (1000) more
+//!   events. Prints the times as `key=value`.
 //! - `sid <n>`: the `session_id` of the n-th session, for the script.
 //! - `files <dir>`: the table's Parquet files, for the DuckDB baseline.
 //! - `storage <dir>`: rows, bytes and bytes per event of those files.
@@ -59,6 +64,7 @@ use db_core::engine::column::table::{
 use db_core::engine::Cell;
 use db_core::storage::ingest::layout::{SessionKey, DAY_NS, HOUR_NS};
 use db_core::storage::ingest::wal::Ack;
+use db_core::storage::ingest::TableReader;
 use db_core::storage::ingest::{
     Layout, RecordValue, Snapshot, TableOptions, TableWriter, TierOptions,
 };
@@ -261,16 +267,7 @@ fn ingest(dir: &Path) {
             writer.flush().expect("flush");
             flush_s += t.elapsed().as_secs_f64();
         }
-        let row = vec![
-            RecordValue::Int(e.session_id),
-            RecordValue::Int(e.request_id),
-            RecordValue::Int(e.ts_ns / 1_000),
-            RecordValue::Int(e.day()),
-            RecordValue::Str(e.name.to_string()),
-            RecordValue::Int(e.user_id),
-            e.amount.map_or(RecordValue::Null, RecordValue::Int),
-        ];
-        writer.append_row(row, Ack::Memory).expect("append");
+        writer.append_row(row(&e), Ack::Memory).expect("append");
         rows += 1;
         if rows % sync_every == 0 {
             writer.sync().expect("sync");
@@ -364,6 +361,51 @@ fn build(dir: &Path, predicate: &str) {
     println!("filtered_ms={some_ms:.1}");
 }
 
+/// The events as record rows.
+fn row(e: &Event) -> Vec<RecordValue> {
+    vec![
+        RecordValue::Int(e.session_id),
+        RecordValue::Int(e.request_id),
+        RecordValue::Int(e.ts_ns / 1_000),
+        RecordValue::Int(e.day()),
+        RecordValue::Str(e.name.to_string()),
+        RecordValue::Int(e.user_id),
+        e.amount.map_or(RecordValue::Null, RecordValue::Int),
+    ]
+}
+
+/// A big unflushed tail read fresh and incrementally (#593).
+fn tail(dir: &Path) {
+    std::fs::remove_dir_all(dir).ok();
+    let (tail, more) = (env("TAIL", 1_000_000), env("TAIL_MORE", 1_000));
+    let mut writer = TableWriter::open(dir, options()).expect("open table");
+    let mut source = events();
+    let mut append = |n: u64| {
+        for e in source.by_ref().take(n as usize) {
+            writer.append_row(row(&e), Ack::Memory).expect("append");
+        }
+        writer.sync().expect("sync");
+    };
+    let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
+    append(tail);
+    let t = Instant::now();
+    let fresh = Snapshot::open(dir).expect("open snapshot");
+    println!("tail_records={}", fresh.rows());
+    println!("fresh_open_ms={:.1}", ms(t));
+    let t = Instant::now();
+    let mut reader = TableReader::open(dir).expect("open reader");
+    println!("reader_open_ms={:.1}", ms(t));
+    append(more);
+    let t = Instant::now();
+    let fresh = Snapshot::open(dir).expect("open snapshot");
+    println!("fresh_after_more_ms={:.1}", ms(t));
+    let t = Instant::now();
+    let held = reader.refresh().expect("refresh");
+    println!("refresh_after_more_ms={:.1}", ms(t));
+    assert_eq!(held.rows(), fresh.rows());
+    println!("records_parsed={}", reader.stats().records_parsed);
+}
+
 /// The id of the n-th session.
 fn sid(n: i64) {
     let id = events()
@@ -404,11 +446,12 @@ fn main() {
         ["csv", file] => csv(Path::new(file)),
         ["query", dir, sql] => query(Path::new(dir), sql),
         ["build", dir, predicate] => build(Path::new(dir), predicate),
+        ["tail", dir] => tail(Path::new(dir)),
         ["sid", n] => sid(n.parse().expect("session ordinal")),
         ["files", dir] => files(Path::new(dir)),
         ["storage", dir] => storage(Path::new(dir)),
         _ => eprintln!(
-            "usage: events ingest <dir> | csv <file> | query <dir> <sql> | build <dir> <predicate> | sid <n> | files <dir> | storage <dir> \
+            "usage: events ingest <dir> | csv <file> | query <dir> <sql> | build <dir> <predicate> | tail <dir> | sid <n> | files <dir> | storage <dir> \
              (run through tools/bench_events.sh)"
         ),
     }
