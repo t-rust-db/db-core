@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.182.0] - 2026-10-26
+
+### Changed
+
+- `TableReader` keeps its parsed records across a flush (it drops what the flush took into files and parses only what comes after) and keeps a lines table's schema, so a reader in another process no longer re-parses the tail each hour or reopens every file footer per query.
+
 ## [0.181.1] - 2026-10-26
 
 ### Fixed
