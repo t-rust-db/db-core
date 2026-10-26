@@ -759,11 +759,16 @@ pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookup_path: std::p
 pub db_core::engine::resolve::CrossModeEngine::StreamStream
 pub db_core::engine::resolve::CrossModeEngine::StreamStream::left: db_core::engine::stream::StreamEngine
 pub db_core::engine::resolve::CrossModeEngine::StreamStream::right: db_core::engine::stream::StreamEngine
+pub db_core::engine::resolve::CrossModeEngine::TableSqlite
+pub db_core::engine::resolve::CrossModeEngine::TableSqlite::driving: alloc::boxed::Box<db_core::engine::column::table::TableEngine>
+pub db_core::engine::resolve::CrossModeEngine::TableSqlite::lookup: db_core::engine::row::RowEngine
+pub db_core::engine::resolve::CrossModeEngine::TableSqlite::lookup_path: std::path::PathBuf
 impl db_core::engine::resolve::CrossModeEngine
 pub fn db_core::engine::resolve::CrossModeEngine::open_column_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::open_column_tables_sqlite(&[&std::path::Path], &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::open_stream_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::open_stream_stream(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::open_table_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 impl core::fmt::Debug for db_core::engine::resolve::CrossModeEngine
 pub fn db_core::engine::resolve::CrossModeEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::engine::Engine for db_core::engine::resolve::CrossModeEngine

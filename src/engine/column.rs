@@ -32,6 +32,8 @@ use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, Vfs
 use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
 use crate::vm::engine;
 
+#[cfg(feature = "ingest-read")]
+use self::table::TableEngine;
 use super::{
     single_statement, Cell, ColumnInfo, Engine, EngineError, ErrorKind, FileStats, Mode, OpcodeRow,
     OpcodeSection, PlanRow, QueryResult, TableInfo,
@@ -1696,6 +1698,208 @@ impl Engine for BatchEngine {
                 .collect(),
         }])
     }
+}
+
+/// A column table of a cross-mode join (#598, #772): a Parquet file or a
+/// table directory. The join entry points are written once over it.
+#[cfg(all(
+    feature = "engine-row",
+    feature = "engine-stream",
+    feature = "vm-batch"
+))]
+#[derive(Clone, Copy)]
+pub(crate) enum ColumnSource<'e> {
+    File(&'e BatchEngine),
+    #[cfg(feature = "ingest-read")]
+    Dir(&'e TableEngine),
+}
+
+/// A probe segment of either kind, so one join runs over both.
+#[cfg(all(
+    feature = "engine-row",
+    feature = "engine-stream",
+    feature = "vm-batch"
+))]
+pub(crate) enum ProbeSegment<'a, 'm> {
+    File(FileSegment<'a, 'm>),
+    #[cfg(feature = "ingest-read")]
+    Dir(SnapshotSegment<'a, 'm>),
+}
+
+#[cfg(all(
+    feature = "engine-row",
+    feature = "engine-stream",
+    feature = "vm-batch"
+))]
+impl ProbeSegment<'_, '_> {
+    /// Whether this is a row group of a file, not a live page: what a
+    /// join's footer-statistics pruning can keep or drop.
+    pub(crate) fn is_row_group(&self) -> bool {
+        match self {
+            ProbeSegment::File(_) => true,
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.is_row_group(),
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "engine-row",
+    feature = "engine-stream",
+    feature = "vm-batch"
+))]
+impl Segment for ProbeSegment<'_, '_> {
+    fn load(&self) -> Result<Arc<Batch>, VmError> {
+        match self {
+            ProbeSegment::File(s) => s.load(),
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.load(),
+        }
+    }
+
+    fn order_key_bound(&self, descending: bool) -> Option<Value> {
+        match self {
+            ProbeSegment::File(s) => s.order_key_bound(descending),
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.order_key_bound(descending),
+        }
+    }
+
+    fn load_columns(&self, columns: &[String]) -> Result<Arc<Batch>, VmError> {
+        match self {
+            ProbeSegment::File(s) => s.load_columns(columns),
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.load_columns(columns),
+        }
+    }
+
+    fn gather_at(&self, columns: &[String], positions: &[u32]) -> Option<Result<Batch, VmError>> {
+        match self {
+            ProbeSegment::File(s) => s.gather_at(columns, positions),
+            #[cfg(feature = "ingest-read")]
+            ProbeSegment::Dir(s) => s.gather_at(columns, positions),
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "engine-row",
+    feature = "engine-stream",
+    feature = "vm-batch"
+))]
+impl ColumnSource<'_> {
+    pub(crate) fn parse_join(&self, sql: &str) -> Result<Select, EngineError> {
+        match self {
+            ColumnSource::File(e) => e.parse_join(sql),
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => e.parse_join(sql),
+        }
+    }
+
+    pub(crate) fn resolve_timestamp_literals(
+        &self,
+        select: &mut Select,
+    ) -> Result<(), EngineError> {
+        match self {
+            ColumnSource::File(e) => e.resolve_timestamp_literals(select),
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => e.resolve_timestamp_literals(select),
+        }
+    }
+
+    pub(crate) fn table_name(&self) -> &str {
+        match self {
+            ColumnSource::File(e) => e.table_name(),
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => e.table_name(),
+        }
+    }
+
+    pub(crate) fn columns(&self) -> Vec<String> {
+        match self {
+            ColumnSource::File(e) => e.columns(),
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => e.columns(),
+        }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        match self {
+            ColumnSource::File(e) => e.path(),
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => e.path(),
+        }
+    }
+
+    pub(crate) fn table_stats(&self) -> TableStats {
+        match self {
+            ColumnSource::File(e) => e.table_stats(),
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => e.table_stats(),
+        }
+    }
+
+    /// Row groups of the file or the archive files, live pages left out.
+    pub(crate) fn row_groups(&self) -> usize {
+        match self {
+            ColumnSource::File(e) => e.table_stats().row_groups,
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => e.archive_row_groups(),
+        }
+    }
+
+    /// The whole table's `columns` as one batch: a join's build side. The
+    /// `bit_pattern` columns read a `UINT_64` above `i64::MAX` as its signed
+    /// bit pattern (#600).
+    pub(crate) fn read_table(
+        &self,
+        columns: &[String],
+        bit_pattern: &[String],
+    ) -> Result<Batch, EngineError> {
+        match self {
+            ColumnSource::File(e) => e.read_table(columns, bit_pattern),
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => e.read_table(columns, bit_pattern),
+        }
+    }
+
+    pub(crate) fn with_probe_segments<T>(
+        &self,
+        columns: &[String],
+        prune: Option<&Expr>,
+        bit_pattern: &[String],
+        f: impl FnOnce(Vec<ProbeSegment<'_, '_>>) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        match self {
+            ColumnSource::File(e) => {
+                e.with_probe_segments(columns, prune, bit_pattern, |segments| {
+                    f(segments.into_iter().map(ProbeSegment::File).collect())
+                })
+            }
+            #[cfg(feature = "ingest-read")]
+            ColumnSource::Dir(e) => {
+                e.with_probe_segments(columns, prune, bit_pattern, |segments| {
+                    f(segments.into_iter().map(ProbeSegment::Dir).collect())
+                })
+            }
+        }
+    }
+}
+
+/// The column tables of a Parquet session as join sources.
+#[cfg(all(
+    feature = "engine-row",
+    feature = "engine-stream",
+    feature = "vm-batch"
+))]
+pub(crate) fn file_sources<'a>(
+    driving: &'a BatchEngine,
+    others: &'a [BatchEngine],
+) -> Vec<ColumnSource<'a>> {
+    std::iter::once(driving)
+        .chain(others.iter())
+        .map(ColumnSource::File)
+        .collect()
 }
 
 #[cfg(test)]
