@@ -26,7 +26,8 @@ use db_core::storage::ingest::Ack;
 use db_core::storage::ingest::{Layout, RecordValue, TableOptions, TableWriter, TierOptions};
 use db_core::storage::parquet::footer::PhysicalType;
 use db_core::storage::parquet::writer::{
-    ColumnSpec, ColumnType, ColumnValues, Compression, MapEntries, ParquetWriter, WriterOptions,
+    ColumnSpec, ColumnType, ColumnValues, Compression, ListItems, MapEntries, ParquetWriter,
+    WriterOptions,
 };
 use db_core::storage::parquet::ParquetFile;
 
@@ -269,8 +270,60 @@ fn map_schema() -> Vec<ColumnSpec> {
     ]
 }
 
+/// #801: lists between flat columns (leaf indices shift): two elements,
+/// a NULL list, an empty list, a NULL element, non-ASCII elements, 100
+/// elements, and a repeated element; a required list after them.
+fn list_batch() -> Vec<ColumnValues> {
+    let items =
+        |e: &[Option<&str>]| Some(e.iter().map(|v| v.map(Into::into)).collect::<ListItems>());
+    let hundred: ListItems = (0..100)
+        .map(|i| (i % 7 != 0).then(|| format!("T{}", i % 5).into()))
+        .collect();
+    vec![
+        ColumnValues::Int32((0..7).map(Some).collect()),
+        ColumnValues::List(vec![
+            items(&[Some("T1059"), Some("T1566")]),
+            None,
+            items(&[]),
+            items(&[None]),
+            items(&[Some("välue"), None, Some("значение")]),
+            Some(hundred),
+            items(&[Some("z"), Some("a"), Some("z")]),
+        ]),
+        ColumnValues::Int64((0..7).map(|i| (i != 3).then_some(i * 10)).collect()),
+        ColumnValues::List((0..7).map(|i| items(&[Some("v")][..(i % 2)])).collect()),
+    ]
+}
+
+fn list_schema() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new("id", ColumnType::Int32, false),
+        ColumnSpec::new("labels", ColumnType::ListUtf8, true),
+        ColumnSpec::new("x", ColumnType::Int64, true),
+        ColumnSpec::new("r", ColumnType::ListUtf8, false),
+    ]
+}
+
 fn cases() -> Vec<Case> {
     vec![
+        Case {
+            name: "lists_dictionary",
+            schema: list_schema(),
+            batches: (0..3).map(|_| list_batch()).collect(),
+            options: options(Compression::Snappy, true, 100),
+        },
+        Case {
+            name: "lists_plain",
+            schema: list_schema(),
+            batches: vec![list_batch()],
+            options: options(Compression::Uncompressed, false, 3),
+        },
+        Case {
+            name: "lists_zstd_dictionary",
+            schema: list_schema(),
+            batches: (0..3).map(|_| list_batch()).collect(),
+            options: options(Compression::Zstd, true, 100),
+        },
         Case {
             name: "maps_dictionary",
             schema: map_schema(),
@@ -518,6 +571,20 @@ fn json_values(out: &mut String, values: &ColumnValues) {
             }
             o.push(']');
         }),
+        // A list as a JSON array of its elements.
+        ColumnValues::List(v) => list(out, v, |o, items| {
+            o.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    o.push(',');
+                }
+                match item {
+                    Some(item) => json_string(o, item),
+                    None => o.push_str("null"),
+                }
+            }
+            o.push(']');
+        }),
     }
 }
 
@@ -539,6 +606,7 @@ fn type_name(t: ColumnType) -> String {
         ColumnType::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
         ColumnType::FixedLenByteArray(len) => format!("fixed({len})"),
         ColumnType::MapUtf8 => "map(utf8,utf8)".into(),
+        ColumnType::ListUtf8 => "list(utf8)".into(),
     }
 }
 
@@ -631,6 +699,10 @@ fn concat(a: ColumnValues, b: &ColumnValues) -> ColumnValues {
         (ColumnValues::Map(mut a), ColumnValues::Map(b)) => {
             a.extend_from_slice(b);
             ColumnValues::Map(a)
+        }
+        (ColumnValues::List(mut a), ColumnValues::List(b)) => {
+            a.extend_from_slice(b);
+            ColumnValues::List(a)
         }
         (a, _) => a,
     }
@@ -891,6 +963,7 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
         ColumnSpec::new("ip", ColumnType::FixedLenByteArray(16), true),
         ColumnSpec::new("memo", ColumnType::Binary, true),
         ColumnSpec::new("score", ColumnType::Double, true),
+        ColumnSpec::new("labels", ColumnType::ListUtf8, true),
         ColumnSpec::new("headers", ColumnType::MapUtf8, true),
     ];
     let start = 20_737 * DAY; // 2026-10-11
@@ -942,6 +1015,7 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
             } else {
                 RecordValue::Float(i as f64 * 0.25 - 100.0)
             },
+            record_labels(i),
             RecordValue::Null,
         ];
         let (headers, stored) = record_headers(i);
@@ -1007,6 +1081,21 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Row `i`'s `labels` list (#801): NULL, empty, 1, 3 and 50 elements, a
+/// NULL element, non-ASCII elements, a repeated element.
+fn record_labels(i: u64) -> RecordValue {
+    let list =
+        |e: &[Option<&str>]| RecordValue::List(e.iter().map(|v| v.map(str::to_string)).collect());
+    match i % 6 {
+        0 => RecordValue::Null,
+        1 => list(&[]),
+        2 => list(&[Some("T1059")]),
+        3 => list(&[Some("T1566"), None, Some("välue")]),
+        4 => RecordValue::List((0..50).map(|k| Some(format!("T{}", k * i % 97))).collect()),
+        _ => list(&[Some("dup"), Some("dup")]),
+    }
+}
+
 /// Row `i`'s `headers` map as appended, and as the table stores it (a
 /// repeated key's values joined, #621): NULL, empty, 1, 3 and 100 entries,
 /// a NULL value, non-ASCII keys, a repeated `X-Forwarded-For`.
@@ -1049,7 +1138,8 @@ fn record_headers(i: u64) -> (RecordValue, RecordValue) {
 }
 
 /// A record value as the checker's JSON: integers and unscaled decimals
-/// as numbers, bytes as lowercase hex, a map as `[key, value]` pairs.
+/// as numbers, bytes as lowercase hex, a map as `[key, value]` pairs, a
+/// list as an array.
 fn record_json(v: &RecordValue) -> String {
     let mut out = String::new();
     match v {
@@ -1078,6 +1168,19 @@ fn record_json(v: &RecordValue) -> String {
                     None => out.push_str("null"),
                 }
                 out.push(']');
+            }
+            out.push(']');
+        }
+        RecordValue::List(items) => {
+            out.push('[');
+            for (n, item) in items.iter().enumerate() {
+                if n > 0 {
+                    out.push(',');
+                }
+                match item {
+                    Some(item) => json_string(&mut out, item),
+                    None => out.push_str("null"),
+                }
             }
             out.push(']');
         }

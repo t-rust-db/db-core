@@ -42,9 +42,14 @@ pub(crate) fn chunk_stats(values: &ColumnValues, column_type: ColumnType) -> Chu
         }
         ColumnValues::UInt32(v) => ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec()),
         ColumnValues::UInt64(v) => ordered(v.iter().copied(), |x| x.to_le_bytes().to_vec()),
-        // Statistics are per leaf; a map's leaves are UTF8 columns.
+        // Statistics are per leaf; a map's or list's leaves are UTF8
+        // columns.
         ColumnValues::Map(v) => ChunkStats {
             null_count: v.iter().filter(|m| m.is_none()).count(),
+            ..ChunkStats::default()
+        },
+        ColumnValues::List(v) => ChunkStats {
+            null_count: v.iter().filter(|l| l.is_none()).count(),
             ..ChunkStats::default()
         },
         ColumnValues::Decimal(v) => {

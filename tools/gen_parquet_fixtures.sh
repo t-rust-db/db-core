@@ -28,9 +28,12 @@ duckdb -c "COPY (SELECT * FROM (VALUES
   ) t(id, h, x) ORDER BY id) TO '$DIR/nested_map.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 
 # #621: nested fields that are not a MAP<UTF8, UTF8>, and one that is
-# (read_map_utf8_column's shape check).
+# (read_map_utf8_column's shape check); #801: a list that is not a
+# LIST<UTF8> and a struct, neither a map nor a list (read_list_utf8_column's
+# shape check, the column engine's leaf columns).
 duckdb -c "COPY (SELECT ['x']::VARCHAR[] AS lst, MAP {1: 'a'} AS ik,
-    MAP {'a': 1} AS iv, MAP {'a': '1'} AS m) TO '$DIR/nested_shapes.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+    MAP {'a': 1} AS iv, MAP {'a': '1'} AS m, [1]::INTEGER[] AS il,
+    {'a': 1} AS st) TO '$DIR/nested_shapes.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 
 # #679: NULLs in every typed column, mixed-case and empty text, a decimal
 # and a timestamp -- the shapes the column engine answered wrongly

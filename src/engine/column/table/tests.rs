@@ -321,6 +321,7 @@ fn record_schema() -> Vec<ColumnSpec> {
         ColumnSpec::new("ts", ColumnType::TimestampNanos, false),
         ColumnSpec::new("f", ColumnType::Float, true),
         ColumnSpec::new("h", ColumnType::MapUtf8, true),
+        ColumnSpec::new("labels", ColumnType::ListUtf8, true),
     ]
 }
 
@@ -355,7 +356,22 @@ fn random_row(rng: &mut Rng, i: u64) -> Vec<RecordValue> {
             let h = random_map(rng);
             maybe(rng, h)
         },
+        {
+            let labels = random_list(rng);
+            maybe(rng, labels)
+        },
     ]
+}
+
+/// A random list (#801): up to three of four elements, some NULL, a
+/// repeated one now and then.
+fn random_list(rng: &mut Rng) -> RecordValue {
+    let items = ["T1059", "T1566", "é", ""];
+    RecordValue::List(
+        (0..rng.below(4))
+            .map(|_| (rng.below(4) > 0).then(|| items[rng.below(4) as usize].to_string()))
+            .collect(),
+    )
 }
 
 /// A random map (#621): up to three of five keys, some values NULL, a
@@ -372,7 +388,7 @@ fn random_map(rng: &mut Rng) -> RecordValue {
     RecordValue::Map(entries)
 }
 
-const RECORD_INVARIANCE_QUERIES: [&str; 13] = [
+const RECORD_INVARIANCE_QUERIES: [&str; 15] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(amount), MAX(amount), SUM(u), COUNT(blob), SUM(f) \
      FROM logs",
     "SELECT id, kind, n, amount, u, blob, ts, f FROM logs ORDER BY id",
@@ -388,6 +404,8 @@ const RECORD_INVARIANCE_QUERIES: [&str; 13] = [
     "SELECT kind, COUNT(DISTINCT amount), COUNT(n) FROM logs GROUP BY kind ORDER BY kind",
     "SELECT id FROM logs WHERE kind = 'k1' ORDER BY id",
     "SELECT id FROM logs WHERE u = 3 OR u = 4000000005 OR n = -7 ORDER BY id",
+    "SELECT id, labels FROM logs ORDER BY id",
+    "SELECT COUNT(*) FROM logs WHERE labels IS NULL",
 ];
 
 /// What the flush-timing test appends: a lines table's lines or a record
@@ -864,6 +882,55 @@ fn read_snapshot_gives_the_whole_table_with_the_tables_types() {
     assert_eq!(err.kind, ErrorKind::Compile);
 }
 
+/// #801: a record table's list column reads as list values from a file
+/// and from a page alike.
+#[test]
+fn read_snapshot_gives_list_columns_from_files_and_pages() {
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        schema: Some(vec![
+            ColumnSpec::new("id", ColumnType::Int64, false),
+            ColumnSpec::new("labels", ColumnType::ListUtf8, true),
+        ]),
+        clock,
+        ..TableOptions::default()
+    });
+    let list = |items: &[Option<&str>]| {
+        RecordValue::List(items.iter().map(|v| v.map(str::to_string)).collect())
+    };
+    let rows = [
+        list(&[Some("a"), None]),
+        RecordValue::Null,
+        list(&[]),
+        list(&[Some("b"), Some("b")]),
+    ];
+    for (i, labels) in rows.into_iter().enumerate() {
+        w.append_row(vec![RecordValue::Int(i as i64), labels], Ack::Memory)
+            .unwrap();
+        if i == 1 {
+            w.flush_all().unwrap();
+        }
+    }
+    let snapshot = w.snapshot().unwrap();
+    assert_eq!(snapshot.files().count(), 1);
+    assert_eq!(snapshot.pages().len(), 1);
+    let batch = read_snapshot(&snapshot, &["labels".to_string()]).unwrap();
+    let item = |v: &str| Some(std::sync::Arc::<str>::from(v));
+    assert_eq!(
+        batch
+            .columns
+            .get("labels")
+            .map(|c| c.to_vec())
+            .unwrap_or_default(),
+        [
+            Value::List(std::sync::Arc::new(vec![item("a"), None])),
+            Value::Null,
+            Value::List(std::sync::Arc::new(Vec::new())),
+            Value::List(std::sync::Arc::new(vec![item("b"), item("b")])),
+        ]
+    );
+}
+
 #[test]
 fn snapshot_segments_drive_a_join_as_a_caller_runs_one() {
     use crate::codegen::batch::{self as planner, BuildSourceKind};
@@ -1125,6 +1192,7 @@ fn queries_see_null_for_columns_added_after_a_file_was_written() {
     let mut evolved = old.clone();
     evolved.push(ColumnSpec::new("note", ColumnType::Utf8, true));
     evolved.push(ColumnSpec::new("h", ColumnType::MapUtf8, true));
+    evolved.push(ColumnSpec::new("labels", ColumnType::ListUtf8, true));
 
     let t = TempTable::new();
     let mut w = t.writer_with(TableOptions {
@@ -1150,12 +1218,14 @@ fn queries_see_null_for_columns_added_after_a_file_was_written() {
     });
     for i in 30..60u64 {
         let map = RecordValue::Map(vec![("k".to_string(), Some(format!("v{}", i % 2)))]);
+        let labels = RecordValue::List(vec![Some(format!("v{}", i % 2)), None]);
         w.append_row(
             vec![
                 RecordValue::UInt(i),
                 RecordValue::Str("a".to_string()),
                 RecordValue::Str("x".to_string()),
                 map,
+                labels,
             ],
             Ack::Memory,
         )
@@ -1174,6 +1244,18 @@ fn queries_see_null_for_columns_added_after_a_file_was_written() {
         assert_eq!(count(w, "note < 'zzz'"), vec![vec![Cell::Int(30)]]);
         assert_eq!(count(w, "h['k'] = 'v1'"), vec![vec![Cell::Int(15)]]);
         assert_eq!(count(w, "h['k'] IS NULL"), vec![vec![Cell::Int(30)]]);
+        assert_eq!(count(w, "labels IS NULL"), vec![vec![Cell::Int(30)]]);
+        // A list reads as a JSON array (#801).
+        assert_eq!(
+            rows(
+                w,
+                "SELECT id, labels FROM logs WHERE id IN (0, 31) ORDER BY id"
+            ),
+            vec![
+                vec![Cell::Int(0), Cell::Null],
+                vec![Cell::Int(31), text(r#"["v1",null]"#)],
+            ]
+        );
         assert_eq!(
             rows(w, "SELECT COUNT(*) FROM logs"),
             vec![vec![Cell::Int(60)]]

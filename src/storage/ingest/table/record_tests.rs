@@ -56,6 +56,7 @@ fn schema() -> Vec<ColumnSpec> {
         ),
         ColumnSpec::new("ip", ColumnType::FixedLenByteArray(16), true),
         ColumnSpec::new("headers", ColumnType::MapUtf8, true),
+        ColumnSpec::new("labels", ColumnType::ListUtf8, true),
     ]
 }
 
@@ -118,6 +119,14 @@ fn row(i: u64) -> Vec<RecordValue> {
             ]),
             _ => RecordValue::Map(vec![("héader".to_string(), Some(i.to_string()))]),
         },
+        // #801: NULL, empty, a NULL element, repeated and non-ASCII ones.
+        match i % 5 {
+            0 => RecordValue::Null,
+            1 => RecordValue::List(Vec::new()),
+            2 => RecordValue::List(vec![None]),
+            3 => RecordValue::List(vec![Some(format!("t{i}")), Some(format!("t{i}"))]),
+            _ => RecordValue::List(vec![Some("é".to_string()), None, Some(i.to_string())]),
+        },
     ]
 }
 
@@ -156,6 +165,8 @@ fn value_at(values: &ColumnValues, i: usize) -> RecordValue {
                     .collect(),
             )
         }),
+        ColumnValues::List(v) => at(v, i)
+            .map(|l| RecordValue::List(l.into_iter().map(|v| v.map(|v| v.to_string())).collect())),
         other => panic!("not in the test schema: {other:?}"),
     };
     v.unwrap_or(RecordValue::Null)
@@ -220,7 +231,10 @@ fn assert_files_have_the_schema(w: &TableWriter) {
                 "headers",
                 "key_value",
                 "key",
-                "value"
+                "value",
+                "labels",
+                "list",
+                "element"
             ],
             "{}",
             file.path
@@ -233,6 +247,8 @@ fn assert_files_have_the_schema(w: &TableWriter) {
         assert_eq!(leaves[6].type_length, Some(16));
         // The map is its group, key_value group and two leaves.
         assert_eq!(leaves[7].converted_type, Some(ConvertedType::Other(1)));
+        // The list is its group, list group and element leaf.
+        assert_eq!(leaves[11].converted_type, Some(ConvertedType::Other(3)));
     }
 }
 
@@ -370,8 +386,13 @@ fn rows_that_do_not_match_the_schema_are_refused() {
         r
     };
     let bad = [
-        (row(1)[..6].to_vec(), "6 values for 8 columns"),
+        (row(1)[..6].to_vec(), "6 values for 9 columns"),
         (with(7, RecordValue::Str("x".into())), "column 'headers'"),
+        (with(8, RecordValue::Str("[]".into())), "column 'labels'"),
+        (
+            with(8, RecordValue::Map(Vec::new())),
+            "column 'labels' (list(utf8))",
+        ),
         (
             with(0, RecordValue::Null),
             "column 'session_id' (uint64, required)",
@@ -476,11 +497,15 @@ fn invalid_schemas_and_sort_keys_are_refused() {
     for (key, why) in [
         (
             "nope",
-            "sort key nope is not a column that sorts (a MAP does not)",
+            "sort key nope is not a column that sorts (a MAP or LIST does not)",
         ),
         (
             "headers",
-            "sort key headers is not a column that sorts (a MAP does not)",
+            "sort key headers is not a column that sorts (a MAP or LIST does not)",
+        ),
+        (
+            "labels",
+            "sort key labels is not a column that sorts (a MAP or LIST does not)",
         ),
     ] {
         let t = TempTable::new();
@@ -623,7 +648,7 @@ fn notes(w: &TableWriter) -> Vec<Option<String>> {
         let PageBody::Rows(rows) = &page.body else {
             panic!("a lines page in a record table");
         };
-        add(&mut out, &rows.columns()[8]);
+        add(&mut out, &rows.columns()[9]);
     }
     out.sort();
     out
@@ -652,7 +677,7 @@ fn a_nullable_column_can_be_appended_to_the_schema() {
     let text = fs::read_to_string(t.0.join("manifest.json")).unwrap();
     assert!(text.starts_with(r#"{"version":5,"#), "{text}");
     assert_eq!(Manifest::parse(&text).unwrap(), *w.manifest());
-    assert_eq!(Snapshot::open(&t.0).unwrap().schema().unwrap().len(), 9);
+    assert_eq!(Snapshot::open(&t.0).unwrap().schema().unwrap().len(), 10);
 
     for i in 8..10 {
         w.append_row(with_note(i, "new"), Ack::Durable).unwrap();

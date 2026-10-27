@@ -21,6 +21,9 @@
 //! `Set-Cookie`, whose values may contain commas. NULL values are left out
 //! of the join; a key whose values are all NULL keeps a NULL value. Keys
 //! are compared exactly, as a MAP's are.
+//!
+//! A `LIST<UTF8>` column (#801) takes [`RecordValue::List`], its elements
+//! in order, any of them NULL.
 
 #[cfg(feature = "ingest")]
 use std::cmp::Ordering;
@@ -63,6 +66,8 @@ pub enum RecordValue {
     /// A MAP's `(key, value)` entries, in order; a repeated key's values
     /// are joined (see the [module docs](self)).
     Map(Vec<(String, Option<String>)>),
+    /// A LIST's elements, in order; an element may be NULL.
+    List(Vec<Option<String>>),
 }
 
 /// The name a column type has in the manifest.
@@ -84,6 +89,7 @@ pub fn type_name(t: ColumnType) -> String {
         ColumnType::Decimal { precision, scale } => format!("decimal({precision},{scale})"),
         ColumnType::FixedLenByteArray(len) => format!("fixed({len})"),
         ColumnType::MapUtf8 => "map(utf8,utf8)".into(),
+        ColumnType::ListUtf8 => "list(utf8)".into(),
     }
 }
 
@@ -104,6 +110,7 @@ pub fn type_from_name(name: &str) -> Option<ColumnType> {
         ColumnType::UInt32,
         ColumnType::UInt64,
         ColumnType::MapUtf8,
+        ColumnType::ListUtf8,
     ];
     if let Some(t) = simple.into_iter().find(|t| type_name(*t) == name) {
         return Some(t);
@@ -198,7 +205,8 @@ pub(crate) fn check_row(schema: &[ColumnSpec], row: &[RecordValue]) -> Option<St
             (ColumnType::FixedLenByteArray(len), RecordValue::Bytes(b)) => {
                 b.len() == usize::from(len)
             }
-            (ColumnType::MapUtf8, RecordValue::Map(_)) => true,
+            (ColumnType::MapUtf8, RecordValue::Map(_))
+            | (ColumnType::ListUtf8, RecordValue::List(_)) => true,
             _ => false,
         };
         (!fits).then(|| {
@@ -239,6 +247,7 @@ const TAG_STR: u8 = 5;
 const TAG_BYTES: u8 = 6;
 const TAG_DECIMAL: u8 = 7;
 const TAG_MAP: u8 = 8;
+const TAG_LIST: u8 = 9;
 
 /// A row as WAL bytes: per value a tag byte, then its little-endian bytes
 /// (a string or bytes as a `u32` length and the bytes). Self-describing,
@@ -282,18 +291,34 @@ pub(crate) fn encode_row(row: &[RecordValue]) -> Option<Vec<u8>> {
                 out.extend_from_slice(&u32::try_from(entries.len()).ok()?.to_le_bytes());
                 for (key, value) in entries {
                     length_prefixed(&mut out, key.as_bytes())?;
-                    match value {
-                        None => out.push(TAG_NULL),
-                        Some(v) => {
-                            out.push(TAG_STR);
-                            length_prefixed(&mut out, v.as_bytes())?;
-                        }
-                    }
+                    optional_str(&mut out, value.as_deref())?;
+                }
+            }
+            // The element count, then per element a NULL tag, or a string
+            // tag and the string.
+            RecordValue::List(items) => {
+                out.push(TAG_LIST);
+                out.extend_from_slice(&u32::try_from(items.len()).ok()?.to_le_bytes());
+                for item in items {
+                    optional_str(&mut out, item.as_deref())?;
                 }
             }
         }
     }
     Some(out)
+}
+
+/// A NULL tag, or a string tag and the length-prefixed string.
+#[cfg(feature = "ingest")]
+fn optional_str(out: &mut Vec<u8>, value: Option<&str>) -> Option<()> {
+    match value {
+        None => out.push(TAG_NULL),
+        Some(v) => {
+            out.push(TAG_STR);
+            length_prefixed(out, v.as_bytes())?;
+        }
+    }
+    Some(())
 }
 
 #[cfg(feature = "ingest")]
@@ -349,6 +374,22 @@ pub(crate) fn decode_row(bytes: &[u8]) -> Option<Vec<RecordValue>> {
                     entries.push((key, value));
                 }
                 RecordValue::Map(entries)
+            }
+            TAG_LIST => {
+                let count = u32::from_le_bytes(take(4)?.try_into().ok()?);
+                let mut items = Vec::new();
+                for _ in 0..count {
+                    items.push(match take(1)?.first().copied()? {
+                        TAG_NULL => None,
+                        TAG_STR => {
+                            let len = u32::from_le_bytes(take(4)?.try_into().ok()?);
+                            let bytes = take(usize::try_from(len).ok()?)?.to_vec();
+                            Some(String::from_utf8(bytes).ok()?)
+                        }
+                        _ => return None,
+                    });
+                }
+                RecordValue::List(items)
             }
             _ => return None,
         });
@@ -534,6 +575,10 @@ fn push_value(column: &mut ColumnValues, value: RecordValue) {
             ),
             _ => None,
         }),
+        ColumnValues::List(c) => c.push(match value {
+            V::List(items) => Some(items.into_iter().map(|v| v.map(Into::into)).collect()),
+            _ => None,
+        }),
     }
 }
 
@@ -580,6 +625,7 @@ pub(crate) fn engine_values(
             })
             .collect::<Result<_, _>>()?,
         ColumnValues::Map(v) => map(v, |entries| Value::Map(Arc::new(entries.clone()))),
+        ColumnValues::List(v) => map(v, |items| Value::List(Arc::new(items.clone()))),
         // Exact, as a flushed file's DECIMAL reads (#632).
         ColumnValues::Decimal(v) => {
             let scale = match column_type {
@@ -616,6 +662,7 @@ pub(crate) fn gather(values: &ColumnValues, order: &[usize]) -> ColumnValues {
         ColumnValues::UInt64(v) => ColumnValues::UInt64(pick(v, order)),
         ColumnValues::Decimal(v) => ColumnValues::Decimal(pick(v, order)),
         ColumnValues::Map(v) => ColumnValues::Map(pick(v, order)),
+        ColumnValues::List(v) => ColumnValues::List(pick(v, order)),
     }
 }
 
@@ -676,6 +723,7 @@ pub(crate) fn compare_across(x: &ColumnValues, a: usize, y: &ColumnValues, b: us
         (C::UInt64(v), C::UInt64(w)) => by(v, a, w, b, Ord::cmp),
         (C::Decimal(v), C::Decimal(w)) => by(v, a, w, b, Ord::cmp),
         (C::Map(v), C::Map(w)) => by(v, a, w, b, Ord::cmp),
+        (C::List(v), C::List(w)) => by(v, a, w, b, Ord::cmp),
         _ => Ordering::Equal,
     }
 }
@@ -717,6 +765,7 @@ pub(crate) fn read_column(
                 .collect(),
         ),
         ColumnType::MapUtf8 => ColumnValues::Map(rg.read_map_utf8_column(field)?),
+        ColumnType::ListUtf8 => ColumnValues::List(rg.read_list_utf8_column(field)?),
         ColumnType::Decimal { .. } => ColumnValues::Decimal(
             rg.read_decimal_column(index)?
                 .into_iter()

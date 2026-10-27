@@ -366,11 +366,12 @@ fn leaf_columns(file: &ParquetFile<'_>) -> Vec<Leaf> {
     file.fields()
         .into_iter()
         .filter_map(|f| {
-            // A MAP (#621) is a column at its first leaf; it decodes as
-            // map values (see `load_leaf`). Other groups are not columns.
+            // A MAP (#621) is a column at its first leaf and a LIST (#801)
+            // at its one leaf; they decode as map and list values (see
+            // `load_leaf`). Other groups are not columns.
             let pt = match f.element.physical_type {
                 Some(pt) => pt,
-                None if is_map(&f) => PhysicalType::ByteArray,
+                None if is_map(&f) || is_list(&f) => PhysicalType::ByteArray,
                 None => return None,
             };
             Some((f.name, f.leaves.start, pt))
@@ -500,6 +501,14 @@ fn is_map(field: &crate::storage::parquet::Field) -> bool {
         && field.leaves.len() == 2
         && field.element.converted_type
             == Some(crate::storage::parquet::footer::ConvertedType::Other(1))
+}
+
+/// A top-level `LIST` field of one leaf.
+fn is_list(field: &crate::storage::parquet::Field) -> bool {
+    field.nested
+        && field.leaves.len() == 1
+        && field.element.converted_type
+            == Some(crate::storage::parquet::footer::ConvertedType::Other(3))
 }
 
 /// One row group of a Parquet file as a lazily-loaded [`Segment`]: decodes
@@ -806,7 +815,7 @@ fn decimal_values(rg: &RowGroupReader<'_, '_>, index: usize) -> Result<Vec<Value
 }
 
 /// Leaf `index` decoded for every row: a MAP field (at its first leaf) as
-/// map values, a DECIMAL as exact decimals, anything else as its typed
+/// map values, a LIST field as list values, a DECIMAL as exact decimals, anything else as its typed
 /// column.
 fn load_leaf(
     rg: &RowGroupReader<'_, '_>,
@@ -815,7 +824,7 @@ fn load_leaf(
     bit_pattern: bool,
 ) -> Result<Loaded, FileError> {
     match rg.nested_field_at(index) {
-        Some(field) => map_values(rg, &field).map(Loaded::Values),
+        Some(field) => nested_values(rg, &field).map(Loaded::Values),
         None if annotation(rg, index) == Annotation::Decimal => {
             decimal_values(rg, index).map(Loaded::Values)
         }
@@ -835,7 +844,7 @@ fn load_leaf_at(
     bit_pattern: bool,
 ) -> Result<Loaded, FileError> {
     let all = match rg.nested_field_at(index) {
-        Some(field) => Some(map_values(rg, &field)?),
+        Some(field) => Some(nested_values(rg, &field)?),
         None if bit_pattern && annotation(rg, index) == Annotation::UInt64 => {
             Some(uint64_bit_pattern(rg, index)?)
         }
@@ -857,8 +866,16 @@ fn load_leaf_at(
     }
 }
 
-/// Every row of MAP field `field` as [`Value::Map`] (NULL for a NULL map).
-fn map_values(rg: &RowGroupReader<'_, '_>, field: &Field) -> Result<Vec<Value>, FileError> {
+/// Every row of LIST field `field` as [`Value::List`], and of any other
+/// nested field as a MAP's [`Value::Map`] (NULL for a NULL list or map).
+fn nested_values(rg: &RowGroupReader<'_, '_>, field: &Field) -> Result<Vec<Value>, FileError> {
+    if is_list(field) {
+        return Ok(rg
+            .read_list_utf8_column(field)?
+            .into_iter()
+            .map(|l| l.map_or(Value::Null, |items| Value::List(Arc::new(items))))
+            .collect());
+    }
     Ok(rg
         .read_map_utf8_column(field)?
         .into_iter()
@@ -1385,7 +1402,8 @@ mod prune {
         ) -> Option<(Option<StatValue>, Option<StatValue>, StatValue)> {
             let (index, physical_type) = *self.leaves_by_name.get(column)?;
             let literal = literal_stat_value(literal, physical_type)?;
-            // A MAP's leaves are keys and values: its statistics bound neither.
+            // A MAP's leaves are keys and values, a LIST's its elements:
+            // their statistics bound neither.
             if self.rg.nested_field_at(index).is_some() {
                 return None;
             }
@@ -3112,6 +3130,43 @@ mod tests {
             values(load_leaf(&rg, index, pt, bit_pattern)),
             values(load_leaf_at(&rg, index, pt, &[0, 1], bit_pattern)),
         )
+    }
+
+    /// Field `name`'s entry in `leaf_columns` of DuckDB's
+    /// `nested_shapes.parquet` (tools/gen_parquet_fixtures.sh), if any.
+    fn nested_shapes_leaf(name: &str) -> Option<Leaf> {
+        let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        super::leaf_columns(&file)
+            .into_iter()
+            .find(|(n, _, _)| n == name)
+    }
+
+    /// #801: `is_map(&f) || is_list(&f)`, a map (leaf A true).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_leaf_columns_2a9a10da__v1_a_map_is_a_column() {
+        assert_eq!(
+            nested_shapes_leaf("m").map(|(_, _, pt)| pt),
+            Some(PhysicalType::ByteArray)
+        );
+    }
+
+    /// A list (leaf B true).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_leaf_columns_2a9a10da__v2_a_list_is_a_column() {
+        assert_eq!(
+            nested_shapes_leaf("lst").map(|(_, _, pt)| pt),
+            Some(PhysicalType::ByteArray)
+        );
+    }
+
+    /// A struct (both false) is not a column.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_leaf_columns_2a9a10da__v3_a_struct_is_not_a_column() {
+        assert_eq!(nested_shapes_leaf("st"), None);
     }
 
     /// #600: `bit_pattern && annotation == UInt64`, leaf A false -- without

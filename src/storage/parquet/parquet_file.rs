@@ -66,6 +66,8 @@ pub enum FileError {
     UnsupportedNestedEncoding(page::Encoding),
     /// A field read as a `MAP<UTF8, UTF8>` that is not one.
     NotAStringMap(String),
+    /// A field read as a `LIST<UTF8>` that is not one.
+    NotAStringList(String),
     /// Nested values could not be rebuilt from a leaf's levels.
     Nested(NestedError),
     /// A page declares more than its column chunk has left (#671): more
@@ -128,6 +130,9 @@ impl fmt::Display for FileError {
             }
             FileError::NotAStringMap(name) => {
                 write!(f, "field {name} is not a MAP<UTF8, UTF8>")
+            }
+            FileError::NotAStringList(name) => {
+                write!(f, "field {name} is not a LIST<UTF8>")
             }
             FileError::UnsupportedNestedDictionary => write!(
                 f,
@@ -343,6 +348,10 @@ pub struct ParquetFile<'a> {
 /// and values are shared: a dictionary string is one allocation however
 /// many maps hold it (#671).
 pub type MapEntries = Vec<(Arc<str>, Option<Arc<str>>)>;
+
+/// A list's elements, in order; an element may be NULL. Elements are
+/// shared as a map's strings are (#801).
+pub type ListItems = Vec<Option<Arc<str>>>;
 
 /// One top-level field of a file: a leaf column, or a group (struct, list,
 /// map) and the leaves (column chunks) it spans.
@@ -1177,6 +1186,56 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         Ok(rows)
     }
 
+    /// Field `field` (a `LIST<UTF8>`, e.g. DuckDB's `VARCHAR[]` or
+    /// pyarrow's `list<string>`) of this row group, one value per row:
+    /// `None` for a NULL list, else its elements in order (#801). Decodes
+    /// only the field's one leaf.
+    pub fn read_list_utf8_column(&self, field: &Field) -> Result<Vec<Option<ListItems>>> {
+        let not_a_list = || FileError::NotAStringList(field.name.clone());
+        let start = field.leaves.start;
+        let leaves = self.file.schema_tree.leaves();
+        let Some(leaf) = leaves.get(start) else {
+            return Err(not_a_list());
+        };
+        let shape = field.nested
+            && field.leaves.len() == 1
+            && field.element.converted_type == Some(footer::ConvertedType::Other(3))
+            && leaf.max_rep_level == 1;
+        if !shape || leaf.element.physical_type != Some(footer::PhysicalType::ByteArray) {
+            return Err(not_a_list());
+        }
+        let items = self.read_leaf_entries(start, leaf)?;
+        // An element is present at its max level and, when it is optional,
+        // NULL one below; the level below a row's first element is an empty
+        // list and anything lower a NULL list.
+        let present = leaf.max_def_level;
+        let optional = leaf.element.repetition == Some(footer::Repetition::Optional);
+        let element = present.saturating_sub(u32::from(optional));
+        let mut rows: Vec<Option<ListItems>> = Vec::new();
+        for i in 0..items.def_levels.len() {
+            let def = items.def_levels.get(i).copied().unwrap_or(0);
+            let rep = items.rep_levels.get(i).copied().unwrap_or(0);
+            if def < element {
+                if rep != 0 {
+                    return Err(not_a_list());
+                }
+                rows.push((def.saturating_add(1) == element).then(Vec::new));
+                continue;
+            }
+            let item = match items.values.get(i).and_then(Option::as_ref) {
+                Some(reader::LeafScalar::Str(s)) if def == present => Some(s.clone()),
+                _ if def < present => None,
+                _ => return Err(not_a_list()),
+            };
+            match (rep, rows.last_mut()) {
+                (0, _) => rows.push(Some(vec![item])),
+                (_, Some(Some(list))) => list.push(item),
+                _ => return Err(not_a_list()),
+            }
+        }
+        Ok(rows)
+    }
+
     /// A dictionary-encoded INT64 column's dictionary and per-row indices,
     /// or `None` when the chunk is not dictionary-encoded throughout.
     pub fn read_int64_column_dictionary_indices(
@@ -1735,6 +1794,43 @@ mod tests {
                 read("m").unwrap(),
                 [Some(vec![("a".into(), Some("1".into()))])]
             );
+        }
+    }
+
+    #[allow(non_snake_case)]
+    mod mcdc_list_shape {
+        //! Tagged MC/DC vectors for `read_list_utf8_column`'s shape check
+        //! (#801), over tools/gen_parquet_fixtures.sh's
+        //! `nested_shapes.parquet`: `lst VARCHAR[]`, `m MAP(VARCHAR,
+        //! VARCHAR)`, `il INTEGER[]`.
+        use super::*;
+
+        fn read(field: &str) -> Result<Vec<Option<ListItems>>> {
+            let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
+            let file = ParquetFile::open(&bytes).unwrap();
+            let field = file.fields().into_iter().find(|f| f.name == field).unwrap();
+            let rg = file.row_group(0).unwrap();
+            rg.read_list_utf8_column(&field)
+        }
+
+        // storage_parquet_parquet_file_read_list_utf8_column_f3c5bfff:
+        // `!shape || leaf.element.physical_type != Some(ByteArray)`
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_read_list_utf8_column_f3c5bfff__v1_a_string_list_reads(
+        ) {
+            assert_eq!(read("lst").unwrap(), [Some(vec![Some("x".into())])]);
+        }
+
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_read_list_utf8_column_f3c5bfff__v2_a_map_is_not_a_list(
+        ) {
+            assert!(matches!(read("m"), Err(FileError::NotAStringList(n)) if n == "m"));
+        }
+
+        #[test]
+        fn mcdc__storage_parquet_parquet_file_read_list_utf8_column_f3c5bfff__v3_an_integer_list_is_refused(
+        ) {
+            assert!(matches!(read("il"), Err(FileError::NotAStringList(n)) if n == "il"));
         }
     }
 

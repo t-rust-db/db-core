@@ -185,10 +185,11 @@ impl From<crate::vm::batch::Value> for Cell {
             crate::vm::batch::Value::Float(x) => Cell::Real(x),
             crate::vm::batch::Value::Bool(b) => Cell::Bool(b),
             crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),
-            // As DuckDB prints a map: `{a=1, b=NULL}`.
-            m @ (crate::vm::batch::Value::Map(_) | crate::vm::batch::Value::Bytes(_)) => {
-                Cell::Text(m.to_string())
-            }
+            // As DuckDB prints a map: `{a=1, b=NULL}`; a list as a JSON
+            // array: `["a",null]`.
+            m @ (crate::vm::batch::Value::Map(_)
+            | crate::vm::batch::Value::List(_)
+            | crate::vm::batch::Value::Bytes(_)) => Cell::Text(m.to_string()),
             crate::vm::batch::Value::Decimal { unscaled, scale } => {
                 Cell::Decimal { unscaled, scale }
             }

@@ -385,6 +385,27 @@ are not known in advance (HTTP headers, cookies, query parameters).
   header names), which DuckDB has no function for. A MAP's leaf statistics
   never prune.
 
+### LIST columns (#801)
+
+**Amendment (#801).** A record table column may be `LIST<UTF8>` (manifest
+type `list(utf8)`), for a variable number of labels per row (tags,
+technique ids, categories) without a delimited string or a second table
+at the grain row × label.
+
+- **Layout.** The standard three-level LIST, as DuckDB writes `VARCHAR[]`
+  and pyarrow `list<string>`: a `LIST` group, a repeated `list` group and
+  an optional UTF8 `element`, one column chunk with repetition and
+  definition levels. `make check-parquet-write-oracle` checks NULL, empty
+  and 100-element lists, NULL and non-ASCII elements in DuckDB and pyarrow.
+- **Type.** `ColumnType::ListUtf8`, not a generic `List(Box<ColumnType>)`:
+  `ColumnType` stays `Copy`, and no unsupported element type can be
+  expressed. Another element type gets its own variant when it is needed.
+- **Duplicates kept.** Unlike a MAP's keys, a list's elements may repeat;
+  they are stored as appended.
+- **Not a sort key.** A tiered table's `sort_key` cannot name a LIST.
+- **Reads.** The column engine reads a LIST as a list value, printed as a
+  JSON array (`["a",null]`); a LIST's leaf statistics never prune.
+
 ## Structure
 
 Feature split and client packaging: ADR 0029.
