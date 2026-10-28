@@ -388,7 +388,7 @@ fn random_map(rng: &mut Rng) -> RecordValue {
     RecordValue::Map(entries)
 }
 
-const RECORD_INVARIANCE_QUERIES: [&str; 18] = [
+const RECORD_INVARIANCE_QUERIES: [&str; 21] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(amount), MAX(amount), SUM(u), COUNT(blob), SUM(f) \
      FROM logs",
     "SELECT id, kind, n, amount, u, blob, ts, f FROM logs ORDER BY id",
@@ -411,6 +411,11 @@ const RECORD_INVARIANCE_QUERIES: [&str; 18] = [
      WHERE u IS NOT NULL GROUP BY label ORDER BY label",
     "SELECT kind, label FROM logs CROSS JOIN UNNEST(labels) AS l(label) \
      WHERE label IS NOT NULL AND n > 0 ORDER BY kind, label, id",
+    "SELECT kind, COUNT(DISTINCT amount), COUNT(DISTINCT n), COUNT(*) FROM logs GROUP BY kind \
+     ORDER BY kind",
+    "SELECT COUNT(DISTINCT kind), COUNT(DISTINCT u), COUNT(DISTINCT n) FROM logs",
+    "SELECT label, COUNT(DISTINCT id), COUNT(DISTINCT kind) FROM logs, \
+     UNNEST(labels) AS l(label) GROUP BY label ORDER BY label",
 ];
 
 /// What the flush-timing test appends: a lines table's lines or a record
