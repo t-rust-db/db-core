@@ -16,7 +16,7 @@
 //! A NULL map gives NULL. A value that is not a map (or a key that is not a
 //! string) gives NULL too: column types are only known per row here.
 
-use super::batch::{MapEntries, Value};
+use super::batch::{MapEntries, SlotState, Value};
 
 /// The functions handled here, with their arities.
 pub(crate) const MAP_FUNCTIONS: [(&str, usize); 7] = [
@@ -41,18 +41,27 @@ pub(crate) fn is_map_function(name: &str) -> bool {
 /// tags), so `string_split` of two strings is computed once per distinct
 /// pair and shared by `Arc` (#815).
 pub(crate) fn call_column(name: &str, columns: &[&[Value]], num_rows: usize) -> Vec<Value> {
-    let splits =
-        name.eq_ignore_ascii_case("string_split") || name.eq_ignore_ascii_case("str_split");
-    let mut memo: std::collections::HashMap<(&str, &str), Value> = std::collections::HashMap::new();
+    if name.eq_ignore_ascii_case("string_split") || name.eq_ignore_ascii_case("str_split") {
+        if let [strings, seps] = columns {
+            let mut memo: std::collections::HashMap<(&str, &str), Value, SlotState> =
+                std::collections::HashMap::default();
+            return strings
+                .iter()
+                .zip(seps.iter())
+                .take(num_rows)
+                .map(|pair| match pair {
+                    (Value::Str(s), Value::Str(sep)) => memo
+                        .entry((s.as_ref(), sep.as_ref()))
+                        .or_insert_with(|| string_split(pair.0, pair.1))
+                        .clone(),
+                    (s, sep) => string_split(s, sep),
+                })
+                .collect();
+        }
+    }
     (0..num_rows)
         .map(|row| {
             let args: Vec<&Value> = columns.iter().filter_map(|c| c.get(row)).collect();
-            if let (true, [Value::Str(s), Value::Str(sep)]) = (splits, args.as_slice()) {
-                return memo
-                    .entry((s.as_ref(), sep.as_ref()))
-                    .or_insert_with(|| call(name, &args))
-                    .clone();
-            }
             call(name, &args)
         })
         .collect()

@@ -4690,7 +4690,7 @@ impl Vm {
         for (i, op) in program.iter().enumerate() {
             self.check_step_limit(op.name())?;
             if matches!(op, Opcode::Unnest { .. }) {
-                self.unnest_live = program.get(i + 1..).and_then(live_through_emit);
+                self.unnest_live = program.get(i.saturating_add(1)..).and_then(live_through_emit);
             }
             self.step(batch, op)?;
         }
@@ -6184,16 +6184,26 @@ impl Vm {
         }
         self.ensure_materialized(src);
         let mut rows: Vec<usize> = Vec::new();
-        let mut elements: Vec<Value> = Vec::new();
+        // The elements as a typed string column (#815): no `Value` per
+        // element, and a typed group key downstream.
+        let mut offsets: Vec<u32> = vec![0];
+        let mut text = String::new();
+        let mut present: Vec<bool> = Vec::new();
         for (row, value) in self.reg(src, opcode)?.iter().enumerate() {
             match value {
                 Value::List(items) => {
                     for item in items.iter() {
                         rows.push(row);
-                        elements.push(match item {
-                            Some(s) => Value::Str(Cow::Owned(s.to_string())),
-                            None => Value::Null,
-                        });
+                        if let Some(s) = item {
+                            text.push_str(s);
+                        }
+                        present.push(item.is_some());
+                        offsets.push(u32::try_from(text.len()).map_err(|_| {
+                            VmError::MalformedProgram {
+                                opcode,
+                                reason: "UNNEST elements exceed 4 GiB".to_string(),
+                            }
+                        })?);
                     }
                 }
                 Value::Null => {}
@@ -6205,6 +6215,11 @@ impl Vm {
                 }
             }
         }
+        let elements = Column::Str {
+            offsets,
+            data: text,
+            valid: crate::vm::column::Bitmap::from_bools(present.into_iter()),
+        };
         let num_rows = self.reg(src, opcode)?.len();
         let typed: Vec<usize> = self.typed_registers.keys().copied().collect();
         let mut gathered: HashMap<usize, Arc<Column>> = HashMap::new();
@@ -6239,7 +6254,8 @@ impl Vm {
         self.typed_registers = gathered;
         // Constants loaded from here on are as long as the expanded rows.
         self.selected_rows = Some(rows.len());
-        self.registers.insert(dst, Arc::new(elements));
+        self.registers.remove(&dst);
+        self.typed_registers.insert(dst, Arc::new(elements));
         Ok(())
     }
 

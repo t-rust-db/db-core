@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::batch::{hash_one_value, Value};
+use super::batch::{hash_one_value, SlotState, Value};
 
 /// The code a `NULL` string key takes in [`AccColumn::Strs`].
 const NULL_CODE: u32 = u32::MAX;
@@ -27,7 +27,8 @@ const NULL_CODE: u32 = u32::MAX;
 pub(crate) struct Interner {
     strings: Vec<Arc<str>>,
     hashes: Vec<u64>,
-    codes: HashMap<Arc<str>, u32>,
+    /// Murmur-mixed, not SipHash: a string key is looked up once per row (#815).
+    codes: HashMap<Arc<str>, u32, SlotState>,
 }
 
 impl Interner {
