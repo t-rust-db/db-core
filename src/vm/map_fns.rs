@@ -221,6 +221,37 @@ mod tests {
         assert_eq!(call("cardinality", &[&m()]), Value::Int(3));
     }
 
+    // vm_map_fns_call_column_fe1c886e (`call_column`): `name` is `string_split`
+    // or `str_split`; a repeated string shares its list, a NULL stays NULL.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_column_fe1c886e__v1_string_split_is_the_first_name() {
+        let strings = [s("a,b"), s("a,b"), Value::Null, s("c")];
+        let seps = [s(","), s(","), s(","), Value::Null];
+        assert_eq!(
+            call_column("string_split", &[&strings, &seps], 4),
+            [
+                list(&["a", "b"]),
+                list(&["a", "b"]),
+                Value::Null,
+                list(&["c"])
+            ]
+        );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_column_fe1c886e__v2_str_split_is_the_alias() {
+        assert_eq!(
+            call_column("str_split", &[&[s("a,b")], &[s(",")]], 1),
+            [list(&["a", "b"])]
+        );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_column_fe1c886e__v3_any_other_name_is_a_map_function() {
+        assert_eq!(call_column("cardinality", &[&[m()]], 1), [Value::Int(3)]);
+    }
+
     // vm_map_fns_string_split_e1a5eb72 (`string_split`): `sep.is_empty() && s.is_empty()`.
     #[test]
     #[allow(non_snake_case)]
