@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.196.1] - 2026-10-28
+
+### Fixed
+
+- Fixed a slowdown in `UNNEST` over a `LIST<UTF8>` column with very many distinct values (about 1M): such a column is now read as plain strings, as before 0.195.0, instead of through a hashed dictionary (#809).
+
 ## [0.196.0] - 2026-10-28
 
 ### Changed
