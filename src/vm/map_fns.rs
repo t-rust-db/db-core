@@ -19,19 +19,29 @@
 //! nothing), NULL when `l` or `v` is NULL. A value that is not a list gives
 //! NULL, as a non-map does below.
 //!
+//! #826: on a list, `l[i]` (`map_extract_value`), `list_extract(l, i)` and
+//! `list_element(l, i)` read element `i`: 1-based, a negative `i` counts
+//! from the end, and 0 or out of range is NULL. `len(l)` and
+//! `array_length(l)` count its elements, NULL ones included. DuckDB's
+//! `cardinality` takes only a map, so on a list it is NULL here.
+//!
 //! A NULL map gives NULL. A value that is not a map (or a key that is not a
 //! string) gives NULL too: column types are only known per row here.
 
-use super::batch::{MapEntries, SlotState, Value};
+use super::batch::{ListItems, MapEntries, SlotState, Value};
 
 /// The functions handled here, with their arities.
-pub(crate) const MAP_FUNCTIONS: [(&str, usize); 11] = [
+pub(crate) const MAP_FUNCTIONS: [(&str, usize); 15] = [
     ("string_split", 2),
     ("str_split", 2),
     ("list_contains", 2),
     ("list_has", 2),
     ("array_contains", 2),
     ("array_has", 2),
+    ("list_extract", 2),
+    ("list_element", 2),
+    ("len", 1),
+    ("array_length", 1),
     ("map_extract_value", 2),
     ("map_get_ci", 2),
     ("element_at", 2),
@@ -91,6 +101,9 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
             _ => Value::Null,
         };
     }
+    if let Some((Value::List(items), rest)) = args.split_first() {
+        return list_call(name, items, rest);
+    }
     let (Some(Value::Map(entries)), key) = (args.first(), args.get(1)) else {
         return Value::Null;
     };
@@ -139,6 +152,34 @@ fn string_split(s: &Value, sep: &Value) -> Value {
         },
     };
     Value::List(std::sync::Arc::new(items))
+}
+
+/// `name(list, rest...)` for a function that reads a list (#826).
+fn list_call(name: &str, items: &ListItems, rest: &[&Value]) -> Value {
+    match (name.to_ascii_lowercase().as_str(), rest) {
+        ("map_extract_value" | "list_extract" | "list_element", [index]) => {
+            list_element(items, index)
+        }
+        ("len" | "array_length", []) => Value::Int(i64::try_from(items.len()).unwrap_or(i64::MAX)),
+        _ => Value::Null,
+    }
+}
+
+/// Element `index` of `items`: 1-based, negative from the end.
+fn list_element(items: &ListItems, index: &Value) -> Value {
+    let Value::Int(i) = index else {
+        return Value::Null;
+    };
+    let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
+    let at = if *i < 0 {
+        len.saturating_add(*i)
+    } else {
+        i.saturating_sub(1)
+    };
+    match usize::try_from(at).ok().and_then(|at| items.get(at)) {
+        Some(Some(item)) => Value::Str(item.to_string().into()),
+        _ => Value::Null,
+    }
 }
 
 /// Whether `name` (any case) is `list_contains` or one of its aliases.
@@ -349,6 +390,32 @@ mod tests {
             ),
             [Value::Bool(true), Value::Null]
         );
+    }
+
+    #[test]
+    fn list_element_and_length_follow_duckdb() {
+        let l = Value::List(Arc::new(vec![Some("a".into()), None, Some("c".into())]));
+        let at = |i: i64| call("map_extract_value", &[&l, &Value::Int(i)]);
+        assert_eq!(at(1), s("a"));
+        assert_eq!(at(2), Value::Null);
+        assert_eq!(at(-1), s("c"));
+        assert_eq!(at(-3), s("a"));
+        assert_eq!(at(-4), Value::Null);
+        assert_eq!(at(0), Value::Null);
+        assert_eq!(at(4), Value::Null);
+        assert_eq!(at(i64::MIN), Value::Null);
+        assert_eq!(call("list_extract", &[&l, &Value::Null]), Value::Null);
+        assert_eq!(call("LIST_ELEMENT", &[&l, &s("1")]), Value::Null);
+        assert_eq!(
+            call("list_extract", &[&Value::Null, &Value::Int(1)]),
+            Value::Null
+        );
+        assert_eq!(call("len", &[&l]), Value::Int(3));
+        assert_eq!(call("array_length", &[&list(&[])]), Value::Int(0));
+        assert_eq!(call("len", &[&Value::Null]), Value::Null);
+        // DuckDB's `cardinality` takes only a map.
+        assert_eq!(call("cardinality", &[&l]), Value::Null);
+        assert_eq!(call("map_keys", &[&l]), Value::Null);
     }
 
     #[test]
