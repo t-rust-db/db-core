@@ -532,7 +532,9 @@ pub enum AggPart {
     /// and morsels group by `(keys, x)`, so merging their partials removes
     /// duplicates of `x` across them; once everything is merged,
     /// `Combine` groups again by the real keys alone, counting non-`NULL`
-    /// `x`s and merging every other part as usual.
+    /// `x`s and merging every other part as usual. Several (#807), one per
+    /// distinct argument, follow the group keys: each is counted by a
+    /// regrouping of its own, as `x` is the only key there.
     DistinctKey,
     /// A partial `SUM`: merged by adding across segments.
     Sum,

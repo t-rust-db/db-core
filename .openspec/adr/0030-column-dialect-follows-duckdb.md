@@ -152,3 +152,21 @@ gives `['']`, a NULL `s` gives NULL, a NULL `sep` the whole string as one
 element, an empty `sep` one element per character, a separator at either end
 or doubled gives empty elements. A value that is not text is split as its
 text.
+
+## As built (#807): several count(DISTINCT ...)
+
+A query may hold any number of `count(DISTINCT x)`; the planner used to
+refuse a second (#633). Each distinct argument is one more hidden group key
+(`AggPart::DistinctKey`), emitted after the real keys, so a segment groups
+by `(keys, x_1 .. x_n)` and merges. Counting cannot be done in that one
+grouping: a value of `x_1` that appears with two values of `x_2` would
+count twice. `Combiner::finish_distinct_many` therefore regroups once per
+distinct: it moves `x_i` next to the keys, leaves the other `x_j` as
+`MAX` slots (which keeps every slot index that `AVG` and expression parts
+hold where they were), and runs the single-distinct regrouping. All passes
+merge the same rows, so their groups come out in the same order; the result
+takes the i-th count from pass i and everything else from the first, and
+fails with a malformed-program error if the passes ever disagree. A single
+`count(DISTINCT x)` takes the code it always did. Cost: the per-segment
+grouping is one row per distinct combination of the arguments within a key,
+and the final merge adds one regrouping per extra distinct.

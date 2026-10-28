@@ -808,6 +808,92 @@ impl Combiner {
         Ok(())
     }
 
+    /// Several `COUNT(DISTINCT x_i)` (#807). Each `(keys, x_1 .. x_n)` group
+    /// is merged, so grouping by `(keys, x_i)` alone and counting its
+    /// non-`NULL` `x_i` gives distinct `x_i` per key -- one regrouping per
+    /// distinct, each by [`Self::finish_distinct`]. A pass moves its `x_i`
+    /// next to the keys and leaves the other `x_j` as `MAX` slots, which
+    /// keeps every other slot where the parts expect it; its output is
+    /// `[keys, d_i, (n - 1 unused), aggregates]`. All passes merge the same
+    /// rows, so their groups come out in the same order; the result takes
+    /// `d_i` from pass `i` and everything else from the first.
+    fn finish_distinct_many(self, distinct: usize) -> Result<QueryOutput> {
+        let malformed = |reason: &str| VmError::MalformedProgram {
+            opcode: "Combine",
+            reason: reason.to_string(),
+        };
+        let keys = self.num_group_keys.saturating_sub(distinct);
+        let block = keys..keys.saturating_add(distinct);
+        let Combiner {
+            parts,
+            acc,
+            first_seen,
+            num_slots,
+            ..
+        } = self;
+        if parts
+            .get(block.clone())
+            .is_none_or(|p| p.iter().any(|p| *p != AggPart::DistinctKey))
+        {
+            return Err(malformed(
+                "COUNT(DISTINCT) keys do not follow the group keys",
+            ));
+        }
+        let mut passes: Vec<Vec<Vec<Value>>> = Vec::with_capacity(distinct);
+        for i in 0..distinct {
+            let mut pass_parts: Vec<AggPart> = parts.get(..keys).unwrap_or_default().to_vec();
+            pass_parts.push(AggPart::DistinctKey);
+            pass_parts.extend((1..distinct).map(|_| AggPart::Max));
+            pass_parts.extend(parts.get(block.end..).unwrap_or_default());
+            let mut merge = Combiner::new(&pass_parts, keys.saturating_add(1));
+            if num_slots.is_some() {
+                let own = keys.saturating_add(i);
+                let others = block.clone().filter(|c| *c != own);
+                let order = (0..keys)
+                    .chain(std::iter::once(own))
+                    .chain(others)
+                    .chain(block.end..acc.len());
+                let columns = order
+                    .enumerate()
+                    .map(|(at, c)| {
+                        let column = acc.get(c).cloned().unwrap_or(AccColumn::Values(Vec::new()));
+                        // The unused slots merge as `MAX`, never as keys.
+                        if at > keys {
+                            AccColumn::Values(column.into_values())
+                        } else {
+                            column
+                        }
+                    })
+                    .collect();
+                merge.push_partial(&Partial {
+                    columns,
+                    first_seen: first_seen.clone(),
+                })?;
+            }
+            passes.push(merge.finish_distinct()?.into_columns());
+        }
+        let Some(first) = passes.first() else {
+            return Ok(QueryOutput::default());
+        };
+        let rows = first.first().map_or(0, Vec::len);
+        let width = first.len();
+        if passes
+            .iter()
+            .any(|p| p.len() != width || p.iter().any(|c| c.len() != rows))
+        {
+            return Err(malformed("COUNT(DISTINCT) passes disagree on the groups"));
+        }
+        let mut out: Vec<Vec<Value>> = Vec::with_capacity(width);
+        for (c, column) in first.iter().enumerate() {
+            if c < keys || c >= block.end {
+                out.push(column.clone());
+            } else if c == keys {
+                out.extend(passes.iter().filter_map(|p| p.get(keys).cloned()));
+            }
+        }
+        Ok(QueryOutput::new(out))
+    }
+
     /// The finalized result (`AVG` divided, `parts` order), groups in
     /// first-seen order.
     pub(crate) fn finish(self) -> Result<QueryOutput> {
@@ -830,6 +916,14 @@ impl Combiner {
     /// `GROUP BY` the result is one row even over no rows, as for any
     /// other aggregate.
     fn finish_distinct(self) -> Result<QueryOutput> {
+        let distinct = self
+            .parts
+            .iter()
+            .filter(|p| **p == AggPart::DistinctKey)
+            .count();
+        if distinct > 1 {
+            return self.finish_distinct_many(distinct);
+        }
         let keys = self.num_group_keys.saturating_sub(1);
         let parts: Vec<AggPart> = self
             .parts
@@ -1363,6 +1457,166 @@ mod tests {
     /// from two workers. The same `(k, x)` from both counts once, a NULL
     /// `x` never, and SUM/AVG still add every partial -- the same through
     /// `combine_partials`, `combine_chunks` and the row form `finalize`.
+    /// #807: several `COUNT(DISTINCT)` merged together and with `SUM`/`AVG`,
+    /// across segments, through workers' partials and in the row form.
+    #[test]
+    fn several_count_distincts_count_each_column_on_its_own() {
+        let parts = [
+            AggPart::GroupKey,
+            AggPart::DistinctKey,
+            AggPart::DistinctKey,
+            AggPart::Sum,
+            AggPart::Avg(4, 5),
+        ];
+        let rows = |r: &[(&str, Option<i64>, Option<i64>, i64)]| {
+            chunk(vec![
+                r.iter().map(|t| s(t.0)).collect(),
+                r.iter()
+                    .map(|t| t.1.map_or(Value::Null, Value::Int))
+                    .collect(),
+                r.iter()
+                    .map(|t| t.2.map_or(Value::Null, Value::Int))
+                    .collect(),
+                r.iter().map(|t| Value::Int(t.3)).collect(),
+                r.iter().map(|t| Value::Int(t.3)).collect(),
+                r.iter().map(|_| Value::Int(1)).collect(),
+            ])
+        };
+        let a = rows(&[
+            ("a", Some(1), Some(10), 10),
+            ("b", Some(7), None, 1),
+            ("a", None, Some(10), 5),
+        ]);
+        let b = rows(&[
+            ("a", Some(1), Some(20), 20),
+            ("a", Some(2), Some(20), 30),
+            ("b", Some(7), Some(3), 2),
+        ]);
+        let expected = vec![
+            vec![
+                s("a"),
+                Value::Int(2),
+                Value::Int(2),
+                Value::Int(65),
+                Value::Float(65.0 / 4.0),
+            ],
+            vec![
+                s("b"),
+                Value::Int(1),
+                Value::Int(1),
+                Value::Int(3),
+                Value::Float(1.5),
+            ],
+        ];
+        let direct = combine_chunks(&parts, 3, &[a.clone(), b.clone()]).unwrap();
+        assert_eq!(direct.into_rows(), expected);
+        let worker = |c: &Chunk, segment| {
+            let mut w = Combiner::new(&parts, 3);
+            w.push_chunk(c, |row| order_key(segment, row)).unwrap();
+            w.finish_partial()
+        };
+        let merged = combine_partials(&parts, 3, vec![worker(&b, 1), worker(&a, 0)]).unwrap();
+        assert_eq!(merged.into_rows(), expected, "first-seen order is kept");
+        let all = rows_of(&[a, b]);
+        let out = finalize(&parts, 3, false, &[], None, all).unwrap();
+        assert_eq!(out.into_rows(), expected);
+    }
+
+    // vm_combine_finish_distinct_many_65ed9eb1 (`finish_distinct_many`):
+    // `c < keys || c >= block.end` (#807).
+    fn two_distinct_columns() -> (Vec<Value>, Vec<Value>) {
+        (
+            vec![Value::Int(1), Value::Int(1), Value::Int(2)],
+            vec![Value::Int(5), Value::Null, Value::Int(5)],
+        )
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_finish_distinct_many_65ed9eb1__v1_only_the_distinct_columns() {
+        let (x, y) = two_distinct_columns();
+        let parts = [AggPart::DistinctKey, AggPart::DistinctKey];
+        let out = combine_chunks(&parts, 2, &[chunk(vec![x, y])]).unwrap();
+        assert_eq!(out.into_rows(), vec![vec![Value::Int(2), Value::Int(1)]]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_finish_distinct_many_65ed9eb1__v2_a_key_column_comes_first() {
+        let (x, y) = two_distinct_columns();
+        let key = vec![s("k"), s("k"), s("k")];
+        let parts = [
+            AggPart::GroupKey,
+            AggPart::DistinctKey,
+            AggPart::DistinctKey,
+        ];
+        let out = combine_chunks(&parts, 3, &[chunk(vec![key, x, y])]).unwrap();
+        assert_eq!(
+            out.into_rows(),
+            vec![vec![s("k"), Value::Int(2), Value::Int(1)]]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_finish_distinct_many_65ed9eb1__v3_an_aggregate_comes_after() {
+        let (x, y) = two_distinct_columns();
+        let sum = vec![Value::Int(1), Value::Int(2), Value::Int(3)];
+        let parts = [AggPart::DistinctKey, AggPart::DistinctKey, AggPart::Sum];
+        let out = combine_chunks(&parts, 2, &[chunk(vec![x, y, sum])]).unwrap();
+        assert_eq!(
+            out.into_rows(),
+            vec![vec![Value::Int(2), Value::Int(1), Value::Int(6)]]
+        );
+    }
+
+    #[test]
+    fn several_count_distincts_without_group_by_give_one_row() {
+        let parts = [
+            AggPart::DistinctKey,
+            AggPart::DistinctKey,
+            AggPart::DistinctKey,
+            AggPart::Count,
+        ];
+        let x = chunk(vec![
+            vec![Value::Int(1), Value::Int(1), Value::Null],
+            vec![Value::Int(5), Value::Int(6), Value::Int(5)],
+            vec![Value::Null, Value::Null, Value::Null],
+            vec![Value::Int(1), Value::Int(1), Value::Int(1)],
+        ]);
+        let out = combine_chunks(&parts, 3, &[x]).unwrap();
+        assert_eq!(
+            out.into_rows(),
+            vec![vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(0),
+                Value::Int(3)
+            ]]
+        );
+        let none = combine_chunks(&parts, 3, &[]).unwrap();
+        assert_eq!(
+            none.into_rows(),
+            vec![vec![
+                Value::Int(0),
+                Value::Int(0),
+                Value::Int(0),
+                Value::Int(0)
+            ]]
+        );
+    }
+
+    #[test]
+    fn several_count_distincts_must_follow_the_group_keys() {
+        let parts = [AggPart::DistinctKey, AggPart::Sum, AggPart::DistinctKey];
+        let x = chunk(vec![
+            vec![Value::Int(1)],
+            vec![Value::Int(1)],
+            vec![Value::Int(1)],
+        ]);
+        assert!(combine_chunks(&parts, 2, &[x]).is_err());
+    }
+
     #[test]
     fn count_distinct_regroups_merged_partials_by_the_real_keys() {
         let parts = [

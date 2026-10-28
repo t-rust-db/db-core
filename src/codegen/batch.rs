@@ -2130,20 +2130,14 @@ pub fn compile(select: &Select) -> Result<Program> {
         agg_parts.push(AggPart::GroupKey);
     }
     // #633: `COUNT(DISTINCT x)` groups by `x` as one more, hidden key; see
-    // `AggPart::DistinctKey`. One per query: a second distinct argument
-    // would need a second grouping.
-    let mut distinct_srcs = items
+    // `AggPart::DistinctKey`. #807: one such key per distinct argument, in
+    // select order, which `Combine` counts one at a time.
+    let distinct_srcs = items
         .iter()
         .zip(&agg_srcs)
         .filter(|(item, _)| matches!(item, Item::Agg(_, _, _, true)))
         .map(|(_, src)| src.first().copied().flatten());
-    let distinct_src = distinct_srcs.next();
-    if distinct_srcs.next().is_some() {
-        return Err(PlanError::UnsupportedSelectItem(
-            "more than one COUNT(DISTINCT ...) in a query".into(),
-        ));
-    }
-    if let Some(src) = distinct_src {
+    for src in distinct_srcs {
         let src = src
             .ok_or_else(|| PlanError::Internal("COUNT(DISTINCT ...) without an argument".into()))?;
         group_by_regs.push(src);
@@ -2159,12 +2153,14 @@ pub fn compile(select: &Select) -> Result<Program> {
     // post-aggregation projection (#623).
     let mut item_slots: Vec<Vec<usize>> = Vec::with_capacity(items.len());
 
+    let mut next_distinct = 0usize;
     for (item, agg_src) in items.iter().zip(&agg_srcs) {
         let mut slots = Vec::new();
         if let Item::Agg(_, _, _, true) = item {
             // Its value is the hidden key's count, emitted with the keys
-            // and merged right after them.
-            slots.push(group_by.len());
+            // and merged right after them, one slot per distinct (#807).
+            slots.push(group_by.len().saturating_add(next_distinct));
+            next_distinct = next_distinct.saturating_add(1);
         } else if let Item::Agg(func, _, _, false) = item {
             let src = agg_src.first().copied().flatten();
             slots.push(push_aggregate(
@@ -3299,13 +3295,16 @@ fn map_window_func(func: WindowFunc) -> crate::vm::batch::WindowFunc {
 fn grouped_output_order(items: &[Item], num_group_keys: usize) -> Vec<usize> {
     // #633: a `COUNT(DISTINCT x)` is merged right after the keys, in the
     // hidden key's slot, ahead of every other aggregate.
-    let has_distinct = items.iter().any(|i| matches!(i, Item::Agg(_, _, _, true)));
-    if num_group_keys == 0 && !has_distinct {
+    let distinct = items
+        .iter()
+        .filter(|i| matches!(i, Item::Agg(_, _, _, true)))
+        .count();
+    if num_group_keys == 0 && distinct == 0 {
         return Vec::new();
     }
     let mut next_key = 0usize;
     let mut distinct_slot = num_group_keys;
-    let mut next_agg = num_group_keys.saturating_add(usize::from(has_distinct));
+    let mut next_agg = num_group_keys.saturating_add(distinct);
     let mut order = Vec::with_capacity(items.len());
     for item in items {
         let slot = match item {
@@ -6544,29 +6543,34 @@ mod tests {
         Item::Agg(AggFunc::Count, Some(AggArg::Column("x".into())), None, true)
     }
 
-    // codegen_batch_grouped_output_order_c4d07137 (`grouped_output_order`):
-    // `num_group_keys == 0 && !has_distinct`
+    // codegen_batch_grouped_output_order_6ede5204 (`grouped_output_order`):
+    // `num_group_keys == 0 && distinct == 0` (#807: counted, not a flag)
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_grouped_output_order_c4d07137__v1_no_keys_no_distinct_is_identity() {
+    fn mcdc__codegen_batch_grouped_output_order_6ede5204__v1_no_keys_no_distinct_is_identity() {
         assert!(grouped_output_order(&[count_item(), count_item()], 0).is_empty());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_grouped_output_order_c4d07137__v2_keys_are_reordered() {
+    fn mcdc__codegen_batch_grouped_output_order_6ede5204__v2_keys_are_reordered() {
         let items = [count_item(), Item::Column("k".into())];
         assert_eq!(grouped_output_order(&items, 1), [1, 0]);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_grouped_output_order_c4d07137__v3_a_distinct_count_moves_first() {
+    fn mcdc__codegen_batch_grouped_output_order_6ede5204__v3_a_distinct_count_moves_first() {
         // Merged as [COUNT(DISTINCT x), COUNT(*)]: the select list's
         // COUNT(*) first is merged column 1.
         assert_eq!(
             grouped_output_order(&[count_item(), distinct_item()], 0),
             [1, 0]
+        );
+        // #807: each of several takes a slot of its own, ahead of the rest.
+        assert_eq!(
+            grouped_output_order(&[count_item(), distinct_item(), distinct_item()], 0),
+            [2, 0, 1]
         );
     }
 
@@ -6589,7 +6593,6 @@ mod tests {
         for sql_text in [
             "SELECT SUM(DISTINCT amount) FROM t",
             "SELECT COUNT(DISTINCT amount) * 2 FROM t",
-            "SELECT COUNT(DISTINCT amount), COUNT(DISTINCT region) FROM t",
             "SELECT COUNT(DISTINCT amount) OVER (PARTITION BY region) FROM t",
         ] {
             let crate::parser::row::error::ParseOutcome::Accepted(select) =
@@ -6600,6 +6603,35 @@ mod tests {
             assert!(
                 matches!(compile(&select), Err(PlanError::UnsupportedSelectItem(_))),
                 "{sql_text}"
+            );
+        }
+    }
+
+    /// #807: several `COUNT(DISTINCT)` count each argument on its own, and
+    /// follow the select list, over 1 segment and 256.
+    #[test]
+    fn several_count_distincts_over_one_and_many_segments() {
+        let s = |v: &str| Value::Str(v.to_string().into());
+        for segments in [1, 256] {
+            let n = i64::try_from(segments).unwrap();
+            // Per segment: a has amounts 5 and 20, b has 3 and 30.
+            assert_eq!(
+                sorted(run_grouped(
+                    "SELECT COUNT(DISTINCT amount), region, COUNT(DISTINCT region), COUNT(*) \
+                     FROM t GROUP BY region",
+                    segments
+                )),
+                vec![
+                    vec![Value::Int(2), s("a"), Value::Int(1), Value::Int(2 * n)],
+                    vec![Value::Int(2), s("b"), Value::Int(1), Value::Int(2 * n)],
+                ],
+            );
+            assert_eq!(
+                run_grouped(
+                    "SELECT COUNT(DISTINCT amount), COUNT(DISTINCT region), SUM(amount) FROM t",
+                    segments
+                ),
+                vec![vec![Value::Int(4), Value::Int(2), Value::Int(58 * n)]],
             );
         }
     }
