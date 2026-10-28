@@ -101,6 +101,11 @@ pub fn compile_select_with_catalog_and_stats(
                 0,
             ));
         }
+        TableRefKind::Unnest { .. } => {
+            return Err(CodegenError::Unsupported {
+                reason: "UNNEST is only available in the column dialect".into(),
+            })
+        }
         TableRefKind::Subquery(subquery) => {
             crate::codegen::row::subquery::materialize_from_subquery(
                 &mut em,

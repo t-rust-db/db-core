@@ -189,6 +189,12 @@ impl fmt::Display for TableRef {
         match &self.kind {
             TableRefKind::Name(name) => write!(f, "{name}")?,
             TableRefKind::Subquery(select) => write!(f, "({select})")?,
+            TableRefKind::Unnest { expr, column } => {
+                write!(f, "UNNEST({expr})")?;
+                if let (Some(alias), Some(column)) = (&self.alias, column) {
+                    return write!(f, " AS {alias}({column})");
+                }
+            }
         }
         if let Some(alias) = &self.alias {
             write!(f, " AS {alias}")?;

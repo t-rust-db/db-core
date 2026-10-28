@@ -466,6 +466,9 @@ pub enum MapOp {
     /// symmetrically: only `b` (the predicate) being exactly `Bool(true)`
     /// passes `a` through.
     MaskIf,
+    /// `a` -- unary; `b` is unused. A register of its own holding another's
+    /// values, for a consumer that overwrites its input (#802).
+    Copy,
     /// `a LIKE b` (`negated`: `NOT LIKE`) -- SQL `%`/`_` wildcard match,
     /// per [`crate::functions::like_match`]. Both operands stringify via
     /// [`Value`]'s `Display`, matching [`MapOp::Concat`]'s convention.
@@ -680,6 +683,16 @@ pub enum Opcode {
         payload_dst: Cow<'static, [usize]>,
         /// Which rows to emit for matches/non-matches.
         kind: JoinKind,
+    },
+    /// #802: `UNNEST(list)`. Expands each live row into one row per element
+    /// of the list in `src`, repeating every other live register, and writes
+    /// the elements to `dst`. A NULL or empty list yields no rows; a NULL
+    /// element yields a row holding NULL.
+    Unnest {
+        /// The register holding one list per row.
+        src: usize,
+        /// Destination register for the elements.
+        dst: usize,
     },
     /// #441: `Opcode::HashProbe` immediately followed by an
     /// `Opcode::GroupReduce` over the joined row, fused into one pass so a
@@ -1002,6 +1015,7 @@ impl Opcode {
             Opcode::GroupReduce { .. } => "GroupReduce",
             Opcode::HashBuild { .. } => "HashBuild",
             Opcode::HashProbe { .. } => "HashProbe",
+            Opcode::Unnest { .. } => "Unnest",
             Opcode::HashProbeGroupReduce { .. } => "HashProbeGroupReduce",
             Opcode::Window { .. } => "Window",
             Opcode::Scan => "Scan",
@@ -5302,6 +5316,7 @@ impl Vm {
                 payload_dst,
                 kind,
             } => self.hash_probe(opcode, key_cols, table, payload_dst, kind)?,
+            Opcode::Unnest { src, dst } => self.unnest(opcode, *src, *dst)?,
             Opcode::HashProbeGroupReduce {
                 key_cols,
                 table,
@@ -6013,6 +6028,56 @@ impl Vm {
                 .collect::<Result<_>>()?;
             self.registers.insert(*dst, Arc::new(col));
         }
+        Ok(())
+    }
+
+    /// [`Opcode::Unnest`]. Reshapes every live register like
+    /// [`Self::hash_probe`], by the row each element came from.
+    fn unnest(&mut self, opcode: &'static str, src: usize, dst: usize) -> Result<()> {
+        self.resolve_selection(opcode)?;
+        self.ensure_materialized(src);
+        let mut rows: Vec<usize> = Vec::new();
+        let mut elements: Vec<Value> = Vec::new();
+        for (row, value) in self.reg(src, opcode)?.iter().enumerate() {
+            match value {
+                Value::List(items) => {
+                    for item in items.iter() {
+                        rows.push(row);
+                        elements.push(match item {
+                            Some(s) => Value::Str(Cow::Owned(s.to_string())),
+                            None => Value::Null,
+                        });
+                    }
+                }
+                Value::Null => {}
+                _ => {
+                    return Err(VmError::MalformedProgram {
+                        opcode,
+                        reason: "UNNEST needs a list column".to_string(),
+                    })
+                }
+            }
+        }
+        let num_rows = self.reg(src, opcode)?.len();
+        let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
+        for r in typed_only {
+            self.ensure_materialized(r);
+        }
+        self.resize_const_registers(rows.len());
+        for values in self.registers.values_mut() {
+            if values.len() != num_rows {
+                return Err(VmError::RegisterLengthMismatch { opcode });
+            }
+            let reshaped: Vec<Value> = rows
+                .iter()
+                .filter_map(|row| values.get(*row).cloned())
+                .collect();
+            *values = Arc::new(reshaped);
+        }
+        self.typed_registers.clear();
+        // Constants loaded from here on are as long as the expanded rows.
+        self.selected_rows = Some(rows.len());
+        self.registers.insert(dst, Arc::new(elements));
         Ok(())
     }
 
@@ -6984,6 +7049,7 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
         // an `unreachable!` the qualified subset forbids.
         MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),
         MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),
+        MapOp::Copy => a.clone(),
         MapOp::MaskIf => {
             // MaskIf keeps `a` wherever the predicate register is true.
             if matches!(b, Value::Bool(true)) {
@@ -7701,6 +7767,81 @@ mod tests {
             vm.register(0).unwrap(),
             &[Value::Int(10), Value::Int(10), Value::Int(10)]
         );
+    }
+
+    /// #802: one row per element; a NULL or empty list gives none, a NULL
+    /// element a NULL row; the other registers repeat per element.
+    #[test]
+    fn unnest_expands_lists_and_repeats_other_registers() {
+        let list = |items: &[Option<&str>]| {
+            Value::List(Arc::new(items.iter().map(|v| v.map(Arc::from)).collect()))
+        };
+        let batch = Batch::new(4)
+            .with_column(
+                "id",
+                vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)],
+            )
+            .with_column(
+                "labels",
+                vec![
+                    list(&[Some("a"), None]),
+                    list(&[]),
+                    Value::Null,
+                    list(&[Some("b")]),
+                ],
+            );
+        let mut vm = Vm::new();
+        let load = |reg, column: &'static str| Opcode::LoadColumn {
+            reg,
+            column: column.into(),
+        };
+        vm.execute(
+            &batch,
+            &[
+                load(0, "id"),
+                load(1, "labels"),
+                Opcode::Unnest { src: 1, dst: 2 },
+                Opcode::LoadConst {
+                    reg: 3,
+                    value: Value::Int(7),
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            vm.register(0).unwrap(),
+            &[Value::Int(1), Value::Int(1), Value::Int(4)]
+        );
+        assert_eq!(
+            vm.register(2).unwrap(),
+            &[Value::Str("a".into()), Value::Null, Value::Str("b".into())]
+        );
+        assert_eq!(vm.register(3).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn unnest_of_a_non_list_is_an_error() {
+        let batch = Batch::new(1).with_column("s", vec![Value::Str("a,b".into())]);
+        let mut vm = Vm::new();
+        let err = vm
+            .execute(
+                &batch,
+                &[
+                    Opcode::LoadColumn {
+                        reg: 0,
+                        column: "s".into(),
+                    },
+                    Opcode::Unnest { src: 0, dst: 1 },
+                ],
+            )
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            VmError::MalformedProgram {
+                opcode: "Unnest",
+                ..
+            }
+        ));
     }
 
     #[test]

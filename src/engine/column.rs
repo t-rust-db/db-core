@@ -21,7 +21,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::codegen::batch::{self as planner, PlanError, TableStats};
-use crate::parser::ast::{BinaryOp, Expr, ExprKind, Literal, OrderingTerm, ResultColumn, Select};
+use crate::parser::ast::{
+    BinaryOp, Expr, ExprKind, Literal, OrderingTerm, ResultColumn, Select, TableRefKind,
+};
 use crate::parser::ParseError;
 use crate::storage::column::{
     annotation, decode_column_at, decode_column_full, Annotation, Decoded,
@@ -314,7 +316,12 @@ fn parse_select(
             format!("unknown table: {from} ({what} is table `{table}`)"),
         ));
     }
-    if let Some(join) = select.from.as_ref().and_then(|f| f.joins.first()) {
+    let table_join = select.from.as_ref().and_then(|f| {
+        f.joins
+            .iter()
+            .find(|j| !matches!(j.table.kind, TableRefKind::Unnest { .. }))
+    });
+    if let Some(join) = table_join {
         let right = join.table.name().unwrap_or("<subquery>");
         return Err(EngineError::new(
             ErrorKind::Unsupported,

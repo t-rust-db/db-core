@@ -283,6 +283,15 @@ pub enum TableRefKind {
     Name(String),
     /// A parenthesized `select-stmt`, materialized at codegen time.
     Subquery(Box<Select>),
+    /// `UNNEST(expr) [AS alias [(column)]]` (#802): a lateral expansion
+    /// of a list expression over the preceding table's rows. Only the
+    /// column dialect evaluates it.
+    Unnest {
+        /// The list expression to expand.
+        expr: Box<Expr>,
+        /// The optional column alias, from `AS alias(column)`.
+        column: Option<String>,
+    },
 }
 
 /// One `FROM`-clause table entry, along with its optional alias.
@@ -303,7 +312,7 @@ impl TableRef {
     pub fn name(&self) -> Option<&str> {
         match &self.kind {
             TableRefKind::Name(name) => Some(name),
-            TableRefKind::Subquery(_) => None,
+            TableRefKind::Subquery(_) | TableRefKind::Unnest { .. } => None,
         }
     }
 }

@@ -1889,6 +1889,9 @@ impl Parser {
             return self.unsupported("NOT INDEXED not yet supported");
         }
         if matches!(self.peek().kind, TokenKind::LParen) {
+            if name.eq_ignore_ascii_case("unnest") && alias.is_none() {
+                return self.unnest_ref(start);
+            }
             return self.unsupported("table-valued functions in FROM not yet supported");
         }
 
@@ -1896,6 +1899,36 @@ impl Parser {
             kind: TableRefKind::Name(name),
             alias,
             span,
+        })
+    }
+
+    /// `UNNEST ( expr ) [ [ "AS" ] alias [ "(" column ")" ] ]` (#802),
+    /// positioned at the `(` after the `UNNEST` identifier.
+    fn unnest_ref(&mut self, start: Span) -> PResult<TableRef> {
+        self.expect_punct(TokenKind::LParen, "'(' after UNNEST")?;
+        let expr = self.expr()?;
+        self.expect_punct(TokenKind::RParen, "')' to close UNNEST")?;
+        let alias = self.opt_alias()?;
+        let mut column = None;
+        if alias.is_some() && matches!(self.peek().kind, TokenKind::LParen) {
+            self.advance();
+            column = Some(self.identifier()?.0);
+            if matches!(self.peek().kind, TokenKind::Comma) {
+                return self.unsupported("UNNEST of a single list yields one column alias");
+            }
+            self.expect_punct(TokenKind::RParen, "')' to close the UNNEST column alias")?;
+        }
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map_or(start, |t| t.span);
+        Ok(TableRef {
+            kind: TableRefKind::Unnest {
+                expr: Box::new(expr),
+                column,
+            },
+            alias,
+            span: join_span(start, end),
         })
     }
 
@@ -3060,6 +3093,58 @@ mod tests {
 
     fn parser(sql: &str) -> Parser {
         Parser::new(Tokenizer::tokenize(sql))
+    }
+
+    // parser_row_grammar_table_ref_930705dc (`table_ref`):
+    // `name.eq_ignore_ascii_case("unnest") && alias.is_none()` (#802).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_930705dc__v1_unnest_without_alias_parses() {
+        let table = parser("UNNEST(x)").table_ref().unwrap();
+        assert!(matches!(table.kind, TableRefKind::Unnest { .. }));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_930705dc__v2_unnest_named_like_an_alias_is_a_table_function(
+    ) {
+        assert!(parser("unnest u(x)").table_ref().is_err());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_930705dc__v3_other_table_functions_are_unsupported() {
+        assert!(parser("generate_series(1, 3)").table_ref().is_err());
+    }
+
+    // parser_row_grammar_unnest_ref_74b9a9cc (`unnest_ref`):
+    // `alias.is_some() && matches!(self.peek().kind, TokenKind::LParen)` (#802).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_unnest_ref_74b9a9cc__v1_alias_with_column_list() {
+        let table = parser("UNNEST(x) AS l(label)").table_ref().unwrap();
+        assert!(matches!(
+            table.kind,
+            TableRefKind::Unnest { column: Some(c), .. } if c == "label"
+        ));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_unnest_ref_74b9a9cc__v2_alias_without_column_list() {
+        let table = parser("UNNEST(x) AS l").table_ref().unwrap();
+        assert!(matches!(
+            table.kind,
+            TableRefKind::Unnest { column: None, .. }
+        ));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_unnest_ref_74b9a9cc__v3_column_list_without_alias_is_left_unread() {
+        let mut p = parser("UNNEST(x) (label)");
+        let table = p.table_ref().unwrap();
+        assert!(matches!(
+            table.kind,
+            TableRefKind::Unnest { column: None, .. }
+        ));
+        assert!(matches!(p.peek().kind, TokenKind::LParen));
     }
 
     // parser_row_grammar_parse_create_view_stmt_fa25776a (`parse_create_view_stmt`):

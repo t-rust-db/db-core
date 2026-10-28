@@ -100,6 +100,7 @@ fn substitute_table_ref(table_ref: &mut TableRef, ctes: &[CommonTableExpr]) {
         // recurse into it the same way view expansion does, so a CTE
         // isn't only resolvable directly under a query's top-level FROM.
         TableRefKind::Subquery(inner) => substitute_cte_refs(inner, ctes),
+        TableRefKind::Unnest { .. } => {}
     }
 }
 
