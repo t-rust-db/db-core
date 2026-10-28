@@ -1014,6 +1014,18 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// (PLAIN encoding only — dictionary-encoded nested leaves aren't
     /// supported yet, see [`FileError::UnsupportedNestedDictionary`]).
     fn read_leaf_entries(&self, column_index: usize, leaf: &SchemaNode) -> Result<LeafEntries> {
+        self.read_leaf_entries_with(column_index, leaf, false)
+    }
+
+    /// [`Self::read_leaf_entries`], or with `levels_only` just the leaf's
+    /// repetition and definition levels (#810): no dictionary page is
+    /// built and no value read, so `values` stays empty.
+    fn read_leaf_entries_with(
+        &self,
+        column_index: usize,
+        leaf: &SchemaNode,
+        levels_only: bool,
+    ) -> Result<LeafEntries> {
         // A nested leaf has one value per level entry, not per row.
         let leaf_values = count(
             "column_chunk.num_values",
@@ -1032,6 +1044,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             match header.page_type {
                 // #621: DuckDB and pyarrow dictionary-encode nested leaves
                 // (a map's keys) by default.
+                PageType::Dictionary(_) if levels_only => {}
                 PageType::Dictionary(dictionary_page_header) => {
                     if dictionary.is_some() {
                         return Err(FileError::UnexpectedDictionaryPage);
@@ -1079,7 +1092,9 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                         def_levels.get(i).copied().unwrap_or(leaf.max_def_level)
                             == leaf.max_def_level
                     };
-                    if dictionary_encoded {
+                    if levels_only {
+                        // The levels below are all this read keeps.
+                    } else if dictionary_encoded {
                         let dict = dictionary
                             .as_ref()
                             .ok_or(FileError::MissingDictionaryPage)?;
@@ -1186,15 +1201,12 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         Ok(rows)
     }
 
-    /// Field `field` (a `LIST<UTF8>`, e.g. DuckDB's `VARCHAR[]` or
-    /// pyarrow's `list<string>`) of this row group, one value per row:
-    /// `None` for a NULL list, else its elements in order (#801). Decodes
-    /// only the field's one leaf.
-    pub fn read_list_utf8_column(&self, field: &Field) -> Result<Vec<Option<ListItems>>> {
+    /// The element leaf (and its index) of `field` when it is a `LIST<UTF8>`.
+    fn list_utf8_leaf(&self, field: &Field) -> Result<(usize, &SchemaNode)> {
         let not_a_list = || FileError::NotAStringList(field.name.clone());
         let start = field.leaves.start;
         let leaves = self.file.schema_tree.leaves();
-        let Some(leaf) = leaves.get(start) else {
+        let Some(leaf) = leaves.get(start).copied() else {
             return Err(not_a_list());
         };
         let shape = field.nested
@@ -1204,6 +1216,45 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         if !shape || leaf.element.physical_type != Some(footer::PhysicalType::ByteArray) {
             return Err(not_a_list());
         }
+        Ok((start, leaf))
+    }
+
+    /// Whether each row of `field` (a `LIST<UTF8>`) holds a list: `false`
+    /// for a NULL list, `true` for an empty or non-empty one (#810). Reads
+    /// the element leaf's levels only, so no element is decoded or
+    /// allocated; what [`Self::read_list_utf8_column`] gives, less the
+    /// elements.
+    pub(crate) fn read_list_utf8_presence(&self, field: &Field) -> Result<Vec<bool>> {
+        let not_a_list = || FileError::NotAStringList(field.name.clone());
+        let (start, leaf) = self.list_utf8_leaf(field)?;
+        let items = self.read_leaf_entries_with(start, leaf, true)?;
+        let optional = leaf.element.repetition == Some(footer::Repetition::Optional);
+        let element = leaf.max_def_level.saturating_sub(u32::from(optional));
+        let mut rows: Vec<bool> = Vec::new();
+        for i in 0..items.def_levels.len() {
+            let def = items.def_levels.get(i).copied().unwrap_or(0);
+            let rep = items.rep_levels.get(i).copied().unwrap_or(0);
+            if rep == 0 {
+                // A row starts here: one level below an element is an
+                // empty list, anything lower a NULL list.
+                rows.push(def.saturating_add(1) >= element);
+            } else if def < element {
+                return Err(not_a_list());
+            } else if rows.last() != Some(&true) {
+                // An element must continue a row that has a list.
+                return Err(not_a_list());
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Field `field` (a `LIST<UTF8>`, e.g. DuckDB's `VARCHAR[]` or
+    /// pyarrow's `list<string>`) of this row group, one value per row:
+    /// `None` for a NULL list, else its elements in order (#801). Decodes
+    /// only the field's one leaf.
+    pub fn read_list_utf8_column(&self, field: &Field) -> Result<Vec<Option<ListItems>>> {
+        let not_a_list = || FileError::NotAStringList(field.name.clone());
+        let (start, leaf) = self.list_utf8_leaf(field)?;
         let items = self.read_leaf_entries(start, leaf)?;
         // An element is present at its max level and, when it is optional,
         // NULL one below; the level below a row's first element is an empty
@@ -1799,7 +1850,7 @@ mod tests {
 
     #[allow(non_snake_case)]
     mod mcdc_list_shape {
-        //! Tagged MC/DC vectors for `read_list_utf8_column`'s shape check
+        //! Tagged MC/DC vectors for `list_utf8_leaf`'s shape check
         //! (#801), over tools/gen_parquet_fixtures.sh's
         //! `nested_shapes.parquet`: `lst VARCHAR[]`, `m MAP(VARCHAR,
         //! VARCHAR)`, `il INTEGER[]`.
@@ -1813,22 +1864,20 @@ mod tests {
             rg.read_list_utf8_column(&field)
         }
 
-        // storage_parquet_parquet_file_read_list_utf8_column_f3c5bfff:
+        // storage_parquet_parquet_file_list_utf8_leaf_f3c5bfff:
         // `!shape || leaf.element.physical_type != Some(ByteArray)`
         #[test]
-        fn mcdc__storage_parquet_parquet_file_read_list_utf8_column_f3c5bfff__v1_a_string_list_reads(
-        ) {
+        fn mcdc__storage_parquet_parquet_file_list_utf8_leaf_f3c5bfff__v1_a_string_list_reads() {
             assert_eq!(read("lst").unwrap(), [Some(vec![Some("x".into())])]);
         }
 
         #[test]
-        fn mcdc__storage_parquet_parquet_file_read_list_utf8_column_f3c5bfff__v2_a_map_is_not_a_list(
-        ) {
+        fn mcdc__storage_parquet_parquet_file_list_utf8_leaf_f3c5bfff__v2_a_map_is_not_a_list() {
             assert!(matches!(read("m"), Err(FileError::NotAStringList(n)) if n == "m"));
         }
 
         #[test]
-        fn mcdc__storage_parquet_parquet_file_read_list_utf8_column_f3c5bfff__v3_an_integer_list_is_refused(
+        fn mcdc__storage_parquet_parquet_file_list_utf8_leaf_f3c5bfff__v3_an_integer_list_is_refused(
         ) {
             assert!(matches!(read("il"), Err(FileError::NotAStringList(n)) if n == "il"));
         }
@@ -2960,6 +3009,76 @@ mod tests {
         let value = |row: &Option<MapEntries>| row.as_ref().unwrap()[0].1.clone().unwrap();
         let first = value(&read[0]);
         assert!(read.iter().all(|row| Arc::ptr_eq(&value(row), &first)));
+    }
+
+    #[test]
+    fn list_presence_matches_the_full_decode() {
+        // #810: NULL list, empty list, NULL element, repeats, across row
+        // groups, plain and dictionary-encoded.
+        use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+        use crate::storage::parquet::writer::{Compression, ParquetWriter, WriterOptions};
+        let list = |items: &[Option<&str>]| -> Option<ListItems> {
+            Some(items.iter().map(|v| v.map(Into::into)).collect())
+        };
+        let rows = vec![
+            list(&[Some("a"), Some("b")]),
+            None,
+            list(&[]),
+            list(&[None]),
+            list(&[Some("a"), None, Some("a")]),
+            None,
+            None,
+            list(&[Some("z")]),
+        ];
+        for dictionary in [false, true] {
+            for row_group_rows in [1, 3, 100] {
+                let mut w = ParquetWriter::new(
+                    Vec::new(),
+                    vec![ColumnSpec::new("labels", ColumnType::ListUtf8, true)],
+                    WriterOptions {
+                        compression: Compression::Snappy,
+                        row_group_rows,
+                        dictionary,
+                        ..WriterOptions::default()
+                    },
+                )
+                .unwrap();
+                w.write_columns(vec![ColumnValues::List(rows.clone())])
+                    .unwrap();
+                let (bytes, _) = w.finish().unwrap();
+                let file = ParquetFile::open(&bytes).unwrap();
+                let field = file.fields().into_iter().next().unwrap();
+                let (mut full, mut presence) = (Vec::new(), Vec::new());
+                for rg in file.row_groups() {
+                    full.extend(rg.read_list_utf8_column(&field).unwrap());
+                    presence.extend(rg.read_list_utf8_presence(&field).unwrap());
+                }
+                assert_eq!(full, rows);
+                assert_eq!(
+                    presence,
+                    rows.iter().map(Option::is_some).collect::<Vec<_>>(),
+                    "dict={dictionary} rg={row_group_rows}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn list_presence_refuses_what_is_not_a_string_list() {
+        let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let field = |name: &str| file.fields().into_iter().find(|f| f.name == name).unwrap();
+        assert_eq!(rg.read_list_utf8_presence(&field("lst")).unwrap(), [true]);
+        for name in ["m", "il"] {
+            assert!(
+                matches!(
+                    rg.read_list_utf8_presence(&field(name)),
+                    Err(FileError::NotAStringList(n)) if n == name
+                ),
+                "{name}"
+            );
+        }
     }
 
     #[allow(non_snake_case)]

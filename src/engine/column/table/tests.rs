@@ -388,7 +388,7 @@ fn random_map(rng: &mut Rng) -> RecordValue {
     RecordValue::Map(entries)
 }
 
-const RECORD_INVARIANCE_QUERIES: [&str; 21] = [
+const RECORD_INVARIANCE_QUERIES: [&str; 27] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(amount), MAX(amount), SUM(u), COUNT(blob), SUM(f) \
      FROM logs",
     "SELECT id, kind, n, amount, u, blob, ts, f FROM logs ORDER BY id",
@@ -406,6 +406,14 @@ const RECORD_INVARIANCE_QUERIES: [&str; 21] = [
     "SELECT id FROM logs WHERE u = 3 OR u = 4000000005 OR n = -7 ORDER BY id",
     "SELECT id, labels FROM logs ORDER BY id",
     "SELECT COUNT(*) FROM logs WHERE labels IS NULL",
+    // #810: a list read only for NULL-ness decodes no element; any other use
+    // of the column (projected, compared, grouped, unnested) still does.
+    "SELECT COUNT(*) FROM logs WHERE labels IS NOT NULL",
+    "SELECT id, labels IS NULL FROM logs WHERE labels IS NOT NULL OR kind = 'k1' ORDER BY id",
+    "SELECT kind, COUNT(*) FROM logs WHERE labels IS NOT NULL GROUP BY kind ORDER BY kind",
+    "SELECT id, labels FROM logs WHERE labels IS NOT NULL ORDER BY id",
+    "SELECT id FROM logs WHERE labels IS NULL ORDER BY id",
+    "SELECT COUNT(*) FROM logs WHERE labels IS NOT NULL AND labels = labels",
     "SELECT id, UNNEST(labels) AS label FROM logs ORDER BY id, label",
     "SELECT label, COUNT(*), COUNT(DISTINCT id) FROM logs, UNNEST(labels) AS l(label) \
      WHERE u IS NOT NULL GROUP BY label ORDER BY label",
@@ -1255,6 +1263,7 @@ fn queries_see_null_for_columns_added_after_a_file_was_written() {
         assert_eq!(count(w, "h['k'] = 'v1'"), vec![vec![Cell::Int(15)]]);
         assert_eq!(count(w, "h['k'] IS NULL"), vec![vec![Cell::Int(30)]]);
         assert_eq!(count(w, "labels IS NULL"), vec![vec![Cell::Int(30)]]);
+        assert_eq!(count(w, "labels IS NOT NULL"), vec![vec![Cell::Int(30)]]);
         // A list reads as a JSON array (#801).
         assert_eq!(
             rows(

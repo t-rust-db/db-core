@@ -595,9 +595,11 @@ impl RowGroupSegment<'_, '_> {
         num_rows: usize,
         leaves: &[Leaf],
     ) -> Result<Batch, VmError> {
+        let null_only = self.program.null_only_columns();
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in leaves {
-            let decoded = load_leaf(rg, *index, *physical_type, self.bits(name))
+            let levels_only = null_only.contains(name);
+            let decoded = load_leaf(rg, *index, *physical_type, self.bits(name), levels_only)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             batch = apply_loaded(batch, name, decoded);
         }
@@ -639,10 +641,19 @@ impl RowGroupSegment<'_, '_> {
 
     fn gather_leaves_at(&self, columns: &[String], positions: &[u32]) -> Result<Batch, VmError> {
         let rg = self.row_group()?;
+        let null_only = self.program.null_only_columns();
         let mut batch = Batch::new(positions.len());
         for (name, index, physical_type) in self.leaves_named(columns)? {
-            let decoded = load_leaf_at(&rg, index, physical_type, positions, self.bits(&name))
-                .map_err(|e| segment_error(self.row_group_index, &name, &e))?;
+            let levels_only = null_only.contains(&name);
+            let decoded = load_leaf_at(
+                &rg,
+                index,
+                physical_type,
+                positions,
+                self.bits(&name),
+                levels_only,
+            )
+            .map_err(|e| segment_error(self.row_group_index, &name, &e))?;
             batch = apply_loaded(batch, &name, decoded);
         }
         Ok(batch)
@@ -711,9 +722,11 @@ impl Segment for RowGroupSegment<'_, '_> {
             .iter()
             .filter(|(name, ..)| predicate_names.iter().any(|n| n == name))
             .collect();
+        let null_only = self.program.null_only_columns();
         let mut predicate_batch = Batch::new(num_rows);
         for (name, index, physical_type) in &predicate_leaves {
-            let decoded = load_leaf(&rg, *index, *physical_type, self.bits(name))
+            let levels_only = null_only.contains(name);
+            let decoded = load_leaf(&rg, *index, *physical_type, self.bits(name), levels_only)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             predicate_batch = apply_loaded(predicate_batch, name, decoded);
         }
@@ -764,8 +777,16 @@ impl Segment for RowGroupSegment<'_, '_> {
                 batch = batch.with_column(name.clone(), Vec::new());
                 continue;
             }
-            let decoded = load_leaf_at(&rg, *index, *physical_type, &indices, self.bits(name))
-                .map_err(|e| segment_error(self.row_group_index, name, &e))?;
+            let levels_only = null_only.contains(name);
+            let decoded = load_leaf_at(
+                &rg,
+                *index,
+                *physical_type,
+                &indices,
+                self.bits(name),
+                levels_only,
+            )
+            .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             batch = apply_loaded(batch, name, decoded);
         }
 
@@ -829,9 +850,10 @@ fn load_leaf(
     index: usize,
     physical_type: PhysicalType,
     bit_pattern: bool,
+    levels_only: bool,
 ) -> Result<Loaded, FileError> {
     match rg.nested_field_at(index) {
-        Some(field) => nested_values(rg, &field).map(Loaded::Values),
+        Some(field) => nested_values(rg, &field, levels_only).map(Loaded::Values),
         None if annotation(rg, index) == Annotation::Decimal => {
             decimal_values(rg, index).map(Loaded::Values)
         }
@@ -849,9 +871,10 @@ fn load_leaf_at(
     physical_type: PhysicalType,
     positions: &[u32],
     bit_pattern: bool,
+    levels_only: bool,
 ) -> Result<Loaded, FileError> {
     let all = match rg.nested_field_at(index) {
-        Some(field) => Some(nested_values(rg, &field)?),
+        Some(field) => Some(nested_values(rg, &field, levels_only)?),
         None if bit_pattern && annotation(rg, index) == Annotation::UInt64 => {
             Some(uint64_bit_pattern(rg, index)?)
         }
@@ -875,7 +898,27 @@ fn load_leaf_at(
 
 /// Every row of LIST field `field` as [`Value::List`], and of any other
 /// nested field as a MAP's [`Value::Map`] (NULL for a NULL list or map).
-fn nested_values(rg: &RowGroupReader<'_, '_>, field: &Field) -> Result<Vec<Value>, FileError> {
+fn nested_values(
+    rg: &RowGroupReader<'_, '_>,
+    field: &Field,
+    levels_only: bool,
+) -> Result<Vec<Value>, FileError> {
+    if is_list(field) && levels_only {
+        // #810: only NULL-ness is read, so a list that is there is one
+        // shared empty list, and no element is decoded.
+        let there = Arc::new(Vec::new());
+        return Ok(rg
+            .read_list_utf8_presence(field)?
+            .into_iter()
+            .map(|has_list| {
+                if has_list {
+                    Value::List(Arc::clone(&there))
+                } else {
+                    Value::Null
+                }
+            })
+            .collect());
+    }
     if is_list(field) {
         return Ok(rg
             .read_list_utf8_column(field)?
@@ -3134,8 +3177,8 @@ mod tests {
             }
         };
         (
-            values(load_leaf(&rg, index, pt, bit_pattern)),
-            values(load_leaf_at(&rg, index, pt, &[0, 1], bit_pattern)),
+            values(load_leaf(&rg, index, pt, bit_pattern, false)),
+            values(load_leaf_at(&rg, index, pt, &[0, 1], bit_pattern, false)),
         )
     }
 
@@ -3147,6 +3190,42 @@ mod tests {
         super::leaf_columns(&file)
             .into_iter()
             .find(|(n, _, _)| n == name)
+    }
+
+    /// `nested_values` of `nested_shapes.parquet`'s field `name`.
+    fn nested_shapes_values(name: &str, levels_only: bool) -> Vec<Value> {
+        let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let field = file.fields().into_iter().find(|f| f.name == name).unwrap();
+        super::nested_values(&file.row_group(0).unwrap(), &field, levels_only).unwrap()
+    }
+
+    // engine_column_nested_values_1a2c930a: `is_list(field) && levels_only`
+    // (#810). `lst` is one row holding `["x"]`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_nested_values_1a2c930a__v1_a_list_read_for_null_ness_has_no_elements() {
+        assert_eq!(
+            nested_shapes_values("lst", true),
+            vec![Value::List(std::sync::Arc::new(Vec::new()))]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_nested_values_1a2c930a__v2_a_list_read_in_full_has_its_elements() {
+        assert_eq!(
+            nested_shapes_values("lst", false),
+            vec![Value::List(std::sync::Arc::new(vec![Some("x".into())]))]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_nested_values_1a2c930a__v3_a_map_is_read_in_full_whatever_the_flag() {
+        let map = nested_shapes_values("m", true);
+        assert_eq!(map, nested_shapes_values("m", false));
+        assert!(matches!(map.as_slice(), [Value::Map(_)]), "{map:?}");
     }
 
     /// #801: `is_map(&f) || is_list(&f)`, a map (leaf A true).
