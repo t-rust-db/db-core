@@ -27,8 +27,8 @@ use super::batch::{
     TopN, Value, Vm, VmError, SLICE_ROWS,
 };
 use super::combine::{
-    combine_chunks, combine_partials, eval_agg_expr, finish_avg, finish_sketch, merge_slot,
-    order_key, slot_ops, Combiner, Partial, SlotOp,
+    combine_chunks, combine_partials, eval_agg_expr, finish_avg, finish_int_set, finish_sketch,
+    merge_slot, order_key, slot_ops, Combiner, Partial, SlotOp,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -676,6 +676,11 @@ fn finalize_row(parts: &[AggPart], row: Vec<Value>) -> Result<Vec<Value>> {
             // The merged sketch becomes its estimate (#603).
             AggPart::ApproxCountDistinct => {
                 out.push(finish_sketch(&row[row_idx])?);
+                row_idx = row_idx.saturating_add(1);
+            }
+            // The merged set becomes its size (#817).
+            AggPart::ExactCountDistinct => {
+                out.push(finish_int_set(&row[row_idx])?);
                 row_idx = row_idx.saturating_add(1);
             }
             // Merged into `row[row_idx]` like its plain counterpart, but

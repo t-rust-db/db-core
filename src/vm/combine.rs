@@ -58,6 +58,9 @@ pub(crate) enum SlotOp {
     Max,
     /// `approx_count_distinct`'s sketch (#603): merged register-wise.
     Sketch,
+    /// An exact `COUNT(DISTINCT <integer>)`'s sorted distinct values: unioned
+    /// (#817).
+    IntSet,
     /// `AVG`'s sum slot: merged like [`SlotOp::Sum`].
     AvgSum,
     /// `AVG`'s count slot: added as `f64` (only ever divided into by the
@@ -101,6 +104,7 @@ pub(crate) fn slot_ops(parts: &[AggPart], num_slots: usize) -> Result<Vec<SlotOp
                         AggPart::Min | AggPart::Hidden(HiddenPart::Min) => SlotOp::Min,
                         AggPart::Max | AggPart::Hidden(HiddenPart::Max) => SlotOp::Max,
                         AggPart::ApproxCountDistinct => SlotOp::Sketch,
+                        AggPart::ExactCountDistinct => SlotOp::IntSet,
                         AggPart::Avg(..) | AggPart::Expr(..) => SlotOp::Key,
                     };
                 }
@@ -187,6 +191,13 @@ pub(crate) fn merge_slot(op: SlotOp, into: &mut Value, from: &Value) -> Result<(
                 *into = Value::Bytes(merged.encode().into());
             }
         }
+        // The union of two sorted sets, still sorted (#817). `Null` is a
+        // segment that saw no rows.
+        SlotOp::IntSet => {
+            if !matches!(from, Value::Null) {
+                *into = Value::Bytes(union_int_sets(set_bytes(into)?, set_bytes(from)?)?.into());
+            }
+        }
         // Previously a no-op (db-core#404): with more than one segment,
         // `AVG` silently returned the first segment's local average. The
         // per-segment count is a `Value::Int` in real execution but is
@@ -215,6 +226,73 @@ fn decode_sketch(v: &Value) -> Result<Option<Hll>> {
             reason: format!("a partial approx_count_distinct is not a sketch: {other}"),
         }),
     }
+}
+
+/// An exact distinct count's partial slot as its bytes; `Null` (a segment
+/// with no rows) is the empty set, anything else but a whole number of
+/// 8-byte values is a planner bug.
+fn set_bytes(v: &Value) -> Result<&[u8]> {
+    match v {
+        Value::Null => Ok(&[]),
+        Value::Bytes(bytes) if bytes.len().is_multiple_of(8) => Ok(bytes),
+        other => Err(VmError::MalformedProgram {
+            opcode: "Combine",
+            reason: format!("a partial exact COUNT(DISTINCT) is not a set of integers: {other}"),
+        }),
+    }
+}
+
+/// The union of two sorted, repeat-free sets of 8-byte little-endian
+/// integers, in the same form.
+fn union_int_sets(a: &[u8], b: &[u8]) -> Result<Vec<u8>> {
+    let read = |bytes: &[u8]| -> Vec<i64> {
+        bytes
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|c| i64::from_le_bytes(*c))
+            .collect()
+    };
+    let (a, b) = (read(a), read(b));
+    let mut out = Vec::with_capacity(a.len().saturating_add(b.len()).saturating_mul(8));
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < a.len() || j < b.len() {
+        let next = match (a.get(i), b.get(j)) {
+            (Some(x), Some(y)) if x < y => {
+                i = i.saturating_add(1);
+                *x
+            }
+            (Some(x), Some(y)) if x > y => {
+                j = j.saturating_add(1);
+                *y
+            }
+            (Some(x), Some(_)) => {
+                i = i.saturating_add(1);
+                j = j.saturating_add(1);
+                *x
+            }
+            (Some(x), None) => {
+                i = i.saturating_add(1);
+                *x
+            }
+            (None, Some(y)) => {
+                j = j.saturating_add(1);
+                *y
+            }
+            (None, None) => break,
+        };
+        out.extend_from_slice(&next.to_le_bytes());
+    }
+    Ok(out)
+}
+
+/// A merged exact `COUNT(DISTINCT <integer>)` slot as its count; no rows is
+/// `0`.
+pub(crate) fn finish_int_set(v: &Value) -> Result<Value> {
+    let bytes = set_bytes(v)?;
+    Ok(Value::Int(
+        i64::try_from(bytes.len() / 8).unwrap_or(i64::MAX),
+    ))
 }
 
 /// A merged `approx_count_distinct` slot as its estimate; no rows is `0`.
@@ -1154,6 +1232,18 @@ fn output_columns(parts: &[AggPart], mut acc: Vec<Vec<Value>>) -> Result<Vec<Vec
                 }
                 cursor = cursor.saturating_add(1);
             }
+            // The merged set becomes its size (#817).
+            AggPart::ExactCountDistinct => {
+                if let Some(column) = acc.get_mut(cursor) {
+                    out.push(
+                        std::mem::take(column)
+                            .iter()
+                            .map(finish_int_set)
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                }
+                cursor = cursor.saturating_add(1);
+            }
             // No acc column of its own -- both operands name a slot
             // another part already claimed above, so the cursor doesn't
             // move (#496).
@@ -1191,6 +1281,64 @@ mod tests {
 
     use super::super::engine::finalize;
     use super::*;
+
+    fn set(values: &[i64]) -> Value {
+        Value::Bytes(crate::vm::batch::encode_int_set(values).into())
+    }
+
+    /// #817: sets of integers merge as a union, still sorted, with a
+    /// segment that saw no rows (`Null`) adding nothing, and the merged set
+    /// is its size.
+    #[test]
+    fn exact_distinct_partials_union_and_count() {
+        let mut into = Value::Null;
+        for part in [
+            set(&[1, 5, 9]),
+            Value::Null,
+            set(&[i64::MIN, 5, 7]),
+            set(&[]),
+            set(&[9, i64::MAX]),
+        ] {
+            merge_slot(SlotOp::IntSet, &mut into, &part).unwrap();
+        }
+        assert_eq!(into, set(&[i64::MIN, 1, 5, 7, 9, i64::MAX]));
+        assert_eq!(finish_int_set(&into).unwrap(), Value::Int(6));
+        assert_eq!(finish_int_set(&Value::Null).unwrap(), Value::Int(0));
+    }
+
+    // vm_combine_union_int_sets_d36c0e8a (`union_int_sets`): `i < a.len() || j < b.len()`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_union_int_sets_d36c0e8a__v1_the_first_set_has_values_left() {
+        let a = crate::vm::batch::encode_int_set(&[1, 2]);
+        let b = crate::vm::batch::encode_int_set(&[2]);
+        assert_eq!(
+            union_int_sets(&a, &b).unwrap(),
+            crate::vm::batch::encode_int_set(&[1, 2])
+        );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_union_int_sets_d36c0e8a__v2_only_the_second_set_has_values_left() {
+        let b = crate::vm::batch::encode_int_set(&[3]);
+        assert_eq!(union_int_sets(&[], &b).unwrap(), b);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_union_int_sets_d36c0e8a__v3_both_sets_are_exhausted() {
+        assert_eq!(union_int_sets(&[], &[]).unwrap(), Vec::<u8>::new());
+    }
+
+    /// A partial that is not a whole number of 8-byte values, or not bytes
+    /// at all, is a planner bug and reported.
+    #[test]
+    fn exact_distinct_partials_that_are_not_sets_are_errors() {
+        let torn = Value::Bytes(vec![1u8, 2, 3].into());
+        let mut into = set(&[1]);
+        assert!(merge_slot(SlotOp::IntSet, &mut into, &torn).is_err());
+        assert!(merge_slot(SlotOp::IntSet, &mut into, &Value::Int(3)).is_err());
+        assert!(finish_int_set(&torn).is_err());
+    }
 
     /// #643 review: the in-place reorder handles a fixed point, a
     /// 2-cycle and a longer cycle, moving every column together.
