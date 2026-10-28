@@ -1,0 +1,131 @@
+# #827: list literals ['a', 'b'] (DuckDB's list_value), list_has_any /
+# list_has_all and list_position, with their aliases. Table events: six
+# rows; labels is NULL (4), empty (3), holds a NULL element and a repeated
+# one (5). A list is read through UNNEST, an index or a function, not
+# printed: DuckDB prints a list differently from the column engine.
+# Expected results come from DuckDB (make refresh-column-sqllogictest).
+
+# 1. Literals: elements, length, an empty list, a NULL element.
+
+query ITIII nosort
+SELECT event_id, ['a', 'b'][2], len(['a', NULL, 'c']), len([]), len(list_value('x')) FROM events WHERE event_id = 1
+----
+1
+b
+3
+0
+1
+
+query IT nosort
+SELECT event_id, UNNEST(['b', NULL, 'a']) AS v FROM events WHERE event_id = 2
+----
+2
+b
+2
+NULL
+2
+a
+
+# 2. list_contains against a literal list, in WHERE.
+
+query I nosort
+SELECT event_id FROM events WHERE list_contains(['y', 'z'], labels[1]) ORDER BY event_id
+----
+2
+6
+
+# 3. list_has_any / list_has_all over a column and a literal.
+
+query III nosort
+SELECT event_id, list_has_any(labels, ['x', 'q']), list_has_all(labels, ['x', 'y']) FROM events ORDER BY event_id
+----
+1
+1
+1
+2
+0
+0
+3
+0
+0
+4
+NULL
+NULL
+5
+1
+0
+6
+0
+0
+
+query I nosort
+SELECT event_id FROM events WHERE array_has_any(labels, ['z']) ORDER BY event_id
+----
+6
+
+query I nosort
+SELECT event_id FROM events WHERE array_has_all(labels, []) ORDER BY event_id
+----
+1
+2
+3
+5
+6
+
+query II nosort
+SELECT event_id, list_has_any(labels, [NULL]) FROM events ORDER BY event_id
+----
+1
+0
+2
+0
+3
+0
+4
+NULL
+5
+0
+6
+0
+
+# 4. list_position and its aliases: first match, NULL finds a NULL
+# element, no match is NULL.
+
+query IIIII nosort
+SELECT event_id, list_position(labels, 'y'), list_indexof(labels, 'x'), array_position(labels, NULL), array_indexof(labels, 'q') FROM events ORDER BY event_id
+----
+1
+2
+1
+NULL
+NULL
+2
+1
+NULL
+NULL
+NULL
+3
+NULL
+NULL
+NULL
+NULL
+4
+NULL
+NULL
+NULL
+NULL
+5
+NULL
+1
+2
+NULL
+6
+2
+NULL
+NULL
+NULL
+
+# 5. A list literal of non-strings is refused: db-core lists hold strings.
+
+statement error
+SELECT [1, 2] FROM events

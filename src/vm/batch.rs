@@ -5704,7 +5704,11 @@ impl Vm {
                     .iter()
                     .map(|&a| self.reg(a, opcode))
                     .collect::<Result<_>>()?;
-                let num_rows = arg_regs.first().map_or(batch.num_rows, |r| r.len());
+                // A call with no arguments (`list_value()`, #827) has the
+                // filtered row count, as a constant does.
+                let num_rows = arg_regs
+                    .first()
+                    .map_or(self.selected_rows.unwrap_or(batch.num_rows), |r| r.len());
                 if arg_regs.iter().any(|r| r.len() != num_rows) {
                     return Err(VmError::RegisterLengthMismatch { opcode });
                 }

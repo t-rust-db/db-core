@@ -25,13 +25,29 @@
 //! `array_length(l)` count its elements, NULL ones included. DuckDB's
 //! `cardinality` takes only a map, so on a list it is NULL here.
 //!
+//! #827: `list_value(v, ...)` (a list literal `['a', 'b']` parses as it)
+//! makes a list of strings and NULLs. `list_has_any(a, b)` / `list_has_all(a,
+//! b)` (and their `array_` aliases) test `b`'s non-NULL elements against `a`;
+//! `list_position(l, v)` (`list_indexof`, `array_position`, `array_indexof`)
+//! is the 1-based position of the first element equal to `v` -- a NULL `v`
+//! finds a NULL element -- or NULL when there is none.
+//!
 //! A NULL map gives NULL. A value that is not a map (or a key that is not a
 //! string) gives NULL too: column types are only known per row here.
 
 use super::batch::{ListItems, MapEntries, SlotState, Value};
 
 /// The functions handled here, with their arities.
-pub(crate) const MAP_FUNCTIONS: [(&str, usize); 15] = [
+pub(crate) const MAP_FUNCTIONS: [(&str, usize); 24] = [
+    ("list_value", VARIADIC),
+    ("list_has_any", 2),
+    ("array_has_any", 2),
+    ("list_has_all", 2),
+    ("array_has_all", 2),
+    ("list_position", 2),
+    ("list_indexof", 2),
+    ("array_position", 2),
+    ("array_indexof", 2),
     ("string_split", 2),
     ("str_split", 2),
     ("list_contains", 2),
@@ -48,6 +64,17 @@ pub(crate) const MAP_FUNCTIONS: [(&str, usize); 15] = [
     ("map_keys", 1),
     ("cardinality", 1),
 ];
+
+/// The arity of a function that takes any number of arguments.
+const VARIADIC: usize = usize::MAX;
+
+/// Whether `name(..arity args)` is a map function call -- the parser's
+/// and the planner's check of a call by name and arity.
+pub(crate) fn is_map_function_call(name: &str, arity: usize) -> bool {
+    MAP_FUNCTIONS
+        .iter()
+        .any(|(f, n)| f.eq_ignore_ascii_case(name) && (*n == arity || *n == VARIADIC))
+}
 
 /// Whether `name` (any case) is a map function.
 pub(crate) fn is_map_function(name: &str) -> bool {
@@ -94,6 +121,9 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
             [s, sep] => string_split(s, sep),
             _ => Value::Null,
         };
+    }
+    if name.eq_ignore_ascii_case("list_value") {
+        return list_value(args);
     }
     if is_list_contains(name) {
         return match args {
@@ -161,8 +191,50 @@ fn list_call(name: &str, items: &ListItems, rest: &[&Value]) -> Value {
             list_element(items, index)
         }
         ("len" | "array_length", []) => Value::Int(i64::try_from(items.len()).unwrap_or(i64::MAX)),
+        ("list_has_any" | "array_has_any", [Value::List(wanted)]) => {
+            Value::Bool(wanted.iter().flatten().any(|w| has(items, w)))
+        }
+        ("list_has_all" | "array_has_all", [Value::List(wanted)]) => {
+            Value::Bool(wanted.iter().flatten().all(|w| has(items, w)))
+        }
+        ("list_position" | "list_indexof" | "array_position" | "array_indexof", [value]) => {
+            list_position(items, value)
+        }
         _ => Value::Null,
     }
+}
+
+/// Whether `items` holds the non-NULL element `wanted`.
+fn has(items: &ListItems, wanted: &str) -> bool {
+    items.iter().flatten().any(|item| &**item == wanted)
+}
+
+/// The 1-based position of the first element equal to `value` (a NULL
+/// `value` finds a NULL element), NULL when there is none.
+fn list_position(items: &ListItems, value: &Value) -> Value {
+    let value = match value {
+        Value::Null => None,
+        v => Some(v.to_string()),
+    };
+    items
+        .iter()
+        .position(|item| item.as_deref() == value.as_deref())
+        .and_then(|at| i64::try_from(at.saturating_add(1)).ok())
+        .map_or(Value::Null, Value::Int)
+}
+
+/// A list of `values`: strings, NULLs, and any other value as NULL (the
+/// parser refuses a literal that is neither, #827).
+fn list_value(values: &[&Value]) -> Value {
+    Value::List(std::sync::Arc::new(
+        values
+            .iter()
+            .map(|v| match v {
+                Value::Str(s) => Some(s.as_ref().into()),
+                _ => None,
+            })
+            .collect(),
+    ))
 }
 
 /// Element `index` of `items`: 1-based, negative from the end.
@@ -416,6 +488,52 @@ mod tests {
         // DuckDB's `cardinality` takes only a map.
         assert_eq!(call("cardinality", &[&l]), Value::Null);
         assert_eq!(call("map_keys", &[&l]), Value::Null);
+    }
+
+    #[test]
+    fn list_literal_set_and_position_follow_duckdb() {
+        let l = Value::List(Arc::new(vec![
+            Some("a".into()),
+            None,
+            Some("b".into()),
+            Some("a".into()),
+        ]));
+        assert_eq!(
+            call("list_value", &[&s("a"), &Value::Null]),
+            Value::List(Arc::new(vec![Some("a".into()), None]))
+        );
+        assert_eq!(call("list_value", &[]), list(&[]));
+        assert_eq!(call_column("list_value", &[], 2), [list(&[]), list(&[])]);
+        // The parser refuses a non-string literal; a value that slips by is NULL.
+        assert_eq!(
+            call("list_value", &[&Value::Int(1)]),
+            Value::List(Arc::new(vec![None]))
+        );
+        let any = |b: &Value| call("list_has_any", &[&l, b]);
+        assert_eq!(any(&list(&["z", "b"])), Value::Bool(true));
+        assert_eq!(any(&list(&["z"])), Value::Bool(false));
+        assert_eq!(any(&list(&[])), Value::Bool(false));
+        assert_eq!(any(&Value::List(Arc::new(vec![None]))), Value::Bool(false));
+        assert_eq!(any(&Value::Null), Value::Null);
+        let all = |b: &Value| call("array_has_all", &[&l, b]);
+        assert_eq!(all(&list(&["a", "b"])), Value::Bool(true));
+        assert_eq!(all(&list(&["a", "z"])), Value::Bool(false));
+        assert_eq!(all(&list(&[])), Value::Bool(true));
+        assert_eq!(all(&Value::List(Arc::new(vec![None]))), Value::Bool(true));
+        assert_eq!(
+            call("list_has_all", &[&Value::Null, &list(&["a"])]),
+            Value::Null
+        );
+        assert_eq!(
+            call("array_has_any", &[&l, &list(&["a"])]),
+            Value::Bool(true)
+        );
+        let pos = |name: &str, v: &Value| call(name, &[&l, v]);
+        assert_eq!(pos("list_position", &s("a")), Value::Int(1));
+        assert_eq!(pos("list_indexof", &s("b")), Value::Int(3));
+        assert_eq!(pos("array_position", &Value::Null), Value::Int(2));
+        assert_eq!(pos("array_indexof", &s("z")), Value::Null);
+        assert_eq!(call("list_position", &[&Value::Null, &s("a")]), Value::Null);
     }
 
     #[test]

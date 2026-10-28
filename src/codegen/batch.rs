@@ -295,9 +295,7 @@ fn is_known_scalar_function(name: &str, arity: usize) -> bool {
         (name.to_ascii_lowercase().as_str(), arity),
         ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
     ) || crate::functions::takes_any_expression(name, arity)
-        || crate::vm::map_fns::MAP_FUNCTIONS
-            .iter()
-            .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
+        || crate::vm::map_fns::is_map_function_call(name, arity)
 }
 
 fn arg_count(args: &FunctionArgs) -> usize {
