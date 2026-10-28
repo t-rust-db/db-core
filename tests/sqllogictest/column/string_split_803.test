@@ -1,0 +1,200 @@
+# #803: string_split / str_split return a LIST<VARCHAR>, so a delimited string
+# can be unnested. Table delimited: NULL, empty, one value, a separator at
+# either end and doubled, a repeated value. A list is read through UNNEST,
+# not printed: DuckDB prints a list differently from the column engine.
+# Expected results come from DuckDB (make refresh-column-sqllogictest).
+
+# 1. In FROM and in the SELECT list.
+
+query IT nosort
+SELECT id, label FROM delimited, UNNEST(string_split(csv, ',')) AS l(label) ORDER BY id, label
+----
+1
+a
+1
+b
+1
+c
+2
+b
+3
+(empty)
+5
+(empty)
+5
+(empty)
+5
+a
+6
+(empty)
+6
+a
+6
+b
+7
+a
+7
+a
+
+query IT nosort
+SELECT id, UNNEST(string_split(csv, ',')) AS label FROM delimited ORDER BY id, label
+----
+1
+a
+1
+b
+1
+c
+2
+b
+3
+(empty)
+5
+(empty)
+5
+(empty)
+5
+a
+6
+(empty)
+6
+a
+6
+b
+7
+a
+7
+a
+
+query IT nosort
+SELECT id, UNNEST(str_split(csv, ',')) AS label FROM delimited ORDER BY id, label
+----
+1
+a
+1
+b
+1
+c
+2
+b
+3
+(empty)
+5
+(empty)
+5
+(empty)
+5
+a
+6
+(empty)
+6
+a
+6
+b
+7
+a
+7
+a
+
+# 2. Ranking the values, filtering on another column.
+
+query TI nosort
+SELECT label, count(DISTINCT id) AS n FROM delimited, UNNEST(string_split(csv, ',')) AS l(label) WHERE severity = 'high' GROUP BY label ORDER BY label
+----
+(empty)
+2
+a
+2
+b
+2
+c
+1
+
+# 3. A NULL string gives NULL, not an empty list.
+
+query I nosort
+SELECT id FROM delimited WHERE string_split(csv, ',') IS NULL ORDER BY id
+----
+4
+
+# 4. A NULL separator keeps the string whole; an empty one splits it into
+# characters; a multi-character one is one separator.
+
+query IT nosort
+SELECT id, UNNEST(string_split(csv, NULL)) AS label FROM delimited ORDER BY id, label
+----
+1
+a,b,c
+2
+b
+3
+(empty)
+5
+,a,
+6
+a,,b
+7
+a,a
+
+query IT nosort
+SELECT id, UNNEST(string_split(csv, '')) AS label FROM delimited ORDER BY id, label
+----
+1
+,
+1
+,
+1
+a
+1
+b
+1
+c
+2
+b
+3
+(empty)
+5
+,
+5
+,
+5
+a
+6
+,
+6
+,
+6
+a
+6
+b
+7
+,
+7
+a
+7
+a
+
+query T nosort
+SELECT UNNEST(string_split('aXYbXYc', 'XY')) AS label FROM delimited WHERE id = 1 ORDER BY label
+----
+a
+b
+c
+
+# 5. A string with no separator in it is one element.
+
+query IT nosort
+SELECT id, UNNEST(string_split(csv, ';')) AS label FROM delimited ORDER BY id, label
+----
+1
+a,b,c
+2
+b
+3
+(empty)
+5
+,a,
+6
+a,,b
+7
+a,a
