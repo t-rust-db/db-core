@@ -2064,6 +2064,39 @@ mod tests {
         assert_eq!(unnest_of(&q), ("labels".into(), Some("unnest".into())));
     }
 
+    // parser_column_validate_select_7ae16433 (`validate_select`):
+    // `j.op != JoinOp::Cross || j.constraint.is_some()` (#802).
+    fn revalidated_unnest_join(op: JoinOp, constraint: Option<JoinConstraint>) -> Result<()> {
+        let mut q = parse("SELECT label FROM events, UNNEST(labels) AS l(label)").unwrap();
+        let join = &mut q.from.as_mut().unwrap().joins[0];
+        join.op = op;
+        join.constraint = constraint;
+        validate_select(&mut q)
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_7ae16433__v1_a_cross_join_without_a_condition_is_an_unnest(
+    ) {
+        assert!(revalidated_unnest_join(JoinOp::Cross, None).is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_7ae16433__v2_another_join_kind_is_rejected() {
+        assert!(revalidated_unnest_join(JoinOp::Left, None).is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_7ae16433__v3_a_condition_is_rejected() {
+        let one = AstExpr {
+            kind: ExprKind::Literal(AstLiteral::Integer(1)),
+            span: Span::UNKNOWN,
+        };
+        assert!(revalidated_unnest_join(JoinOp::Cross, Some(JoinConstraint::On(one))).is_err());
+    }
+
     #[test]
     fn rejects_unsupported_unnest_shapes() {
         for sql in [

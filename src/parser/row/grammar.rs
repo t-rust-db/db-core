@@ -3095,6 +3095,58 @@ mod tests {
         Parser::new(Tokenizer::tokenize(sql))
     }
 
+    // parser_row_grammar_table_ref_930705dc (`table_ref`):
+    // `name.eq_ignore_ascii_case("unnest") && alias.is_none()` (#802).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_930705dc__v1_unnest_without_alias_parses() {
+        let table = parser("UNNEST(x)").table_ref().unwrap();
+        assert!(matches!(table.kind, TableRefKind::Unnest { .. }));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_930705dc__v2_unnest_named_like_an_alias_is_a_table_function(
+    ) {
+        assert!(parser("unnest u(x)").table_ref().is_err());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_930705dc__v3_other_table_functions_are_unsupported() {
+        assert!(parser("generate_series(1, 3)").table_ref().is_err());
+    }
+
+    // parser_row_grammar_unnest_ref_74b9a9cc (`unnest_ref`):
+    // `alias.is_some() && matches!(self.peek().kind, TokenKind::LParen)` (#802).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_unnest_ref_74b9a9cc__v1_alias_with_column_list() {
+        let table = parser("UNNEST(x) AS l(label)").table_ref().unwrap();
+        assert!(matches!(
+            table.kind,
+            TableRefKind::Unnest { column: Some(c), .. } if c == "label"
+        ));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_unnest_ref_74b9a9cc__v2_alias_without_column_list() {
+        let table = parser("UNNEST(x) AS l").table_ref().unwrap();
+        assert!(matches!(
+            table.kind,
+            TableRefKind::Unnest { column: None, .. }
+        ));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_unnest_ref_74b9a9cc__v3_column_list_without_alias_is_left_unread() {
+        let mut p = parser("UNNEST(x) (label)");
+        let table = p.table_ref().unwrap();
+        assert!(matches!(
+            table.kind,
+            TableRefKind::Unnest { column: None, .. }
+        ));
+        assert!(matches!(p.peek().kind, TokenKind::LParen));
+    }
+
     // parser_row_grammar_parse_create_view_stmt_fa25776a (`parse_create_view_stmt`):
     // `self.at_kw(Keyword::TEMP) || self.at_kw(Keyword::TEMPORARY)` -- MC/DC
     // vectors (`mcdc__<id>__vN`, joined to tests/mcdc/obligations.json by

@@ -4726,6 +4726,48 @@ mod tests {
         assert_eq!(fin.comment.as_deref(), Some("concatenate segments"));
     }
 
+    fn copies_a_distinct_key(program: &Program) -> bool {
+        program.opcodes().any(|op| {
+            matches!(
+                op,
+                Opcode::Map {
+                    op: MapOp::Copy,
+                    ..
+                }
+            )
+        })
+    }
+
+    /// MC/DC vector (obligation `codegen_batch_compile_9c98f3ed`, `*distinct
+    /// && ctx.post_unnest`, #802): a distinct key after an `UNNEST` is a copy.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_9c98f3ed__v1_distinct_after_unnest_copies_the_key() {
+        let query = sql::parse(
+            "SELECT label, COUNT(DISTINCT id) FROM t, UNNEST(labels) AS l(label) GROUP BY label",
+        )
+        .unwrap();
+        assert!(copies_a_distinct_key(&compile(&query).unwrap()));
+    }
+
+    /// Leaf `post_unnest` false: the key is loaded as before.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_9c98f3ed__v2_distinct_without_unnest_loads_the_key() {
+        let query = sql::parse("SELECT region, COUNT(DISTINCT id) FROM t GROUP BY region").unwrap();
+        assert!(!copies_a_distinct_key(&compile(&query).unwrap()));
+    }
+
+    /// Leaf `distinct` false: a plain aggregate after an `UNNEST` copies nothing.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_9c98f3ed__v3_plain_aggregate_after_unnest_copies_nothing() {
+        let query =
+            sql::parse("SELECT label, COUNT(id) FROM t, UNNEST(labels) AS l(label) GROUP BY label")
+                .unwrap();
+        assert!(!copies_a_distinct_key(&compile(&query).unwrap()));
+    }
+
     #[test]
     fn compile_join_splits_columns_by_table_and_builds_both_programs() {
         let query = sql::parse(
