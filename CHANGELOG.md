@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.190.0] - 2026-10-28
+
+### Added
+
+- `UNNEST` of a `LIST<VARCHAR>` column in the column dialect, in `FROM` (`FROM events, UNNEST(labels) AS l(label)`, `CROSS JOIN UNNEST(...)`) and in the `SELECT` list: one row per element, none for a NULL or empty list, a NULL row for a NULL element. It runs over Parquet files and table directories (files and WAL pages), and `EXPLAIN` shows the step (#802).
+
 ## [0.189.0] - 2026-10-28
 
 ### Added
