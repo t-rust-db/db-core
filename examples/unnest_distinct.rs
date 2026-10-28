@@ -32,7 +32,7 @@ use db_core::storage::parquet::writer::{
 
 const LABELS: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
 
-const QUERIES: [(&str, &str); 4] = [
+const QUERIES: [(&str, &str); 5] = [
     (
         "baseline",
         "SELECT labels, count(*), count(DISTINCT source) FROM t WHERE seq = 0 GROUP BY labels",
@@ -48,6 +48,12 @@ const QUERIES: [(&str, &str); 4] = [
     (
         "distinct_id",
         "SELECT labels, count(DISTINCT event_id) FROM t GROUP BY labels",
+    ),
+    // Many groups with few values each: a set per group must not cost more
+    // than the pairs it replaces (#817).
+    (
+        "distinct_per_event",
+        "SELECT event_id, count(DISTINCT seq) FROM t GROUP BY event_id",
     ),
 ];
 

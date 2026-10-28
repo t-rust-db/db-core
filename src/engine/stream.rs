@@ -1128,7 +1128,10 @@ fn fold_summaries_into(
         // comment), nor the planner-internal `AvgSum` -- a non-panicking
         // fallback here costs nothing and keeps this helper safe to call
         // with any `AggFunc` value.
-        AggFunc::Avg | AggFunc::AvgSum | AggFunc::ApproxCountDistinct => Value::Null,
+        AggFunc::Avg
+        | AggFunc::AvgSum
+        | AggFunc::ApproxCountDistinct
+        | AggFunc::ExactCountDistinct => Value::Null,
     }
 }
 
