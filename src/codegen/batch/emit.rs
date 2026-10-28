@@ -1339,6 +1339,27 @@ mod tests {
     }
 
     #[test]
+    fn renders_the_exact_distinct_aggregates_by_name() {
+        // #820: plain `compile` never plans these, so name them directly.
+        assert_eq!(
+            render_agg_part(&AggPart::ExactCountDistinct),
+            "AggPart::ExactCountDistinct"
+        );
+        assert_eq!(
+            render_agg_part(&AggPart::ExactCountDistinctStr),
+            "AggPart::ExactCountDistinctStr"
+        );
+        assert_eq!(
+            render_agg_func(AggFunc::ExactCountDistinct),
+            "ExactCountDistinct"
+        );
+        assert_eq!(
+            render_agg_func(AggFunc::ExactCountDistinctStr),
+            "ExactCountDistinctStr"
+        );
+    }
+
+    #[test]
     fn generates_const_program_for_group_by_aggregate_query() {
         let src = generate(
             "column_rs",
