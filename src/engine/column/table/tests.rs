@@ -1663,3 +1663,224 @@ fn snapshot_segments_where_skips_row_groups_by_footer_statistics() {
     assert_eq!(all.iter().filter(|s| s.is_row_group()).count(), 4);
     assert_eq!(kept.iter().filter(|s| s.is_row_group()).count(), 1);
 }
+
+/// #812: the schema of the ranked-labels shape: the labels twice, as one
+/// comma-separated `Utf8` column (data written before a list type existed,
+/// read through `string_split`, #803) and as a `LIST<VARCHAR>` (#801).
+fn ranked_schema() -> Vec<ColumnSpec> {
+    vec![
+        ColumnSpec::new("event_id", ColumnType::UInt64, false),
+        ColumnSpec::new("source", ColumnType::Utf8, false),
+        ColumnSpec::new("severity", ColumnType::Utf8, false),
+        ColumnSpec::new("ts", ColumnType::TimestampNanos, false),
+        ColumnSpec::new("labels", ColumnType::Utf8, true),
+        ColumnSpec::new("tags", ColumnType::ListUtf8, true),
+    ]
+}
+
+/// The rows of `tests/fixtures/parquet/ranked_events.parquet`, which
+/// `unnest_filters_812.test` checks against DuckDB: `(event_id, source,
+/// severity, ts in microseconds, labels)`.
+const RANKED_EVENTS: [(u64, &str, &str, i64, Option<&str>); 8] = [
+    (1, "s1", "high", 1_791_712_800_000_000, Some("a,b")),
+    (2, "s2", "critical", 1_791_713_100_000_000, Some("b,c,b")),
+    (3, "s1", "low", 1_791_713_400_000_000, Some("a,b")),
+    (4, "s3", "high", 1_791_716_400_000_000, Some("")),
+    (5, "s2", "high", 1_791_718_200_000_000, None),
+    (6, "s1", "critical", 1_791_795_600_000_000, Some("b,,a,")),
+    (7, "s2", "high", 1_791_797_400_000_000, Some("c")),
+    (8, "s3", "info", 1_791_799_200_000_000, Some("a")),
+];
+
+fn ranked_row(event: &(u64, &str, &str, i64, Option<&str>)) -> Vec<RecordValue> {
+    let (id, source, severity, micros, labels) = *event;
+    vec![
+        RecordValue::UInt(id),
+        RecordValue::Str(source.to_string()),
+        RecordValue::Str(severity.to_string()),
+        RecordValue::Int(micros * 1000),
+        labels.map_or(RecordValue::Null, |l| RecordValue::Str(l.to_string())),
+        labels.map_or(RecordValue::Null, |l| {
+            RecordValue::List(l.split(',').map(|s| Some(s.to_string())).collect())
+        }),
+    ]
+}
+
+fn ranked_options() -> TableOptions {
+    TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            sort_key: Vec::new(),
+            row_group_max_rows: 3,
+            max_file_size: 1 << 30,
+            delete_grace_ns: 0,
+            spill_rows: usize::MAX,
+            retention_days: None,
+            session_key: None,
+            stat_columns: Vec::new(),
+        }),
+        clock,
+        schema: Some(ranked_schema()),
+        ..TableOptions::default()
+    }
+}
+
+/// The ranked-labels queries with the answers DuckDB gives on the same
+/// rows (`unnest_filters_812.test`, `unnest_802.test`): `{LABELS}` is the
+/// list expression, `UNNEST(string_split(labels, ','))` or `UNNEST(tags)`.
+fn ranked_queries() -> Vec<(&'static str, Vec<Vec<Cell>>)> {
+    let int = |v: i64| Cell::Int(v);
+    let ts = |micros: i64| Cell::Int(micros * 1000);
+    let row = |label: &str, cells: &[Cell]| {
+        let mut row = vec![text(label)];
+        row.extend_from_slice(cells);
+        row
+    };
+    vec![
+        // A filter on the unnested value with a base column's.
+        (
+            "SELECT event_id, label FROM logs, {LABELS} AS l(label) \
+             WHERE label = 'b' AND source = 's1' ORDER BY event_id",
+            vec![
+                vec![int(1), text("b")],
+                vec![int(3), text("b")],
+                vec![int(6), text("b")],
+            ],
+        ),
+        // The empty string is a label: three of them (events 4 and 6).
+        (
+            "SELECT count(*) FROM logs, {LABELS} AS l(label) WHERE label = ''",
+            vec![vec![int(3)]],
+        ),
+        // The ranked-labels shape: a filter on the base table's columns and
+        // the unnested value, two count(DISTINCT), min/max of the
+        // timestamp, ordered by an aggregate.
+        (
+            "SELECT label, count(DISTINCT event_id) AS events, count(DISTINCT source) AS sources, \
+             min(ts), max(ts) FROM logs, {LABELS} AS l(label) \
+             WHERE ts >= 1791712860000000000 AND severity IN ('high', 'critical') AND label <> '' \
+             GROUP BY label ORDER BY events DESC, label",
+            vec![
+                row(
+                    "b",
+                    &[
+                        int(2),
+                        int(2),
+                        ts(1_791_713_100_000_000),
+                        ts(1_791_795_600_000_000),
+                    ],
+                ),
+                row(
+                    "c",
+                    &[
+                        int(2),
+                        int(1),
+                        ts(1_791_713_100_000_000),
+                        ts(1_791_797_400_000_000),
+                    ],
+                ),
+                row(
+                    "a",
+                    &[
+                        int(1),
+                        int(1),
+                        ts(1_791_795_600_000_000),
+                        ts(1_791_795_600_000_000),
+                    ],
+                ),
+            ],
+        ),
+        (
+            "SELECT label, count(DISTINCT event_id) AS events, count(DISTINCT source) AS sources \
+             FROM logs, {LABELS} AS l(label) GROUP BY label ORDER BY events DESC, label",
+            vec![
+                row("a", &[int(4), int(2)]),
+                row("b", &[int(4), int(2)]),
+                row("", &[int(2), int(2)]),
+                row("c", &[int(2), int(1)]),
+            ],
+        ),
+        (
+            "SELECT label, count(DISTINCT event_id), count(DISTINCT source), min(ts), max(ts) \
+             FROM logs, {LABELS} AS l(label) WHERE label = 'b' AND source <> 's3' GROUP BY label",
+            vec![row(
+                "b",
+                &[
+                    int(4),
+                    int(2),
+                    ts(1_791_712_800_000_000),
+                    ts(1_791_795_600_000_000),
+                ],
+            )],
+        ),
+    ]
+}
+
+/// Every ranked query, over the string and the list form of the labels,
+/// gives DuckDB's answer.
+type Answer = Result<Vec<Vec<Cell>>, String>;
+
+fn check_ranked(state: &str, mut run: impl FnMut(&str) -> Answer) {
+    for labels in ["UNNEST(string_split(labels, ','))", "UNNEST(tags)"] {
+        for (sql, expected) in ranked_queries() {
+            let sql = sql.replace("{LABELS}", labels);
+            assert_eq!(run(&sql), Ok(expected), "{state}: {sql}");
+        }
+    }
+}
+
+/// #812: `string_split`, `UNNEST` and several `count(DISTINCT ...)` give
+/// the answers DuckDB gives on the same rows, through an ingest table:
+/// (a) every row in a WAL page, (b) an hour file and pages, (c) after a day
+/// merge, (d) after reopening the table, WAL replayed.
+#[test]
+fn unnest_over_an_ingest_table_agrees_with_duckdb_in_every_state() {
+    let append_all = |w: &mut TableWriter, events: &[(u64, &str, &str, i64, Option<&str>)]| {
+        for event in events {
+            w.append_row(ranked_row(event), Ack::Memory).unwrap();
+        }
+    };
+
+    // (a) pages only, and (d) the same, reopened.
+    let t = TempTable::new();
+    let mut w = t.writer_with(ranked_options());
+    append_all(&mut w, &RANKED_EVENTS);
+    assert!(w.manifest().files.is_empty(), "no file yet");
+    check_ranked("(a) WAL pages", |sql| answer(&w, sql));
+    drop(w);
+    let mut engine = TableEngine::open(&t.0).unwrap();
+    check_ranked("(d) reopened, WAL replayed", |sql| {
+        engine
+            .run_query(sql)
+            .map(|r| r.rows)
+            .map_err(|e| e.to_string())
+    });
+
+    // (b) an hour file, and pages after it; (c) merged into the archive.
+    let t = TempTable::new();
+    let mut w = t.writer_with(ranked_options());
+    append_all(&mut w, &RANKED_EVENTS[..4]);
+    advance_clock(2 * HOUR_NS);
+    w.flush().unwrap();
+    append_all(&mut w, &RANKED_EVENTS[4..]);
+    assert!(!w.manifest().files.is_empty(), "an hour file");
+    check_ranked("(b) file and pages", |sql| answer(&w, sql));
+    advance_clock(2 * DAY_NS);
+    w.flush_all().unwrap();
+    w.compact().unwrap();
+    assert!(
+        w.manifest()
+            .files
+            .iter()
+            .all(|f| f.area == crate::storage::ingest::Area::Archive),
+        "everything archived"
+    );
+    check_ranked("(c) day merge", |sql| answer(&w, sql));
+    drop(w);
+    let mut engine = TableEngine::open(&t.0).unwrap();
+    check_ranked("(c') day merge, reopened", |sql| {
+        engine
+            .run_query(sql)
+            .map(|r| r.rows)
+            .map_err(|e| e.to_string())
+    });
+}

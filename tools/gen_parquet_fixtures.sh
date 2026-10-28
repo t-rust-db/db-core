@@ -58,6 +58,22 @@ duckdb -c "COPY (SELECT * FROM (VALUES
     (7, 'a,a', 'low')
   ) t(id, csv, severity) ORDER BY id) TO '$DIR/delimited.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 
+# #812: events with a comma-separated labels column and a timestamp, for the
+# ranked-labels query (string_split + UNNEST, two count(DISTINCT), min/max
+# of the timestamp, a filter on the unnested value) over a file and, with
+# the same rows, over an ingest table. An empty string, a NULL, a doubled
+# and a trailing separator, a label repeated within an event.
+duckdb -c "COPY (SELECT * FROM (VALUES
+    (1, 's1', 'high', TIMESTAMP '2026-10-11 10:00:00', 'a,b'),
+    (2, 's2', 'critical', TIMESTAMP '2026-10-11 10:05:00', 'b,c,b'),
+    (3, 's1', 'low', TIMESTAMP '2026-10-11 10:10:00', 'a,b'),
+    (4, 's3', 'high', TIMESTAMP '2026-10-11 11:00:00', ''),
+    (5, 's2', 'high', TIMESTAMP '2026-10-11 11:30:00', NULL),
+    (6, 's1', 'critical', TIMESTAMP '2026-10-12 09:00:00', 'b,,a,'),
+    (7, 's2', 'high', TIMESTAMP '2026-10-12 09:30:00', 'c'),
+    (8, 's3', 'info', TIMESTAMP '2026-10-12 10:00:00', 'a')
+  ) t(event_id, source, severity, ts, labels) ORDER BY event_id) TO '$DIR/ranked_events.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+
 # #679: NULLs in every typed column, mixed-case and empty text, a decimal
 # and a timestamp -- the shapes the column engine answered wrongly
 # (three-valued AND/OR, quoted-value comparisons, timestamps, LIKE case).
@@ -87,4 +103,4 @@ duckdb -c "COPY (SELECT
   FROM range(1, 10001) t(i) ORDER BY id)
   TO '$DIR/typed_nulls.parquet' (FORMAT PARQUET, COMPRESSION 'snappy', ROW_GROUP_SIZE 2048);"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet"
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet"
