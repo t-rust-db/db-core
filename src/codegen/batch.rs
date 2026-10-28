@@ -557,6 +557,7 @@ fn push_aggregate(
         AggFunc::Max => Some(AggPart::Max),
         AggFunc::ApproxCountDistinct => Some(AggPart::ApproxCountDistinct),
         AggFunc::ExactCountDistinct => Some(AggPart::ExactCountDistinct),
+        AggFunc::ExactCountDistinctStr => Some(AggPart::ExactCountDistinctStr),
         // `AvgSum` never comes from SQL; it is `Avg`'s partial.
         AggFunc::Avg | AggFunc::AvgSum => None,
     };
@@ -1955,6 +1956,17 @@ pub fn compile(select: &Select) -> Result<Program> {
 /// column not named here, or an `x` that is an expression, takes the
 /// general plan, whose answers are the same.
 pub fn compile_with_int_columns(select: &Select, int_columns: &[String]) -> Result<Program> {
+    compile_with_distinct_columns(select, int_columns, &[])
+}
+
+/// [`compile_with_int_columns`], also told which columns hold strings
+/// (#820): `COUNT(DISTINCT x)` of one of them collects each group's
+/// distinct strings ([`AggFunc::ExactCountDistinctStr`]).
+pub fn compile_with_distinct_columns(
+    select: &Select,
+    int_columns: &[String],
+    str_columns: &[String],
+) -> Result<Program> {
     if select.scope.is_some() {
         return Err(PlanError::ScopeClauseUnsupported);
     }
@@ -1985,7 +1997,7 @@ pub fn compile_with_int_columns(select: &Select, int_columns: &[String]) -> Resu
         None => select,
     };
 
-    let items = exact_distinct_items(classify_items(select)?, int_columns);
+    let items = exact_distinct_items(classify_items(select)?, int_columns, str_columns);
     // Display text only (plan comments); the keys are `select.group_by`'s
     // expressions, already resolved by [`expand_star`] (#623): a real
     // column by name, a `SELECT`-list alias (#307) as its expression.
@@ -2400,21 +2412,25 @@ fn and_chain(operands: &[&AstExpr]) -> Option<AstExpr> {
         })
 }
 
-/// `COUNT(DISTINCT x)` items over an integer column of `int_columns` as
-/// the exact distinct aggregate (#817).
-fn exact_distinct_items(items: Vec<Item>, int_columns: &[String]) -> Vec<Item> {
+/// `COUNT(DISTINCT x)` items over an integer column of `int_columns` (#817)
+/// or a string column of `str_columns` (#820) as the exact distinct aggregate.
+fn exact_distinct_items(
+    items: Vec<Item>,
+    int_columns: &[String],
+    str_columns: &[String],
+) -> Vec<Item> {
     items
         .into_iter()
         .map(|item| match item {
-            Item::Agg(AggFunc::Count, Some(AggArg::Column(name)), filter, true)
-                if int_columns.contains(&name) =>
-            {
-                Item::Agg(
-                    AggFunc::ExactCountDistinct,
-                    Some(AggArg::Column(name)),
-                    filter,
-                    false,
-                )
+            Item::Agg(AggFunc::Count, Some(AggArg::Column(name)), filter, true) => {
+                let func = if int_columns.contains(&name) {
+                    AggFunc::ExactCountDistinct
+                } else if str_columns.contains(&name) {
+                    AggFunc::ExactCountDistinctStr
+                } else {
+                    return Item::Agg(AggFunc::Count, Some(AggArg::Column(name)), filter, true);
+                };
+                Item::Agg(func, Some(AggArg::Column(name)), filter, false)
             }
             other => other,
         })
@@ -4697,8 +4713,8 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_ce9ae325__v1_agg_without_group_by_emits_reduce()
-    {
+    fn mcdc__codegen_batch_compile_with_distinct_columns_ce9ae325__v1_agg_without_group_by_emits_reduce(
+    ) {
         // #452: a bare aggregate is a global `Reduce`, never a keyless
         // `GroupReduce` (which emits no row over zero surviving rows).
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
@@ -4712,7 +4728,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_ce9ae325__v2_group_by_without_agg_emits_group_reduce(
+    fn mcdc__codegen_batch_compile_with_distinct_columns_ce9ae325__v2_group_by_without_agg_emits_group_reduce(
     ) {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
@@ -4724,7 +4740,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_ce9ae325__v3_no_agg_no_group_by_omits_group_reduce(
+    fn mcdc__codegen_batch_compile_with_distinct_columns_ce9ae325__v3_no_agg_no_group_by_omits_group_reduce(
     ) {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
@@ -4738,7 +4754,7 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_3755607c__v1_group_by_without_agg_column_merges_partial_aggregates(
+    fn mcdc__codegen_batch_compile_with_distinct_columns_3755607c__v1_group_by_without_agg_column_merges_partial_aggregates(
     ) {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
@@ -4749,7 +4765,7 @@ mod tests {
     /// MC/DC vector (obligation `batch_1127`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_3755607c__v2_agg_column_without_group_by_merges_partial_aggregates(
+    fn mcdc__codegen_batch_compile_with_distinct_columns_3755607c__v2_agg_column_without_group_by_merges_partial_aggregates(
     ) {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
@@ -4761,7 +4777,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_3755607c__v3_no_group_by_no_agg_column_concatenates_segments(
+    fn mcdc__codegen_batch_compile_with_distinct_columns_3755607c__v3_no_group_by_no_agg_column_concatenates_segments(
     ) {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
@@ -4781,11 +4797,11 @@ mod tests {
         })
     }
 
-    /// MC/DC vector (obligation `codegen_batch_compile_with_int_columns_9c98f3ed`, `*distinct
+    /// MC/DC vector (obligation `codegen_batch_compile_with_distinct_columns_9c98f3ed`, `*distinct
     /// && ctx.post_unnest`, #802): a distinct key after an `UNNEST` is a copy.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_9c98f3ed__v1_distinct_after_unnest_copies_the_key(
+    fn mcdc__codegen_batch_compile_with_distinct_columns_9c98f3ed__v1_distinct_after_unnest_copies_the_key(
     ) {
         let query = sql::parse(
             "SELECT label, COUNT(DISTINCT id) FROM t, UNNEST(labels) AS l(label) GROUP BY label",
@@ -4797,7 +4813,7 @@ mod tests {
     /// Leaf `post_unnest` false: the key is loaded as before.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_9c98f3ed__v2_distinct_without_unnest_loads_the_key(
+    fn mcdc__codegen_batch_compile_with_distinct_columns_9c98f3ed__v2_distinct_without_unnest_loads_the_key(
     ) {
         let query = sql::parse("SELECT region, COUNT(DISTINCT id) FROM t GROUP BY region").unwrap();
         assert!(!copies_a_distinct_key(&compile(&query).unwrap()));
@@ -4806,7 +4822,7 @@ mod tests {
     /// Leaf `distinct` false: a plain aggregate after an `UNNEST` copies nothing.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_int_columns_9c98f3ed__v3_plain_aggregate_after_unnest_copies_nothing(
+    fn mcdc__codegen_batch_compile_with_distinct_columns_9c98f3ed__v3_plain_aggregate_after_unnest_copies_nothing(
     ) {
         let query =
             sql::parse("SELECT label, COUNT(id) FROM t, UNNEST(labels) AS l(label) GROUP BY label")
@@ -4857,6 +4873,43 @@ mod tests {
         assert_eq!(
             agg_parts_of(&compile(&sql::parse(grouped).unwrap()).unwrap()),
             general
+        );
+    }
+
+    /// #820: `COUNT(DISTINCT x)` of a column named a string collects its
+    /// strings; the integer hint wins for a column named in both, and a
+    /// column named in neither keeps the general plan.
+    #[test]
+    fn a_distinct_count_of_a_string_column_is_the_exact_string_aggregate() {
+        let strs = ["s".to_string()];
+        let planned = |sql: &str, ints: &[String], strs: &[String]| {
+            let query = sql::parse(sql).unwrap();
+            agg_parts_of(&compile_with_distinct_columns(&query, ints, strs).unwrap())
+        };
+        let grouped = "SELECT region, COUNT(DISTINCT s) FROM t GROUP BY region";
+        assert_eq!(
+            planned(grouped, &[], &strs),
+            [AggPart::GroupKey, AggPart::ExactCountDistinctStr]
+        );
+        assert_eq!(
+            planned("SELECT COUNT(DISTINCT s) FROM t", &[], &strs),
+            [AggPart::ExactCountDistinctStr]
+        );
+        assert_eq!(
+            planned(grouped, &strs, &strs),
+            [AggPart::GroupKey, AggPart::ExactCountDistinct]
+        );
+        assert_eq!(
+            planned(grouped, &[], &[]),
+            [AggPart::GroupKey, AggPart::DistinctKey]
+        );
+        assert_eq!(
+            planned(
+                "SELECT region, COUNT(DISTINCT s || 'x') FROM t GROUP BY region",
+                &[],
+                &strs
+            ),
+            [AggPart::GroupKey, AggPart::DistinctKey]
         );
     }
 

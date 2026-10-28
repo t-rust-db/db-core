@@ -1131,7 +1131,8 @@ fn fold_summaries_into(
         AggFunc::Avg
         | AggFunc::AvgSum
         | AggFunc::ApproxCountDistinct
-        | AggFunc::ExactCountDistinct => Value::Null,
+        | AggFunc::ExactCountDistinct
+        | AggFunc::ExactCountDistinctStr => Value::Null,
     }
 }
 

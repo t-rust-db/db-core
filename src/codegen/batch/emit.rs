@@ -349,6 +349,7 @@ fn render_agg_part(part: &AggPart) -> String {
         AggPart::Max => "AggPart::Max".to_string(),
         AggPart::ApproxCountDistinct => "AggPart::ApproxCountDistinct".to_string(),
         AggPart::ExactCountDistinct => "AggPart::ExactCountDistinct".to_string(),
+        AggPart::ExactCountDistinctStr => "AggPart::ExactCountDistinctStr".to_string(),
         AggPart::Avg(sum, count) => format!("AggPart::Avg({sum}, {count})"),
         AggPart::Hidden(kind) => {
             format!("AggPart::Hidden(HiddenPart::{})", render_hidden_part(*kind))
@@ -1102,6 +1103,7 @@ fn render_agg_func(func: AggFunc) -> &'static str {
         AggFunc::AvgSum => "AvgSum",
         AggFunc::ApproxCountDistinct => "ApproxCountDistinct",
         AggFunc::ExactCountDistinct => "ExactCountDistinct",
+        AggFunc::ExactCountDistinctStr => "ExactCountDistinctStr",
     }
 }
 

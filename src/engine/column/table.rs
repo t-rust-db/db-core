@@ -252,8 +252,14 @@ pub fn query_snapshot(
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
     let (schema, select) = parsed_select(snapshot, table, sql)?;
-    let program: Program = planner::compile_with_int_columns(&select, &schema_int_columns(&schema))
-        .map_err(plan_err)?;
+    let program: Program = planner::compile_with_distinct_columns(
+        &select,
+        &schema_columns(&schema, |t| {
+            matches!(t, ColumnType::Int32 | ColumnType::Int64)
+        }),
+        &schema_columns(&schema, |t| matches!(t, ColumnType::Utf8)),
+    )
+    .map_err(plan_err)?;
     let requests = resolve(&schema, &program.columns_to_load(), &[])?;
     let keep = file_flags(snapshot, &schema, select.where_clause.as_ref());
     let files = snapshot
@@ -591,12 +597,12 @@ fn schema_timestamps(schema: &[ColumnSpec]) -> Vec<(String, i64)> {
         .collect()
 }
 
-/// The schema's integer columns, for [`planner::compile_with_int_columns`]
-/// (#817).
-fn schema_int_columns(schema: &[ColumnSpec]) -> Vec<String> {
+/// The schema's columns whose type `wanted` accepts, for
+/// [`planner::compile_with_distinct_columns`] (#817, #820).
+fn schema_columns(schema: &[ColumnSpec], wanted: impl Fn(&ColumnType) -> bool) -> Vec<String> {
     schema
         .iter()
-        .filter(|s| matches!(s.column_type, ColumnType::Int32 | ColumnType::Int64))
+        .filter(|s| wanted(&s.column_type))
         .map(|s| s.name.clone())
         .collect()
 }

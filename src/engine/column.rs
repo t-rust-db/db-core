@@ -403,6 +403,21 @@ pub(crate) fn int_columns(file: &ParquetFile<'_>) -> Vec<String> {
         .collect()
 }
 
+/// The file's UTF-8 string columns (BYTE_ARRAY annotated `UTF8`, not a
+/// BLOB): they decode as strings, so a `COUNT(DISTINCT)` of one can
+/// collect its values (#820).
+pub(crate) fn str_columns(file: &ParquetFile<'_>) -> Vec<String> {
+    use crate::storage::parquet::footer::ConvertedType;
+    file.fields()
+        .into_iter()
+        .filter(|f| {
+            f.element.physical_type == Some(PhysicalType::ByteArray)
+                && f.element.converted_type == Some(ConvertedType::Other(0))
+        })
+        .map(|f| f.name)
+        .collect()
+}
+
 /// The file's TIMESTAMP columns (`TIMESTAMP_MILLIS` / `TIMESTAMP_MICROS`)
 /// and how many of their units make a second. They decode as plain
 /// integers, so a quoted timestamp compared with one must become that
@@ -1777,8 +1792,12 @@ impl Engine for BatchEngine {
         let stmt = single_statement(sql)?;
         let select = self.parse_for_table(&stmt)?;
         let file = self.file()?;
-        let program: Program =
-            planner::compile_with_int_columns(&select, &int_columns(&file)).map_err(plan_err)?;
+        let program: Program = planner::compile_with_distinct_columns(
+            &select,
+            &int_columns(&file),
+            &str_columns(&file),
+        )
+        .map_err(plan_err)?;
         let columns = resolve_columns(&self.leaves, &program.columns_to_load())?;
         let mut segments = row_group_segments(
             &file,

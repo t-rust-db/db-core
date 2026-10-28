@@ -32,7 +32,7 @@ use db_core::storage::parquet::writer::{
 
 const LABELS: [&str; 4] = ["alpha", "beta", "gamma", "delta"];
 
-const QUERIES: [(&str, &str); 5] = [
+const QUERIES: [(&str, &str); 8] = [
     (
         "baseline",
         "SELECT labels, count(*), count(DISTINCT source) FROM t WHERE seq = 0 GROUP BY labels",
@@ -55,6 +55,19 @@ const QUERIES: [(&str, &str); 5] = [
         "distinct_per_event",
         "SELECT event_id, count(DISTINCT seq) FROM t GROUP BY event_id",
     ),
+    // A string argument with about one value per event (#820).
+    (
+        "distinct_str_hi",
+        "SELECT labels, count(DISTINCT session) FROM t GROUP BY labels",
+    ),
+    (
+        "unnest_distinct_str_hi",
+        "SELECT label, count(*), count(DISTINCT session) FROM t, UNNEST(string_split(labels, ',')) AS l(label) WHERE label <> '' GROUP BY label",
+    ),
+    (
+        "distinct_str_per_event",
+        "SELECT event_id, count(DISTINCT source) FROM t GROUP BY event_id",
+    ),
 ];
 
 /// A deterministic pseudo-random sequence (xorshift), so runs compare.
@@ -73,8 +86,8 @@ impl Rng {
 /// same `labels` (1-2 of 4 values) and `source` on every row of an event.
 fn write(path: &Path, events: u64) -> Result<usize, String> {
     let mut rng = Rng(0x5EED);
-    let (mut ids, mut seqs, mut sources, mut labels) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut ids, mut seqs, mut sources, mut labels, mut sessions) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for id in 0..events {
         let l = if rng.below(2) == 0 {
             LABELS[rng.below(4) as usize].to_string()
@@ -86,11 +99,13 @@ fn write(path: &Path, events: u64) -> Result<usize, String> {
             )
         };
         let source = format!("source-{}", rng.below(50));
+        let session = format!("session-{}", rng.below(events));
         for seq in 0..=rng.below(4).min(3) {
             ids.push(Some(id as i64));
             seqs.push(Some(seq as i32));
             sources.push(Some(source.clone()));
             labels.push(Some(l.clone()));
+            sessions.push(Some(session.clone()));
         }
     }
     let rows = ids.len();
@@ -100,6 +115,7 @@ fn write(path: &Path, events: u64) -> Result<usize, String> {
         ColumnSpec::new("seq", ColumnType::Int32, false),
         ColumnSpec::new("source", ColumnType::Utf8, false),
         ColumnSpec::new("labels", ColumnType::Utf8, false),
+        ColumnSpec::new("session", ColumnType::Utf8, false),
     ];
     let mut w = ParquetWriter::new(BufWriter::new(file), schema, WriterOptions::default())
         .map_err(|e| e.to_string())?;
@@ -108,6 +124,7 @@ fn write(path: &Path, events: u64) -> Result<usize, String> {
         ColumnValues::Int32(seqs),
         ColumnValues::Utf8(sources),
         ColumnValues::Utf8(labels),
+        ColumnValues::Utf8(sessions),
     ])
     .map_err(|e| e.to_string())?;
     w.finish().map_err(|e| e.to_string())?;
