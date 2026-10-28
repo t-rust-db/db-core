@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.199.1] - 2026-10-29
+
+### Fixed
+
+- `l[i]` on a `LIST<VARCHAR>` returned NULL; it now reads element `i` (1-based, negative from the end), as do `list_extract` and `list_element` (#826). `len(l)` and `array_length(l)` count a list's elements. A scalar function's arguments in the SELECT list may be any expression (`tags[-1]`, `len(string_split(s, ','))`).
+
 ## [0.199.0] - 2026-10-28
 
 ### Added

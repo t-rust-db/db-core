@@ -1,0 +1,155 @@
+# #826: on a LIST<VARCHAR>, l[i] / list_extract / list_element read an
+# element (1-based, negative from the end, 0 or out of range NULL) and
+# len / array_length count its elements. l[i] returned NULL.
+# Table events: six rows; labels is NULL (4), empty (3), holds a NULL
+# element and a repeated one (5). Expected results come from DuckDB (make
+# refresh-column-sqllogictest).
+
+# 1. Subscripts: first, second, last, 0, out of range.
+
+query ITTTTT nosort
+SELECT event_id, labels[1], labels[2], labels[-1], labels[0], labels[9] FROM events ORDER BY event_id
+----
+1
+x
+y
+y
+NULL
+NULL
+2
+y
+NULL
+y
+NULL
+NULL
+3
+NULL
+NULL
+NULL
+NULL
+NULL
+4
+NULL
+NULL
+NULL
+NULL
+NULL
+5
+x
+NULL
+x
+NULL
+NULL
+6
+z
+y
+y
+NULL
+NULL
+
+# 2. The named forms.
+
+query ITTI nosort
+SELECT event_id, list_extract(labels, 1), list_element(labels, -2), list_extract(labels, NULL) FROM events ORDER BY event_id
+----
+1
+x
+x
+NULL
+2
+y
+NULL
+NULL
+3
+NULL
+NULL
+NULL
+4
+NULL
+NULL
+NULL
+5
+x
+NULL
+NULL
+6
+z
+z
+NULL
+
+# 3. Lengths: NULL elements count, a NULL list is NULL.
+
+query III nosort
+SELECT event_id, len(labels), array_length(labels) FROM events ORDER BY event_id
+----
+1
+2
+2
+2
+1
+1
+3
+0
+0
+4
+NULL
+NULL
+5
+3
+3
+6
+2
+2
+
+# 4. In WHERE.
+
+query I nosort
+SELECT event_id FROM events WHERE labels[1] = 'x' ORDER BY event_id
+----
+1
+5
+
+query I nosort
+SELECT event_id FROM events WHERE len(labels) > 1 ORDER BY event_id
+----
+1
+5
+6
+
+# 5. Over string_split, and a scalar nested in a SELECT-list call.
+
+query IT nosort
+SELECT id, string_split(csv, ',')[2] FROM delimited ORDER BY id
+----
+1
+b
+2
+NULL
+3
+NULL
+4
+NULL
+5
+a
+6
+(empty)
+7
+a
+
+query II nosort
+SELECT id, len(string_split(csv, ',')) FROM delimited ORDER BY id
+----
+1
+3
+2
+1
+3
+1
+4
+NULL
+5
+3
+6
+3
+7
+2

@@ -939,47 +939,12 @@ fn validate_result_column(col: &mut crate::parser::ast::ResultColumn) -> Result<
                 distinct,
                 args,
                 ..
-            } => {
-                if is_known_agg_name(name) {
-                    validate_distinct(expr.span, name, *distinct, args)?;
-                    return validate_aggregate_call(expr.span, name, args);
-                }
-                // Not an aggregate: a scalar call (#307) -- its arguments
-                // are validated like any other expression (e.g. `raw`/
-                // `message` column references, or a literal path/key/
-                // group), same as an aggregate's own column argument.
-                if !is_known_scalar_function(name, arg_count(args)) {
-                    return Err(unsupported(expr.span, format!("unknown function {name}")));
-                }
-                match args {
-                    FunctionArgs::Star => Err(unsupported(
-                        expr.span,
-                        format!("{name} does not accept (*)"),
-                    )),
-                    // A column reference or a literal (path/key/group) --
-                    // `validate_expr` isn't reused here because it takes
-                    // `&mut`, and none of these three functions' arguments
-                    // need anything beyond what `column_name`/a literal
-                    // check already cover.
-                    FunctionArgs::List(list) => {
-                        for arg in list {
-                            match &arg.kind {
-                                ExprKind::Column { .. } => {
-                                    column_name(arg)?;
-                                }
-                                ExprKind::Literal(_) => {}
-                                _ => {
-                                    return Err(unsupported(
-                                        arg.span,
-                                        format!("{name} arguments must be a column or literal"),
-                                    ))
-                                }
-                            }
-                        }
-                        Ok(())
-                    }
-                }
+            } if is_known_agg_name(name) => {
+                validate_distinct(expr.span, name, *distinct, args)?;
+                validate_aggregate_call(expr.span, name, args)
             }
+            // A scalar call (#307) is validated like any other expression,
+            // its arguments included: `l[-1]`, `f(g(x))` (#826).
             _ => validate_expr(expr, true),
         },
     }
