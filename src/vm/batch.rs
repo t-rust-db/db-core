@@ -4690,7 +4690,9 @@ impl Vm {
         for (i, op) in program.iter().enumerate() {
             self.check_step_limit(op.name())?;
             if matches!(op, Opcode::Unnest { .. }) {
-                self.unnest_live = program.get(i.saturating_add(1)..).and_then(live_through_emit);
+                self.unnest_live = program
+                    .get(i.saturating_add(1)..)
+                    .and_then(live_through_emit);
             }
             self.step(batch, op)?;
         }
@@ -4810,14 +4812,9 @@ impl Vm {
             let Some(column) = self.typed_registers.get(&dict_reg).cloned() else {
                 continue;
             };
-            let Column::Dict {
-                dict,
-                indices,
-                valid,
-            } = column.as_ref()
-            else {
+            if !matches!(column.as_ref(), Column::Dict { .. } | Column::Str { .. }) {
                 continue;
-            };
+            }
             // #681: a `LoadConst` literal is read as is, never
             // broadcast to a column only to be scanned back to one value.
             let literal = if let Some(value) = self.const_value(other_reg) {
@@ -4832,6 +4829,37 @@ impl Vm {
                     continue;
                 };
                 literal
+            };
+            // #815: a `Str` column compares each row's bytes in place.
+            if let Column::Str {
+                offsets,
+                data,
+                valid,
+            } = column.as_ref()
+            {
+                let result = (0..valid.len())
+                    .map(|i| {
+                        if !valid.get(i) {
+                            return Value::Null;
+                        }
+                        let bound =
+                            |at: usize| offsets.get(at).and_then(|o| usize::try_from(*o).ok());
+                        let row = bound(i)
+                            .zip(bound(i.saturating_add(1)))
+                            .and_then(|(lo, hi)| data.get(lo..hi));
+                        let is_eq = row == Some(literal);
+                        Value::Bool(if op == MapOp::Eq { is_eq } else { !is_eq })
+                    })
+                    .collect();
+                return Ok(Some(result));
+            }
+            let Column::Dict {
+                dict,
+                indices,
+                valid,
+            } = column.as_ref()
+            else {
+                continue;
             };
             let code = dict.iter().position(|s| s.as_ref() == literal);
             let result = (0..indices.len())
@@ -10282,6 +10310,63 @@ mod tests {
             &[Value::Null, Value::Str("east".into())]
         );
         assert_eq!(vm.register(2).unwrap(), &[Value::Int(8), Value::Int(2)]);
+    }
+
+    /// #815: `<>`/`=` against a literal on a typed `Str` column compares
+    /// the column's bytes in place, with NULL for a NULL row.
+    #[test]
+    fn eq_and_ne_against_a_literal_read_a_str_column_in_place() {
+        let text = Column::from(vec![
+            Value::Str("a".into()),
+            Value::Str("".into()),
+            Value::Null,
+            Value::Str("ab".into()),
+        ]);
+        assert!(matches!(text, Column::Str { .. }));
+        let batch = Batch::new(4).with_typed_column("t", text);
+        for (op, expected) in [
+            (
+                MapOp::Ne,
+                [
+                    Value::Bool(true),
+                    Value::Bool(false),
+                    Value::Null,
+                    Value::Bool(true),
+                ],
+            ),
+            (
+                MapOp::Eq,
+                [
+                    Value::Bool(false),
+                    Value::Bool(true),
+                    Value::Null,
+                    Value::Bool(false),
+                ],
+            ),
+        ] {
+            let mut vm = Vm::new();
+            vm.execute(
+                &batch,
+                &[
+                    Opcode::LoadColumn {
+                        reg: 0,
+                        column: "t".into(),
+                    },
+                    Opcode::LoadConst {
+                        reg: 1,
+                        value: Value::Str("".into()),
+                    },
+                    Opcode::Map {
+                        dst: 2,
+                        op,
+                        a: 0,
+                        b: 1,
+                    },
+                ],
+            )
+            .unwrap();
+            assert_eq!(vm.register(2).unwrap(), &expected);
+        }
     }
 
     #[test]
