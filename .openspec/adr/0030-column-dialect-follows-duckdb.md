@@ -140,3 +140,15 @@ Without a column alias the value is named `unnest`.
   A non-list value is a `MalformedProgram` execute error. Naming the value
   by its alias in `WHERE`/`GROUP BY` works; `UNNEST(...)` written there does
   not.
+
+## As built (#803): string_split
+
+`string_split(s, sep)` and its alias `str_split` give a `LIST<VARCHAR>`,
+so data written before a list type existed (`"a,b,c"`) unnests without a
+rewrite: `UNNEST(string_split(labels, ','))` in `FROM` or the `SELECT`
+list. It lives in `vm::map_fns` beside the map functions, because
+`Opcode::Call`'s row functions cannot carry a list. DuckDB's answers: `''`
+gives `['']`, a NULL `s` gives NULL, a NULL `sep` the whole string as one
+element, an empty `sep` one element per character, a separator at either end
+or doubled gives empty elements. A value that is not text is split as its
+text.
