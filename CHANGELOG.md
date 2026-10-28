@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.191.0] - 2026-10-28
+
+### Added
+
+- `string_split(s, sep)` (alias `str_split`) in the column dialect: a `LIST<VARCHAR>` as DuckDB gives it (`''` is `['']`, NULL is NULL, a NULL separator keeps the string whole, an empty one splits into characters), so a delimited string can be unnested: `FROM events, UNNEST(string_split(labels, ',')) AS l(label)` (#803).
+
 ## [0.190.0] - 2026-10-28
 
 ### Added
