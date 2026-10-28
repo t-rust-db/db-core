@@ -203,7 +203,12 @@ pub(crate) fn merge_slot(op: SlotOp, into: &mut Value, from: &Value) -> Result<(
         }
         // The same union for strings (#820).
         SlotOp::StrSet => {
-            if !matches!(from, Value::Null) {
+            if matches!(into, Value::Null) && !matches!(from, Value::Null) {
+                // Nothing to union with: the partial itself (#823), after
+                // the check a union would make.
+                str_set_len(from)?;
+                *into = from.clone();
+            } else if !matches!(from, Value::Null) {
                 *into = Value::Bytes(union_str_sets(str_set(into)?, str_set(from)?).into());
             }
         }
@@ -347,8 +352,29 @@ pub(crate) fn finish_int_set(v: &Value) -> Result<Value> {
 /// A merged exact `COUNT(DISTINCT <string>)` slot as its count (#820).
 pub(crate) fn finish_str_set(v: &Value) -> Result<Value> {
     Ok(Value::Int(
-        i64::try_from(str_set(v)?.len()).unwrap_or(i64::MAX),
+        i64::try_from(str_set_len(v)?).unwrap_or(i64::MAX),
     ))
+}
+
+/// How many strings a partial holds, counted without collecting them (#823).
+fn str_set_len(v: &Value) -> Result<usize> {
+    let torn = || VmError::MalformedProgram {
+        opcode: "Combine",
+        reason: format!("a partial string COUNT(DISTINCT) is not a set of strings: {v}"),
+    };
+    let mut rest: &[u8] = match v {
+        Value::Null => return Ok(0),
+        Value::Bytes(bytes) => bytes,
+        _ => return Err(torn()),
+    };
+    let mut count = 0usize;
+    while !rest.is_empty() {
+        let (len, tail) = rest.split_first_chunk::<4>().ok_or_else(torn)?;
+        let len = u32::from_le_bytes(*len) as usize;
+        rest = tail.get(len..).ok_or_else(torn)?;
+        count = count.saturating_add(1);
+    }
+    Ok(count)
 }
 
 /// A merged `approx_count_distinct` slot as its estimate; no rows is `0`.
@@ -1443,6 +1469,30 @@ mod tests {
         assert_eq!(finish_str_set(&Value::Null).unwrap(), Value::Int(0));
     }
 
+    // vm_combine_merge_slot_92a4f746 (`merge_slot`, `StrSet`):
+    // `matches!(into, Value::Null) && !matches!(from, Value::Null)`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_merge_slot_92a4f746__v1_nothing_yet_takes_the_partial_as_it_is() {
+        let mut into = Value::Null;
+        merge_slot(SlotOp::StrSet, &mut into, &strs(&["a", "b"])).unwrap();
+        assert_eq!(into, strs(&["a", "b"]));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_merge_slot_92a4f746__v2_a_set_so_far_is_unioned() {
+        let mut into = strs(&["a"]);
+        merge_slot(SlotOp::StrSet, &mut into, &strs(&["a", "b"])).unwrap();
+        assert_eq!(strs_of(&into), ["a", "b"]);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_combine_merge_slot_92a4f746__v3_a_segment_without_rows_adds_nothing() {
+        let mut into = Value::Null;
+        merge_slot(SlotOp::StrSet, &mut into, &Value::Null).unwrap();
+        assert_eq!(into, Value::Null);
+    }
+
     /// A string partial cut short, or not bytes at all, is a planner bug and
     /// reported.
     #[test]
@@ -1454,6 +1504,15 @@ mod tests {
             assert!(finish_str_set(&torn).is_err());
         }
         assert!(merge_slot(SlotOp::StrSet, &mut into, &Value::Int(3)).is_err());
+        // Into nothing, a torn partial is refused too (#823).
+        let mut empty = Value::Null;
+        assert!(merge_slot(
+            SlotOp::StrSet,
+            &mut empty,
+            &Value::Bytes(vec![5, 0, 0, 0].into())
+        )
+        .is_err());
+        assert_eq!(empty, Value::Null);
     }
 
     /// #643 review: the in-place reorder handles a fixed point, a

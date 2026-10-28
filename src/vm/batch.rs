@@ -199,6 +199,12 @@ fn push_distinct_strs<K: std::hash::Hash + Eq + Copy>(
     }
 }
 
+/// [`encode_str_set`] of the one string `text`, built in place (#823).
+fn encode_one_str(text: &str) -> Arc<[u8]> {
+    let len = u32::try_from(text.len()).unwrap_or(u32::MAX).to_le_bytes();
+    len.iter().chain(text.as_bytes()).copied().collect()
+}
+
 /// `values` (without repeats) as an exact string distinct count's partial:
 /// a 4-byte little-endian length and the bytes of each (#820).
 pub(crate) fn encode_str_set<S: AsRef<str>>(values: impl IntoIterator<Item = S>) -> Vec<u8> {
@@ -4115,6 +4121,9 @@ enum Extremes {
     /// is free of repeats; the flag is set once a second one is added, and
     /// [`RunningAgg::finalize`] then removes the repeats between them.
     Strs(Vec<Arc<str>>, bool),
+    /// A string distinct count that has seen one string (#823): most groups
+    /// of a query with many small groups, which then need no `Vec`.
+    Str1(Arc<str>),
     /// A value that is not a string reached a string distinct count.
     NotStrs,
 }
@@ -4140,14 +4149,31 @@ impl RunningAgg {
     }
 
     /// Adds strings to an exact string distinct count (#820).
-    fn add_strs(&mut self, strs: impl Iterator<Item = Arc<str>>) {
+    fn add_strs(&mut self, mut strs: impl Iterator<Item = Arc<str>>) {
         match &mut self.extremes {
             Extremes::Strs(values, repeats) => {
                 *repeats |= !values.is_empty();
                 values.extend(strs);
             }
+            Extremes::Str1(first) => {
+                if let Some(second) = strs.next() {
+                    let mut values = vec![Arc::clone(first), second];
+                    values.extend(strs);
+                    self.extremes = Extremes::Strs(values, true);
+                }
+            }
             Extremes::NotStrs => {}
-            other => *other = Extremes::Strs(strs.collect(), false),
+            other => match strs.next() {
+                None => *other = Extremes::Strs(Vec::new(), false),
+                Some(first) => match strs.next() {
+                    None => *other = Extremes::Str1(first),
+                    Some(second) => {
+                        let mut values = vec![first, second];
+                        values.extend(strs);
+                        *other = Extremes::Strs(values, false);
+                    }
+                },
+            },
         }
     }
 
@@ -4204,6 +4230,7 @@ impl RunningAgg {
             | Extremes::Ints(_)
             | Extremes::NotInts
             | Extremes::Strs(..)
+            | Extremes::Str1(_)
             | Extremes::NotStrs => (value.clone(), value.clone()),
             Extremes::Int(min, max) => (Value::Int(min), Value::Int(max)),
             Extremes::Float(min, max) => (Value::Float(min), Value::Float(max)),
@@ -4354,6 +4381,7 @@ impl RunningAgg {
                 | Extremes::Ints(_)
                 | Extremes::NotInts
                 | Extremes::Strs(..)
+                | Extremes::Str1(_)
                 | Extremes::NotStrs => Value::Null,
                 Extremes::Int(min, _) => Value::Int(*min),
                 Extremes::Float(min, _) => Value::Float(*min),
@@ -4365,6 +4393,7 @@ impl RunningAgg {
                 | Extremes::Ints(_)
                 | Extremes::NotInts
                 | Extremes::Strs(..)
+                | Extremes::Str1(_)
                 | Extremes::NotStrs => Value::Null,
                 Extremes::Int(_, max) => Value::Int(*max),
                 Extremes::Float(_, max) => Value::Float(*max),
@@ -4396,6 +4425,9 @@ impl RunningAgg {
             },
             // The same for strings (#820).
             AggFunc::ExactCountDistinctStr => match &self.extremes {
+                // One string: its partial is written straight into the
+                // `Arc`, with no intermediate buffer (#823).
+                Extremes::Str1(text) => Value::Bytes(encode_one_str(text)),
                 Extremes::Strs(values, repeats) => {
                     let mut seen = HashSet::new();
                     Value::Bytes(
@@ -10905,6 +10937,49 @@ mod tests {
         ];
         assert_eq!(sets(1 << 20), expected);
         assert_eq!(sets(0), expected);
+    }
+
+    /// #823: a string distinct accumulator that holds nothing, one string
+    /// (no `Vec`), several, or a second batch repeating the first, counts
+    /// each distinct string once, the empty string included; a non-string
+    /// reaching it is an error even after one string was seen.
+    #[test]
+    fn string_distinct_accumulators_count_each_string_once_in_every_state() {
+        let count = |batches: &[&[&str]]| {
+            let mut acc = RunningAgg::default();
+            for batch in batches {
+                acc.add_strs(batch.iter().map(|s| Arc::<str>::from(*s)));
+            }
+            let partial = acc
+                .finalize(AggFunc::ExactCountDistinctStr, false, "test")
+                .unwrap();
+            crate::vm::combine::finish_str_set(&partial).unwrap()
+        };
+        assert_eq!(count(&[]), Value::Int(0));
+        assert_eq!(count(&[&[]]), Value::Int(0));
+        assert_eq!(count(&[&["a"]]), Value::Int(1));
+        assert_eq!(count(&[&[""]]), Value::Int(1));
+        assert_eq!(count(&[&["a"], &["a"]]), Value::Int(1));
+        assert_eq!(count(&[&["a"], &[]]), Value::Int(1));
+        assert_eq!(count(&[&["a"], &["b", "c"]]), Value::Int(3));
+        assert_eq!(count(&[&["a"], &["b"], &["a", "c"]]), Value::Int(3));
+        assert_eq!(count(&[&["a", "b"]]), Value::Int(2));
+        assert_eq!(count(&[&["a", "b"], &["b"]]), Value::Int(2));
+
+        let one = {
+            let mut acc = RunningAgg::default();
+            acc.add_strs(std::iter::once(Arc::<str>::from("ab")));
+            acc.finalize(AggFunc::ExactCountDistinctStr, false, "test")
+                .unwrap()
+        };
+        assert_eq!(one, Value::Bytes(encode_str_set(["ab"]).into()));
+
+        let mut acc = RunningAgg::default();
+        acc.add_strs(std::iter::once(Arc::<str>::from("a")));
+        acc.push_str_set(&Value::Int(1));
+        assert!(acc
+            .finalize(AggFunc::ExactCountDistinctStr, false, "test")
+            .is_err());
     }
 
     /// #820: an exact string distinct count of a dictionary column, a
