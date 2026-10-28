@@ -1,0 +1,133 @@
+# #812: string_split + UNNEST with a filter on the unnested value, and the
+# ranked-labels shape: GROUP BY the unnested value, two count(DISTINCT ...),
+# min/max of a timestamp, ORDER BY an aggregate. Table ranked_events: eight
+# events; labels is a comma-separated string, NULL (5), empty (4), with a
+# doubled and a trailing separator (6), a label repeated in one event (2).
+# Expected results come from DuckDB (make refresh-column-sqllogictest).
+
+# 1. A filter on the unnested value, alone and with a base column.
+
+query T nosort
+SELECT label FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) WHERE label = 'b' ORDER BY event_id
+----
+b
+b
+b
+b
+b
+
+query IT nosort
+SELECT event_id, label FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) WHERE label = 'b' AND source = 's1' ORDER BY event_id
+----
+1
+b
+3
+b
+6
+b
+
+query IT nosort
+SELECT event_id, label FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) WHERE label <> '' AND severity IN ('high', 'critical') ORDER BY event_id, label
+----
+1
+a
+1
+b
+2
+b
+2
+b
+2
+c
+6
+a
+6
+b
+7
+c
+
+query I nosort
+SELECT count(*) FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) WHERE label = ''
+----
+3
+
+# 2. Ranked labels: two count(DISTINCT), min and max, ordered by an
+# aggregate. The column engine prints a TIMESTAMP as an integer until the
+# timestamp type lands (#678), so min/max of the timestamp are the DuckDB
+# answers only (skipif db-core; the ingest-table test in
+# engine/column/table/tests.rs checks them); the twins below take min/max of
+# the event id.
+
+skipif db-core
+query TIITT nosort
+SELECT label, count(DISTINCT event_id) AS events, count(DISTINCT source) AS sources, min(ts), max(ts) FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) WHERE ts >= '2026-10-11 10:01:00' AND severity IN ('high', 'critical') AND label <> '' GROUP BY label ORDER BY events DESC, label
+----
+b
+2
+2
+2026-10-11 10:05:00
+2026-10-12 09:00:00
+c
+2
+1
+2026-10-11 10:05:00
+2026-10-12 09:30:00
+a
+1
+1
+2026-10-12 09:00:00
+2026-10-12 09:00:00
+
+query TIIII nosort
+SELECT label, count(DISTINCT event_id) AS events, count(DISTINCT source) AS sources, min(event_id), max(event_id) FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) WHERE ts >= '2026-10-11 10:01:00' AND severity IN ('high', 'critical') AND label <> '' GROUP BY label ORDER BY events DESC, label
+----
+b
+2
+2
+2
+6
+c
+2
+1
+2
+7
+a
+1
+1
+6
+6
+
+query TII nosort
+SELECT label, count(DISTINCT event_id) AS events, count(DISTINCT source) AS sources FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) GROUP BY label ORDER BY events DESC, label
+----
+a
+4
+2
+b
+4
+2
+(empty)
+2
+2
+c
+2
+1
+
+skipif db-core
+query TIITT nosort
+SELECT label, count(DISTINCT event_id), count(DISTINCT source), min(ts), max(ts) FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) WHERE label = 'b' AND source <> 's3' GROUP BY label
+----
+b
+4
+2
+2026-10-11 10:00:00
+2026-10-12 09:00:00
+
+query TIIII nosort
+SELECT label, count(DISTINCT event_id), count(DISTINCT source), min(event_id), max(event_id) FROM ranked_events, UNNEST(string_split(labels, ',')) AS l(label) WHERE label = 'b' AND source <> 's3' GROUP BY label
+----
+b
+4
+2
+1
+6
