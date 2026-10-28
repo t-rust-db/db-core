@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.192.0] - 2026-10-28
+
+### Added
+
+- More than one `count(DISTINCT ...)` in a query, with or without `GROUP BY` and beside other aggregates, as DuckDB answers it: `SELECT label, count(DISTINCT event_id), count(DISTINCT source) FROM events, UNNEST(labels) AS l(label) GROUP BY label` (#807).
+
 ## [0.191.0] - 2026-10-28
 
 ### Added
