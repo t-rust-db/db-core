@@ -7,6 +7,7 @@ use crate::storage::parquet::nested::{self, LeafData, LeafEntries, NestedError, 
 use crate::storage::parquet::page::{self, Encoding, PageError, PageType};
 use crate::storage::parquet::reader::{self, ReadError};
 use crate::storage::parquet::schema_tree::{self, SchemaNode};
+use crate::vm::column::{Bitmap, Column};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -1285,6 +1286,92 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             }
         }
         Ok(rows)
+    }
+
+    /// [`Self::read_list_utf8_column`]'s rows in a flat layout (#809): one
+    /// offsets vector and one dictionary column of every element, instead of
+    /// one `Vec` per row. Elements that share an `Arc<str>` (the decoded
+    /// dictionary entries of a dictionary-encoded leaf, #671) share one
+    /// dictionary code.
+    pub fn read_list_utf8_flat(&self, field: &Field) -> Result<Column> {
+        let not_a_list = || FileError::NotAStringList(field.name.clone());
+        let (start, leaf) = self.list_utf8_leaf(field)?;
+        let mut items = self.read_leaf_entries(start, leaf)?;
+        let present = leaf.max_def_level;
+        let optional = leaf.element.repetition == Some(footer::Repetition::Optional);
+        let element = present.saturating_sub(u32::from(optional));
+        let mut offsets: Vec<u32> = vec![0];
+        let mut row_valid: Vec<bool> = Vec::new();
+        let mut dict: Vec<Arc<str>> = Vec::new();
+        let mut by_ptr: HashMap<*const u8, u32> = HashMap::new();
+        let mut by_text: HashMap<Arc<str>, u32> = HashMap::new();
+        let mut seen: Vec<Arc<str>> = Vec::new();
+        let mut indices: Vec<u32> = Vec::with_capacity(items.values.len());
+        let mut elem_valid: Vec<bool> = Vec::with_capacity(items.values.len());
+        for i in 0..items.def_levels.len() {
+            let def = items.def_levels.get(i).copied().unwrap_or(0);
+            let rep = items.rep_levels.get(i).copied().unwrap_or(0);
+            if def < element {
+                if rep != 0 {
+                    return Err(not_a_list());
+                }
+                row_valid.push(def.saturating_add(1) == element);
+                offsets.push(u32::try_from(indices.len()).map_err(|_| not_a_list())?);
+                continue;
+            }
+            let item = match items.values.get_mut(i).and_then(Option::take) {
+                Some(reader::LeafScalar::Str(s)) if def == present => Some(s),
+                _ if def < present => None,
+                _ => return Err(not_a_list()),
+            };
+            if rep == 0 {
+                row_valid.push(true);
+                offsets.push(0);
+            } else if row_valid.is_empty() {
+                return Err(not_a_list());
+            }
+            match item {
+                Some(s) => {
+                    // The same `Arc` is the same code without hashing the
+                    // text; a new `Arc` is looked up by content, so one
+                    // string never holds two codes (`Column::Dict` entries
+                    // are distinct).
+                    let code = match by_ptr.get(&s.as_ptr()) {
+                        Some(&code) => code,
+                        None => {
+                            let next = u32::try_from(dict.len()).map_err(|_| not_a_list())?;
+                            let code = *by_text.entry(Arc::clone(&s)).or_insert(next);
+                            if code == next {
+                                dict.push(Arc::clone(&s));
+                            }
+                            by_ptr.insert(s.as_ptr(), code);
+                            // Keeps the address `by_ptr` holds from being reused.
+                            seen.push(s);
+                            code
+                        }
+                    };
+                    indices.push(code);
+                    elem_valid.push(true);
+                }
+                None => {
+                    indices.push(0);
+                    elem_valid.push(false);
+                }
+            }
+            let end = u32::try_from(indices.len()).map_err(|_| not_a_list())?;
+            if let Some(last) = offsets.last_mut() {
+                *last = end;
+            }
+        }
+        Ok(Column::List {
+            offsets,
+            elements: Box::new(Column::Dict {
+                dict,
+                indices,
+                valid: Bitmap::from_bools(elem_valid.into_iter()),
+            }),
+            valid: Bitmap::from_bools(row_valid.into_iter()),
+        })
     }
 
     /// A dictionary-encoded INT64 column's dictionary and per-row indices,
@@ -3060,6 +3147,87 @@ mod tests {
                     "dict={dictionary} rg={row_group_rows}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn list_flat_matches_the_full_decode() {
+        // #809: NULL list, empty list, NULL element, repeats, across row
+        // groups, plain and dictionary-encoded -- and one string, whichever
+        // `Arc` it arrives in, is one dictionary entry.
+        use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
+        use crate::storage::parquet::writer::{Compression, ParquetWriter, WriterOptions};
+        use crate::vm::batch::Value;
+        let list = |items: &[Option<&str>]| -> Option<ListItems> {
+            Some(items.iter().map(|v| v.map(Into::into)).collect())
+        };
+        let rows = vec![
+            list(&[Some("a"), Some("b")]),
+            None,
+            list(&[]),
+            list(&[None]),
+            list(&[Some("a"), None, Some("a"), Some("")]),
+            None,
+            list(&[Some("")]),
+            list(&[Some("z")]),
+        ];
+        for dictionary in [false, true] {
+            for row_group_rows in [1, 3, 100] {
+                let mut w = ParquetWriter::new(
+                    Vec::new(),
+                    vec![ColumnSpec::new("labels", ColumnType::ListUtf8, true)],
+                    WriterOptions {
+                        compression: Compression::Snappy,
+                        row_group_rows,
+                        dictionary,
+                        ..WriterOptions::default()
+                    },
+                )
+                .unwrap();
+                w.write_columns(vec![ColumnValues::List(rows.clone())])
+                    .unwrap();
+                let (bytes, _) = w.finish().unwrap();
+                let file = ParquetFile::open(&bytes).unwrap();
+                let field = file.fields().into_iter().next().unwrap();
+                let mut flat: Vec<Value> = Vec::new();
+                for rg in file.row_groups() {
+                    let column = rg.read_list_utf8_flat(&field).unwrap();
+                    let Column::List { elements, .. } = &column else {
+                        panic!("a flat list read is a list column");
+                    };
+                    let Column::Dict { dict, .. } = elements.as_ref() else {
+                        panic!("the elements are a dictionary column");
+                    };
+                    let mut distinct: Vec<&Arc<str>> = dict.iter().collect();
+                    distinct.sort();
+                    distinct.dedup();
+                    assert_eq!(distinct.len(), dict.len(), "dict={dictionary}");
+                    flat.extend((0..column.len()).map(|i| column.get(i)));
+                }
+                let expected: Vec<Value> = rows
+                    .iter()
+                    .map(|r| r.clone().map_or(Value::Null, |l| Value::List(Arc::new(l))))
+                    .collect();
+                assert_eq!(flat, expected, "dict={dictionary} rg={row_group_rows}");
+            }
+        }
+    }
+
+    #[test]
+    fn list_flat_refuses_what_is_not_a_string_list() {
+        let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let field = |name: &str| file.fields().into_iter().find(|f| f.name == name).unwrap();
+        assert_eq!(rg.read_list_utf8_flat(&field("lst")).unwrap().len(), 1);
+        for name in ["m", "il"] {
+            assert!(
+                matches!(
+                    rg.read_list_utf8_flat(&field(name)),
+                    Err(FileError::NotAStringList(n)) if n == name
+                ),
+                "{name}"
+            );
         }
     }
 
