@@ -8188,6 +8188,10 @@ pub db_core::vm::batch::Column::Float::valid: db_core::vm::column::Bitmap
 pub db_core::vm::batch::Column::Int
 pub db_core::vm::batch::Column::Int::data: alloc::vec::Vec<i64>
 pub db_core::vm::batch::Column::Int::valid: db_core::vm::column::Bitmap
+pub db_core::vm::batch::Column::List
+pub db_core::vm::batch::Column::List::elements: alloc::boxed::Box<db_core::vm::column::Column>
+pub db_core::vm::batch::Column::List::offsets: alloc::vec::Vec<u32>
+pub db_core::vm::batch::Column::List::valid: db_core::vm::column::Bitmap
 pub db_core::vm::batch::Column::Str
 pub db_core::vm::batch::Column::Str::data: alloc::string::String
 pub db_core::vm::batch::Column::Str::offsets: alloc::vec::Vec<u32>
@@ -8563,6 +8567,7 @@ pub fn db_core::vm::batch::Program::opcodes(&self) -> impl core::iter::traits::i
 pub fn db_core::vm::batch::Program::predicate_columns(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::vm::batch::Program::projection_only_columns(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::vm::batch::Program::split_finalize(&self) -> (alloc::vec::Vec<db_core::vm::batch::Opcode>, core::option::Option<&db_core::vm::batch::Opcode>, core::option::Option<&db_core::vm::batch::Opcode>, core::option::Option<&db_core::vm::batch::Opcode>)
+pub fn db_core::vm::batch::Program::unnest_only_columns(&self) -> alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for db_core::vm::batch::Program
 pub fn db_core::vm::batch::Program::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::vm::batch::Program
@@ -8693,6 +8698,10 @@ pub db_core::vm::column::Column::Float::valid: db_core::vm::column::Bitmap
 pub db_core::vm::column::Column::Int
 pub db_core::vm::column::Column::Int::data: alloc::vec::Vec<i64>
 pub db_core::vm::column::Column::Int::valid: db_core::vm::column::Bitmap
+pub db_core::vm::column::Column::List
+pub db_core::vm::column::Column::List::elements: alloc::boxed::Box<db_core::vm::column::Column>
+pub db_core::vm::column::Column::List::offsets: alloc::vec::Vec<u32>
+pub db_core::vm::column::Column::List::valid: db_core::vm::column::Bitmap
 pub db_core::vm::column::Column::Str
 pub db_core::vm::column::Column::Str::data: alloc::string::String
 pub db_core::vm::column::Column::Str::offsets: alloc::vec::Vec<u32>

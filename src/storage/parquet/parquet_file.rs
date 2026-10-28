@@ -7,6 +7,7 @@ use crate::storage::parquet::nested::{self, LeafData, LeafEntries, NestedError, 
 use crate::storage::parquet::page::{self, Encoding, PageError, PageType};
 use crate::storage::parquet::reader::{self, ReadError};
 use crate::storage::parquet::schema_tree::{self, SchemaNode};
+#[cfg(feature = "engine-column")]
 use crate::vm::column::{Bitmap, Column};
 use std::collections::HashMap;
 use std::fmt;
@@ -1225,6 +1226,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// the element leaf's levels only, so no element is decoded or
     /// allocated; what [`Self::read_list_utf8_column`] gives, less the
     /// elements.
+    #[cfg(feature = "engine-column")]
     pub(crate) fn read_list_utf8_presence(&self, field: &Field) -> Result<Vec<bool>> {
         let not_a_list = || FileError::NotAStringList(field.name.clone());
         let (start, leaf) = self.list_utf8_leaf(field)?;
@@ -1293,7 +1295,8 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// one `Vec` per row. Elements that share an `Arc<str>` (the decoded
     /// dictionary entries of a dictionary-encoded leaf, #671) share one
     /// dictionary code.
-    pub fn read_list_utf8_flat(&self, field: &Field) -> Result<Column> {
+    #[cfg(feature = "engine-column")]
+    pub(crate) fn read_list_utf8_flat(&self, field: &Field) -> Result<Column> {
         let not_a_list = || FileError::NotAStringList(field.name.clone());
         let (start, leaf) = self.list_utf8_leaf(field)?;
         let mut items = self.read_leaf_entries(start, leaf)?;
@@ -3099,6 +3102,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "engine-column")]
     fn list_presence_matches_the_full_decode() {
         // #810: NULL list, empty list, NULL element, repeats, across row
         // groups, plain and dictionary-encoded.
@@ -3150,6 +3154,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "engine-column")]
     #[test]
     fn list_flat_matches_the_full_decode() {
         // #809: NULL list, empty list, NULL element, repeats, across row
@@ -3213,6 +3218,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "engine-column")]
     #[test]
     fn list_flat_refuses_what_is_not_a_string_list() {
         let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
@@ -3232,6 +3238,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "engine-column")]
     fn list_presence_refuses_what_is_not_a_string_list() {
         let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
         let file = ParquetFile::open(&bytes).unwrap();

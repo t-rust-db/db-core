@@ -39392,7 +39392,7 @@
   {
     "id": "storage_parquet_parquet_file_fmt_ebc4990f",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 91,
+    "line": 92,
     "decision": "match self {\n            FileError::Footer(e) => write!(f, \"{e}\"),\n            FileError::InvalidMetadata { field, value } => {\n                write!(f, \"invalid {field} in file metadata: {value}\")\n            }\n            FileError::Page(e) => write!(f, \"{e}\"),\n            FileError::Read(e) => write!(f, \"{e}\"),\n            FileError::Compression(e) => write!(f, \"{e}\"),\n            FileError::ColumnIndexOutOfRange(i) => write!(f, \"column index {i} out of range\"),\n            FileError::RowPositionOutOfRange(p) => write!(f, \"row position {p} out of range\"),\n            FileError::ChunkOutOfBounds => write!(f, \"column chunk byte range is outside the file\"),\n            FileError::MissingColumnMetadata => write!(f, \"column chunk has no meta_data\"),\n            FileError::UnexpectedDictionaryPage => {\n                write!(f, \"column chunk has more than one DICTIONARY_PAGE\")\n            }\n            FileError::MissingDictionaryPage => write!(\n                f,\n                \"dictionary-encoded data page with no preceding DICTIONARY_PAGE\"\n            ),\n            FileError::MissingTypeLength => write!(\n                f,\n                \"FIXED_LEN_BYTE_ARRAY column has no positive type_length in its schema\"\n            ),\n            FileError::MissingDecimalScale => {\n                write!(f, \"DECIMAL column has no scale in its schema\")\n            }\n            FileError::UnsignedOutOfRange(v) => write!(\n                f,\n                \"unsigned value {v} is above the largest supported integer ({})\",\n                i64::MAX\n            ),\n            FileError::TimestampOutOfRange => write!(\n                f,\n                \"timestamp is outside the range of microseconds since the epoch\"\n            ),\n            FileError::UnsupportedTimestampPhysicalType(t) => {\n                write!(f, \"unsupported physical type for a timestamp column: {t:?}\")\n            }\n            FileError::UnsupportedDecimalPhysicalType(t) => {\n                write!(f, \"unsupported physical type for a DECIMAL column: {t:?}\")\n            }\n            FileError::NotAStringMap(name) => {\n                write!(f, \"field {name} is not a MAP<UTF8, UTF8>\")\n            }\n            FileError::NotAStringList(name) => {\n                write!(f, \"field {name} is not a LIST<UTF8>\")\n            }\n            FileError::UnsupportedNestedDictionary => write!(\n                f,\n                \"dictionary-encoded nested/repeated leaf columns are not supported yet\"\n            ),\n            FileError::UnsupportedNestedEncoding(e) => write!(\n                f,\n                \"unsupported encoding for a nested/repeated leaf column: {e:?}\"\n            ),\n            FileError::Nested(e) => write!(f, \"{e}\"),\n            FileError::PageExceedsChunk {\n                field,\n                declared,\n                left,\n            } => write!(\n                f,\n                \"page {field} {declared} is more than its column chunk has left ({left})\"\n            ),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39402,7 +39402,7 @@
   {
     "id": "storage_parquet_parquet_file_next_821c7eac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 258,
+    "line": 259,
     "decision": "self.pos >= self.chunk.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39412,7 +39412,7 @@
   {
     "id": "storage_parquet_parquet_file_next_1bfb17fd",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 264,
+    "line": 265,
     "decision": "let PageType::Data(data_page_header) = &header.page_type",
     "conditions": 1,
     "vectors_required": 2,
@@ -39422,7 +39422,7 @@
   {
     "id": "storage_parquet_parquet_file_read_nested_column_314dfa36",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 451,
+    "line": 452,
     "decision": "!self\n            .schema_tree\n            .children\n            .iter()\n            .any(|c| c.name == field_name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39432,7 +39432,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_3ebd21ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 668,
+    "line": 669,
     "decision": "let Some((header, compressed)) = pages.next()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39442,7 +39442,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_0443dbdd",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 669,
+    "line": 670,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;\n                    let is_dictionary_encoded = matches!(\n                        data_page_header.encoding,\n                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                    );\n                    let values = match (is_dictionary_encoded, &dictionary) {\n                        (true, Some(dict)) => {\n                            decode_data(&page_body, &data_page_header, max_def_level, dict)?\n                        }\n                        (true, None) => return Err(FileError::MissingDictionaryPage),\n                        (false, _) => decode_plain(&page_body, &data_page_header, max_def_level)?,\n                    };\n                    out.extend(values);\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let dictionary_body = pages.body(compressed, header.uncompressed_page_size)?;\n                    dictionary = Some(decode_dictionary(\n                        &dictionary_body,\n                        dictionary_page_header.num_values,\n                    )?);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39452,7 +39452,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_0746b8a2",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 676,
+    "line": 677,
     "decision": "match (is_dictionary_encoded, &dictionary) {\n                        (true, Some(dict)) => {\n                            decode_data(&page_body, &data_page_header, max_def_level, dict)?\n                        }\n                        (true, None) => return Err(FileError::MissingDictionaryPage),\n                        (false, _) => decode_plain(&page_body, &data_page_header, max_def_level)?,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39462,7 +39462,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_d31770f8",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 686,
+    "line": 687,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39472,7 +39472,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_3ebd21ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 720,
+    "line": 721,
     "decision": "let Some((header, compressed)) = pages.next()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39482,7 +39482,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_53dde488",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 724,
+    "line": 725,
     "decision": "data_page_header.encoding != page::Encoding::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -39492,7 +39492,7 @@
   {
     "id": "storage_parquet_parquet_file_read_dictionary_fixed_column_3ebd21ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 759,
+    "line": 760,
     "decision": "let Some((header, compressed)) = pages.next()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39502,7 +39502,7 @@
   {
     "id": "storage_parquet_parquet_file_read_dictionary_fixed_column_f33e230c",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 760,
+    "line": 761,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    let Some(dictionary) = dictionary.as_deref() else {\n                        return Ok(None);\n                    };\n                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;\n                    match data_page_header.encoding {\n                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary => {\n                            reader::read_dictionary_fixed(\n                                &page_body,\n                                &data_page_header,\n                                max_def_level,\n                                dictionary,\n                                &mut values,\n                                &mut present,\n                            )?\n                        }\n                        page::Encoding::Plain => reader::read_plain_fixed(\n                            &page_body,\n                            &data_page_header,\n                            max_def_level,\n                            &decode,\n                            &mut values,\n                            &mut present,\n                        )?,\n                        _ => return Ok(None),\n                    }\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let body = pages.body(compressed, header.uncompressed_page_size)?;\n                    dictionary = Some(reader::decode_dictionary_fixed(\n                        &body,\n                        dictionary_page_header.num_values,\n                        &decode,\n                    )?);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39512,7 +39512,7 @@
   {
     "id": "storage_parquet_parquet_file_read_dictionary_fixed_column_dd161425",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 766,
+    "line": 767,
     "decision": "match data_page_header.encoding {\n                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary => {\n                            reader::read_dictionary_fixed(\n                                &page_body,\n                                &data_page_header,\n                                max_def_level,\n                                dictionary,\n                                &mut values,\n                                &mut present,\n                            )?\n                        }\n                        page::Encoding::Plain => reader::read_plain_fixed(\n                            &page_body,\n                            &data_page_header,\n                            max_def_level,\n                            &decode,\n                            &mut values,\n                            &mut present,\n                        )?,\n                        _ => return Ok(None),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39522,7 +39522,7 @@
   {
     "id": "storage_parquet_parquet_file_read_dictionary_fixed_column_d31770f8",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 789,
+    "line": 790,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39532,7 +39532,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_string_column_3ebd21ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 819,
+    "line": 820,
     "decision": "let Some((header, compressed)) = pages.next()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39542,7 +39542,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_string_column_53dde488",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 823,
+    "line": 824,
     "decision": "data_page_header.encoding != page::Encoding::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -39552,7 +39552,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_string_column_4c35c444",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 836,
+    "line": 837,
     "decision": "u32::try_from(data.len()).is_err()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39562,7 +39562,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_a3d20f7f",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 875,
+    "line": 876,
     "decision": "!remaining.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39572,7 +39572,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_53dde488",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 882,
+    "line": 883,
     "decision": "data_page_header.encoding != page::Encoding::Plain",
     "conditions": 1,
     "vectors_required": 2,
@@ -39582,7 +39582,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_1c99f19c",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 910,
+    "line": 911,
     "decision": "!rows.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39592,7 +39592,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_fa9b1ee4",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 924,
+    "line": 925,
     "decision": "let Some(&(position, _)) = remaining.first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39602,7 +39602,7 @@
   {
     "id": "storage_parquet_parquet_file_read_plain_fixed_column_at_4c7ae637",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 927,
+    "line": 928,
     "decision": "max_def_level == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39612,7 +39612,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_dictionary_indices_3ebd21ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 962,
+    "line": 963,
     "decision": "let Some((header, compressed)) = pages.next()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39622,7 +39622,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_dictionary_indices_6322aaaf",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 963,
+    "line": 964,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    let Some(dict) = dictionary.as_mut() else {\n                        return Ok(None);\n                    };\n                    let dictionary_encoded = matches!(\n                        data_page_header.encoding,\n                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                    );\n                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;\n                    if dictionary_encoded {\n                        indices.extend(reader::read_dictionary_index_column(\n                            &page_body,\n                            &data_page_header,\n                            max_def_level,\n                        )?);\n                        continue;\n                    }\n                    let Some(decode_plain) = decode_plain else {\n                        return Ok(None);\n                    };\n                    for value in decode_plain(&page_body, &data_page_header, max_def_level)? {\n                        let Some(value) = value else {\n                            indices.push(None);\n                            continue;\n                        };\n                        let index =\n                            u32::try_from(dict.len()).map_err(|_| FileError::InvalidMetadata {\n                                field: \"dictionary entries\",\n                                value: i64::try_from(dict.len()).unwrap_or(i64::MAX),\n                            })?;\n                        dict.push(value);\n                        indices.push(Some(index));\n                    }\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let dictionary_body = pages.body(compressed, header.uncompressed_page_size)?;\n                    dictionary = Some(decode_dictionary(\n                        &dictionary_body,\n                        dictionary_page_header.num_values,\n                    )?);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39632,7 +39632,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_dictionary_indices_cd7d9e8e",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 973,
+    "line": 974,
     "decision": "dictionary_encoded",
     "conditions": 1,
     "vectors_required": 2,
@@ -39642,7 +39642,7 @@
   {
     "id": "storage_parquet_parquet_file_read_column_dictionary_indices_d31770f8",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 999,
+    "line": 1000,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39652,7 +39652,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_3ebd21ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1044,
+    "line": 1045,
     "decision": "let Some((header, compressed)) = pages.next()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -39662,7 +39662,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_abd6cc50",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1045,
+    "line": 1046,
     "decision": "match header.page_type {\n                // #621: DuckDB and pyarrow dictionary-encode nested leaves\n                // (a map's keys) by default.\n                PageType::Dictionary(_) if levels_only => {}\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let body = pages.body(compressed, header.uncompressed_page_size)?;\n                    let count =\n                        usize::try_from(dictionary_page_header.num_values).map_err(|_| {\n                            FileError::InvalidMetadata {\n                                field: \"dictionary_page.num_values\",\n                                value: i64::from(dictionary_page_header.num_values),\n                            }\n                        })?;\n                    let mut buf: &[u8] = &body;\n                    let mut bit_pos = 0usize;\n                    dictionary = Some(\n                        (0..count)\n                            .map(|_| {\n                                reader::read_plain_scalar(&mut buf, physical_type, &mut bit_pos)\n                            })\n                            .collect::<reader::Result<_>>()?,\n                    );\n                }\n                PageType::Data(data_page_header) => {\n                    let dictionary_encoded = match data_page_header.encoding {\n                        Encoding::Plain => false,\n                        Encoding::PlainDictionary | Encoding::RleDictionary => true,\n                        other => return Err(FileError::UnsupportedNestedEncoding(other)),\n                    };\n                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;\n                    let (rep_levels, def_levels, mut value_bytes) = reader::split_rep_def_levels(\n                        &page_body,\n                        &data_page_header,\n                        leaf.max_rep_level,\n                        leaf.max_def_level,\n                    )?;\n\n                    let num_values =\n                        usize::try_from(data_page_header.num_values).map_err(|_| {\n                            FileError::InvalidMetadata {\n                                field: \"data_page.num_values\",\n                                value: i64::from(data_page_header.num_values),\n                            }\n                        })?;\n                    let defined = |i: usize| {\n                        def_levels.get(i).copied().unwrap_or(leaf.max_def_level)\n                            == leaf.max_def_level\n                    };\n                    if levels_only {\n                        // The levels below are all this read keeps.\n                    } else if dictionary_encoded {\n                        let dict = dictionary\n                            .as_ref()\n                            .ok_or(FileError::MissingDictionaryPage)?;\n                        let present = (0..num_values).filter(|&i| defined(i)).count();\n                        let mut indices =\n                            reader::read_dictionary_indices(value_bytes, present)?.into_iter();\n                        for i in 0..num_values {\n                            if !defined(i) {\n                                out.values.push(None);\n                                continue;\n                            }\n                            let index = indices.next().ok_or(ReadError::UnexpectedEof)?;\n                            let entry = usize::try_from(index)\n                                .ok()\n                                .and_then(|i| dict.get(i))\n                                .ok_or(ReadError::DictionaryIndexOutOfRange(index))?;\n                            out.values.push(Some(entry.clone()));\n                        }\n                    } else {\n                        let mut bit_pos = 0usize;\n                        for i in 0..num_values {\n                            if defined(i) {\n                                let scalar = reader::read_plain_scalar(\n                                    &mut value_bytes,\n                                    physical_type,\n                                    &mut bit_pos,\n                                )?;\n                                out.values.push(Some(scalar));\n                            } else {\n                                out.values.push(None);\n                            }\n                        }\n                    }\n                    if rep_levels.is_empty() {\n                        out.rep_levels.extend(std::iter::repeat_n(0, num_values));\n                    } else {\n                        out.rep_levels.extend(rep_levels);\n                    }\n                    if def_levels.is_empty() {\n                        out.def_levels\n                            .extend(std::iter::repeat_n(leaf.max_def_level, num_values));\n                    } else {\n                        out.def_levels.extend(def_levels);\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39672,7 +39672,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_373287a3",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1048,
+    "line": 1049,
     "decision": "levels_only",
     "conditions": 1,
     "vectors_required": 2,
@@ -39682,7 +39682,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_d31770f8",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1050,
+    "line": 1051,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39692,7 +39692,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_33c82476",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1072,
+    "line": 1073,
     "decision": "match data_page_header.encoding {\n                        Encoding::Plain => false,\n                        Encoding::PlainDictionary | Encoding::RleDictionary => true,\n                        other => return Err(FileError::UnsupportedNestedEncoding(other)),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39702,7 +39702,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_373287a3_2",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1096,
+    "line": 1097,
     "decision": "levels_only",
     "conditions": 1,
     "vectors_required": 2,
@@ -39712,7 +39712,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_cd7d9e8e",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1098,
+    "line": 1099,
     "decision": "dictionary_encoded",
     "conditions": 1,
     "vectors_required": 2,
@@ -39722,7 +39722,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_aaab3d34",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1106,
+    "line": 1107,
     "decision": "!defined(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39732,7 +39732,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_600f3042",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1120,
+    "line": 1121,
     "decision": "defined(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39742,7 +39742,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_7959e6f3",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1132,
+    "line": 1133,
     "decision": "rep_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39752,7 +39752,7 @@
   {
     "id": "storage_parquet_parquet_file_read_leaf_entries_with_f3e67ac5",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1137,
+    "line": 1138,
     "decision": "def_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39762,7 +39762,7 @@
   {
     "id": "storage_parquet_parquet_file_read_map_utf8_column_62508017",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1168,
+    "line": 1169,
     "decision": "!shape || !is_string(key) || !is_string(value)",
     "conditions": 3,
     "vectors_required": 4,
@@ -39772,7 +39772,7 @@
   {
     "id": "storage_parquet_parquet_file_read_map_utf8_column_090fe708",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1173,
+    "line": 1174,
     "decision": "keys.def_levels.len() != values.def_levels.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39782,7 +39782,7 @@
   {
     "id": "storage_parquet_parquet_file_read_map_utf8_column_739f3587",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1179,
+    "line": 1180,
     "decision": "match v {\n            Some(reader::LeafScalar::Str(s)) => Some(s.clone()),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39792,7 +39792,7 @@
   {
     "id": "storage_parquet_parquet_file_read_map_utf8_column_16b1832f",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1187,
+    "line": 1188,
     "decision": "def < entry_def",
     "conditions": 1,
     "vectors_required": 2,
@@ -39802,7 +39802,7 @@
   {
     "id": "storage_parquet_parquet_file_read_map_utf8_column_db5f49ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1188,
+    "line": 1189,
     "decision": "rep != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39812,7 +39812,7 @@
   {
     "id": "storage_parquet_parquet_file_read_map_utf8_column_4f1d3a6b",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1196,
+    "line": 1197,
     "decision": "match (rep, rows.last_mut()) {\n                (0, _) => rows.push(Some(vec![(k, v)])),\n                (_, Some(Some(entries))) => entries.push((k, v)),\n                _ => return Err(not_a_map()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39822,7 +39822,7 @@
   {
     "id": "storage_parquet_parquet_file_list_utf8_leaf_f3c5bfff",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1217,
+    "line": 1218,
     "decision": "!shape || leaf.element.physical_type != Some(footer::PhysicalType::ByteArray)",
     "conditions": 2,
     "vectors_required": 3,
@@ -39832,7 +39832,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_presence_442edac1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1238,
+    "line": 1240,
     "decision": "rep == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39842,7 +39842,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_presence_7512d997",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1242,
+    "line": 1244,
     "decision": "def < element",
     "conditions": 1,
     "vectors_required": 2,
@@ -39852,7 +39852,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_presence_2bbc7446",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1244,
+    "line": 1246,
     "decision": "rows.last() != Some(&true)",
     "conditions": 1,
     "vectors_required": 2,
@@ -39862,7 +39862,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_column_7512d997",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1270,
+    "line": 1272,
     "decision": "def < element",
     "conditions": 1,
     "vectors_required": 2,
@@ -39872,7 +39872,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_column_db5f49ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1271,
+    "line": 1273,
     "decision": "rep != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39882,7 +39882,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_column_3162cf7e",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1277,
+    "line": 1279,
     "decision": "match items.values.get(i).and_then(Option::as_ref) {\n                Some(reader::LeafScalar::Str(s)) if def == present => Some(s.clone()),\n                _ if def < present => None,\n                _ => return Err(not_a_list()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39892,7 +39892,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_column_d433e6ed",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1278,
+    "line": 1280,
     "decision": "def == present",
     "conditions": 1,
     "vectors_required": 2,
@@ -39902,7 +39902,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_column_531d0089",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1279,
+    "line": 1281,
     "decision": "def < present",
     "conditions": 1,
     "vectors_required": 2,
@@ -39912,7 +39912,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_column_93831762",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1282,
+    "line": 1284,
     "decision": "match (rep, rows.last_mut()) {\n                (0, _) => rows.push(Some(vec![item])),\n                (_, Some(Some(list))) => list.push(item),\n                _ => return Err(not_a_list()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39922,7 +39922,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_7512d997",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1314,
+    "line": 1317,
     "decision": "def < element",
     "conditions": 1,
     "vectors_required": 2,
@@ -39932,7 +39932,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_db5f49ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1315,
+    "line": 1318,
     "decision": "rep != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39942,7 +39942,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_d6c6bdbd",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1322,
+    "line": 1325,
     "decision": "match items.values.get_mut(i).and_then(Option::take) {\n                Some(reader::LeafScalar::Str(s)) if def == present => Some(s),\n                _ if def < present => None,\n                _ => return Err(not_a_list()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39952,7 +39952,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_d433e6ed",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1323,
+    "line": 1326,
     "decision": "def == present",
     "conditions": 1,
     "vectors_required": 2,
@@ -39962,7 +39962,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_531d0089",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1324,
+    "line": 1327,
     "decision": "def < present",
     "conditions": 1,
     "vectors_required": 2,
@@ -39972,7 +39972,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_442edac1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1327,
+    "line": 1330,
     "decision": "rep == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -39982,7 +39982,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_5938ed0e",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1330,
+    "line": 1333,
     "decision": "row_valid.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -39992,7 +39992,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_4a3b46de",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1333,
+    "line": 1336,
     "decision": "match item {\n                Some(s) => {\n                    // The same `Arc` is the same code without hashing the\n                    // text; a new `Arc` is looked up by content, so one\n                    // string never holds two codes (`Column::Dict` entries\n                    // are distinct).\n                    let code = match by_ptr.get(&s.as_ptr()) {\n                        Some(&code) => code,\n                        None => {\n                            let next = u32::try_from(dict.len()).map_err(|_| not_a_list())?;\n                            let code = *by_text.entry(Arc::clone(&s)).or_insert(next);\n                            if code == next {\n                                dict.push(Arc::clone(&s));\n                            }\n                            by_ptr.insert(s.as_ptr(), code);\n                            // Keeps the address `by_ptr` holds from being reused.\n                            seen.push(s);\n                            code\n                        }\n                    };\n                    indices.push(code);\n                    elem_valid.push(true);\n                }\n                None => {\n                    indices.push(0);\n                    elem_valid.push(false);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40002,7 +40002,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_fa816056",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1339,
+    "line": 1342,
     "decision": "match by_ptr.get(&s.as_ptr()) {\n                        Some(&code) => code,\n                        None => {\n                            let next = u32::try_from(dict.len()).map_err(|_| not_a_list())?;\n                            let code = *by_text.entry(Arc::clone(&s)).or_insert(next);\n                            if code == next {\n                                dict.push(Arc::clone(&s));\n                            }\n                            by_ptr.insert(s.as_ptr(), code);\n                            // Keeps the address `by_ptr` holds from being reused.\n                            seen.push(s);\n                            code\n                        }\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40012,7 +40012,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_41fc620d",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1344,
+    "line": 1347,
     "decision": "code == next",
     "conditions": 1,
     "vectors_required": 2,
@@ -40022,7 +40022,7 @@
   {
     "id": "storage_parquet_parquet_file_read_list_utf8_flat_2fa895e3",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1362,
+    "line": 1365,
     "decision": "let Some(last) = offsets.last_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40032,7 +40032,7 @@
   {
     "id": "storage_parquet_parquet_file_read_string_column_dictionary_at_3ebd21ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1440,
+    "line": 1443,
     "decision": "let Some((header, compressed)) = pages.next()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -40042,7 +40042,7 @@
   {
     "id": "storage_parquet_parquet_file_read_string_column_dictionary_at_c0a68e9c",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1441,
+    "line": 1444,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    let Some((_, entries)) = dictionary.as_ref() else {\n                        return Ok(None);\n                    };\n                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;\n                    if matches!(\n                        data_page_header.encoding,\n                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                    ) {\n                        indices.extend(reader::read_dictionary_index_column(\n                            &page_body,\n                            &data_page_header,\n                            max_def_level,\n                        )?);\n                        continue;\n                    }\n                    for value in\n                        reader::read_string_column(&page_body, &data_page_header, max_def_level)?\n                    {\n                        let Some(value) = value else {\n                            indices.push(None);\n                            continue;\n                        };\n                        let next = entries.saturating_add(fallback.len());\n                        let index =\n                            u32::try_from(next).map_err(|_| FileError::InvalidMetadata {\n                                field: \"dictionary entries\",\n                                value: i64::try_from(next).unwrap_or(i64::MAX),\n                            })?;\n                        fallback.push(value);\n                        indices.push(Some(index));\n                    }\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let entries =\n                        usize::try_from(dictionary_page_header.num_values).map_err(|_| {\n                            FileError::InvalidMetadata {\n                                field: \"dictionary_page.num_values\",\n                                value: i64::from(dictionary_page_header.num_values),\n                            }\n                        })?;\n                    let body = pages.body(compressed, header.uncompressed_page_size)?;\n                    dictionary = Some((body, entries));\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40052,7 +40052,7 @@
   {
     "id": "storage_parquet_parquet_file_read_string_column_dictionary_at_25546375",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1447,
+    "line": 1450,
     "decision": "matches!(\n                        data_page_header.encoding,\n                        page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -40062,7 +40062,7 @@
   {
     "id": "storage_parquet_parquet_file_read_string_column_dictionary_at_d31770f8",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1476,
+    "line": 1479,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40072,7 +40072,7 @@
   {
     "id": "storage_parquet_parquet_file_column_dictionary_3ebd21ac",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1549,
+    "line": 1552,
     "decision": "let Some((header, compressed)) = pages.next()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -40082,7 +40082,7 @@
   {
     "id": "storage_parquet_parquet_file_column_dictionary_775c5fe4",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1550,
+    "line": 1553,
     "decision": "match header.page_type {\n                PageType::Data(data_page_header) => {\n                    if dictionary.is_none()\n                        || !matches!(\n                            data_page_header.encoding,\n                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                        )\n                    {\n                        return Ok(None);\n                    }\n                }\n                PageType::Dictionary(dictionary_page_header) => {\n                    if dictionary.is_some() {\n                        return Err(FileError::UnexpectedDictionaryPage);\n                    }\n                    let dictionary_body = pages.body(compressed, header.uncompressed_page_size)?;\n                    dictionary = Some(decode_dictionary(\n                        &dictionary_body,\n                        dictionary_page_header.num_values,\n                    )?);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40092,7 +40092,7 @@
   {
     "id": "storage_parquet_parquet_file_column_dictionary_1b5585c0",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1552,
+    "line": 1555,
     "decision": "dictionary.is_none()\n                        || !matches!(\n                            data_page_header.encoding,\n                            page::Encoding::PlainDictionary | page::Encoding::RleDictionary\n                        )",
     "conditions": 2,
     "vectors_required": 3,
@@ -40102,7 +40102,7 @@
   {
     "id": "storage_parquet_parquet_file_column_dictionary_d31770f8",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1562,
+    "line": 1565,
     "decision": "dictionary.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40112,7 +40112,7 @@
   {
     "id": "storage_parquet_parquet_file_read_timestamp_column_b81123f2",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1778,
+    "line": 1781,
     "decision": "match self.column_meta(column_index)?.physical_type {\n            footer::PhysicalType::Int64 => {\n                let is_millis = matches!(\n                    self.file.converted_type(column_index),\n                    Some(footer::ConvertedType::TimestampMillis)\n                );\n                let raw = self.read_int64_column(column_index)?;\n                if !is_millis {\n                    return Ok(raw);\n                }\n                raw.into_iter()\n                    .map(|v| {\n                        v.map(|v| v.checked_mul(1000).ok_or(FileError::TimestampOutOfRange))\n                            .transpose()\n                    })\n                    .collect()\n            }\n            footer::PhysicalType::Int96 => {\n                let raw = self.read_int96_column(column_index)?;\n                raw.into_iter()\n                    .map(|v| {\n                        v.map(|v| int96_to_epoch_micros(v).ok_or(FileError::TimestampOutOfRange))\n                            .transpose()\n                    })\n                    .collect()\n            }\n            other => Err(FileError::UnsupportedTimestampPhysicalType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40122,7 +40122,7 @@
   {
     "id": "storage_parquet_parquet_file_read_timestamp_column_f6c4df87",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1785,
+    "line": 1788,
     "decision": "!is_millis",
     "conditions": 1,
     "vectors_required": 2,
@@ -40132,7 +40132,7 @@
   {
     "id": "storage_parquet_parquet_file_read_decimal_column_16768ba9",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1816,
+    "line": 1819,
     "decision": "match self.column_meta(column_index)?.physical_type {\n            footer::PhysicalType::Int32 => {\n                let raw = self.read_int32_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|v| crate::storage::parquet::decimal::Decimal {\n                            unscaled: v as i128,\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            footer::PhysicalType::Int64 => {\n                let raw = self.read_int64_column(column_index)?;\n                Ok(raw\n                    .into_iter()\n                    .map(|v| {\n                        v.map(|v| crate::storage::parquet::decimal::Decimal {\n                            unscaled: v as i128,\n                            scale,\n                        })\n                    })\n                    .collect())\n            }\n            footer::PhysicalType::FixedLenByteArray => {\n                let raw = self.read_fixed_len_byte_array_column(column_index)?;\n                raw.into_iter()\n                    .map(|v| {\n                        v.map(|bytes| {\n                            // More than 16 bytes would lose the high bits in\n                            // an i128 (#632): beyond DECIMAL(38), refused.\n                            if bytes.len() > 16 {\n                                return Err(FileError::InvalidMetadata {\n                                    field: \"DECIMAL fixed_len_byte_array length\",\n                                    value: i64::try_from(bytes.len()).unwrap_or(i64::MAX),\n                                });\n                            }\n                            Ok(crate::storage::parquet::decimal::Decimal {\n                                unscaled: crate::storage::parquet::decimal::from_be_bytes(&bytes),\n                                scale,\n                            })\n                        })\n                        .transpose()\n                    })\n                    .collect()\n            }\n            other => Err(FileError::UnsupportedDecimalPhysicalType(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40142,7 +40142,7 @@
   {
     "id": "storage_parquet_parquet_file_read_decimal_column_7fdd76cb",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 1848,
+    "line": 1851,
     "decision": "bytes.len() > 16",
     "conditions": 1,
     "vectors_required": 2,
@@ -40152,7 +40152,7 @@
   {
     "id": "storage_parquet_parquet_file_write_varint_2427714d",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2025,
+    "line": 2028,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40162,7 +40162,7 @@
   {
     "id": "storage_parquet_parquet_file_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2029,
+    "line": 2032,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40172,7 +40172,7 @@
   {
     "id": "storage_parquet_parquet_file_list_of_structs_field_b09c4ad2",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2063,
+    "line": 2066,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -40182,7 +40182,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_typed_642303d1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2220,
+    "line": 2223,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -40192,7 +40192,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_annotated_642303d1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2253,
+    "line": 2256,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -40202,7 +40202,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_annotated_aafe5a53",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2259,
+    "line": 2262,
     "decision": "let Some(s) = scale",
     "conditions": 1,
     "vectors_required": 2,
@@ -40212,7 +40212,7 @@
   {
     "id": "storage_parquet_parquet_file_encode_dictionary_indices_9466a82b",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2288,
+    "line": 2291,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -40222,7 +40222,7 @@
   {
     "id": "storage_parquet_parquet_file_build_fixed_dictionary_chunk_bc1ee538",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2658,
+    "line": 2661,
     "decision": "match page {\n                DictTestPage::Codes(codes) => {\n                    let body = encode_dictionary_indices(codes, bit_width);\n                    let header = build_dictionary_encoded_data_page_header(\n                        codes.len() as i32,\n                        body.len() as i32,\n                    );\n                    num_rows += codes.len() as i64;\n                    (header, body)\n                }\n                DictTestPage::Plain(body, n) => {\n                    num_rows += i64::from(*n);\n                    (build_page_header(*n, body.len() as i32), body.to_vec())\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40232,7 +40232,7 @@
   {
     "id": "storage_parquet_parquet_file_an_rle_run_claiming_more_values_than_rows_is_refused_before_decoding_d90eaf1e",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2873,
+    "line": 2876,
     "decision": "run >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -40242,7 +40242,7 @@
   {
     "id": "storage_parquet_parquet_file_read_decimal_column_refuses_a_fixed_len_byte_array_past_16_bytes_e69e6d01",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 3591,
+    "line": 3598,
     "decision": "match rg.read_decimal_column(0) {\n            Err(FileError::InvalidMetadata { field, value }) => {\n                assert_eq!(field, \"DECIMAL fixed_len_byte_array length\");\n                assert_eq!(value, 17);\n            }\n            other => panic!(\"expected InvalidMetadata, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40252,7 +40252,7 @@
   {
     "id": "storage_parquet_parquet_file_negative_page_size_is_invalid_metadata_not_a_huge_allocation_a5ccf881",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 3611,
+    "line": 3618,
     "decision": "match page_size(\"compressed_page_size\", -1) {\n            Err(FileError::InvalidMetadata { field, value }) => {\n                assert_eq!(field, \"compressed_page_size\");\n                assert_eq!(value, -1);\n            }\n            other => panic!(\"expected InvalidMetadata, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
