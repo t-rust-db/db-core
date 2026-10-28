@@ -36,6 +36,28 @@ pub(crate) fn is_map_function(name: &str) -> bool {
         .any(|(f, _)| f.eq_ignore_ascii_case(name))
 }
 
+/// `name(args)` for every row of `columns` (one slice per argument, all
+/// `num_rows` long). A split column holds few distinct strings (labels,
+/// tags), so `string_split` of two strings is computed once per distinct
+/// pair and shared by `Arc` (#815).
+pub(crate) fn call_column(name: &str, columns: &[&[Value]], num_rows: usize) -> Vec<Value> {
+    let splits =
+        name.eq_ignore_ascii_case("string_split") || name.eq_ignore_ascii_case("str_split");
+    let mut memo: std::collections::HashMap<(&str, &str), Value> = std::collections::HashMap::new();
+    (0..num_rows)
+        .map(|row| {
+            let args: Vec<&Value> = columns.iter().filter_map(|c| c.get(row)).collect();
+            if let (true, [Value::Str(s), Value::Str(sep)]) = (splits, args.as_slice()) {
+                return memo
+                    .entry((s.as_ref(), sep.as_ref()))
+                    .or_insert_with(|| call(name, &args))
+                    .clone();
+            }
+            call(name, &args)
+        })
+        .collect()
+}
+
 /// `name(args)` for one row.
 pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
     if name.eq_ignore_ascii_case("string_split") || name.eq_ignore_ascii_case("str_split") {

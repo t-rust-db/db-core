@@ -2403,7 +2403,6 @@ fn unnest_prologue(select: &Select, ctx: &mut Ctx) -> Result<Option<Select>> {
         return Ok(None);
     };
     let mut rest = without_unnest(select);
-    let list_reg = compile_expr(list, ctx);
 
     let conditions = select
         .where_clause
@@ -2415,15 +2414,15 @@ fn unnest_prologue(select: &Select, ctx: &mut Ctx) -> Result<Option<Select>> {
         collect_expr_columns(c, &mut columns);
         columns.iter().any(|name| name == column)
     });
-    if let Some(early) = and_chain(&early) {
-        let predicate = compile_expr(&early, ctx);
-        ctx.push_commented(
-            Opcode::Filter { predicate },
-            format!("WHERE {}", expr_to_string(&early)),
-        );
-    }
     rest.where_clause = and_chain(&late);
 
+    // Every column is loaded before the early filter, which leaves its
+    // selection pending, so all registers stay the same length.
+    let mut list_columns = Vec::new();
+    collect_expr_columns(list, &mut list_columns);
+    for name in &list_columns {
+        ctx.load_column(name);
+    }
     let mut columns = referenced_columns(&rest)?;
     if let Some(having) = &select.having {
         collect_expr_columns(having, &mut columns);
@@ -2431,6 +2430,16 @@ fn unnest_prologue(select: &Select, ctx: &mut Ctx) -> Result<Option<Select>> {
     for name in columns.iter().filter(|name| *name != column) {
         ctx.load_column(name);
     }
+    if let Some(early) = and_chain(&early) {
+        let predicate = compile_expr(&early, ctx);
+        ctx.push_commented(
+            Opcode::Filter { predicate },
+            format!("WHERE {}", expr_to_string(&early)),
+        );
+    }
+    // After the early filter, so the list is built for the surviving rows
+    // only (#815).
+    let list_reg = compile_expr(list, ctx);
     let dst = ctx.alloc();
     ctx.push_commented(
         Opcode::Unnest { src: list_reg, dst },

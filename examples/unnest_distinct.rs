@@ -7,7 +7,7 @@
 //! engine. Writes the fixture, prints the median time of each query, and
 //! with `--duckdb` also times DuckDB (single-threaded, same file).
 //!
-//!     cargo run --release --example unnest_distinct -- [events] [--duckdb]
+//!     cargo run --release --example unnest_distinct -- [events] [--duckdb] [--only name]
 
 #![allow(
     clippy::indexing_slicing,
@@ -118,7 +118,7 @@ fn run() -> Result<(), String> {
     let duckdb = args.iter().any(|a| a == "--duckdb");
     let events: u64 = args
         .iter()
-        .find(|a| !a.starts_with("--"))
+        .find(|a| a.parse::<u64>().is_ok())
         .map(|n| n.parse().map_err(|_| format!("not a count: {n}")))
         .transpose()?
         .unwrap_or(30_000);
@@ -129,7 +129,14 @@ fn run() -> Result<(), String> {
     println!("{events} events, {rows} rows");
 
     let mut engine = BatchEngine::open(&path).map_err(|e| e.to_string())?;
+    let only = args
+        .iter()
+        .position(|a| a == "--only")
+        .and_then(|i| args.get(i + 1));
     for (name, sql) in QUERIES {
+        if only.is_some_and(|o| o != name) {
+            continue;
+        }
         engine.run_query(sql).map_err(|e| format!("{name}: {e}"))?;
         let mut times = Vec::new();
         for _ in 0..5 {

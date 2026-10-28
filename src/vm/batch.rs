@@ -1002,6 +1002,20 @@ pub enum ScanSource {
     InMemory(Batch),
 }
 
+/// The registers `rest` reads, when it ends the program with an
+/// [`Opcode::Emit`] -- so nothing outside it looks at the registers
+/// afterwards; `None` otherwise (#815).
+fn live_through_emit(rest: &[Opcode]) -> Option<Vec<usize>> {
+    if !rest.iter().any(|op| matches!(op, Opcode::Emit { .. })) {
+        return None;
+    }
+    let mut live = Vec::new();
+    for op in rest {
+        op.read_registers(&mut live);
+    }
+    Some(live)
+}
+
 impl Opcode {
     /// Pushes every register this opcode reads onto `out` (#810). Written
     /// without a wildcard so a new opcode must say what it reads; where an
@@ -4331,6 +4345,11 @@ pub struct Vm {
     /// `Eq`/`Ne` against a `Dict` column) read it directly; every other
     /// opcode reads through [`Vm::reg`], which materializes on demand.
     typed_registers: HashMap<usize, Arc<Column>>,
+    /// The registers the opcodes after the next [`Opcode::Unnest`] still
+    /// read (#815), set by [`Vm::execute`] when the program goes on to an
+    /// [`Opcode::Emit`]; `Unnest` drops every other register instead of
+    /// repeating it once per element.
+    unnest_live: Option<Vec<usize>>,
     /// Constant registers (#681): an [`Opcode::LoadConst`] lives here as
     /// one value plus the live row count it stands for, instead of a
     /// `Vec<Value>` with one clone of the literal per row.
@@ -4668,8 +4687,11 @@ impl Vm {
     /// the first error. Unlike [`Vm::run`], this executes a single batch and
     /// does no segment looping.
     pub fn execute(&mut self, batch: &Batch, program: &[Opcode]) -> Result<()> {
-        for op in program {
+        for (i, op) in program.iter().enumerate() {
             self.check_step_limit(op.name())?;
+            if matches!(op, Opcode::Unnest { .. }) {
+                self.unnest_live = program.get(i + 1..).and_then(live_through_emit);
+            }
             self.step(batch, op)?;
         }
         Ok(())
@@ -5326,13 +5348,7 @@ impl Vm {
                 // #621: map functions read `Value::Map`, which the row
                 // functions' values cannot carry.
                 let result: Vec<Value> = if super::map_fns::is_map_function(name) {
-                    (0..num_rows)
-                        .map(|row| {
-                            let args: Vec<&Value> =
-                                arg_regs.iter().filter_map(|r| r.get(row)).collect();
-                            super::map_fns::call(name, &args)
-                        })
-                        .collect()
+                    super::map_fns::call_column(name, &arg_regs, num_rows)
                 } else {
                     let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];
                     let mut result = Vec::with_capacity(num_rows);
@@ -6143,10 +6159,16 @@ impl Vm {
         Ok(())
     }
 
-    /// [`Opcode::Unnest`]. Reshapes every live register like
+    /// [`Opcode::Unnest`]. Reshapes every register `unnest_live` keeps (all
+    /// of them without it) like
     /// [`Self::hash_probe`], by the row each element came from.
     fn unnest(&mut self, opcode: &'static str, src: usize, dst: usize) -> Result<()> {
         self.resolve_selection(opcode)?;
+        if let Some(live) = self.unnest_live.take() {
+            self.registers.retain(|r, _| *r == src || live.contains(r));
+            self.typed_registers
+                .retain(|r, _| *r == src || live.contains(r));
+        }
         self.ensure_materialized(src);
         let mut rows: Vec<usize> = Vec::new();
         let mut elements: Vec<Value> = Vec::new();
