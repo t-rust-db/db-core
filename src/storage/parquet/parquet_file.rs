@@ -1291,10 +1291,9 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     }
 
     /// [`Self::read_list_utf8_column`]'s rows in a flat layout (#809): one
-    /// offsets vector and one dictionary column of every element, instead of
-    /// one `Vec` per row. Elements that share an `Arc<str>` (the decoded
-    /// dictionary entries of a dictionary-encoded leaf, #671) share one
-    /// dictionary code.
+    /// offsets vector and one column of every element, instead of one `Vec`
+    /// per row. The elements are a dictionary when few of them are distinct
+    /// and plain strings otherwise (see [`ElementSink`]).
     #[cfg(feature = "engine-column")]
     pub(crate) fn read_list_utf8_flat(&self, field: &Field) -> Result<Column> {
         let not_a_list = || FileError::NotAStringList(field.name.clone());
@@ -1303,14 +1302,15 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         let present = leaf.max_def_level;
         let optional = leaf.element.repetition == Some(footer::Repetition::Optional);
         let element = present.saturating_sub(u32::from(optional));
+        let mut sink = ElementSink::for_sample(
+            items.values.iter().flatten().filter_map(|v| match v {
+                reader::LeafScalar::Str(s) => Some(s.as_ptr()),
+                _ => None,
+            }),
+            items.values.len(),
+        );
         let mut offsets: Vec<u32> = vec![0];
         let mut row_valid: Vec<bool> = Vec::new();
-        let mut dict: Vec<Arc<str>> = Vec::new();
-        let mut by_ptr: HashMap<*const u8, u32> = HashMap::new();
-        let mut by_text: HashMap<Arc<str>, u32> = HashMap::new();
-        let mut seen: Vec<Arc<str>> = Vec::new();
-        let mut indices: Vec<u32> = Vec::with_capacity(items.values.len());
-        let mut elem_valid: Vec<bool> = Vec::with_capacity(items.values.len());
         for i in 0..items.def_levels.len() {
             let def = items.def_levels.get(i).copied().unwrap_or(0);
             let rep = items.rep_levels.get(i).copied().unwrap_or(0);
@@ -1319,7 +1319,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     return Err(not_a_list());
                 }
                 row_valid.push(def.saturating_add(1) == element);
-                offsets.push(u32::try_from(indices.len()).map_err(|_| not_a_list())?);
+                offsets.push(u32::try_from(sink.len()).map_err(|_| not_a_list())?);
                 continue;
             }
             let item = match items.values.get_mut(i).and_then(Option::take) {
@@ -1333,46 +1333,15 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             } else if row_valid.is_empty() {
                 return Err(not_a_list());
             }
-            match item {
-                Some(s) => {
-                    // The same `Arc` is the same code without hashing the
-                    // text; a new `Arc` is looked up by content, so one
-                    // string never holds two codes (`Column::Dict` entries
-                    // are distinct).
-                    let code = match by_ptr.get(&s.as_ptr()) {
-                        Some(&code) => code,
-                        None => {
-                            let next = u32::try_from(dict.len()).map_err(|_| not_a_list())?;
-                            let code = *by_text.entry(Arc::clone(&s)).or_insert(next);
-                            if code == next {
-                                dict.push(Arc::clone(&s));
-                            }
-                            by_ptr.insert(s.as_ptr(), code);
-                            // Keeps the address `by_ptr` holds from being reused.
-                            seen.push(s);
-                            code
-                        }
-                    };
-                    indices.push(code);
-                    elem_valid.push(true);
-                }
-                None => {
-                    indices.push(0);
-                    elem_valid.push(false);
-                }
-            }
-            let end = u32::try_from(indices.len()).map_err(|_| not_a_list())?;
+            sink.push(item).ok_or_else(not_a_list)?;
+            let end = u32::try_from(sink.len()).map_err(|_| not_a_list())?;
             if let Some(last) = offsets.last_mut() {
                 *last = end;
             }
         }
         Ok(Column::List {
             offsets,
-            elements: Box::new(Column::Dict {
-                dict,
-                indices,
-                valid: Bitmap::from_bools(elem_valid.into_iter()),
-            }),
+            elements: Box::new(sink.finish()),
             valid: Bitmap::from_bools(row_valid.into_iter()),
         })
     }
@@ -1879,6 +1848,146 @@ fn int96_to_epoch_micros(v: reader::Int96) -> Option<i64> {
     days_since_epoch
         .checked_mul(86_400_000_000)?
         .checked_add(v.time_nanos / 1000)
+}
+
+/// How many leading elements [`ElementSink::for_sample`] looks at to judge
+/// cardinality.
+#[cfg(feature = "engine-column")]
+const CARDINALITY_SAMPLE: usize = 16_384;
+
+/// Where a flat list's elements are built (#809): a dictionary when at most a
+/// quarter of a sample of the first [`CARDINALITY_SAMPLE`] present elements
+/// are distinct `Arc`s -- the decoded entries of a dictionary-encoded leaf are
+/// shared (#671), so the sample sees the leaf's dictionary size -- and plain
+/// strings otherwise: hashing every element of a high-cardinality leaf costs
+/// more than the dictionary saves. A string is one dictionary entry whichever
+/// `Arc` it arrives in.
+#[cfg(feature = "engine-column")]
+enum ElementSink {
+    Dict {
+        dict: Vec<Arc<str>>,
+        by_ptr: HashMap<*const u8, u32>,
+        by_text: HashMap<Arc<str>, u32>,
+        /// Every `Arc` `by_ptr` holds an address of, so none is reused.
+        seen: Vec<Arc<str>>,
+        indices: Vec<u32>,
+        valid: Vec<bool>,
+    },
+    Str {
+        offsets: Vec<u32>,
+        data: String,
+        valid: Vec<bool>,
+    },
+}
+
+#[cfg(feature = "engine-column")]
+impl ElementSink {
+    /// The sink for a leaf of up to `capacity` elements whose present
+    /// elements' addresses start with `pointers`.
+    fn for_sample(pointers: impl Iterator<Item = *const u8>, capacity: usize) -> Self {
+        let mut sample: Vec<*const u8> = pointers.take(CARDINALITY_SAMPLE).collect();
+        let sampled = sample.len();
+        sample.sort_unstable();
+        sample.dedup();
+        if sample.len().saturating_mul(4) > sampled {
+            let mut offsets = Vec::with_capacity(capacity.saturating_add(1));
+            offsets.push(0);
+            Self::Str {
+                offsets,
+                data: String::new(),
+                valid: Vec::with_capacity(capacity),
+            }
+        } else {
+            Self::Dict {
+                dict: Vec::new(),
+                by_ptr: HashMap::new(),
+                by_text: HashMap::new(),
+                seen: Vec::new(),
+                indices: Vec::with_capacity(capacity),
+                valid: Vec::with_capacity(capacity),
+            }
+        }
+    }
+
+    /// Elements pushed so far.
+    #[inline]
+    fn len(&self) -> usize {
+        match self {
+            Self::Dict { valid, .. } | Self::Str { valid, .. } => valid.len(),
+        }
+    }
+
+    /// Appends one element (`None` for a NULL one); `None` if the elements
+    /// no longer fit `u32` codes or offsets.
+    #[inline]
+    fn push(&mut self, item: Option<Arc<str>>) -> Option<()> {
+        match self {
+            Self::Dict {
+                dict,
+                by_ptr,
+                by_text,
+                seen,
+                indices,
+                valid,
+            } => {
+                valid.push(item.is_some());
+                let Some(s) = item else {
+                    indices.push(0);
+                    return Some(());
+                };
+                let code = match by_ptr.get(&s.as_ptr()) {
+                    Some(&code) => code,
+                    None => {
+                        let next = u32::try_from(dict.len()).ok()?;
+                        let code = *by_text.entry(Arc::clone(&s)).or_insert(next);
+                        if code == next {
+                            dict.push(Arc::clone(&s));
+                        }
+                        by_ptr.insert(s.as_ptr(), code);
+                        seen.push(s);
+                        code
+                    }
+                };
+                indices.push(code);
+            }
+            Self::Str {
+                offsets,
+                data,
+                valid,
+            } => {
+                valid.push(item.is_some());
+                if let Some(s) = item {
+                    data.push_str(&s);
+                }
+                offsets.push(u32::try_from(data.len()).ok()?);
+            }
+        }
+        Some(())
+    }
+
+    fn finish(self) -> Column {
+        match self {
+            Self::Dict {
+                dict,
+                indices,
+                valid,
+                ..
+            } => Column::Dict {
+                dict,
+                indices,
+                valid: Bitmap::from_bools(valid.into_iter()),
+            },
+            Self::Str {
+                offsets,
+                data,
+                valid,
+            } => Column::Str {
+                offsets,
+                data,
+                valid: Bitmap::from_bools(valid.into_iter()),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3200,13 +3309,11 @@ mod tests {
                     let Column::List { elements, .. } = &column else {
                         panic!("a flat list read is a list column");
                     };
-                    let Column::Dict { dict, .. } = elements.as_ref() else {
-                        panic!("the elements are a dictionary column");
-                    };
-                    let mut distinct: Vec<&Arc<str>> = dict.iter().collect();
-                    distinct.sort();
-                    distinct.dedup();
-                    assert_eq!(distinct.len(), dict.len(), "dict={dictionary}");
+                    // Few elements, and nearly all distinct `Arc`s: plain strings.
+                    assert!(
+                        matches!(elements.as_ref(), Column::Str { .. }),
+                        "dict={dictionary}"
+                    );
                     flat.extend((0..column.len()).map(|i| column.get(i)));
                 }
                 let expected: Vec<Value> = rows
@@ -3215,6 +3322,56 @@ mod tests {
                     .collect();
                 assert_eq!(flat, expected, "dict={dictionary} rg={row_group_rows}");
             }
+        }
+    }
+
+    /// The column an [`ElementSink`] builds from `elements`.
+    #[cfg(feature = "engine-column")]
+    fn sink_of(elements: &[Option<Arc<str>>]) -> Column {
+        let mut sink = ElementSink::for_sample(
+            elements.iter().flatten().map(|s| s.as_ptr()),
+            elements.len(),
+        );
+        for e in elements {
+            sink.push(e.clone()).unwrap();
+        }
+        sink.finish()
+    }
+
+    /// #809: elements that are few next to how many there are become a
+    /// dictionary whose entries are distinct, however many `Arc`s one string
+    /// arrives in.
+    #[cfg(feature = "engine-column")]
+    #[test]
+    fn flat_elements_of_a_low_cardinality_leaf_are_a_dictionary() {
+        let arcs: Vec<Arc<str>> = ["a", "a", "a", "a", "b", "b", "b", "b"]
+            .iter()
+            .map(|s| Arc::from(*s))
+            .collect();
+        let elements: Vec<Option<Arc<str>>> = (0..200)
+            .map(|i| (i % 25 != 0).then(|| Arc::clone(&arcs[i % arcs.len()])))
+            .collect();
+        let column = sink_of(&elements);
+        let Column::Dict { dict, .. } = &column else {
+            panic!("a low-cardinality leaf is a dictionary");
+        };
+        assert_eq!(dict.len(), 2);
+        for (i, e) in elements.iter().enumerate() {
+            assert_eq!(column.shared_str(i), e.clone(), "{i}");
+        }
+    }
+
+    /// #809: a leaf whose elements are mostly distinct stays plain strings.
+    #[cfg(feature = "engine-column")]
+    #[test]
+    fn flat_elements_of_a_high_cardinality_leaf_are_plain_strings() {
+        let elements: Vec<Option<Arc<str>>> = (0..200)
+            .map(|i| (i % 25 != 0).then(|| Arc::from(format!("tag{i}").as_str())))
+            .collect();
+        let column = sink_of(&elements);
+        assert!(matches!(column, Column::Str { .. }));
+        for (i, e) in elements.iter().enumerate() {
+            assert_eq!(column.shared_str(i), e.clone(), "{i}");
         }
     }
 
