@@ -4730,9 +4730,27 @@ impl Vm {
         // hence absent from `registers`) would be silently skipped by the
         // loop below, then lost for good once `typed_registers` is
         // cleared at the end of this function.
-        let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
-        for reg in typed_only {
-            self.ensure_materialized(reg);
+        // #815: a typed column is gathered by the surviving rows as a
+        // typed column (no `Value` per row); only one that cannot be is
+        // materialized.
+        let kept: Vec<usize> = selection.indices.iter().map(|&i| i as usize).collect();
+        let mut gathered: HashMap<usize, Arc<Column>> = HashMap::new();
+        let typed: Vec<usize> = self.typed_registers.keys().copied().collect();
+        for reg in typed {
+            let column = self
+                .typed_registers
+                .get(&reg)
+                .filter(|c| c.len() == selection.base_len)
+                .and_then(|c| c.take(&kept));
+            match column {
+                Some(column) => {
+                    gathered.insert(reg, Arc::new(column));
+                }
+                None => self.ensure_materialized(reg),
+            }
+        }
+        for reg in gathered.keys() {
+            self.registers.remove(reg);
         }
         for (reg, values) in self.registers.iter_mut() {
             // #474: a register a preceding bare `Reduce` (`COUNT(*)`,
@@ -4760,14 +4778,9 @@ impl Vm {
             *values = Arc::new(compacted);
         }
         // #429: `typed_registers` shadows a `registers` entry loaded
-        // straight from `Batch::typed_columns`, uncompacted. Once a
-        // selection is resolved, `registers` above just got compacted to
-        // the surviving rows while any typed shadow would still be the
-        // original full-length `Column` -- stale and wrong-length for
-        // `Filter`/`Map`'s fast paths to read afterward. Clearing them
-        // is conservative (falls back to the general `Value` path for
-        // that register from here on) but always correct.
-        self.typed_registers.clear();
+        // straight from `Batch::typed_columns`; the shadows are the
+        // gathered columns, as long as the compacted `registers` (#815).
+        self.typed_registers = gathered;
         Ok(())
     }
 
@@ -6193,9 +6206,24 @@ impl Vm {
             }
         }
         let num_rows = self.reg(src, opcode)?.len();
-        let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
-        for r in typed_only {
-            self.ensure_materialized(r);
+        let typed: Vec<usize> = self.typed_registers.keys().copied().collect();
+        let mut gathered: HashMap<usize, Arc<Column>> = HashMap::new();
+        for r in typed {
+            let column = self
+                .typed_registers
+                .get(&r)
+                .filter(|c| c.len() == num_rows)
+                .and_then(|c| c.take(&rows));
+            match column {
+                Some(column) => {
+                    gathered.insert(r, Arc::new(column));
+                }
+                None => self.ensure_materialized(r),
+            }
+        }
+        // The typed copy stands for its `Value` one, which is not repeated.
+        for r in gathered.keys() {
+            self.registers.remove(r);
         }
         self.resize_const_registers(rows.len());
         for values in self.registers.values_mut() {
@@ -6208,7 +6236,7 @@ impl Vm {
                 .collect();
             *values = Arc::new(reshaped);
         }
-        self.typed_registers.clear();
+        self.typed_registers = gathered;
         // Constants loaded from here on are as long as the expanded rows.
         self.selected_rows = Some(rows.len());
         self.registers.insert(dst, Arc::new(elements));

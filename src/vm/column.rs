@@ -345,6 +345,92 @@ impl Column {
         }
     }
 
+    /// The rows at `rows`, in that order and repeats allowed, as a column of
+    /// their own (#815: a selection or an `UNNEST` reshapes typed columns
+    /// without a `Value` per row). A dictionary column keeps its dictionary
+    /// while it is small next to `rows`, else its strings are copied into a
+    /// `Str`. `None` when a row is out of range.
+    pub(crate) fn take(&self, rows: &[usize]) -> Option<Column> {
+        if rows.iter().any(|&r| r >= self.len()) {
+            return None;
+        }
+        let valid = Bitmap::from_bools(rows.iter().map(|&r| self.valid_at(r)));
+        Some(match self {
+            Column::Int { data, .. } => Column::Int {
+                data: rows
+                    .iter()
+                    .map(|&r| data.get(r).copied().unwrap_or(0))
+                    .collect(),
+                valid,
+            },
+            Column::Float { data, .. } => Column::Float {
+                data: rows
+                    .iter()
+                    .map(|&r| data.get(r).copied().unwrap_or(0.0))
+                    .collect(),
+                valid,
+            },
+            Column::Bool { data, .. } => Column::Bool {
+                data: rows
+                    .iter()
+                    .map(|&r| data.get(r).copied().unwrap_or(false))
+                    .collect(),
+                valid,
+            },
+            Column::Dict { dict, indices, .. } if dict.len() <= rows.len().saturating_mul(4) => {
+                Column::Dict {
+                    dict: dict.clone(),
+                    indices: rows
+                        .iter()
+                        .map(|&r| indices.get(r).copied().unwrap_or(0))
+                        .collect(),
+                    valid,
+                }
+            }
+            Column::Str { .. } | Column::Dict { .. } => {
+                let mut offsets = Vec::with_capacity(rows.len().saturating_add(1));
+                let mut data = String::new();
+                offsets.push(0);
+                for &r in rows {
+                    if self.valid_at(r) {
+                        match self {
+                            Column::Str {
+                                offsets: o,
+                                data: d,
+                                ..
+                            } => {
+                                let lo = o.get(r).and_then(|x| usize::try_from(*x).ok());
+                                let hi = o
+                                    .get(r.saturating_add(1))
+                                    .and_then(|x| usize::try_from(*x).ok());
+                                if let Some(s) = lo.zip(hi).and_then(|(lo, hi)| d.get(lo..hi)) {
+                                    data.push_str(s);
+                                }
+                            }
+                            Column::Dict { dict, indices, .. } => {
+                                let code = indices.get(r).and_then(|c| usize::try_from(*c).ok());
+                                if let Some(s) = code.and_then(|c| dict.get(c)) {
+                                    data.push_str(s);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    offsets.push(u32::try_from(data.len()).unwrap_or(u32::MAX));
+                }
+                Column::Str {
+                    offsets,
+                    data,
+                    valid,
+                }
+            }
+        })
+    }
+
+    fn valid_at(&self, i: usize) -> bool {
+        !self.is_null(i)
+    }
+
     /// Whether row `i` is NULL. `i >= len()` reads as NULL rather than
     /// panicking.
     pub fn is_null(&self, i: usize) -> bool {
