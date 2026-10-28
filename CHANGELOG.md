@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.189.0] - 2026-10-28
+
+### Added
+
+- LIST<VARCHAR> columns: record tables take a list per row, written to Parquet as DuckDB and pyarrow read `VARCHAR[]`, and `SELECT` returns the list as a JSON array (#801).
+
 ## [0.188.0] - 2026-10-26
 
 ### Added
