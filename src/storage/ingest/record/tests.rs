@@ -25,6 +25,7 @@ fn every_type() -> Vec<ColumnType> {
         },
         ColumnType::FixedLenByteArray(16),
         ColumnType::MapUtf8,
+        ColumnType::ListUtf8,
     ]
 }
 
@@ -63,6 +64,8 @@ fn rows_round_trip_through_the_wal_encoding() {
             ("é".to_string(), None),
             ("k".to_string(), Some(String::new())),
         ]),
+        RecordValue::List(Vec::new()),
+        RecordValue::List(vec![None, Some("é".to_string()), Some(String::new())]),
     ];
     let bytes = encode_row(&row).unwrap();
     assert_eq!(decode_row(&bytes), Some(row));
@@ -300,4 +303,40 @@ fn a_map_column_takes_only_a_map() {
     let tag_at = bytes.len() - 6;
     bad_value_tag[tag_at] = 99;
     assert_eq!(decode_row(&bad_value_tag), None);
+}
+
+/// #801: a list column takes a list (or NULL), reads back as the engine's
+/// list, and its WAL bytes decode only when whole.
+#[test]
+fn a_list_column_takes_only_a_list() {
+    let schema = [spec("l", ColumnType::ListUtf8, true)];
+    let fits = |v: RecordValue| check_row(&schema, &[v]).is_none();
+    assert!(fits(RecordValue::List(Vec::new())));
+    assert!(fits(RecordValue::List(vec![None])));
+    assert!(fits(RecordValue::Null));
+    assert!(!fits(RecordValue::Str("[]".into())));
+    assert!(!fits(RecordValue::Map(Vec::new())));
+    let mut page = RowPage::new(Arc::from(schema.to_vec().as_slice()));
+    page.push(1, vec![RecordValue::List(vec![Some("a".into()), None])]);
+    page.push(2, vec![RecordValue::Null]);
+    page.push(3, vec![RecordValue::List(Vec::new())]);
+    let values = page.engine_column("l", false).unwrap().unwrap();
+    assert_eq!(
+        values,
+        [
+            Value::List(Arc::new(vec![Some("a".into()), None])),
+            Value::Null,
+            Value::List(Arc::new(Vec::new())),
+        ]
+    );
+    let shown: Vec<String> = values.iter().map(ToString::to_string).collect();
+    assert_eq!(shown, [r#"["a",null]"#, "NULL", "[]"]);
+    // Truncated list bytes, or an element tag that is neither NULL nor a
+    // string, are not a row.
+    let bytes = encode_row(&[RecordValue::List(vec![Some("v".into())])]).unwrap();
+    assert_eq!(decode_row(&bytes[..bytes.len() - 1]), None);
+    let mut bad_tag = bytes.clone();
+    let tag_at = bytes.len() - 6;
+    bad_tag[tag_at] = 99;
+    assert_eq!(decode_row(&bad_tag), None);
 }

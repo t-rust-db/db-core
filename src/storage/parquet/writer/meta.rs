@@ -30,6 +30,7 @@ const REPETITION_REPEATED: i32 = 2;
 
 const CONVERTED_UTF8: i32 = 0;
 const CONVERTED_MAP: i32 = 1;
+const CONVERTED_LIST: i32 = 3;
 const CONVERTED_DECIMAL: i32 = 5;
 const CONVERTED_TIMESTAMP_MICROS: i32 = 10;
 const CONVERTED_UINT_8: i32 = 11;
@@ -109,8 +110,9 @@ pub(crate) fn physical_type(column_type: ColumnType) -> i32 {
             DecimalStorage::Fixed16 => TYPE_FIXED_LEN_BYTE_ARRAY,
         },
         ColumnType::FixedLenByteArray(_) => TYPE_FIXED_LEN_BYTE_ARRAY,
-        // A map's leaves are UTF8; the group itself has no physical type.
-        ColumnType::MapUtf8 => TYPE_BYTE_ARRAY,
+        // A map's or list's leaves are UTF8; the group itself has no
+        // physical type.
+        ColumnType::MapUtf8 | ColumnType::ListUtf8 => TYPE_BYTE_ARRAY,
     }
 }
 
@@ -269,42 +271,64 @@ fn schema_element(spec: &ColumnSpec) -> Value {
         | ColumnType::Double
         | ColumnType::Binary
         | ColumnType::FixedLenByteArray(_)
-        | ColumnType::MapUtf8 => {}
+        | ColumnType::MapUtf8
+        | ColumnType::ListUtf8 => {}
     }
     Value::Struct(fields)
 }
 
-/// A column's `SchemaElement`s, depth first: one leaf, or for a map the
+/// A column's `SchemaElement`s, depth first: one leaf; for a map the
 /// `MAP` group, its repeated `key_value` group and the `key`/`value`
-/// leaves, as DuckDB writes `MAP(VARCHAR, VARCHAR)`.
+/// leaves, as DuckDB writes `MAP(VARCHAR, VARCHAR)`; for a list the `LIST`
+/// group, its repeated `list` group and the `element` leaf, as DuckDB
+/// writes `VARCHAR[]`.
 fn schema_elements(spec: &ColumnSpec) -> Vec<Value> {
-    if spec.column_type != ColumnType::MapUtf8 {
-        return vec![schema_element(spec)];
-    }
     let repetition = if spec.nullable {
         REPETITION_OPTIONAL
     } else {
         REPETITION_REQUIRED
     };
-    // LogicalType.MAP (2): MapType {}
-    let map = Value::Struct(vec![
-        (3, Value::I32(repetition)),
-        (4, string(&spec.name)),
-        (5, Value::I32(1)),
-        (6, Value::I32(CONVERTED_MAP)),
-        (10, Value::Struct(vec![(2, empty())])),
-    ]);
-    let key_value = Value::Struct(vec![
-        (3, Value::I32(REPETITION_REPEATED)),
-        (4, string("key_value")),
-        (5, Value::I32(2)),
-    ]);
-    vec![
-        map,
-        key_value,
-        schema_element(&ColumnSpec::new("key", ColumnType::Utf8, false)),
-        schema_element(&ColumnSpec::new("value", ColumnType::Utf8, true)),
-    ]
+    let repeated = |name: &str, children: i32| {
+        Value::Struct(vec![
+            (3, Value::I32(REPETITION_REPEATED)),
+            (4, string(name)),
+            (5, Value::I32(children)),
+        ])
+    };
+    match spec.column_type {
+        ColumnType::MapUtf8 => {
+            // LogicalType.MAP (2): MapType {}
+            let map = Value::Struct(vec![
+                (3, Value::I32(repetition)),
+                (4, string(&spec.name)),
+                (5, Value::I32(1)),
+                (6, Value::I32(CONVERTED_MAP)),
+                (10, Value::Struct(vec![(2, empty())])),
+            ]);
+            vec![
+                map,
+                repeated("key_value", 2),
+                schema_element(&ColumnSpec::new("key", ColumnType::Utf8, false)),
+                schema_element(&ColumnSpec::new("value", ColumnType::Utf8, true)),
+            ]
+        }
+        ColumnType::ListUtf8 => {
+            // LogicalType.LIST (3): ListType {}
+            let list = Value::Struct(vec![
+                (3, Value::I32(repetition)),
+                (4, string(&spec.name)),
+                (5, Value::I32(1)),
+                (6, Value::I32(CONVERTED_LIST)),
+                (10, Value::Struct(vec![(3, empty())])),
+            ]);
+            vec![
+                list,
+                repeated("list", 1),
+                schema_element(&ColumnSpec::new("element", ColumnType::Utf8, true)),
+            ]
+        }
+        _ => vec![schema_element(spec)],
+    }
 }
 
 /// `FileMetaData`: version 1, the flattened schema (a root group named

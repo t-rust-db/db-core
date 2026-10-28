@@ -48,6 +48,7 @@ fn validity(values: &ColumnValues) -> Vec<bool> {
         ColumnValues::UInt64(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Decimal(v) => v.iter().map(Option::is_some).collect(),
         ColumnValues::Map(v) => v.iter().map(Option::is_some).collect(),
+        ColumnValues::List(v) => v.iter().map(Option::is_some).collect(),
     }
 }
 
@@ -68,6 +69,7 @@ fn append(into: &mut ColumnValues, from: ColumnValues) {
         (ColumnValues::UInt64(a), ColumnValues::UInt64(b)) => a.extend(b),
         (ColumnValues::Decimal(a), ColumnValues::Decimal(b)) => a.extend(b),
         (ColumnValues::Map(a), ColumnValues::Map(b)) => a.extend(b),
+        (ColumnValues::List(a), ColumnValues::List(b)) => a.extend(b),
         (ColumnValues::FixedLenByteArray(a), ColumnValues::FixedLenByteArray(b)) => a.extend(b),
         (a, b) => panic!("append {b:?} to {a:?}"),
     }
@@ -107,6 +109,7 @@ fn read_column(
     let column = field.leaves.start;
     match column_type {
         ColumnType::MapUtf8 => ColumnValues::Map(rg.read_map_utf8_column(field).unwrap()),
+        ColumnType::ListUtf8 => ColumnValues::List(rg.read_list_utf8_column(field).unwrap()),
         ColumnType::Boolean => ColumnValues::Boolean(rg.read_boolean_column(column).unwrap()),
         ColumnType::Int32 => ColumnValues::Int32(rg.read_int32_column(column).unwrap()),
         ColumnType::Int64 => ColumnValues::Int64(rg.read_int64_column(column).unwrap()),
@@ -201,10 +204,28 @@ fn read_all(bytes: &[u8], schema: &[ColumnSpec]) -> Vec<ColumnValues> {
 }
 
 /// [`check_stats`] for every leaf of field `field`: a map's key and value
-/// leaves are UTF8 columns with one slot per level entry.
+/// leaves and a list's element leaf are UTF8 columns with one slot per
+/// level entry.
 fn check_field_stats(file: &ParquetFile, group: usize, field: usize, values: &ColumnValues) {
     let rg = file.row_group(group).unwrap();
     let leaves = file.fields()[field].leaves.clone();
+    if let ColumnValues::List(rows) = values {
+        let elements = rows
+            .iter()
+            .flat_map(|row| match row.as_deref() {
+                None | Some([]) => vec![None],
+                Some(items) => items
+                    .iter()
+                    .map(|v| v.as_ref().map(|v| v.to_string()))
+                    .collect(),
+            })
+            .collect();
+        check_stats(
+            &ColumnValues::Utf8(elements),
+            rg.column_statistics(leaves.start).unwrap().unwrap(),
+        );
+        return;
+    }
     let ColumnValues::Map(rows) = values else {
         check_stats(values, rg.column_statistics(leaves.start).unwrap().unwrap());
         return;
@@ -280,7 +301,9 @@ fn check_stats(values: &ColumnValues, stats: &Statistics) {
             u64::from_le_bytes(b.try_into().unwrap())
         }),
         // The bound's width says where the decimal is stored.
-        ColumnValues::Map(_) => panic!("maps are checked per leaf"),
+        ColumnValues::Map(_) | ColumnValues::List(_) => {
+            panic!("maps and lists are checked per leaf")
+        }
         ColumnValues::Decimal(v) => bounds(v.iter().flatten().copied(), stats, |b| match b.len() {
             4 => i128::from(i32::from_le_bytes(b.try_into().unwrap())),
             8 => i128::from(i64::from_le_bytes(b.try_into().unwrap())),
@@ -799,6 +822,7 @@ fn column_type_strategy() -> impl Strategy<Value = ColumnType> {
             .prop_map(|(p, s)| decimal(p, s)),
         (1u16..20).prop_map(ColumnType::FixedLenByteArray),
         Just(ColumnType::MapUtf8),
+        Just(ColumnType::ListUtf8),
     ]
 }
 
@@ -927,6 +951,19 @@ fn values_strategy(t: ColumnType, nullable: bool, n: usize) -> BoxedStrategy<Col
             n,
         )
         .prop_map(ColumnValues::Map)
+        .boxed(),
+        // Any elements, NULL ones and empty lists included.
+        ColumnType::ListUtf8 => col(
+            proptest::collection::vec(proptest::option::of(".{0,5}"), 0..4).prop_map(|v| {
+                v.into_iter()
+                    .map(|e| e.map(Into::into))
+                    .collect::<ListItems>()
+            }),
+            Just(vec![None]),
+            nullable,
+            n,
+        )
+        .prop_map(ColumnValues::List)
         .boxed(),
         ColumnType::FixedLenByteArray(len) => {
             let len = usize::from(len);
@@ -1437,6 +1474,110 @@ fn a_duckdb_map_reads_back() {
     );
     let err = rg.read_map_utf8_column(&fields[0]).unwrap_err();
     assert_eq!(err.to_string(), "field id is not a MAP<UTF8, UTF8>");
+}
+
+// --- LIST<UTF8> (#801) -----------------------------------------------------
+
+fn list(items: &[Option<&str>]) -> Option<ListItems> {
+    Some(items.iter().map(|v| v.map(Into::into)).collect())
+}
+
+/// Lists between flat columns, so leaf indices shift: the NULL, empty and
+/// 100-element lists, NULL elements, non-ASCII elements and element order
+/// survive, with and without dictionary encoding.
+#[test]
+fn list_columns_round_trip_between_flat_columns() {
+    let schema = vec![
+        ColumnSpec::new("id", ColumnType::Int32, false),
+        ColumnSpec::new("labels", ColumnType::ListUtf8, true),
+        ColumnSpec::new("x", ColumnType::Int64, true),
+        ColumnSpec::new("r", ColumnType::ListUtf8, false),
+    ];
+    let hundred: ListItems = (0..100)
+        .map(|i| (i % 7 != 0).then(|| format!("T{}", i % 5).into()))
+        .collect();
+    let labels = vec![
+        list(&[Some("T1059"), Some("T1566")]),
+        None,
+        list(&[]),
+        list(&[None]),
+        list(&[Some("välue"), None, Some("")]),
+        Some(hundred),
+        list(&[Some("z"), Some("a"), Some("z")]),
+    ];
+    let rows = labels.len();
+    let batch = vec![
+        ColumnValues::Int32((0..rows as i32).map(Some).collect()),
+        ColumnValues::List(labels),
+        ColumnValues::Int64(
+            (0..rows as i64)
+                .map(|i| (i != 3).then_some(i * 10))
+                .collect(),
+        ),
+        ColumnValues::List(
+            (0..rows)
+                .map(|i| {
+                    let n = i.to_string();
+                    list(&[Some(n.as_str())][..(i % 2)])
+                })
+                .collect(),
+        ),
+    ];
+    for dictionary in [false, true] {
+        for row_group_rows in [1, 1000] {
+            let bytes = write(
+                schema.clone(),
+                options(Compression::Snappy, dictionary, row_group_rows),
+                vec![batch.clone()],
+            );
+            assert_eq!(
+                read_all(&bytes, &schema),
+                batch,
+                "dict={dictionary} rg={row_group_rows}"
+            );
+            let file = ParquetFile::open(&bytes).unwrap();
+            let paths: Vec<Vec<String>> = file.metadata().row_groups[0]
+                .columns
+                .iter()
+                .map(|c| c.meta_data.as_ref().unwrap().path_in_schema.clone())
+                .collect();
+            assert_eq!(
+                paths,
+                [
+                    vec!["id"],
+                    vec!["labels", "list", "element"],
+                    vec!["x"],
+                    vec!["r", "list", "element"],
+                ]
+            );
+            for group in 0..file.num_row_groups() {
+                for (i, spec) in schema.iter().enumerate() {
+                    check_field_stats(
+                        &file,
+                        group,
+                        i,
+                        &read_column(&file, group, i, spec.column_type),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// DuckDB's own `VARCHAR[]` file (tools/gen_parquet_fixtures.sh) reads
+/// back, and a MAP is not a list.
+#[test]
+fn a_duckdb_list_reads_back() {
+    let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    let field = |name: &str| file.fields().into_iter().find(|f| f.name == name).unwrap();
+    let rg = file.row_group(0).unwrap();
+    assert_eq!(
+        rg.read_list_utf8_column(&field("lst")).unwrap(),
+        [list(&[Some("x")])]
+    );
+    let err = rg.read_list_utf8_column(&field("m")).unwrap_err();
+    assert_eq!(err.to_string(), "field m is not a LIST<UTF8>");
 }
 
 /// #622: zstd pages of an empty batch, an all-NULL column and a

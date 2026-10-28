@@ -142,13 +142,14 @@ impl TableWriter {
             }
             if let Layout::Tiered(tier) = &options.layout {
                 let sortable = |k: &String| {
-                    schema
-                        .iter()
-                        .any(|s| s.name == *k && s.column_type != ColumnType::MapUtf8)
+                    schema.iter().any(|s| {
+                        s.name == *k
+                            && !matches!(s.column_type, ColumnType::MapUtf8 | ColumnType::ListUtf8)
+                    })
                 };
                 if let Some(key) = tier.sort_key.iter().find(|k| !sortable(k)) {
                     return Err(IngestError::InvalidSchema(format!(
-                        "sort key {key} is not a column that sorts (a MAP does not)"
+                        "sort key {key} is not a column that sorts (a MAP or LIST does not)"
                     )));
                 }
                 if let Some(key) = &tier.session_key {

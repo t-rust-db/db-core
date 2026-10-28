@@ -43,6 +43,7 @@ ARROW_TYPES = {
     "uint32": pa.uint32(),
     "uint64": pa.uint64(),
     "map(utf8,utf8)": pa.map_(pa.string(), pa.string()),
+    "list(utf8)": pa.list_(pa.field("element", pa.string())),
 }
 
 DUCKDB_TYPES = {
@@ -60,6 +61,7 @@ DUCKDB_TYPES = {
     "uint32": "UINTEGER",
     "uint64": "UBIGINT",
     "map(utf8,utf8)": "MAP(VARCHAR, VARCHAR)",
+    "list(utf8)": "VARCHAR[]",
 }
 
 # How DuckDB's VARCHAR stats_min_value/stats_max_value are cast back.
@@ -131,6 +133,8 @@ def normalize(column_type, value):
         else:
             pairs = value
         return tuple((k, v) for k, v in pairs)
+    if column_type == "list(utf8)":
+        return tuple(value)
     if column_type == "float":
         value = f32(value)
     if column_type in ("float", "double"):
@@ -202,8 +206,8 @@ def check_pyarrow(path, columns, fails):
             col["values"] = [v for v in data.to_pylist()]
         want = [normalize(ctype, v) for v in col["values"]]
         fails.check(got == want, f"pyarrow {name}: values differ (first at {first_diff(got, want)})")
-        if ctype == "map(utf8,utf8)":
-            continue  # statistics are per leaf; the values check covers maps
+        if ctype in ("map(utf8,utf8)", "list(utf8)"):
+            continue  # statistics are per leaf; the values check covers them
         start = 0
         for rg in range(meta.num_row_groups):
             n = meta.row_group(rg).num_rows
@@ -241,7 +245,7 @@ def check_duckdb(path, columns, fails):
         got = [normalize(ctype, r[0]) for r in con.execute(f"SELECT {select} FROM read_parquet('{p}')").fetchall()]
         want = [normalize(ctype, v) for v in col["values"]]
         fails.check(got == want, f"duckdb {name}: values differ (first at {first_diff(got, want)})")
-        if ctype == "map(utf8,utf8)":
+        if ctype in ("map(utf8,utf8)", "list(utf8)"):
             continue
         cast = duckdb_stat_cast(ctype)
         stats = con.execute(

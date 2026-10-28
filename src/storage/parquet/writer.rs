@@ -47,7 +47,7 @@ use std::hash::Hash;
 use std::io::{self, Write};
 
 pub(crate) use super::schema::DecimalStorage;
-pub use super::schema::{ColumnSpec, ColumnType, ColumnValues, MapEntries};
+pub use super::schema::{ColumnSpec, ColumnType, ColumnValues, ListItems, MapEntries};
 pub use thrift::EncodeError;
 
 use crate::storage::parquet::thrift::Value;
@@ -720,9 +720,13 @@ fn encode_values(
             out.extend_from_slice(&x.to_le_bytes());
             Ok(())
         }),
-        // A map is written as its leaves (see `leaf`), never as one chunk.
+        // A map or list is written as its leaves (see `leaf`), never as
+        // one chunk.
         ColumnValues::Map(_) => Err(WriteError::InvalidSchema(
             "a MAP column is written as its key and value leaves".to_string(),
+        )),
+        ColumnValues::List(_) => Err(WriteError::InvalidSchema(
+            "a LIST column is written as its element leaf".to_string(),
         )),
         ColumnValues::Decimal(v) => {
             let storage = match column_type {

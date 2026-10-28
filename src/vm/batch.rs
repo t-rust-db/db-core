@@ -111,6 +111,9 @@ pub enum Value {
     /// unique keys, a value may be NULL. Read from a Parquet MAP column;
     /// queried with `m['k']` and the map functions.
     Map(Arc<MapEntries>),
+    /// A `LIST<VARCHAR>` (#801): elements in order, any of them NULL. Read
+    /// from a Parquet LIST column.
+    List(Arc<ListItems>),
     /// An `approx_count_distinct` partial (#603): an encoded HyperLogLog
     /// sketch. Only ever a slot between a segment's `GroupReduce`/`Reduce`
     /// and `Combine`, which merges the sketches and finalizes them to the
@@ -131,6 +134,9 @@ pub enum Value {
 /// shared strings (#671).
 pub type MapEntries = Vec<(Arc<str>, Option<Arc<str>>)>;
 
+/// A list value's elements, in order: the Parquet reader's shared strings.
+pub type ListItems = Vec<Option<Arc<str>>>;
+
 /// Structural equality, except that two decimals are equal when their
 /// values are (`1.50 == 1.5`, #632): what `GROUP BY` and join keys need.
 /// A decimal never equals an `Int` or a `Float` here, as `Int(1)` never
@@ -144,6 +150,7 @@ impl PartialEq for Value {
             (Value::Str(a), Value::Str(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::Map(a), Value::Map(b)) => a == b,
+            (Value::List(a), Value::List(b)) => a == b,
             (Value::Bytes(a), Value::Bytes(b)) => a == b,
             (
                 Value::Decimal {
@@ -277,8 +284,40 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+            // A JSON array: `["a",null]`.
+            Value::List(items) => {
+                write!(f, "[")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ",")?;
+                    }
+                    match item {
+                        Some(s) => write_json_string(f, s)?,
+                        None => write!(f, "null")?,
+                    }
+                }
+                write!(f, "]")
+            }
         }
     }
+}
+
+/// `s` as a JSON string: quoted, with `"`, `\\` and control characters
+/// escaped.
+fn write_json_string(f: &mut std::fmt::Formatter<'_>, s: &str) -> std::fmt::Result {
+    write!(f, "\"")?;
+    for c in s.chars() {
+        match c {
+            '"' => write!(f, "\\\"")?,
+            '\\' => write!(f, "\\\\")?,
+            '\n' => write!(f, "\\n")?,
+            '\r' => write!(f, "\\r")?,
+            '\t' => write!(f, "\\t")?,
+            c if c.is_control() => write!(f, "\\u{:04x}", u32::from(c))?,
+            c => write!(f, "{c}")?,
+        }
+    }
+    write!(f, "\"")
 }
 
 impl Value {
@@ -992,7 +1031,7 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
         Value::Str(s) => crate::value::Value::Text(s.as_ref().into()),
         Value::Null => crate::value::Value::Null,
         // The row functions have no map type: its rendered text.
-        Value::Map(_) => crate::value::Value::Text(v.to_string().into()),
+        Value::Map(_) | Value::List(_) => crate::value::Value::Text(v.to_string().into()),
         // A sketch partial never reaches a row function.
         Value::Bytes(_) => crate::value::Value::Null,
         // SQLite reads a DECIMAL as REAL (its affinity), so the row
@@ -2884,6 +2923,10 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
             5u8.hash(state);
             entries.hash(state);
         }
+        Value::List(items) => {
+            8u8.hash(state);
+            items.hash(state);
+        }
         Value::Bytes(bytes) => {
             7u8.hash(state);
             bytes.hash(state);
@@ -2909,6 +2952,7 @@ const TAG_STR: u64 = 0x1656_67B1_9E37_79F9;
 const TAG_NULL: u64 = 0x2545_F491_4F6C_DD1D;
 const TAG_MAP: u64 = 0x4CF5_AD43_2745_937F;
 const TAG_DECIMAL: u64 = 0x7FB5_D329_728E_A185;
+const TAG_LIST: u64 = 0xD6E8_FEB8_6659_FD93;
 /// Dictionary codes are hashed within one segment only (the code -> string
 /// map is per column chunk), so their tag just has to stay clear of the
 /// scalar tags above.
@@ -2931,6 +2975,7 @@ pub(crate) fn hash_one_value(value: &Value) -> u64 {
         Value::Null => murmur_finalize(TAG_NULL),
         // Rare as a key: the rendered entries, kept apart from strings.
         Value::Map(_) => murmur_finalize(hash_str_bytes(value.to_string().as_bytes()) ^ TAG_MAP),
+        Value::List(_) => murmur_finalize(hash_str_bytes(value.to_string().as_bytes()) ^ TAG_LIST),
         Value::Bytes(bytes) => murmur_finalize(hash_str_bytes(bytes) ^ TAG_MAP),
         // The canonical form, so `1.50` and `1.5` (equal) hash alike.
         Value::Decimal { unscaled, scale } => {
@@ -3971,7 +4016,7 @@ fn keep_extreme(slot: &mut Value, value: &Value, want: std::cmp::Ordering) {
 
 /// The order `MIN`/`MAX` compare in (#631), SQLite's: booleans, then
 /// numbers (integers exactly, an integer against a float as floats, NaN
-/// last), then text byte-wise, then maps. `Null` sorts first and never
+/// last), then text byte-wise, then maps, lists. `Null` sorts first and never
 /// reaches an aggregate.
 pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
     fn rank(v: &Value) -> u8 {
@@ -3981,6 +4026,7 @@ pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
             Value::Int(_) | Value::Float(_) | Value::Decimal { .. } => 2,
             Value::Str(_) => 3,
             Value::Map(_) => 4,
+            Value::List(_) => 6,
             Value::Bytes(_) => 5,
         }
     }
@@ -3991,6 +4037,7 @@ pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Str(x), Value::Str(y)) => x.cmp(y),
         (Value::Map(x), Value::Map(y)) => x.cmp(y),
+        (Value::List(x), Value::List(y)) => x.cmp(y),
         (Value::Bytes(x), Value::Bytes(y)) => x.cmp(y),
         _ => rank(a).cmp(&rank(b)),
     }
@@ -6719,6 +6766,7 @@ enum BranchKind {
     Str,
     Bytes,
     Map,
+    List,
 }
 
 impl BranchKind {
@@ -6733,6 +6781,7 @@ impl BranchKind {
             Value::Str(_) => Some(BranchKind::Str),
             Value::Bytes(_) => Some(BranchKind::Bytes),
             Value::Map(_) => Some(BranchKind::Map),
+            Value::List(_) => Some(BranchKind::List),
         }
     }
 
@@ -6745,6 +6794,7 @@ impl BranchKind {
             BranchKind::Str => "text",
             BranchKind::Bytes => "bytes",
             BranchKind::Map => "a map",
+            BranchKind::List => "a list",
         }
     }
 
@@ -7271,6 +7321,34 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #801: a list prints as a JSON array, its strings escaped; equal
+    /// lists hash and group alike, and order after maps.
+    #[test]
+    fn a_list_prints_as_a_json_array() {
+        let list = |items: &[Option<&str>]| {
+            Value::List(Arc::new(items.iter().map(|v| v.map(Arc::from)).collect()))
+        };
+        assert_eq!(list(&[]).to_string(), "[]");
+        assert_eq!(
+            list(&[Some("a"), None, Some("q\"\\\n\t\r\u{1}é")]).to_string(),
+            r#"["a",null,"q\"\\\n\t\r\u0001é"]"#
+        );
+        let (a, b) = (list(&[Some("x"), None]), list(&[Some("x"), None]));
+        assert_eq!(a, b);
+        assert_eq!(hash_one_value(&a), hash_one_value(&b));
+        assert_ne!(hash_one_value(&a), hash_one_value(&list(&[Some("x")])));
+        assert_eq!(
+            agg_cmp(&list(&[Some("a")]), &list(&[Some("b")])),
+            std::cmp::Ordering::Less
+        );
+        let map = Value::Map(Arc::new(Vec::new()));
+        assert_eq!(agg_cmp(&map, &a), std::cmp::Ordering::Less);
+        assert_eq!(
+            to_scalar_value(&a),
+            crate::value::Value::Text(r#"["x",null]"#.into())
+        );
+    }
 
     /// #679: a string compared with a number or a boolean is converted to
     /// its type first, either side; one that does not convert is a

@@ -1099,8 +1099,9 @@ fn render_value(value: &Value) -> String {
             rust_str_literal(v)
         ),
         Value::Null => "Value::Null".to_string(),
-        // Programs hold literals only; a map is only ever column data.
-        Value::Map(_) | Value::Bytes(_) => "Value::Null".to_string(),
+        // Programs hold literals only; a map or list is only ever column
+        // data.
+        Value::Map(_) | Value::List(_) | Value::Bytes(_) => "Value::Null".to_string(),
         Value::Decimal { unscaled, scale } => {
             format!("Value::Decimal {{ unscaled: {unscaled}, scale: {scale} }}")
         }

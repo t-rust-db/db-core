@@ -1,9 +1,9 @@
-//! Column types and values (#566): what a Parquet file's flat or MAP
-//! columns hold, shared by the writer (`parquet::writer`) and by readers
+//! Column types and values (#566): what a Parquet file's flat, MAP or
+//! LIST columns hold, shared by the writer (`parquet::writer`) and by readers
 //! that know a table's schema without writing it (ADR 0029's
 //! `ingest-read`).
 
-pub use crate::storage::parquet::parquet_file::MapEntries;
+pub use crate::storage::parquet::parquet_file::{ListItems, MapEntries};
 
 /// The logical type of a column, and with it its physical type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,10 @@ pub enum ColumnType {
     /// VARCHAR)`, a required UTF8 `key` and an optional UTF8 `value` per
     /// entry (#621). Keys within a map are unique.
     MapUtf8,
+    /// A `LIST<UTF8>`: the standard three-level LIST group DuckDB writes
+    /// for `VARCHAR[]`, a repeated `list` group with an optional UTF8
+    /// `element` (#801).
+    ListUtf8,
 }
 
 /// Where a [`ColumnType::Decimal`]'s unscaled value is stored.
@@ -143,6 +147,9 @@ pub enum ColumnValues {
     /// For a [`ColumnType::MapUtf8`] column: each map's entries in order,
     /// `None` for a NULL map, `Some(vec![])` for an empty one.
     Map(Vec<Option<MapEntries>>),
+    /// For a [`ColumnType::ListUtf8`] column: each list's elements in
+    /// order, `None` for a NULL list, `Some(vec![])` for an empty one.
+    List(Vec<Option<ListItems>>),
 }
 
 impl ColumnValues {
@@ -165,6 +172,7 @@ impl ColumnValues {
             ColumnType::Decimal { .. } => ColumnValues::Decimal(Vec::new()),
             ColumnType::FixedLenByteArray(_) => ColumnValues::FixedLenByteArray(Vec::new()),
             ColumnType::MapUtf8 => ColumnValues::Map(Vec::new()),
+            ColumnType::ListUtf8 => ColumnValues::List(Vec::new()),
         }
     }
 
@@ -195,6 +203,7 @@ impl ColumnValues {
                     ColumnType::FixedLenByteArray(_)
                 )
                 | (ColumnValues::Map(_), ColumnType::MapUtf8)
+                | (ColumnValues::List(_), ColumnType::ListUtf8)
         )
     }
 
@@ -216,6 +225,7 @@ impl ColumnValues {
             ColumnValues::UInt64(v) => v.len(),
             ColumnValues::Decimal(v) => v.len(),
             ColumnValues::Map(v) => v.len(),
+            ColumnValues::List(v) => v.len(),
         }
     }
 
@@ -245,6 +255,7 @@ impl ColumnValues {
             ColumnValues::UInt64(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Decimal(v) => v.iter().map(Option::is_some).collect(),
             ColumnValues::Map(v) => v.iter().map(Option::is_some).collect(),
+            ColumnValues::List(v) => v.iter().map(Option::is_some).collect(),
         }
     }
 
@@ -269,6 +280,7 @@ impl ColumnValues {
             (ColumnValues::Decimal(a), ColumnValues::Decimal(b)) => a.extend(b),
             (ColumnValues::FixedLenByteArray(a), ColumnValues::FixedLenByteArray(b)) => a.extend(b),
             (ColumnValues::Map(a), ColumnValues::Map(b)) => a.extend(b),
+            (ColumnValues::List(a), ColumnValues::List(b)) => a.extend(b),
             _ => {}
         }
     }

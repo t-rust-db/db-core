@@ -250,7 +250,7 @@ pub fn archive_dir(day: i64) -> String {
 
 /// The order rows are sorted in: NULL first, then numbers (integers,
 /// floats and decimals compared as numbers, per [`numeric_cmp`]; NaN last),
-/// booleans, strings, maps.
+/// booleans, strings, maps, lists.
 pub fn compare(a: &Value, b: &Value) -> Ordering {
     fn rank(v: &Value) -> u8 {
         match v {
@@ -259,6 +259,7 @@ pub fn compare(a: &Value, b: &Value) -> Ordering {
             Value::Bool(_) => 2,
             Value::Str(_) => 3,
             Value::Map(_) => 4,
+            Value::List(_) => 6,
             Value::Bytes(_) => 5,
         }
     }
@@ -269,6 +270,7 @@ pub fn compare(a: &Value, b: &Value) -> Ordering {
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Str(x), Value::Str(y)) => x.cmp(y),
         (Value::Map(x), Value::Map(y)) => x.cmp(y),
+        (Value::List(x), Value::List(y)) => x.cmp(y),
         (Value::Bytes(x), Value::Bytes(y)) => x.cmp(y),
         _ => rank(a).cmp(&rank(b)),
     }
