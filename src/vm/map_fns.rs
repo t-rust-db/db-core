@@ -13,15 +13,25 @@
 //! `''` gives `['']`, a NULL `s` gives NULL, a NULL `sep` the whole string as
 //! one element, an empty `sep` one element per character.
 //!
+//! #825: `list_contains(l, v)` (aliases `list_has`, `array_contains`,
+//! `array_has`) tests a list for a value, DuckDB's answers -- `true` when
+//! an element equals `v`, `false` otherwise (a NULL element matches
+//! nothing), NULL when `l` or `v` is NULL. A value that is not a list gives
+//! NULL, as a non-map does below.
+//!
 //! A NULL map gives NULL. A value that is not a map (or a key that is not a
 //! string) gives NULL too: column types are only known per row here.
 
 use super::batch::{MapEntries, SlotState, Value};
 
 /// The functions handled here, with their arities.
-pub(crate) const MAP_FUNCTIONS: [(&str, usize); 7] = [
+pub(crate) const MAP_FUNCTIONS: [(&str, usize); 11] = [
     ("string_split", 2),
     ("str_split", 2),
+    ("list_contains", 2),
+    ("list_has", 2),
+    ("array_contains", 2),
+    ("array_has", 2),
     ("map_extract_value", 2),
     ("map_get_ci", 2),
     ("element_at", 2),
@@ -75,6 +85,12 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
             _ => Value::Null,
         };
     }
+    if is_list_contains(name) {
+        return match args {
+            [list, value] => list_contains(list, value),
+            _ => Value::Null,
+        };
+    }
     let (Some(Value::Map(entries)), key) = (args.first(), args.get(1)) else {
         return Value::Null;
     };
@@ -123,6 +139,29 @@ fn string_split(s: &Value, sep: &Value) -> Value {
         },
     };
     Value::List(std::sync::Arc::new(items))
+}
+
+/// Whether `name` (any case) is `list_contains` or one of its aliases.
+fn is_list_contains(name: &str) -> bool {
+    ["list_contains", "list_has", "array_contains", "array_has"]
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(name))
+}
+
+fn list_contains(list: &Value, value: &Value) -> Value {
+    let Value::List(items) = list else {
+        return Value::Null;
+    };
+    if matches!(value, Value::Null) {
+        return Value::Null;
+    }
+    // A list's elements are strings, so `value` is compared as text.
+    let value = value.to_string();
+    Value::Bool(
+        items
+            .iter()
+            .any(|item| item.as_deref() == Some(value.as_str())),
+    )
 }
 
 /// The value of the first entry whose key matches: `None` when no key
@@ -268,6 +307,48 @@ mod tests {
     fn mcdc__vm_map_fns_string_split_e1a5eb72__v3_empty_string_by_a_separator_is_one_empty_element()
     {
         assert_eq!(string_split(&s(""), &s(",")), list(&[""]));
+    }
+
+    #[test]
+    fn list_contains_follows_duckdb() {
+        let with_null = Value::List(Arc::new(vec![Some("a".into()), None]));
+        assert_eq!(
+            call("list_contains", &[&list(&["a", "b"]), &s("b")]),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            call("list_contains", &[&with_null, &s("c")]),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            call("list_contains", &[&list(&[]), &s("a")]),
+            Value::Bool(false)
+        );
+        assert_eq!(call("list_contains", &[&Value::Null, &s("a")]), Value::Null);
+        assert_eq!(
+            call("list_contains", &[&list(&["a"]), &Value::Null]),
+            Value::Null
+        );
+        assert_eq!(call("list_contains", &[&s("a"), &s("a")]), Value::Null);
+        assert_eq!(
+            call("list_contains", &[&list(&["1"]), &Value::Int(1)]),
+            Value::Bool(true)
+        );
+        for alias in ["LIST_HAS", "array_contains", "array_has"] {
+            assert_eq!(
+                call(alias, &[&list(&["a"]), &s("a")]),
+                Value::Bool(true),
+                "{alias}"
+            );
+        }
+        assert_eq!(
+            call_column(
+                "list_contains",
+                &[&[list(&["a"]), Value::Null], &[s("a"), s("a")]],
+                2
+            ),
+            [Value::Bool(true), Value::Null]
+        );
     }
 
     #[test]
