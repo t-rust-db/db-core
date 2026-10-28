@@ -1019,8 +1019,11 @@ fn live_through_emit(rest: &[Opcode]) -> Option<Vec<usize>> {
 impl Opcode {
     /// Pushes every register this opcode reads onto `out` (#810). Written
     /// without a wildcard so a new opcode must say what it reads; where an
-    /// opcode nests others (`Combine`, `Select`) everything read inside
-    /// counts, which can only make a caller less eager, never wrong.
+    /// opcode nests others (`Select`) everything read inside counts, which
+    /// can only make a caller less eager, never wrong. `Sort`, `Limit` and
+    /// `Combine` read no register: they work on the emitted rows (their
+    /// columns are output positions, and `Combine`'s `project` runs over the
+    /// merged rows in a register space of its own).
     pub(crate) fn read_registers(&self, out: &mut Vec<usize>) {
         let source = |s: &ValueSource| match s {
             ValueSource::Probe(r) => Some(*r),
@@ -1033,7 +1036,9 @@ impl Opcode {
             | Opcode::ScanSource(_)
             | Opcode::NextSegment { .. }
             | Opcode::Halt
-            | Opcode::Limit { .. } => {}
+            | Opcode::Limit { .. }
+            | Opcode::Sort { .. }
+            | Opcode::Combine { .. } => {}
             Opcode::Map { a, b, .. } => out.extend([*a, *b]),
             Opcode::Filter { predicate } => out.push(*predicate),
             Opcode::Reduce { src, .. } => out.extend(src),
@@ -1072,15 +1077,6 @@ impl Opcode {
                 out.extend(order_by.iter().map(|(r, _)| *r));
             }
             Opcode::Emit { registers } => out.extend(registers.iter()),
-            Opcode::Combine {
-                output_order,
-                project,
-                ..
-            } => {
-                out.extend(output_order.iter());
-                project.iter().for_each(|o| o.read_registers(out));
-            }
-            Opcode::Sort { keys, .. } => out.extend(keys.iter().map(|(r, _)| *r)),
             Opcode::Call { args, .. } => out.extend(args.iter()),
             Opcode::InList { src, .. } => out.push(*src),
             Opcode::Select {
@@ -1670,6 +1666,37 @@ impl Program {
                     other.push(column.as_ref());
                 } else if !out.iter().any(|c| c == column.as_ref()) {
                     out.push(column.to_string());
+                }
+            }
+        }
+        out.retain(|c| !other.contains(&c.as_str()));
+        out
+    }
+
+    /// Every loaded column the program reads only as the source of an
+    /// [`Opcode::Unnest`] (#809): a `LIST` column among them is read flat
+    /// and never built as one `Value::List` per row. A column loaded into a
+    /// register any other opcode reads, or into none an `Unnest` reads, is
+    /// left out.
+    pub fn unnest_only_columns(&self) -> Vec<String> {
+        let mut read: Vec<usize> = Vec::new();
+        let mut unnested: Vec<usize> = Vec::new();
+        for op in self.opcodes() {
+            match op {
+                Opcode::Unnest { src, .. } => unnested.push(*src),
+                op => op.read_registers(&mut read),
+            }
+        }
+        let mut out: Vec<String> = Vec::new();
+        let mut other: Vec<&str> = Vec::new();
+        for op in self.opcodes() {
+            if let Opcode::LoadColumn { reg, column } = op {
+                if unnested.contains(reg) && !read.contains(reg) {
+                    if !out.iter().any(|c| c == column.as_ref()) {
+                        out.push(column.to_string());
+                    }
+                } else {
+                    other.push(column.as_ref());
                 }
             }
         }
@@ -3310,6 +3337,9 @@ impl KeyView {
                 Column::Dict { indices, valid, .. } => {
                     valid.get(p) == valid.get(q) && (!valid.get(p) || indices[p] == indices[q])
                 }
+                // Never a typed key in practice (a list column is read
+                // through `Unnest`); compared by value to stay exact.
+                list @ Column::List { .. } => list.get(p) == list.get(q),
             },
         }
     }
@@ -3322,6 +3352,25 @@ impl KeyView {
             KeyView::Typed(column) => column.get(p),
         }
     }
+}
+
+/// The row each element of a flat list column came from, repeated once per
+/// element (a NULL or empty list has none).
+fn flat_unnest_rows(offsets: &[u32], valid: &Bitmap) -> Vec<usize> {
+    let mut rows = Vec::new();
+    for (row, pair) in offsets.windows(2).enumerate() {
+        if !valid.get(row) {
+            continue;
+        }
+        let [lo, hi] = [
+            pair.first().copied().unwrap_or(0),
+            pair.get(1).copied().unwrap_or(0),
+        ];
+        for _ in lo..hi {
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 /// `GroupReduce`'s generic grouping (#479): composite, string, float and
@@ -6210,6 +6259,11 @@ impl Vm {
             self.typed_registers
                 .retain(|r, _| *r == src || live.contains(r));
         }
+        // #809: a flat list column unnests from its own offsets and
+        // dictionary, with no `Value` per row or element.
+        if let Some((rows, elements)) = self.flat_list(src) {
+            return self.finish_unnest(opcode, src, dst, rows, elements);
+        }
         self.ensure_materialized(src);
         let mut rows: Vec<usize> = Vec::new();
         // The elements as a typed string column (#815): no `Value` per
@@ -6248,7 +6302,41 @@ impl Vm {
             data: text,
             valid: crate::vm::column::Bitmap::from_bools(present.into_iter()),
         };
-        let num_rows = self.reg(src, opcode)?.len();
+        self.finish_unnest(opcode, src, dst, rows, elements)
+    }
+
+    /// The rows and elements of `src` when it is a flat list column held
+    /// only as a typed register (#809): one element per row it repeats,
+    /// and the list's own element column. `None` for any other register.
+    fn flat_list(&self, src: usize) -> Option<(Vec<usize>, Column)> {
+        if self.registers.contains_key(&src) {
+            return None;
+        }
+        match self.typed_registers.get(&src)?.as_ref() {
+            Column::List {
+                offsets,
+                elements,
+                valid,
+            } => Some((flat_unnest_rows(offsets, valid), elements.as_ref().clone())),
+            _ => None,
+        }
+    }
+
+    /// The reshape half of [`Self::unnest`]: every live register repeated
+    /// by `rows` (a typed one gathered, #815), then `elements` as register
+    /// `dst`.
+    fn finish_unnest(
+        &mut self,
+        opcode: &'static str,
+        src: usize,
+        dst: usize,
+        rows: Vec<usize>,
+        elements: Column,
+    ) -> Result<()> {
+        let num_rows = match self.typed_registers.get(&src) {
+            Some(column) if !self.registers.contains_key(&src) => column.len(),
+            _ => self.reg(src, opcode)?.len(),
+        };
         let typed: Vec<usize> = self.typed_registers.keys().copied().collect();
         let mut gathered: HashMap<usize, Arc<Column>> = HashMap::new();
         for r in typed {
@@ -8023,6 +8111,134 @@ mod tests {
             &[Value::Str("a".into()), Value::Null, Value::Str("b".into())]
         );
         assert_eq!(vm.register(3).unwrap().len(), 3);
+    }
+
+    /// #809: a flat list column unnests to the same rows as its
+    /// `Value::List` form, but leaves a typed element column.
+    #[test]
+    fn unnest_of_a_flat_list_column_matches_the_value_path() {
+        // [a, NULL], [], NULL, [b, a]
+        let flat = Column::List {
+            offsets: vec![0, 2, 2, 2, 4],
+            elements: Box::new(Column::Dict {
+                dict: vec![Arc::from("a"), Arc::from("b")],
+                indices: vec![0, 0, 1, 0],
+                valid: Bitmap::from_bools([true, false, true, true].into_iter()),
+            }),
+            valid: Bitmap::from_bools([true, true, false, true].into_iter()),
+        };
+        let ids = || vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
+        let ops = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "labels".into(),
+            },
+            Opcode::Unnest { src: 1, dst: 2 },
+        ];
+        let typed = Batch::new(4)
+            .with_column("id", ids())
+            .with_typed_column("labels", flat.clone());
+        let values = Batch::new(4)
+            .with_column("id", ids())
+            .with_column("labels", (0..4).map(|i| flat.get(i)).collect());
+        let (mut a, mut b) = (Vm::new(), Vm::new());
+        a.execute(&typed, &ops).unwrap();
+        b.execute(&values, &ops).unwrap();
+        assert_eq!(
+            a.register(0).unwrap(),
+            &[Value::Int(1), Value::Int(1), Value::Int(4), Value::Int(4)]
+        );
+        assert_eq!(a.register(0).unwrap(), b.register(0).unwrap());
+        assert_eq!(a.register(2).unwrap(), b.register(2).unwrap());
+        assert!(a.typed_register(2).is_some());
+    }
+
+    /// #809: a pending selection compacts a flat list column, which then
+    /// unnests like its `Value::List` form.
+    #[test]
+    fn unnest_of_a_flat_list_column_after_a_filter_matches_the_value_path() {
+        // [a, NULL], [], NULL, [b, a]; the filter keeps rows 0, 2, 3.
+        let flat = Column::List {
+            offsets: vec![0, 2, 2, 2, 4],
+            elements: Box::new(Column::Dict {
+                dict: vec![Arc::from("a"), Arc::from("b")],
+                indices: vec![0, 0, 1, 0],
+                valid: Bitmap::from_bools([true, false, true, true].into_iter()),
+            }),
+            valid: Bitmap::from_bools([true, true, false, true].into_iter()),
+        };
+        let ids = || vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
+        let keep = || {
+            vec![
+                Value::Bool(true),
+                Value::Bool(false),
+                Value::Bool(true),
+                Value::Bool(true),
+            ]
+        };
+        let ops = [
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "id".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "labels".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 2,
+                column: "keep".into(),
+            },
+            Opcode::Filter { predicate: 2 },
+            Opcode::Unnest { src: 1, dst: 3 },
+        ];
+        let typed = Batch::new(4)
+            .with_column("id", ids())
+            .with_column("keep", keep())
+            .with_typed_column("labels", flat.clone());
+        let values = Batch::new(4)
+            .with_column("id", ids())
+            .with_column("keep", keep())
+            .with_column("labels", (0..4).map(|i| flat.get(i)).collect());
+        let (mut a, mut b) = (Vm::new(), Vm::new());
+        a.execute(&typed, &ops).unwrap();
+        b.execute(&values, &ops).unwrap();
+        assert_eq!(
+            a.register(0).unwrap(),
+            &[Value::Int(1), Value::Int(1), Value::Int(4), Value::Int(4)]
+        );
+        assert_eq!(a.register(0).unwrap(), b.register(0).unwrap());
+        assert_eq!(a.register(3).unwrap(), b.register(3).unwrap());
+        assert!(a.typed_register(3).is_some());
+    }
+
+    /// #809: slicing a flat list column rebases its offsets and elements.
+    #[test]
+    fn a_flat_list_column_slices_and_reads_back_by_row() {
+        let flat = Column::List {
+            offsets: vec![0, 2, 2, 2, 4],
+            elements: Box::new(Column::Dict {
+                dict: vec![Arc::from("a"), Arc::from("b")],
+                indices: vec![0, 0, 1, 0],
+                valid: Bitmap::from_bools([true, false, true, true].into_iter()),
+            }),
+            valid: Bitmap::from_bools([true, true, false, true].into_iter()),
+        };
+        let tail = flat.slice(1, 3);
+        assert_eq!(tail.len(), 3);
+        assert_eq!(
+            (1..4).map(|i| flat.get(i)).collect::<Vec<_>>(),
+            (0..3).map(|i| tail.get(i)).collect::<Vec<_>>()
+        );
+        assert!(tail.is_null(1));
+        assert_eq!(
+            tail.get(2),
+            Value::List(Arc::new(vec![Some(Arc::from("b")), Some(Arc::from("a"))]))
+        );
     }
 
     #[test]
@@ -12778,6 +12994,90 @@ mod tests {
         assert_eq!(program.null_only_columns(), vec!["tags".to_string()]);
     }
 
+    /// #809: a column only `Unnest` reads is a flat read -- also behind an
+    /// `ORDER BY` (`Sort`/`Combine` name output positions, not registers).
+    #[test]
+    fn a_column_read_only_by_unnest_is_unnest_only() {
+        let combine = || {
+            Instruction::new(Opcode::Combine {
+                agg_parts: Vec::new().into(),
+                num_group_keys: 1,
+                distinct: false,
+                output_order: Vec::new().into(),
+                project: Vec::new().into(),
+            })
+        };
+        let program = Program::new(vec![
+            load(0, "tags"),
+            Instruction::new(Opcode::Unnest { src: 0, dst: 1 }),
+            Instruction::new(Opcode::GroupReduce {
+                group_by: vec![1].into(),
+                aggs: vec![(AggFunc::Count, None)].into(),
+                agg_dst: vec![2].into(),
+            }),
+            Instruction::new(Opcode::Emit {
+                registers: vec![1, 2].into(),
+            }),
+            combine(),
+            Instruction::new(Opcode::Sort {
+                keys: vec![(0, false)].into(),
+                hidden: 0,
+            }),
+        ]);
+        assert_eq!(program.unnest_only_columns(), vec!["tags".to_string()]);
+        // Read elsewhere too, or loaded again into a register that is.
+        let program = Program::new(vec![
+            load(0, "tags"),
+            is_null(2, 0, true),
+            Instruction::new(Opcode::Unnest { src: 0, dst: 1 }),
+        ]);
+        assert!(program.unnest_only_columns().is_empty());
+        let program = Program::new(vec![
+            load(0, "tags"),
+            load(3, "tags"),
+            Instruction::new(Opcode::Unnest { src: 0, dst: 1 }),
+            Instruction::new(Opcode::Emit {
+                registers: vec![3].into(),
+            }),
+        ]);
+        assert!(program.unnest_only_columns().is_empty());
+    }
+
+    // vm_batch_unnest_only_columns_3df5548a: `unnested.contains(reg) &&
+    // !read.contains(reg)` (#809).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_unnest_only_columns_3df5548a__v1_unnested_and_read_nowhere_else() {
+        let program = Program::new(vec![
+            load(0, "tags"),
+            Instruction::new(Opcode::Unnest { src: 0, dst: 1 }),
+        ]);
+        assert_eq!(program.unnest_only_columns(), vec!["tags".to_string()]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_unnest_only_columns_3df5548a__v2_unnested_but_read_elsewhere_too() {
+        let program = Program::new(vec![
+            load(0, "tags"),
+            is_null(2, 0, true),
+            Instruction::new(Opcode::Unnest { src: 0, dst: 1 }),
+        ]);
+        assert!(program.unnest_only_columns().is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_unnest_only_columns_3df5548a__v3_never_unnested() {
+        let program = Program::new(vec![
+            load(0, "tags"),
+            Instruction::new(Opcode::Emit {
+                registers: vec![0].into(),
+            }),
+        ]);
+        assert!(program.unnest_only_columns().is_empty());
+    }
+
     #[test]
     fn any_other_read_of_the_column_makes_it_a_full_decode() {
         let emit = |regs: Vec<usize>| Opcode::Emit {
@@ -12901,13 +13201,12 @@ mod tests {
             }),
             [1, 2]
         );
-        assert_eq!(
-            read(Opcode::Sort {
-                keys: vec![(4, false)].into(),
-                hidden: 0
-            }),
-            [4]
-        );
+        // Output positions, not registers.
+        assert!(read(Opcode::Sort {
+            keys: vec![(4, false)].into(),
+            hidden: 0
+        })
+        .is_empty());
         assert_eq!(
             read(Opcode::Call {
                 dst: 9,
@@ -12940,16 +13239,15 @@ mod tests {
             }),
             [1, 2, 3, 4, 5]
         );
-        assert_eq!(
-            read(Opcode::Combine {
-                agg_parts: Vec::new().into(),
-                num_group_keys: 0,
-                distinct: false,
-                output_order: vec![1].into(),
-                project: vec![Opcode::Filter { predicate: 2 }].into(),
-            }),
-            [1, 2]
-        );
+        // Its `project` runs over the merged rows, in registers of its own.
+        assert!(read(Opcode::Combine {
+            agg_parts: Vec::new().into(),
+            num_group_keys: 0,
+            distinct: false,
+            output_order: vec![1].into(),
+            project: vec![Opcode::Filter { predicate: 2 }].into(),
+        })
+        .is_empty());
     }
 
     // vm_batch_run_morsels_ordered_04f69f8a (`run_morsels_ordered` worker

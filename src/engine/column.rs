@@ -595,10 +595,10 @@ impl RowGroupSegment<'_, '_> {
         num_rows: usize,
         leaves: &[Leaf],
     ) -> Result<Batch, VmError> {
-        let null_only = self.program.null_only_columns();
+        let list_reads = ListReads::of(self.program);
         let mut batch = Batch::new(num_rows);
         for (name, index, physical_type) in leaves {
-            let levels_only = null_only.contains(name);
+            let levels_only = list_reads.get(name);
             let decoded = load_leaf(rg, *index, *physical_type, self.bits(name), levels_only)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             batch = apply_loaded(batch, name, decoded);
@@ -641,10 +641,10 @@ impl RowGroupSegment<'_, '_> {
 
     fn gather_leaves_at(&self, columns: &[String], positions: &[u32]) -> Result<Batch, VmError> {
         let rg = self.row_group()?;
-        let null_only = self.program.null_only_columns();
+        let list_reads = ListReads::of(self.program);
         let mut batch = Batch::new(positions.len());
         for (name, index, physical_type) in self.leaves_named(columns)? {
-            let levels_only = null_only.contains(&name);
+            let levels_only = list_reads.get(&name);
             let decoded = load_leaf_at(
                 &rg,
                 index,
@@ -722,10 +722,10 @@ impl Segment for RowGroupSegment<'_, '_> {
             .iter()
             .filter(|(name, ..)| predicate_names.iter().any(|n| n == name))
             .collect();
-        let null_only = self.program.null_only_columns();
+        let list_reads = ListReads::of(self.program);
         let mut predicate_batch = Batch::new(num_rows);
         for (name, index, physical_type) in &predicate_leaves {
-            let levels_only = null_only.contains(name);
+            let levels_only = list_reads.get(name);
             let decoded = load_leaf(&rg, *index, *physical_type, self.bits(name), levels_only)
                 .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             predicate_batch = apply_loaded(predicate_batch, name, decoded);
@@ -777,7 +777,7 @@ impl Segment for RowGroupSegment<'_, '_> {
                 batch = batch.with_column(name.clone(), Vec::new());
                 continue;
             }
-            let levels_only = null_only.contains(name);
+            let levels_only = list_reads.get(name);
             let decoded = load_leaf_at(
                 &rg,
                 *index,
@@ -842,6 +842,42 @@ fn decimal_values(rg: &RowGroupReader<'_, '_>, index: usize) -> Result<Vec<Value
         .collect()
 }
 
+/// How a LIST column is read: all its elements, only whether each list is
+/// NULL (#810), or flat -- one offsets vector and one dictionary column of
+/// elements, for a column only `UNNEST` reads (#809).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListRead {
+    Full,
+    LevelsOnly,
+    Flat,
+}
+
+/// The columns a program reads as [`ListRead::LevelsOnly`] or
+/// [`ListRead::Flat`]; every other column reads in full.
+struct ListReads {
+    null_only: Vec<String>,
+    unnest_only: Vec<String>,
+}
+
+impl ListReads {
+    fn of(program: &Program) -> Self {
+        Self {
+            null_only: program.null_only_columns(),
+            unnest_only: program.unnest_only_columns(),
+        }
+    }
+
+    fn get(&self, name: &str) -> ListRead {
+        if self.null_only.iter().any(|c| c == name) {
+            ListRead::LevelsOnly
+        } else if self.unnest_only.iter().any(|c| c == name) {
+            ListRead::Flat
+        } else {
+            ListRead::Full
+        }
+    }
+}
+
 /// Leaf `index` decoded for every row: a MAP field (at its first leaf) as
 /// map values, a LIST field as list values, a DECIMAL as exact decimals, anything else as its typed
 /// column.
@@ -850,10 +886,13 @@ fn load_leaf(
     index: usize,
     physical_type: PhysicalType,
     bit_pattern: bool,
-    levels_only: bool,
+    list: ListRead,
 ) -> Result<Loaded, FileError> {
     match rg.nested_field_at(index) {
-        Some(field) => nested_values(rg, &field, levels_only).map(Loaded::Values),
+        Some(field) if is_list(&field) && list == ListRead::Flat => rg
+            .read_list_utf8_flat(&field)
+            .map(|column| Loaded::Typed(Decoded::Column(column))),
+        Some(field) => nested_values(rg, &field, list == ListRead::LevelsOnly).map(Loaded::Values),
         None if annotation(rg, index) == Annotation::Decimal => {
             decimal_values(rg, index).map(Loaded::Values)
         }
@@ -871,10 +910,10 @@ fn load_leaf_at(
     physical_type: PhysicalType,
     positions: &[u32],
     bit_pattern: bool,
-    levels_only: bool,
+    list: ListRead,
 ) -> Result<Loaded, FileError> {
     let all = match rg.nested_field_at(index) {
-        Some(field) => Some(nested_values(rg, &field, levels_only)?),
+        Some(field) => Some(nested_values(rg, &field, list == ListRead::LevelsOnly)?),
         None if bit_pattern && annotation(rg, index) == Annotation::UInt64 => {
             Some(uint64_bit_pattern(rg, index)?)
         }
@@ -3177,8 +3216,21 @@ mod tests {
             }
         };
         (
-            values(load_leaf(&rg, index, pt, bit_pattern, false)),
-            values(load_leaf_at(&rg, index, pt, &[0, 1], bit_pattern, false)),
+            values(load_leaf(
+                &rg,
+                index,
+                pt,
+                bit_pattern,
+                super::ListRead::Full,
+            )),
+            values(load_leaf_at(
+                &rg,
+                index,
+                pt,
+                &[0, 1],
+                bit_pattern,
+                super::ListRead::Full,
+            )),
         )
     }
 
@@ -3226,6 +3278,52 @@ mod tests {
         let map = nested_shapes_values("m", true);
         assert_eq!(map, nested_shapes_values("m", false));
         assert!(matches!(map.as_slice(), [Value::Map(_)]), "{map:?}");
+    }
+
+    /// `load_leaf` of `nested_shapes.parquet`'s field `name`, read as `list`.
+    fn nested_shapes_load(name: &str, list: super::ListRead) -> super::Loaded {
+        let bytes = std::fs::read("tests/fixtures/parquet/nested_shapes.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let (_, index, pt) = nested_shapes_leaf(name).unwrap();
+        super::load_leaf(&file.row_group(0).unwrap(), index, pt, false, list).unwrap()
+    }
+
+    // engine_column_load_leaf_1a209f83: `is_list(&field) && list ==
+    // ListRead::Flat` (#809). `lst` is one row holding `["x"]`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_1a209f83__v1_a_flat_list_read_is_a_typed_list_column() {
+        let super::Loaded::Typed(super::Decoded::Column(column)) =
+            nested_shapes_load("lst", super::ListRead::Flat)
+        else {
+            panic!("a flat list read is a typed column");
+        };
+        assert!(matches!(column, crate::vm::column::Column::List { .. }));
+        assert_eq!(
+            column.get(0),
+            Value::List(std::sync::Arc::new(vec![Some("x".into())]))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_1a209f83__v2_a_list_read_in_full_is_values() {
+        let super::Loaded::Values(values) = nested_shapes_load("lst", super::ListRead::Full) else {
+            panic!("a full list read is values");
+        };
+        assert_eq!(
+            values,
+            vec![Value::List(std::sync::Arc::new(vec![Some("x".into())]))]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_1a209f83__v3_a_map_is_values_whatever_the_flag() {
+        let super::Loaded::Values(values) = nested_shapes_load("m", super::ListRead::Flat) else {
+            panic!("a map is read as values");
+        };
+        assert!(matches!(values.as_slice(), [Value::Map(_)]), "{values:?}");
     }
 
     /// #801: `is_map(&f) || is_list(&f)`, a map (leaf A true).

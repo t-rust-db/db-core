@@ -230,6 +230,18 @@ pub enum Column {
         /// Per-row validity (`true` = not NULL).
         valid: Bitmap,
     },
+    /// A list of strings in a flat layout (#809): row `i`'s elements are
+    /// `elements[offsets[i]..offsets[i + 1]]`, with one `Vec` for the whole
+    /// column instead of one per row. `offsets` has `len + 1` entries; a NULL
+    /// element is a NULL row of `elements`, a NULL list a cleared bit in `valid`.
+    List {
+        /// Row `i`'s element range is `offsets[i]..offsets[i + 1]`.
+        offsets: Vec<u32>,
+        /// Every row's elements, back to back (a [`Column::Dict`]).
+        elements: Box<Column>,
+        /// Per-row validity (`true` = not a NULL list).
+        valid: Bitmap,
+    },
 }
 
 /// Row `i`'s owned copy out of a `Column::Str`'s offsets+data buffer, or
@@ -252,7 +264,8 @@ impl Column {
             | Column::Float { valid, .. }
             | Column::Bool { valid, .. }
             | Column::Str { valid, .. }
-            | Column::Dict { valid, .. } => valid.len(),
+            | Column::Dict { valid, .. }
+            | Column::List { valid, .. } => valid.len(),
         }
     }
 
@@ -305,6 +318,30 @@ impl Column {
                         .map(|o| o.saturating_sub(base))
                         .collect(),
                     data: data.get(lo..hi).unwrap_or_default().to_string(),
+                    valid: valid.slice(start, end),
+                }
+            }
+            Column::List {
+                offsets,
+                elements,
+                valid,
+            } => {
+                let at = |i: usize| {
+                    offsets
+                        .get(i)
+                        .and_then(|o| usize::try_from(*o).ok())
+                        .unwrap_or(0)
+                };
+                let (lo, hi) = (at(start), at(end));
+                let base = offsets.get(start).copied().unwrap_or(0);
+                Column::List {
+                    offsets: offsets
+                        .get(start..=end)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|o| o.saturating_sub(base))
+                        .collect(),
+                    elements: Box::new(elements.slice(lo, hi.saturating_sub(lo))),
                     valid: valid.slice(start, end),
                 }
             }
@@ -387,6 +424,7 @@ impl Column {
                     valid,
                 }
             }
+            Column::List { .. } => return self.take_list(rows),
             Column::Str { .. } | Column::Dict { .. } => {
                 let mut offsets = Vec::with_capacity(rows.len().saturating_add(1));
                 let mut data = String::new();
@@ -439,7 +477,8 @@ impl Column {
             | Column::Float { valid, .. }
             | Column::Bool { valid, .. }
             | Column::Str { valid, .. }
-            | Column::Dict { valid, .. } => valid,
+            | Column::Dict { valid, .. }
+            | Column::List { valid, .. } => valid,
         };
         !valid.get(i)
     }
@@ -463,6 +502,86 @@ impl Column {
                 .get(i)
                 .and_then(|&code| dict.get(usize::try_from(code).unwrap_or(usize::MAX)))
                 .map_or(Value::Null, |s| Value::Str(s.to_string().into())),
+            Column::List {
+                offsets, elements, ..
+            } => {
+                let at = |i: usize| {
+                    offsets
+                        .get(i)
+                        .and_then(|o| usize::try_from(*o).ok())
+                        .unwrap_or(0)
+                };
+                let items = (at(i)..at(i.saturating_add(1)))
+                    .map(|j| elements.shared_str(j))
+                    .collect();
+                Value::List(Arc::new(items))
+            }
+        }
+    }
+
+    /// [`Self::take`] of a [`Column::List`] over a [`Column::Dict`] of
+    /// elements (#809): the listed rows' elements, back to back, so a
+    /// selection or a repeat (`UNNEST`) keeps the list flat.
+    fn take_list(&self, rows: &[usize]) -> Option<Column> {
+        let Column::List {
+            offsets,
+            elements,
+            valid,
+        } = self
+        else {
+            return None;
+        };
+        let Column::Dict {
+            dict,
+            indices,
+            valid: element_valid,
+        } = elements.as_ref()
+        else {
+            return None;
+        };
+        let at = |i: usize| {
+            offsets
+                .get(i)
+                .and_then(|o| usize::try_from(*o).ok())
+                .unwrap_or(0)
+        };
+        let mut taken_offsets = Vec::with_capacity(rows.len().saturating_add(1));
+        taken_offsets.push(0u32);
+        let mut taken_indices: Vec<u32> = Vec::new();
+        let mut taken_element_valid: Vec<bool> = Vec::new();
+        let mut taken_valid: Vec<bool> = Vec::with_capacity(rows.len());
+        for &row in rows {
+            for j in at(row)..at(row.saturating_add(1)) {
+                taken_indices.push(*indices.get(j)?);
+                taken_element_valid.push(element_valid.get(j));
+            }
+            taken_offsets.push(u32::try_from(taken_indices.len()).ok()?);
+            taken_valid.push(valid.get(row));
+        }
+        Some(Column::List {
+            offsets: taken_offsets,
+            elements: Box::new(Column::Dict {
+                dict: dict.clone(),
+                indices: taken_indices,
+                valid: Bitmap::from_bools(taken_element_valid.into_iter()),
+            }),
+            valid: Bitmap::from_bools(taken_valid.into_iter()),
+        })
+    }
+
+    /// Row `i` of a [`Column::Dict`] as its shared string (`None` for NULL,
+    /// out of range, or any other variant).
+    pub(crate) fn shared_str(&self, i: usize) -> Option<Arc<str>> {
+        match self {
+            Column::Dict {
+                dict,
+                indices,
+                valid,
+            } if valid.get(i) => indices
+                .get(i)
+                .and_then(|&code| dict.get(usize::try_from(code).unwrap_or(usize::MAX)))
+                .cloned(),
+            _ => None,
         }
     }
 }
