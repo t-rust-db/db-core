@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.194.0] - 2026-10-28
+
+### Changed
+
+- Faster `UNNEST(string_split(...))`, grouped `count(DISTINCT <string>)` after UNNEST, and `=`/`<>` on string columns (#815, partial).
+
 ## [0.193.0] - 2026-10-28
 
 ### Changed
