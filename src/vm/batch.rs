@@ -60,6 +60,10 @@ pub enum AggFunc {
     /// group's sorted distinct values ([`Value::Bytes`], 8 bytes each),
     /// which `Combine` unions and counts.
     ExactCountDistinct,
+    /// [`AggFunc::ExactCountDistinct`] for a string column (#820): the
+    /// partial is the group's distinct strings ([`encode_str_set`]), which
+    /// `Combine` unions and counts.
+    ExactCountDistinctStr,
 }
 
 impl AggFunc {
@@ -78,7 +82,7 @@ impl AggFunc {
             AggFunc::Max => "MAX",
             AggFunc::AvgSum => "SUM",
             AggFunc::ApproxCountDistinct => "APPROX_COUNT_DISTINCT",
-            AggFunc::ExactCountDistinct => "COUNT",
+            AggFunc::ExactCountDistinct | AggFunc::ExactCountDistinctStr => "COUNT",
         }
     }
 
@@ -101,6 +105,110 @@ impl AggFunc {
 /// 8 little-endian bytes each (#817).
 pub(crate) fn encode_int_set(values: &[i64]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// A `Hasher` for `(group, key)` pairs: [`mix_hash`] per word, strings by
+/// [`hash_str_bytes`]; the default SipHash costs more than the dedupe it
+/// serves (#820).
+#[derive(Default)]
+struct PairHasher(u64);
+
+impl std::hash::Hasher for PairHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        self.0 = mix_hash(self.0, hash_str_bytes(bytes));
+    }
+    fn write_u32(&mut self, v: u32) {
+        self.0 = mix_hash(self.0, u64::from(v));
+    }
+    fn write_usize(&mut self, v: usize) {
+        self.0 = mix_hash(self.0, u64::try_from(v).unwrap_or(u64::MAX));
+    }
+}
+
+/// [`push_distinct_strs`] for dictionary codes: while `groups x dict` is
+/// small (a megabyte of bits at most), a bit per pair replaces the hash set
+/// (#820).
+fn push_distinct_codes(
+    accs: &mut [RunningAgg],
+    groups: usize,
+    dict: &[Arc<str>],
+    rows: impl Iterator<Item = (usize, u32)>,
+) {
+    push_distinct_codes_within(accs, groups, dict, rows, 1 << 20);
+}
+
+/// [`push_distinct_codes`] with up to `max_words` 64-bit words of bits.
+fn push_distinct_codes_within(
+    accs: &mut [RunningAgg],
+    groups: usize,
+    dict: &[Arc<str>],
+    rows: impl Iterator<Item = (usize, u32)>,
+    max_words: usize,
+) {
+    // Each group's bits start on a word, so they are read a word at a time.
+    let stride = dict.len().div_ceil(64);
+    let Some(words) = groups.checked_mul(stride).filter(|w| *w <= max_words) else {
+        return push_distinct_strs(accs, rows, |code: u32| {
+            dict.get(usize::try_from(code).ok()?).cloned()
+        });
+    };
+    let mut seen = vec![0u64; words];
+    for (group, code) in rows {
+        let word = usize::try_from(code / 64)
+            .ok()
+            .and_then(|w| w.checked_add(group.checked_mul(stride)?));
+        if let Some(word) = word.and_then(|w| seen.get_mut(w)) {
+            *word |= 1u64.wrapping_shl(code % 64);
+        }
+    }
+    for (acc, bits) in accs.iter_mut().zip(seen.chunks_exact(stride.max(1))) {
+        let codes = bits.iter().enumerate().flat_map(|(w, word)| {
+            let mut word = *word;
+            std::iter::from_fn(move || {
+                (word != 0).then(|| {
+                    let bit = usize::try_from(word.trailing_zeros()).unwrap_or(0);
+                    word &= word.wrapping_sub(1);
+                    w.saturating_mul(64).saturating_add(bit)
+                })
+            })
+        });
+        acc.add_strs(codes.filter_map(|code| dict.get(code).cloned()));
+    }
+}
+
+/// Adds each group's distinct strings to its accumulator (#820): `rows` is
+/// `(group, key)` per row and `resolve` turns a key (a dictionary code, or
+/// the string itself) into its text. A pair seen before is skipped, so each
+/// distinct string is copied once.
+fn push_distinct_strs<K: std::hash::Hash + Eq + Copy>(
+    accs: &mut [RunningAgg],
+    rows: impl Iterator<Item = (usize, K)>,
+    resolve: impl Fn(K) -> Option<Arc<str>>,
+) {
+    let mut seen: HashSet<(usize, K), std::hash::BuildHasherDefault<PairHasher>> =
+        HashSet::default();
+    for (group, key) in rows {
+        if seen.insert((group, key)) {
+            if let (Some(acc), Some(text)) = (accs.get_mut(group), resolve(key)) {
+                acc.add_strs(std::iter::once(text));
+            }
+        }
+    }
+}
+
+/// `values` (without repeats) as an exact string distinct count's partial:
+/// a 4-byte little-endian length and the bytes of each (#820).
+pub(crate) fn encode_str_set<S: AsRef<str>>(values: impl IntoIterator<Item = S>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for v in values {
+        let v = v.as_ref();
+        out.extend_from_slice(&u32::try_from(v.len()).unwrap_or(u32::MAX).to_le_bytes());
+        out.extend_from_slice(v.as_bytes());
+    }
+    out
 }
 
 /// A runtime row value, or a `SELECT`-list literal baked into an
@@ -566,6 +674,8 @@ pub enum AggPart {
     /// distinct values, unioned across segments and replaced by their count
     /// once everything is merged.
     ExactCountDistinct,
+    /// [`AggPart::ExactCountDistinct`] for strings (#820).
+    ExactCountDistinctStr,
     /// `(sum_index, count_index)` into the emitted row, combined at the end.
     Avg(usize, usize),
     /// A partial `SUM`/`COUNT`/`MIN`/`MAX`, merged the same as its plain
@@ -4001,6 +4111,12 @@ enum Extremes {
     /// A value that is not an integer reached an integer distinct count:
     /// the plan was wrong about the column, reported at finalize.
     NotInts,
+    /// `COUNT(DISTINCT <string>)`'s values so far (#820): each added batch
+    /// is free of repeats; the flag is set once a second one is added, and
+    /// [`RunningAgg::finalize`] then removes the repeats between them.
+    Strs(Vec<Arc<str>>, bool),
+    /// A value that is not a string reached a string distinct count.
+    NotStrs,
 }
 
 impl RunningAgg {
@@ -4020,6 +4136,28 @@ impl RunningAgg {
             Extremes::Ints(values) => values.push(x),
             Extremes::NotInts => {}
             other => *other = Extremes::Ints(vec![x]),
+        }
+    }
+
+    /// Adds strings to an exact string distinct count (#820).
+    fn add_strs(&mut self, strs: impl Iterator<Item = Arc<str>>) {
+        match &mut self.extremes {
+            Extremes::Strs(values, repeats) => {
+                *repeats |= !values.is_empty();
+                values.extend(strs);
+            }
+            Extremes::NotStrs => {}
+            other => *other = Extremes::Strs(strs.collect(), false),
+        }
+    }
+
+    /// Folds one value into an exact string distinct count (#820); `Null`
+    /// is skipped.
+    fn push_str_set(&mut self, value: &Value) {
+        match value {
+            Value::Null => {}
+            Value::Str(s) => self.add_strs(std::iter::once(Arc::from(&**s))),
+            _ => self.extremes = Extremes::NotStrs,
         }
     }
 
@@ -4061,9 +4199,12 @@ impl RunningAgg {
     /// primitives seen so far first.
     fn push_extreme(&mut self, value: &Value) {
         let (mut min, mut max) = match std::mem::take(&mut self.extremes) {
-            Extremes::Empty | Extremes::Sketch(_) | Extremes::Ints(_) | Extremes::NotInts => {
-                (value.clone(), value.clone())
-            }
+            Extremes::Empty
+            | Extremes::Sketch(_)
+            | Extremes::Ints(_)
+            | Extremes::NotInts
+            | Extremes::Strs(..)
+            | Extremes::NotStrs => (value.clone(), value.clone()),
             Extremes::Int(min, max) => (Value::Int(min), Value::Int(max)),
             Extremes::Float(min, max) => (Value::Float(min), Value::Float(max)),
             Extremes::Boxed(min, max) => (min, max),
@@ -4208,17 +4349,23 @@ impl RunningAgg {
                 Value::Float(self.total() / count)
             }
             AggFunc::Min => match &self.extremes {
-                Extremes::Empty | Extremes::Sketch(_) | Extremes::Ints(_) | Extremes::NotInts => {
-                    Value::Null
-                }
+                Extremes::Empty
+                | Extremes::Sketch(_)
+                | Extremes::Ints(_)
+                | Extremes::NotInts
+                | Extremes::Strs(..)
+                | Extremes::NotStrs => Value::Null,
                 Extremes::Int(min, _) => Value::Int(*min),
                 Extremes::Float(min, _) => Value::Float(*min),
                 Extremes::Boxed(min, _) => min.clone(),
             },
             AggFunc::Max => match &self.extremes {
-                Extremes::Empty | Extremes::Sketch(_) | Extremes::Ints(_) | Extremes::NotInts => {
-                    Value::Null
-                }
+                Extremes::Empty
+                | Extremes::Sketch(_)
+                | Extremes::Ints(_)
+                | Extremes::NotInts
+                | Extremes::Strs(..)
+                | Extremes::NotStrs => Value::Null,
                 Extremes::Int(_, max) => Value::Int(*max),
                 Extremes::Float(_, max) => Value::Float(*max),
                 Extremes::Boxed(_, max) => max.clone(),
@@ -4246,6 +4393,29 @@ impl RunningAgg {
                     })
                 }
                 _ => Value::Bytes(encode_int_set(&[]).into()),
+            },
+            // The same for strings (#820).
+            AggFunc::ExactCountDistinctStr => match &self.extremes {
+                Extremes::Strs(values, repeats) => {
+                    let mut seen = HashSet::new();
+                    Value::Bytes(
+                        encode_str_set(
+                            values
+                                .iter()
+                                .map(|v| &**v)
+                                .filter(|v| !*repeats || seen.insert(*v)),
+                        )
+                        .into(),
+                    )
+                }
+                Extremes::NotStrs => {
+                    return Err(VmError::MalformedProgram {
+                        opcode,
+                        reason: "a string COUNT(DISTINCT) read a value that is not a string"
+                            .to_string(),
+                    })
+                }
+                _ => Value::Bytes(Vec::new().into()),
             },
         })
     }
@@ -4418,6 +4588,8 @@ fn fold_group_row(
                     accumulators[i][group].push_sketch(value);
                 } else if *func == AggFunc::ExactCountDistinct {
                     accumulators[i][group].push_set(value);
+                } else if *func == AggFunc::ExactCountDistinctStr {
+                    accumulators[i][group].push_str_set(value);
                 } else {
                     accumulators[i][group].push(Some(value));
                 }
@@ -5846,9 +6018,18 @@ impl Vm {
                 .map(Arc::clone),
             _ => None,
         };
-        for (_, src) in aggs.iter() {
+        for (func, src) in aggs.iter() {
             if let Some(reg) = src {
-                self.ensure_materialized(*reg);
+                // #820: a string distinct count reads a dictionary's codes
+                // or a string column's bytes in place.
+                let in_place = *func == AggFunc::ExactCountDistinctStr
+                    && matches!(
+                        self.typed_registers.get(reg).map(|c| c.as_ref()),
+                        Some(Column::Dict { .. } | Column::Str { .. })
+                    );
+                if !in_place {
+                    self.ensure_materialized(*reg);
+                }
             }
         }
         // #479: the generic path reads each key register through a
@@ -6008,6 +6189,63 @@ impl Vm {
                         }
                         for (row, group) in row_group.iter().enumerate() {
                             accs[*group].push_set(&values[physical(row)]);
+                        }
+                    }
+                }
+                // #820: a string distinct count collects each group's
+                // distinct strings, from a dictionary's codes or a
+                // string column's bytes without a `Value` per row.
+                Some(reg) if *func == AggFunc::ExactCountDistinctStr => {
+                    let typed = self
+                        .typed_registers
+                        .get(reg)
+                        .map(Arc::clone)
+                        .filter(|c| c.len() == base_len);
+                    match typed.as_deref() {
+                        Some(Column::Dict {
+                            dict,
+                            indices,
+                            valid,
+                        }) => {
+                            let pairs = row_group.iter().enumerate().filter_map(|(row, g)| {
+                                let p = physical(row);
+                                valid.get(p).then(|| (*g, indices[p]))
+                            });
+                            push_distinct_codes(accs, num_groups, dict, pairs);
+                        }
+                        Some(Column::Str {
+                            offsets,
+                            data,
+                            valid,
+                        }) => {
+                            let pairs = row_group.iter().enumerate().filter_map(|(row, g)| {
+                                let p = physical(row);
+                                let (start, end) = (*offsets.get(p)?, *offsets.get(p + 1)?);
+                                let text = data.get(start as usize..end as usize)?;
+                                valid.get(p).then_some((*g, text))
+                            });
+                            push_distinct_strs(accs, pairs, |s: &str| Some(Arc::from(s)));
+                        }
+                        _ => {
+                            self.ensure_materialized(*reg);
+                            let values = self.reg(*reg, opcode)?;
+                            if values.len() != base_len {
+                                return Err(VmError::RegisterLengthMismatch { opcode });
+                            }
+                            let rows = row_group.iter().enumerate().filter_map(|(row, g)| {
+                                match &values[physical(row)] {
+                                    Value::Str(s) => Some((*g, &**s)),
+                                    _ => None,
+                                }
+                            });
+                            push_distinct_strs(accs, rows, |s: &str| Some(Arc::from(s)));
+                            // Anything but a string or `Null` is reported at
+                            // finalize.
+                            for (row, g) in row_group.iter().enumerate() {
+                                if !matches!(values[physical(row)], Value::Str(_) | Value::Null) {
+                                    accs[*g].extremes = Extremes::NotStrs;
+                                }
+                            }
                         }
                     }
                 }
@@ -7113,7 +7351,7 @@ fn reduce_count_star(func: AggFunc, num_rows: usize) -> Value {
 fn typed_reduce_values(func: AggFunc, column: &Column) -> Option<Result<Value>> {
     if matches!(
         func,
-        AggFunc::ApproxCountDistinct | AggFunc::ExactCountDistinct
+        AggFunc::ApproxCountDistinct | AggFunc::ExactCountDistinct | AggFunc::ExactCountDistinctStr
     ) {
         return None;
     }
@@ -7208,6 +7446,8 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Result<Value> {
             acc.push_sketch(value);
         } else if func == AggFunc::ExactCountDistinct {
             acc.push_set(value);
+        } else if func == AggFunc::ExactCountDistinctStr {
+            acc.push_str_set(value);
         } else {
             acc.push(Some(value));
         }
@@ -10627,6 +10867,141 @@ mod tests {
             &[Value::Null, Value::Str("east".into())]
         );
         assert_eq!(vm.register(2).unwrap(), &[Value::Int(8), Value::Int(2)]);
+    }
+
+    /// #820: dictionary codes reach the same strings through the bit table
+    /// and, when it would be too big, through the hash set; a dictionary of
+    /// more than 64 entries spans several words per group.
+    #[test]
+    fn distinct_codes_collect_the_same_strings_with_or_without_the_bit_table() {
+        let dict: Vec<Arc<str>> = (0..130).map(|i| Arc::from(format!("s{i}"))).collect();
+        let rows = [
+            (0, 3),
+            (1, 129),
+            (0, 3),
+            (0, 64),
+            (1, 0),
+            (1, 129),
+            (0, 129),
+        ];
+        let sets = |max_words: usize| -> Vec<Vec<String>> {
+            let mut accs = vec![RunningAgg::default(); 3];
+            push_distinct_codes_within(&mut accs, 3, &dict, rows.iter().copied(), max_words);
+            accs.iter()
+                .map(|acc| match &acc.extremes {
+                    Extremes::Strs(values, _) => {
+                        let mut v: Vec<String> = values.iter().map(|s| s.to_string()).collect();
+                        v.sort();
+                        v
+                    }
+                    _ => Vec::new(),
+                })
+                .collect()
+        };
+        let expected = vec![
+            vec!["s129".to_string(), "s3".to_string(), "s64".to_string()],
+            vec!["s0".to_string(), "s129".to_string()],
+            Vec::new(),
+        ];
+        assert_eq!(sets(1 << 20), expected);
+        assert_eq!(sets(0), expected);
+    }
+
+    /// #820: an exact string distinct count of a dictionary column, a
+    /// string column and `Value`s (NULLs skipped, repeats merged, the empty
+    /// string counted) gives the same strings; a value that is not a string
+    /// is an error, not a miscount.
+    #[test]
+    fn exact_string_distinct_collects_strings_and_refuses_anything_else() {
+        let run = |batch: &Batch, grouped: bool| {
+            let mut vm = Vm::new();
+            let mut program = vec![
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "x".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "k".into(),
+                },
+            ];
+            program.push(if grouped {
+                Opcode::GroupReduce {
+                    group_by: vec![1].into(),
+                    aggs: vec![(AggFunc::ExactCountDistinctStr, Some(0))].into(),
+                    agg_dst: vec![2].into(),
+                }
+            } else {
+                Opcode::Reduce {
+                    func: AggFunc::ExactCountDistinctStr,
+                    src: Some(0),
+                    dst: 2,
+                }
+            });
+            vm.execute(batch, &program).map(|()| vm)
+        };
+        let keys = vec![
+            Value::Str("a".into()),
+            Value::Str("b".into()),
+            Value::Str("a".into()),
+            Value::Str("a".into()),
+            Value::Str("b".into()),
+        ];
+        let strs = vec![
+            Value::Str("x".into()),
+            Value::Null,
+            Value::Str("".into()),
+            Value::Str("x".into()),
+            Value::Null,
+        ];
+        let sorted = |value: &Value| -> Vec<String> {
+            let Value::Bytes(bytes) = value else {
+                panic!("not a set: {value}")
+            };
+            let mut out = Vec::new();
+            let mut rest: &[u8] = bytes;
+            while let Some((len, tail)) = rest.split_first_chunk::<4>() {
+                let (item, tail) = tail.split_at(u32::from_le_bytes(*len) as usize);
+                out.push(String::from_utf8(item.to_vec()).unwrap());
+                rest = tail;
+            }
+            out.sort();
+            out
+        };
+        let dict = Column::Dict {
+            dict: vec!["x".into(), "".into()],
+            indices: vec![0, 0, 1, 0, 0],
+            valid: Bitmap::from_bools([true, false, true, true, false].into_iter()),
+        };
+        let typed = Batch::new(5)
+            .with_column("k", keys.clone())
+            .with_typed_column("x", Column::from(strs.clone()));
+        let boxed = Batch::new(5)
+            .with_column("k", keys.clone())
+            .with_column("x", strs.clone());
+        let dictionary = Batch::new(5)
+            .with_column("k", keys.clone())
+            .with_typed_column("x", dict);
+        for batch in [&typed, &boxed, &dictionary] {
+            let mut grouped = run(batch, true).unwrap();
+            let groups = grouped.register(2).unwrap();
+            assert_eq!(sorted(&groups[0]), ["", "x"]);
+            assert_eq!(sorted(&groups[1]), Vec::<String>::new());
+            let mut whole = run(batch, false).unwrap();
+            assert_eq!(sorted(&whole.register(2).unwrap()[0]), ["", "x"]);
+        }
+        let mixed = Batch::new(5).with_column("k", keys).with_column(
+            "x",
+            vec![
+                Value::Str("1".into()),
+                Value::Int(1),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ],
+        );
+        assert!(run(&mixed, true).is_err());
+        assert!(run(&mixed, false).is_err());
     }
 
     /// #817: an exact integer distinct count of a typed `Int` column

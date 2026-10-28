@@ -349,6 +349,7 @@ fn render_agg_part(part: &AggPart) -> String {
         AggPart::Max => "AggPart::Max".to_string(),
         AggPart::ApproxCountDistinct => "AggPart::ApproxCountDistinct".to_string(),
         AggPart::ExactCountDistinct => "AggPart::ExactCountDistinct".to_string(),
+        AggPart::ExactCountDistinctStr => "AggPart::ExactCountDistinctStr".to_string(),
         AggPart::Avg(sum, count) => format!("AggPart::Avg({sum}, {count})"),
         AggPart::Hidden(kind) => {
             format!("AggPart::Hidden(HiddenPart::{})", render_hidden_part(*kind))
@@ -1102,6 +1103,7 @@ fn render_agg_func(func: AggFunc) -> &'static str {
         AggFunc::AvgSum => "AvgSum",
         AggFunc::ApproxCountDistinct => "ApproxCountDistinct",
         AggFunc::ExactCountDistinct => "ExactCountDistinct",
+        AggFunc::ExactCountDistinctStr => "ExactCountDistinctStr",
     }
 }
 
@@ -1334,6 +1336,27 @@ mod tests {
         let src = generate("column_rs", "SELECT count(*), SUM(amount) FROM t").unwrap();
         assert_eq!(src.matches("Opcode::Reduce {").count(), 2, "{src}");
         assert!(!src.contains("Opcode::GroupReduce {"), "{src}");
+    }
+
+    #[test]
+    fn renders_the_exact_distinct_aggregates_by_name() {
+        // #820: plain `compile` never plans these, so name them directly.
+        assert_eq!(
+            render_agg_part(&AggPart::ExactCountDistinct),
+            "AggPart::ExactCountDistinct"
+        );
+        assert_eq!(
+            render_agg_part(&AggPart::ExactCountDistinctStr),
+            "AggPart::ExactCountDistinctStr"
+        );
+        assert_eq!(
+            render_agg_func(AggFunc::ExactCountDistinct),
+            "ExactCountDistinct"
+        );
+        assert_eq!(
+            render_agg_func(AggFunc::ExactCountDistinctStr),
+            "ExactCountDistinctStr"
+        );
     }
 
     #[test]

@@ -2072,3 +2072,207 @@ fn distinct_counts_of_integer_columns_agree_with_a_model_in_every_state() {
     assert!(w.manifest().files.is_empty(), "no file yet");
     check(&cases, "pages only", |sql| answer(&w, sql));
 }
+
+/// #820: `COUNT(DISTINCT <string column>)` collects each group's strings
+/// instead of grouping by `(keys, s)`; its answers are a model's, in every
+/// state of the table, for one and several distincts (a string next to an
+/// integer one), with and without `GROUP BY`, `WHERE`, `FILTER`, `HAVING`
+/// and `ORDER BY` on the count, NULLs, empty strings, strings that are
+/// prefixes of each other, and empty inputs.
+#[test]
+fn distinct_counts_of_string_columns_agree_with_a_model_in_every_state() {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    type Row = (&'static str, Option<String>, Option<i64>);
+    let schema = vec![
+        ColumnSpec::new("k", ColumnType::Utf8, false),
+        ColumnSpec::new("s", ColumnType::Utf8, true),
+        ColumnSpec::new("n", ColumnType::Int32, true),
+    ];
+    let options = || TableOptions {
+        layout: Layout::Tiered(TierOptions {
+            sort_key: Vec::new(),
+            row_group_max_rows: 7,
+            max_file_size: 1 << 30,
+            delete_grace_ns: 0,
+            spill_rows: usize::MAX,
+            retention_days: None,
+            session_key: None,
+            stat_columns: Vec::new(),
+        }),
+        clock,
+        schema: Some(schema.clone()),
+        ..TableOptions::default()
+    };
+    let mut rng = Rng::new(820);
+    let keys = ["a", "b", "c", "d"];
+    let odd = ["", "a", "ab", "abc", "a\u{0}", "é", "日本", "ab "];
+    let rows: Vec<Row> = (0..400)
+        .map(|_| {
+            let s = match rng.below(10) {
+                0 | 1 => None,
+                2 | 3 => Some(odd[rng.below(8) as usize].to_string()),
+                _ => Some(format!("v{}", rng.below(60))),
+            };
+            let n = (rng.below(8) != 0).then(|| rng.below(12) as i64);
+            (keys[rng.below(4) as usize], s, n)
+        })
+        .collect();
+    let row_values = |(k, s, n): &Row| {
+        vec![
+            RecordValue::Str((*k).to_string()),
+            s.clone().map_or(RecordValue::Null, RecordValue::Str),
+            n.map_or(RecordValue::Null, RecordValue::Int),
+        ]
+    };
+
+    // The model: per key, the distinct non-NULL strings and the row count
+    // among the rows `keep` accepts.
+    fn model<K: Fn(&Row) -> bool>(
+        rows: &[Row],
+        keep: K,
+    ) -> BTreeMap<&'static str, (BTreeSet<String>, i64)> {
+        let mut groups: BTreeMap<&'static str, (BTreeSet<String>, i64)> = BTreeMap::new();
+        for row in rows.iter().filter(|r| keep(r)) {
+            let group = groups.entry(row.0).or_default();
+            group.0.extend(row.1.clone());
+            group.1 += 1;
+        }
+        groups
+    }
+    let int = |v: i64| Cell::Int(v);
+    let text = |s: &str| Cell::Text(s.to_string());
+
+    let mut cases: Vec<(&str, Vec<Vec<Cell>>)> = Vec::new();
+    let by_key = model(&rows, |_| true);
+    cases.push((
+        "SELECT k, count(DISTINCT s), count(*) FROM logs GROUP BY k ORDER BY k",
+        by_key
+            .iter()
+            .map(|(k, (set, n))| vec![text(k), int(set.len() as i64), int(*n)])
+            .collect(),
+    ));
+    cases.push((
+        "SELECT count(DISTINCT s), k FROM logs GROUP BY k ORDER BY k",
+        by_key
+            .iter()
+            .map(|(k, (set, _))| vec![int(set.len() as i64), text(k)])
+            .collect(),
+    ));
+    let distinct_n: BTreeMap<&str, BTreeSet<i64>> =
+        rows.iter().fold(BTreeMap::new(), |mut acc, r| {
+            acc.entry(r.0).or_default().extend(r.2);
+            acc
+        });
+    cases.push((
+        "SELECT k, count(DISTINCT s), count(DISTINCT n) FROM logs GROUP BY k ORDER BY k",
+        by_key
+            .iter()
+            .map(|(k, (set, _))| {
+                vec![
+                    text(k),
+                    int(set.len() as i64),
+                    int(distinct_n[k].len() as i64),
+                ]
+            })
+            .collect(),
+    ));
+    let distinct_all: BTreeSet<&String> = rows.iter().filter_map(|r| r.1.as_ref()).collect();
+    cases.push((
+        "SELECT count(DISTINCT s) FROM logs",
+        vec![vec![int(distinct_all.len() as i64)]],
+    ));
+    let big = |r: &Row| r.2.is_some_and(|n| n > 5);
+    let filtered = model(&rows, big);
+    cases.push((
+        "SELECT k, count(DISTINCT s) FROM logs WHERE n > 5 GROUP BY k ORDER BY k",
+        filtered
+            .iter()
+            .map(|(k, (set, _))| vec![text(k), int(set.len() as i64)])
+            .collect(),
+    ));
+    let distinct_big: BTreeSet<&String> = rows
+        .iter()
+        .filter(|r| big(r))
+        .filter_map(|r| r.1.as_ref())
+        .collect();
+    cases.push((
+        "SELECT count(DISTINCT s) FILTER (WHERE n > 5) FROM logs",
+        vec![vec![int(distinct_big.len() as i64)]],
+    ));
+    cases.push((
+        "SELECT k, count(DISTINCT s) FROM logs WHERE n > 1000 GROUP BY k",
+        Vec::new(),
+    ));
+    cases.push((
+        "SELECT count(DISTINCT s) FROM logs WHERE n > 1000",
+        vec![vec![int(0)]],
+    ));
+    let mut busiest: Vec<(&str, i64)> = by_key
+        .iter()
+        .map(|(k, (set, _))| (*k, set.len() as i64))
+        .collect();
+    busiest.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+    cases.push((
+        "SELECT k, count(DISTINCT s) AS d FROM logs GROUP BY k ORDER BY d DESC, k",
+        busiest
+            .iter()
+            .map(|(k, d)| vec![text(k), int(*d)])
+            .collect(),
+    ));
+    cases.push((
+        "SELECT k, count(DISTINCT s) FROM logs GROUP BY k HAVING count(*) > 90 ORDER BY k",
+        by_key
+            .iter()
+            .filter(|(_, (_, n))| *n > 90)
+            .map(|(k, (set, _))| vec![text(k), int(set.len() as i64)])
+            .collect(),
+    ));
+    // Grouped by an integer: many groups, strings across them.
+    let mut by_n: BTreeMap<Option<i64>, BTreeSet<&String>> = BTreeMap::new();
+    for r in &rows {
+        by_n.entry(r.2).or_default().extend(r.1.as_ref());
+    }
+    cases.push((
+        "SELECT n, count(DISTINCT s) FROM logs WHERE n IS NOT NULL GROUP BY n ORDER BY n",
+        by_n.iter()
+            .filter_map(|(n, set)| Some(vec![int((*n)?), int(set.len() as i64)]))
+            .collect(),
+    ));
+
+    fn check<F: Fn(&str) -> Result<Vec<Vec<Cell>>, String>>(
+        cases: &[(&str, Vec<Vec<Cell>>)],
+        state: &str,
+        ask: F,
+    ) {
+        for (sql, expected) in cases {
+            assert_eq!(ask(sql).as_ref(), Ok(expected), "{state}: {sql}");
+        }
+    }
+
+    // Pages only, then an hour file and pages, then archived.
+    let t = TempTable::new();
+    let mut w = t.writer_with(options());
+    for row in &rows[..150] {
+        w.append_row(row_values(row), Ack::Memory).unwrap();
+    }
+    advance_clock(2 * HOUR_NS);
+    w.flush().unwrap();
+    for row in &rows[150..] {
+        w.append_row(row_values(row), Ack::Memory).unwrap();
+    }
+    assert!(!w.manifest().files.is_empty(), "an hour file");
+    check(&cases, "file and pages", |sql| answer(&w, sql));
+    advance_clock(2 * DAY_NS);
+    w.flush_all().unwrap();
+    w.compact().unwrap();
+    check(&cases, "archived", |sql| answer(&w, sql));
+
+    let t = TempTable::new();
+    let mut w = t.writer_with(options());
+    for row in &rows {
+        w.append_row(row_values(row), Ack::Memory).unwrap();
+    }
+    assert!(w.manifest().files.is_empty(), "no file yet");
+    check(&cases, "pages only", |sql| answer(&w, sql));
+}

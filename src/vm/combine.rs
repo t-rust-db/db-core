@@ -61,6 +61,8 @@ pub(crate) enum SlotOp {
     /// An exact `COUNT(DISTINCT <integer>)`'s sorted distinct values: unioned
     /// (#817).
     IntSet,
+    /// [`SlotOp::IntSet`] for strings, in no order (#820).
+    StrSet,
     /// `AVG`'s sum slot: merged like [`SlotOp::Sum`].
     AvgSum,
     /// `AVG`'s count slot: added as `f64` (only ever divided into by the
@@ -105,6 +107,7 @@ pub(crate) fn slot_ops(parts: &[AggPart], num_slots: usize) -> Result<Vec<SlotOp
                         AggPart::Max | AggPart::Hidden(HiddenPart::Max) => SlotOp::Max,
                         AggPart::ApproxCountDistinct => SlotOp::Sketch,
                         AggPart::ExactCountDistinct => SlotOp::IntSet,
+                        AggPart::ExactCountDistinctStr => SlotOp::StrSet,
                         AggPart::Avg(..) | AggPart::Expr(..) => SlotOp::Key,
                     };
                 }
@@ -198,6 +201,12 @@ pub(crate) fn merge_slot(op: SlotOp, into: &mut Value, from: &Value) -> Result<(
                 *into = Value::Bytes(union_int_sets(set_bytes(into)?, set_bytes(from)?)?.into());
             }
         }
+        // The same union for strings (#820).
+        SlotOp::StrSet => {
+            if !matches!(from, Value::Null) {
+                *into = Value::Bytes(union_str_sets(str_set(into)?, str_set(from)?).into());
+            }
+        }
         // Previously a no-op (db-core#404): with more than one segment,
         // `AVG` silently returned the first segment's local average. The
         // per-segment count is a `Value::Int` in real execution but is
@@ -240,6 +249,46 @@ fn set_bytes(v: &Value) -> Result<&[u8]> {
             reason: format!("a partial exact COUNT(DISTINCT) is not a set of integers: {other}"),
         }),
     }
+}
+
+/// A string distinct count's partial slot as its strings (see
+/// [`encode_str_set`](crate::vm::batch::encode_str_set)); `Null` is the
+/// empty set, anything torn is a planner bug.
+fn str_set(v: &Value) -> Result<Vec<&[u8]>> {
+    let torn = || VmError::MalformedProgram {
+        opcode: "Combine",
+        reason: format!("a partial string COUNT(DISTINCT) is not a set of strings: {v}"),
+    };
+    let mut rest: &[u8] = match v {
+        Value::Null => return Ok(Vec::new()),
+        Value::Bytes(bytes) => bytes,
+        _ => return Err(torn()),
+    };
+    let mut out = Vec::new();
+    while !rest.is_empty() {
+        let (len, tail) = rest.split_first_chunk::<4>().ok_or_else(torn)?;
+        let len = u32::from_le_bytes(*len) as usize;
+        let (item, tail) = tail.split_at_checked(len).ok_or_else(torn)?;
+        out.push(item);
+        rest = tail;
+    }
+    Ok(out)
+}
+
+/// The union of two repeat-free string sets, in the same form: all of `a`,
+/// then what `b` adds.
+fn union_str_sets(a: Vec<&[u8]>, b: Vec<&[u8]>) -> Vec<u8> {
+    let seen: std::collections::HashSet<&[u8]> = a.iter().copied().collect();
+    let mut out = Vec::new();
+    for item in a
+        .iter()
+        .copied()
+        .chain(b.into_iter().filter(|i| !seen.contains(i)))
+    {
+        out.extend_from_slice(&u32::try_from(item.len()).unwrap_or(u32::MAX).to_le_bytes());
+        out.extend_from_slice(item);
+    }
+    out
 }
 
 /// The union of two sorted, repeat-free sets of 8-byte little-endian
@@ -292,6 +341,13 @@ pub(crate) fn finish_int_set(v: &Value) -> Result<Value> {
     let bytes = set_bytes(v)?;
     Ok(Value::Int(
         i64::try_from(bytes.len() / 8).unwrap_or(i64::MAX),
+    ))
+}
+
+/// A merged exact `COUNT(DISTINCT <string>)` slot as its count (#820).
+pub(crate) fn finish_str_set(v: &Value) -> Result<Value> {
+    Ok(Value::Int(
+        i64::try_from(str_set(v)?.len()).unwrap_or(i64::MAX),
     ))
 }
 
@@ -1244,6 +1300,18 @@ fn output_columns(parts: &[AggPart], mut acc: Vec<Vec<Value>>) -> Result<Vec<Vec
                 }
                 cursor = cursor.saturating_add(1);
             }
+            // The same for strings (#820).
+            AggPart::ExactCountDistinctStr => {
+                if let Some(column) = acc.get_mut(cursor) {
+                    out.push(
+                        std::mem::take(column)
+                            .iter()
+                            .map(finish_str_set)
+                            .collect::<Result<Vec<_>>>()?,
+                    );
+                }
+                cursor = cursor.saturating_add(1);
+            }
             // No acc column of its own -- both operands name a slot
             // another part already claimed above, so the cursor doesn't
             // move (#496).
@@ -1338,6 +1406,54 @@ mod tests {
         assert!(merge_slot(SlotOp::IntSet, &mut into, &torn).is_err());
         assert!(merge_slot(SlotOp::IntSet, &mut into, &Value::Int(3)).is_err());
         assert!(finish_int_set(&torn).is_err());
+    }
+
+    fn strs(values: &[&str]) -> Value {
+        Value::Bytes(crate::vm::batch::encode_str_set(values.iter().copied()).into())
+    }
+
+    /// The strings of a merged string set, sorted.
+    fn strs_of(v: &Value) -> Vec<String> {
+        let mut out: Vec<String> = str_set(v)
+            .unwrap()
+            .into_iter()
+            .map(|s| String::from_utf8(s.to_vec()).unwrap())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// #820: sets of strings merge as a union (in no particular order), a
+    /// segment that saw no rows (`Null`) adds nothing, the empty string is a
+    /// member like any other, and the merged set is its size.
+    #[test]
+    fn string_distinct_partials_union_and_count() {
+        let mut into = Value::Null;
+        for part in [
+            strs(&["b", "", "a"]),
+            Value::Null,
+            strs(&["ab", "a"]),
+            strs(&[]),
+            strs(&["é", "b"]),
+        ] {
+            merge_slot(SlotOp::StrSet, &mut into, &part).unwrap();
+        }
+        assert_eq!(strs_of(&into), ["", "a", "ab", "b", "é"]);
+        assert_eq!(finish_str_set(&into).unwrap(), Value::Int(5));
+        assert_eq!(finish_str_set(&Value::Null).unwrap(), Value::Int(0));
+    }
+
+    /// A string partial cut short, or not bytes at all, is a planner bug and
+    /// reported.
+    #[test]
+    fn string_distinct_partials_that_are_not_sets_are_errors() {
+        let mut into = strs(&["a"]);
+        for torn in [vec![1u8, 0], vec![5, 0, 0, 0, b'a'], vec![1, 0, 0, 0]] {
+            let torn = Value::Bytes(torn.into());
+            assert!(merge_slot(SlotOp::StrSet, &mut into, &torn).is_err());
+            assert!(finish_str_set(&torn).is_err());
+        }
+        assert!(merge_slot(SlotOp::StrSet, &mut into, &Value::Int(3)).is_err());
     }
 
     /// #643 review: the in-place reorder handles a fixed point, a
