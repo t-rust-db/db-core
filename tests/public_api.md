@@ -8558,6 +8558,7 @@ pub fn db_core::vm::batch::Program::get(&self, usize) -> core::option::Option<&d
 pub fn db_core::vm::batch::Program::is_empty(&self) -> bool
 pub fn db_core::vm::batch::Program::len(&self) -> usize
 pub fn db_core::vm::batch::Program::new(alloc::vec::Vec<db_core::vm::batch::Instruction>) -> Self
+pub fn db_core::vm::batch::Program::null_only_columns(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::vm::batch::Program::opcodes(&self) -> impl core::iter::traits::iterator::Iterator<Item = &db_core::vm::batch::Opcode>
 pub fn db_core::vm::batch::Program::predicate_columns(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn db_core::vm::batch::Program::projection_only_columns(&self) -> alloc::vec::Vec<alloc::string::String>

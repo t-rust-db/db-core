@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.193.0] - 2026-10-28
+
+### Changed
+
+- Read a `LIST<UTF8>` column for `IS [NOT] NULL` without decoding its elements: about 4-5x faster and about a third of the memory for that query at 10M rows (#810).
+
 ## [0.192.0] - 2026-10-28
 
 ### Added

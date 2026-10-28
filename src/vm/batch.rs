@@ -1003,6 +1003,84 @@ pub enum ScanSource {
 }
 
 impl Opcode {
+    /// Pushes every register this opcode reads onto `out` (#810). Written
+    /// without a wildcard so a new opcode must say what it reads; where an
+    /// opcode nests others (`Combine`, `Select`) everything read inside
+    /// counts, which can only make a caller less eager, never wrong.
+    pub(crate) fn read_registers(&self, out: &mut Vec<usize>) {
+        let source = |s: &ValueSource| match s {
+            ValueSource::Probe(r) => Some(*r),
+            ValueSource::Payload(_) => None,
+        };
+        match self {
+            Opcode::LoadColumn { .. }
+            | Opcode::LoadConst { .. }
+            | Opcode::Scan
+            | Opcode::ScanSource(_)
+            | Opcode::NextSegment { .. }
+            | Opcode::Halt
+            | Opcode::Limit { .. } => {}
+            Opcode::Map { a, b, .. } => out.extend([*a, *b]),
+            Opcode::Filter { predicate } => out.push(*predicate),
+            Opcode::Reduce { src, .. } => out.extend(src),
+            Opcode::GroupReduce { group_by, aggs, .. } => {
+                out.extend(group_by.iter());
+                out.extend(aggs.iter().filter_map(|(_, src)| *src));
+            }
+            Opcode::HashBuild {
+                key_cols,
+                payload_cols,
+                ..
+            } => {
+                out.extend(key_cols.iter());
+                out.extend(payload_cols.iter());
+            }
+            Opcode::HashProbe { key_cols, .. } => out.extend(key_cols.iter()),
+            Opcode::Unnest { src, .. } => out.push(*src),
+            Opcode::HashProbeGroupReduce {
+                key_cols,
+                group_by,
+                aggs,
+                ..
+            } => {
+                out.extend(key_cols.iter());
+                out.extend(group_by.iter().filter_map(|(s, _)| source(s)));
+                out.extend(aggs.iter().filter_map(|(_, s)| s.as_ref().and_then(source)));
+            }
+            Opcode::Window {
+                arg,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                out.extend(arg);
+                out.extend(partition_by.iter());
+                out.extend(order_by.iter().map(|(r, _)| *r));
+            }
+            Opcode::Emit { registers } => out.extend(registers.iter()),
+            Opcode::Combine {
+                output_order,
+                project,
+                ..
+            } => {
+                out.extend(output_order.iter());
+                project.iter().for_each(|o| o.read_registers(out));
+            }
+            Opcode::Sort { keys, .. } => out.extend(keys.iter().map(|(r, _)| *r)),
+            Opcode::Call { args, .. } => out.extend(args.iter()),
+            Opcode::InList { src, .. } => out.push(*src),
+            Opcode::Select {
+                cond, then, else_, ..
+            } => {
+                out.push(*cond);
+                for branch in [then, else_] {
+                    out.extend(branch.inputs.iter());
+                    branch.ops.iter().for_each(|o| o.read_registers(out));
+                }
+            }
+        }
+    }
+
     /// The opcode's variant name, used as `VmError`'s runtime-error context
     /// (the execution-time equivalent of `Span` for parse errors -- there's
     /// no source text left at execution time, but there's always a specific
@@ -1550,6 +1628,38 @@ impl Program {
                 }
             }
         }
+        out
+    }
+
+    /// Every loaded column whose values the program reads only through
+    /// `IS NULL` / `IS NOT NULL` (#810): a `LIST` column among them needs no
+    /// element decoded, only whether each row's list is NULL. A column
+    /// loaded into a register any other opcode reads is left out, and so
+    /// is one loaded again into such a register.
+    pub fn null_only_columns(&self) -> Vec<String> {
+        // Every register an opcode other than an `IS [NOT] NULL` reads.
+        let mut read: Vec<usize> = Vec::new();
+        for op in self.opcodes() {
+            match op {
+                Opcode::Map {
+                    op: MapOp::IsNull | MapOp::IsNotNull,
+                    ..
+                } => {}
+                op => op.read_registers(&mut read),
+            }
+        }
+        let mut out: Vec<String> = Vec::new();
+        let mut other: Vec<&str> = Vec::new();
+        for op in self.opcodes() {
+            if let Opcode::LoadColumn { reg, column } = op {
+                if read.contains(reg) {
+                    other.push(column.as_ref());
+                } else if !out.iter().any(|c| c == column.as_ref()) {
+                    out.push(column.to_string());
+                }
+            }
+        }
+        out.retain(|c| !other.contains(&c.as_str()));
         out
     }
 
@@ -12475,6 +12585,220 @@ mod tests {
         // load already sits in `out` (second leaf false).
         let program = filtered_projection(&["x", "x"]);
         assert_eq!(program.projection_only_columns(), vec!["x".to_string()]);
+    }
+
+    fn load(reg: usize, column: &'static str) -> Instruction {
+        Instruction::new(Opcode::LoadColumn {
+            reg,
+            column: column.into(),
+        })
+    }
+
+    fn is_null(dst: usize, a: usize, negated: bool) -> Instruction {
+        Instruction::new(Opcode::Map {
+            dst,
+            op: if negated {
+                MapOp::IsNotNull
+            } else {
+                MapOp::IsNull
+            },
+            a,
+            b: a,
+        })
+    }
+
+    #[test]
+    fn a_column_read_only_by_null_tests_is_null_only() {
+        let program = Program::new(vec![
+            load(0, "tags"),
+            load(1, "id"),
+            is_null(2, 0, true),
+            is_null(3, 0, false),
+            Instruction::new(Opcode::Filter { predicate: 2 }),
+            Instruction::new(Opcode::Reduce {
+                func: AggFunc::Count,
+                src: Some(1),
+                dst: 4,
+            }),
+            Instruction::new(Opcode::Emit {
+                registers: vec![3, 4].into(),
+            }),
+        ]);
+        assert_eq!(program.null_only_columns(), vec!["tags".to_string()]);
+    }
+
+    #[test]
+    fn any_other_read_of_the_column_makes_it_a_full_decode() {
+        let emit = |regs: Vec<usize>| Opcode::Emit {
+            registers: regs.into(),
+        };
+        // Projected next to its null test.
+        let program = Program::new(vec![
+            load(0, "tags"),
+            is_null(1, 0, true),
+            Instruction::new(emit(vec![0, 1])),
+        ]);
+        assert!(program.null_only_columns().is_empty());
+        // Compared: `tags = tags` reads it as a value.
+        let program = Program::new(vec![
+            load(0, "tags"),
+            is_null(1, 0, true),
+            Instruction::new(Opcode::Map {
+                dst: 2,
+                op: MapOp::Eq,
+                a: 0,
+                b: 0,
+            }),
+        ]);
+        assert!(program.null_only_columns().is_empty());
+        // One load null-only, another load of the same column not.
+        let program = Program::new(vec![
+            load(0, "tags"),
+            is_null(1, 0, false),
+            load(2, "tags"),
+            Instruction::new(Opcode::Unnest { src: 2, dst: 3 }),
+        ]);
+        assert!(program.null_only_columns().is_empty());
+        // A column nothing reads is not a null test's column either way:
+        // it stays null-only, decoding nothing it was not asked for.
+        let program = Program::new(vec![load(0, "tags"), is_null(1, 0, false)]);
+        assert_eq!(program.null_only_columns(), vec!["tags".to_string()]);
+    }
+
+    #[test]
+    fn read_registers_names_what_each_opcode_reads() {
+        let read = |op: Opcode| {
+            let mut out = Vec::new();
+            op.read_registers(&mut out);
+            out.sort_unstable();
+            out
+        };
+        assert_eq!(read(Opcode::Halt), Vec::<usize>::new());
+        assert_eq!(
+            read(Opcode::Map {
+                dst: 9,
+                op: MapOp::Add,
+                a: 1,
+                b: 2
+            }),
+            [1, 2]
+        );
+        assert_eq!(read(Opcode::Filter { predicate: 3 }), [3]);
+        assert_eq!(
+            read(Opcode::Reduce {
+                func: AggFunc::Sum,
+                src: Some(4),
+                dst: 9
+            }),
+            [4]
+        );
+        assert_eq!(
+            read(Opcode::Reduce {
+                func: AggFunc::Count,
+                src: None,
+                dst: 9
+            }),
+            Vec::<usize>::new()
+        );
+        assert_eq!(
+            read(Opcode::GroupReduce {
+                group_by: vec![1].into(),
+                aggs: vec![(AggFunc::Sum, Some(2)), (AggFunc::Count, None)].into(),
+                agg_dst: vec![8, 9].into(),
+            }),
+            [1, 2]
+        );
+        assert_eq!(
+            read(Opcode::HashBuild {
+                key_cols: vec![1].into(),
+                payload_cols: vec![2].into(),
+                table: 0
+            }),
+            [1, 2]
+        );
+        assert_eq!(read(Opcode::Unnest { src: 5, dst: 6 }), [5]);
+        assert_eq!(
+            read(Opcode::HashProbeGroupReduce {
+                key_cols: vec![1].into(),
+                table: 0,
+                kind: JoinKind::Inner,
+                group_by: vec![(ValueSource::Probe(2), 8), (ValueSource::Payload(0), 9)].into(),
+                aggs: vec![
+                    (AggFunc::Sum, Some(ValueSource::Probe(3))),
+                    (AggFunc::Sum, Some(ValueSource::Payload(1))),
+                    (AggFunc::Count, None)
+                ]
+                .into(),
+                agg_dst: vec![7].into(),
+            }),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            read(Opcode::Window {
+                func: WindowFunc::Rank,
+                arg: Some(1),
+                offset: None,
+                partition_by: vec![2].into(),
+                order_by: vec![(3, true)].into(),
+                dst: 9,
+            }),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            read(Opcode::Emit {
+                registers: vec![1, 2].into()
+            }),
+            [1, 2]
+        );
+        assert_eq!(
+            read(Opcode::Sort {
+                keys: vec![(4, false)].into(),
+                hidden: 0
+            }),
+            [4]
+        );
+        assert_eq!(
+            read(Opcode::Call {
+                dst: 9,
+                name: "f".into(),
+                args: vec![1, 2].into()
+            }),
+            [1, 2]
+        );
+        assert_eq!(
+            read(Opcode::InList {
+                dst: 9,
+                src: 3,
+                list: Vec::new().into(),
+                negated: false
+            }),
+            [3]
+        );
+        // A nested arm's reads count, whichever arm holds them.
+        let arm = |ops: Vec<Opcode>, inputs: Vec<usize>| Branch {
+            ops: ops.into(),
+            out: 9,
+            inputs: inputs.into(),
+        };
+        assert_eq!(
+            read(Opcode::Select {
+                dst: 9,
+                cond: 1,
+                then: arm(vec![Opcode::Filter { predicate: 2 }], vec![3]),
+                else_: arm(vec![Opcode::Filter { predicate: 4 }], vec![5]),
+            }),
+            [1, 2, 3, 4, 5]
+        );
+        assert_eq!(
+            read(Opcode::Combine {
+                agg_parts: Vec::new().into(),
+                num_group_keys: 0,
+                distinct: false,
+                output_order: vec![1].into(),
+                project: vec![Opcode::Filter { predicate: 2 }].into(),
+            }),
+            [1, 2]
+        );
     }
 
     // vm_batch_run_morsels_ordered_04f69f8a (`run_morsels_ordered` worker
