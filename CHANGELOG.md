@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.199.0] - 2026-10-28
+
+### Added
+
+- `list_contains(list, value)` and its aliases `list_has`, `array_contains`, `array_has` (#825): test a `LIST<VARCHAR>` column or `string_split(...)` for a value, in `SELECT` and `WHERE`, with DuckDB's NULL semantics.
+
 ## [0.198.0] - 2026-10-28
 
 ### Changed

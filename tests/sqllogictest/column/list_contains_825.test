@@ -1,0 +1,90 @@
+# #825: list_contains(l, v) and its aliases list_has, array_contains,
+# array_has. Table events: six rows; labels is NULL (4), empty (3), holds a
+# NULL element and a repeated one (5). Expected results come from DuckDB
+# (make refresh-column-sqllogictest).
+
+# 1. In the SELECT list: true, false, NULL for a NULL list.
+
+query II nosort
+SELECT event_id, list_contains(labels, 'x') FROM events ORDER BY event_id
+----
+1
+1
+2
+0
+3
+0
+4
+NULL
+5
+1
+6
+0
+
+# 2. In WHERE, over a LIST<VARCHAR> column, with each alias.
+
+query I nosort
+SELECT event_id FROM events WHERE list_contains(labels, 'y') ORDER BY event_id
+----
+1
+2
+6
+
+query I nosort
+SELECT event_id FROM events WHERE list_has(labels, 'x') ORDER BY event_id
+----
+1
+5
+
+query I nosort
+SELECT event_id FROM events WHERE array_contains(labels, 'x') ORDER BY event_id
+----
+1
+5
+
+query I nosort
+SELECT event_id FROM events WHERE array_has(labels, 'x') ORDER BY event_id
+----
+1
+5
+
+# 3. Negated, and with a base column: a NULL list is neither in nor out.
+
+query I nosort
+SELECT event_id FROM events WHERE NOT list_contains(labels, 'x') ORDER BY event_id
+----
+2
+3
+6
+
+query I nosort
+SELECT event_id FROM events WHERE list_contains(labels, 'x') AND event_id > 1 ORDER BY event_id
+----
+5
+
+# 4. A NULL value gives NULL.
+
+query II nosort
+SELECT event_id, list_contains(labels, NULL) FROM events ORDER BY event_id
+----
+1
+NULL
+2
+NULL
+3
+NULL
+4
+NULL
+5
+NULL
+6
+NULL
+
+# 5. Over string_split.
+
+query I nosort
+SELECT id FROM delimited WHERE list_contains(string_split(csv, ','), 'b') ORDER BY id
+----
+1
+2
+6
