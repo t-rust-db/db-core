@@ -1002,6 +1002,20 @@ pub enum ScanSource {
     InMemory(Batch),
 }
 
+/// The registers `rest` reads, when it ends the program with an
+/// [`Opcode::Emit`] -- so nothing outside it looks at the registers
+/// afterwards; `None` otherwise (#815).
+fn live_through_emit(rest: &[Opcode]) -> Option<Vec<usize>> {
+    if !rest.iter().any(|op| matches!(op, Opcode::Emit { .. })) {
+        return None;
+    }
+    let mut live = Vec::new();
+    for op in rest {
+        op.read_registers(&mut live);
+    }
+    Some(live)
+}
+
 impl Opcode {
     /// Pushes every register this opcode reads onto `out` (#810). Written
     /// without a wildcard so a new opcode must say what it reads; where an
@@ -4331,6 +4345,11 @@ pub struct Vm {
     /// `Eq`/`Ne` against a `Dict` column) read it directly; every other
     /// opcode reads through [`Vm::reg`], which materializes on demand.
     typed_registers: HashMap<usize, Arc<Column>>,
+    /// The registers the opcodes after the next [`Opcode::Unnest`] still
+    /// read (#815), set by [`Vm::execute`] when the program goes on to an
+    /// [`Opcode::Emit`]; `Unnest` drops every other register instead of
+    /// repeating it once per element.
+    unnest_live: Option<Vec<usize>>,
     /// Constant registers (#681): an [`Opcode::LoadConst`] lives here as
     /// one value plus the live row count it stands for, instead of a
     /// `Vec<Value>` with one clone of the literal per row.
@@ -4668,8 +4687,13 @@ impl Vm {
     /// the first error. Unlike [`Vm::run`], this executes a single batch and
     /// does no segment looping.
     pub fn execute(&mut self, batch: &Batch, program: &[Opcode]) -> Result<()> {
-        for op in program {
+        for (i, op) in program.iter().enumerate() {
             self.check_step_limit(op.name())?;
+            if matches!(op, Opcode::Unnest { .. }) {
+                self.unnest_live = program
+                    .get(i.saturating_add(1)..)
+                    .and_then(live_through_emit);
+            }
             self.step(batch, op)?;
         }
         Ok(())
@@ -4708,9 +4732,27 @@ impl Vm {
         // hence absent from `registers`) would be silently skipped by the
         // loop below, then lost for good once `typed_registers` is
         // cleared at the end of this function.
-        let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
-        for reg in typed_only {
-            self.ensure_materialized(reg);
+        // #815: a typed column is gathered by the surviving rows as a
+        // typed column (no `Value` per row); only one that cannot be is
+        // materialized.
+        let kept: Vec<usize> = selection.indices.iter().map(|&i| i as usize).collect();
+        let mut gathered: HashMap<usize, Arc<Column>> = HashMap::new();
+        let typed: Vec<usize> = self.typed_registers.keys().copied().collect();
+        for reg in typed {
+            let column = self
+                .typed_registers
+                .get(&reg)
+                .filter(|c| c.len() == selection.base_len)
+                .and_then(|c| c.take(&kept));
+            match column {
+                Some(column) => {
+                    gathered.insert(reg, Arc::new(column));
+                }
+                None => self.ensure_materialized(reg),
+            }
+        }
+        for reg in gathered.keys() {
+            self.registers.remove(reg);
         }
         for (reg, values) in self.registers.iter_mut() {
             // #474: a register a preceding bare `Reduce` (`COUNT(*)`,
@@ -4738,14 +4780,9 @@ impl Vm {
             *values = Arc::new(compacted);
         }
         // #429: `typed_registers` shadows a `registers` entry loaded
-        // straight from `Batch::typed_columns`, uncompacted. Once a
-        // selection is resolved, `registers` above just got compacted to
-        // the surviving rows while any typed shadow would still be the
-        // original full-length `Column` -- stale and wrong-length for
-        // `Filter`/`Map`'s fast paths to read afterward. Clearing them
-        // is conservative (falls back to the general `Value` path for
-        // that register from here on) but always correct.
-        self.typed_registers.clear();
+        // straight from `Batch::typed_columns`; the shadows are the
+        // gathered columns, as long as the compacted `registers` (#815).
+        self.typed_registers = gathered;
         Ok(())
     }
 
@@ -4775,14 +4812,9 @@ impl Vm {
             let Some(column) = self.typed_registers.get(&dict_reg).cloned() else {
                 continue;
             };
-            let Column::Dict {
-                dict,
-                indices,
-                valid,
-            } = column.as_ref()
-            else {
+            if !matches!(column.as_ref(), Column::Dict { .. } | Column::Str { .. }) {
                 continue;
-            };
+            }
             // #681: a `LoadConst` literal is read as is, never
             // broadcast to a column only to be scanned back to one value.
             let literal = if let Some(value) = self.const_value(other_reg) {
@@ -4797,6 +4829,37 @@ impl Vm {
                     continue;
                 };
                 literal
+            };
+            // #815: a `Str` column compares each row's bytes in place.
+            if let Column::Str {
+                offsets,
+                data,
+                valid,
+            } = column.as_ref()
+            {
+                let result = (0..valid.len())
+                    .map(|i| {
+                        if !valid.get(i) {
+                            return Value::Null;
+                        }
+                        let bound =
+                            |at: usize| offsets.get(at).and_then(|o| usize::try_from(*o).ok());
+                        let row = bound(i)
+                            .zip(bound(i.saturating_add(1)))
+                            .and_then(|(lo, hi)| data.get(lo..hi));
+                        let is_eq = row == Some(literal);
+                        Value::Bool(if op == MapOp::Eq { is_eq } else { !is_eq })
+                    })
+                    .collect();
+                return Ok(Some(result));
+            }
+            let Column::Dict {
+                dict,
+                indices,
+                valid,
+            } = column.as_ref()
+            else {
+                continue;
             };
             let code = dict.iter().position(|s| s.as_ref() == literal);
             let result = (0..indices.len())
@@ -5326,13 +5389,7 @@ impl Vm {
                 // #621: map functions read `Value::Map`, which the row
                 // functions' values cannot carry.
                 let result: Vec<Value> = if super::map_fns::is_map_function(name) {
-                    (0..num_rows)
-                        .map(|row| {
-                            let args: Vec<&Value> =
-                                arg_regs.iter().filter_map(|r| r.get(row)).collect();
-                            super::map_fns::call(name, &args)
-                        })
-                        .collect()
+                    super::map_fns::call_column(name, &arg_regs, num_rows)
                 } else {
                     let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];
                     let mut result = Vec::with_capacity(num_rows);
@@ -6143,22 +6200,38 @@ impl Vm {
         Ok(())
     }
 
-    /// [`Opcode::Unnest`]. Reshapes every live register like
+    /// [`Opcode::Unnest`]. Reshapes every register `unnest_live` keeps (all
+    /// of them without it) like
     /// [`Self::hash_probe`], by the row each element came from.
     fn unnest(&mut self, opcode: &'static str, src: usize, dst: usize) -> Result<()> {
         self.resolve_selection(opcode)?;
+        if let Some(live) = self.unnest_live.take() {
+            self.registers.retain(|r, _| *r == src || live.contains(r));
+            self.typed_registers
+                .retain(|r, _| *r == src || live.contains(r));
+        }
         self.ensure_materialized(src);
         let mut rows: Vec<usize> = Vec::new();
-        let mut elements: Vec<Value> = Vec::new();
+        // The elements as a typed string column (#815): no `Value` per
+        // element, and a typed group key downstream.
+        let mut offsets: Vec<u32> = vec![0];
+        let mut text = String::new();
+        let mut present: Vec<bool> = Vec::new();
         for (row, value) in self.reg(src, opcode)?.iter().enumerate() {
             match value {
                 Value::List(items) => {
                     for item in items.iter() {
                         rows.push(row);
-                        elements.push(match item {
-                            Some(s) => Value::Str(Cow::Owned(s.to_string())),
-                            None => Value::Null,
-                        });
+                        if let Some(s) = item {
+                            text.push_str(s);
+                        }
+                        present.push(item.is_some());
+                        offsets.push(u32::try_from(text.len()).map_err(|_| {
+                            VmError::MalformedProgram {
+                                opcode,
+                                reason: "UNNEST elements exceed 4 GiB".to_string(),
+                            }
+                        })?);
                     }
                 }
                 Value::Null => {}
@@ -6170,10 +6243,30 @@ impl Vm {
                 }
             }
         }
+        let elements = Column::Str {
+            offsets,
+            data: text,
+            valid: crate::vm::column::Bitmap::from_bools(present.into_iter()),
+        };
         let num_rows = self.reg(src, opcode)?.len();
-        let typed_only: Vec<usize> = self.typed_registers.keys().copied().collect();
-        for r in typed_only {
-            self.ensure_materialized(r);
+        let typed: Vec<usize> = self.typed_registers.keys().copied().collect();
+        let mut gathered: HashMap<usize, Arc<Column>> = HashMap::new();
+        for r in typed {
+            let column = self
+                .typed_registers
+                .get(&r)
+                .filter(|c| c.len() == num_rows)
+                .and_then(|c| c.take(&rows));
+            match column {
+                Some(column) => {
+                    gathered.insert(r, Arc::new(column));
+                }
+                None => self.ensure_materialized(r),
+            }
+        }
+        // The typed copy stands for its `Value` one, which is not repeated.
+        for r in gathered.keys() {
+            self.registers.remove(r);
         }
         self.resize_const_registers(rows.len());
         for values in self.registers.values_mut() {
@@ -6186,10 +6279,11 @@ impl Vm {
                 .collect();
             *values = Arc::new(reshaped);
         }
-        self.typed_registers.clear();
+        self.typed_registers = gathered;
         // Constants loaded from here on are as long as the expanded rows.
         self.selected_rows = Some(rows.len());
-        self.registers.insert(dst, Arc::new(elements));
+        self.registers.remove(&dst);
+        self.typed_registers.insert(dst, Arc::new(elements));
         Ok(())
     }
 
@@ -10216,6 +10310,63 @@ mod tests {
             &[Value::Null, Value::Str("east".into())]
         );
         assert_eq!(vm.register(2).unwrap(), &[Value::Int(8), Value::Int(2)]);
+    }
+
+    /// #815: `<>`/`=` against a literal on a typed `Str` column compares
+    /// the column's bytes in place, with NULL for a NULL row.
+    #[test]
+    fn eq_and_ne_against_a_literal_read_a_str_column_in_place() {
+        let text = Column::from(vec![
+            Value::Str("a".into()),
+            Value::Str("".into()),
+            Value::Null,
+            Value::Str("ab".into()),
+        ]);
+        assert!(matches!(text, Column::Str { .. }));
+        let batch = Batch::new(4).with_typed_column("t", text);
+        for (op, expected) in [
+            (
+                MapOp::Ne,
+                [
+                    Value::Bool(true),
+                    Value::Bool(false),
+                    Value::Null,
+                    Value::Bool(true),
+                ],
+            ),
+            (
+                MapOp::Eq,
+                [
+                    Value::Bool(false),
+                    Value::Bool(true),
+                    Value::Null,
+                    Value::Bool(false),
+                ],
+            ),
+        ] {
+            let mut vm = Vm::new();
+            vm.execute(
+                &batch,
+                &[
+                    Opcode::LoadColumn {
+                        reg: 0,
+                        column: "t".into(),
+                    },
+                    Opcode::LoadConst {
+                        reg: 1,
+                        value: Value::Str("".into()),
+                    },
+                    Opcode::Map {
+                        dst: 2,
+                        op,
+                        a: 0,
+                        b: 1,
+                    },
+                ],
+            )
+            .unwrap();
+            assert_eq!(vm.register(2).unwrap(), &expected);
+        }
     }
 
     #[test]
