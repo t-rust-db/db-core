@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.195.0] - 2026-10-28
+
+### Changed
+
+- Read a `LIST<UTF8>` column that only `UNNEST` reads as a flat offsets + dictionary layout: `UNNEST ... GROUP BY` is about 2.3x faster and uses about 55% less memory on a 10M-row file (#809).
+- Levels-only list reads are no longer disabled by an `ORDER BY` on the list's query (#810).
+
 ## [0.194.0] - 2026-10-28
 
 ### Changed
