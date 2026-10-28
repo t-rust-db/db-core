@@ -120,7 +120,16 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 	# Every feature is `default` (db-core#111) specifically so this bare
 	# `cargo test` still reaches every scanned module (vm-row,
 	# codegen-row, ...), not just what a curated file list would imply.
-	cargo-mvl-mcdc harvest --obligations=tests/mcdc/obligations.json --run-dir=. 2>/dev/null \
+	#
+	# `harvest` shells out to a bare `cargo test` (no filter flag), which
+	# runs the whole suite plus doctests (~70s). It only reads `mcdc__`
+	# tests, so a PATH shim narrows that one invocation to them (~3s once
+	# built); every other cargo call passes through untouched.
+	@mkdir -p target/mcdc-shim
+	@printf '#!/bin/sh\nif [ "$$1" = test ] && [ $$# -eq 1 ]; then exec "%s" test --tests -- mcdc__; fi\nexec "%s" "$$@"\n' \
+		"$$(command -v cargo)" "$$(command -v cargo)" > target/mcdc-shim/cargo
+	@chmod +x target/mcdc-shim/cargo
+	PATH="$(CURDIR)/target/mcdc-shim:$$PATH" cargo-mvl-mcdc harvest --obligations=tests/mcdc/obligations.json --run-dir=. 2>/dev/null \
 		| python3 tools/mcdc_report.py $(if $(filter 1,$(VERBOSE)),--verbose,)
 
 COVERAGE_MIN := 85
