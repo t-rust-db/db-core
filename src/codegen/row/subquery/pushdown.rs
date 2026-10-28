@@ -525,7 +525,9 @@ mod mcdc_vectors {
         push_down_where_predicates(&mut select);
         match &select.from.as_ref().unwrap().first.kind {
             TableRefKind::Subquery(inner) => inner.where_clause.is_some(),
-            TableRefKind::Name(_) => panic!("pushdown must not flatten"),
+            TableRefKind::Name(_) | TableRefKind::Unnest { .. } => {
+                panic!("pushdown must not flatten")
+            }
         }
     }
 

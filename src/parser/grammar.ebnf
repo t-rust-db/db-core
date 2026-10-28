@@ -532,6 +532,9 @@ result-column   ::= "*"                                   (* V2 [parse.y:717 sel
 
 table-ref       ::= table-name [ [ "AS" ] identifier ]    (* V2 [parse.y:762 seltablist, single-table shape only --
                                                               no schema-qualifier or INDEXED BY/NOT INDEXED] *)
+                  | "UNNEST" "(" expr ")" [ [ "AS" ] identifier [ "(" identifier ")" ] ]
+                                                           (* column dialect only, #802: expands a list column; the row
+                                                              grammar parses it and codegen::row rejects it *)
                   | "(" select-stmt ")" [ "AS" ] identifier
                                                            (* V4 [parse.y:762 seltablist LP select RP as, #257 --
                                                               this codebase requires the alias SQLite itself

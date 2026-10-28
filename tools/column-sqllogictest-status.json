@@ -9,7 +9,8 @@
     {"file": "order_by_645.test", "pass": 8, "skip": 1, "fail": 0},
     {"file": "order_by_ordinal_752.test", "pass": 9, "skip": 0, "fail": 0},
     {"file": "types.test", "pass": 23, "skip": 4, "fail": 0},
+    {"file": "unnest_802.test", "pass": 10, "skip": 0, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 203, "skip": 5, "fail": 0}
+  "total": {"pass": 213, "skip": 5, "fail": 0}
 }

@@ -226,6 +226,8 @@ fn source(
             let (columns, rowid) = named_source(name, schemas, views, ctes, depth);
             (name.clone(), columns, rowid)
         }
+        // Only the column dialect evaluates UNNEST (#802).
+        TableRefKind::Unnest { .. } => (String::new(), Vec::new(), None),
     };
     Source {
         name: table_ref.alias.clone().unwrap_or(name),

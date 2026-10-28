@@ -145,6 +145,9 @@ fn from_table_name(from: &FromClause) -> Result<&str> {
             .alias
             .as_deref()
             .ok_or(EmitError::Unsupported("a FROM subquery without an alias")),
+        TableRefKind::Unnest { .. } => {
+            Err(EmitError::Unsupported("UNNEST as the first FROM entry"))
+        }
     }
 }
 
@@ -586,6 +589,15 @@ fn render_table_ref_kind(kind: &TableRefKind) -> String {
                 render_select(select)
             )
         }
+        TableRefKind::Unnest { expr, column } => {
+            let column = column.as_ref().map_or("None".to_string(), |c| {
+                format!("Some({}.to_string())", rust_str_literal(c))
+            });
+            format!(
+                "TableRefKind::Unnest {{ expr: Box::new({}), column: {column} }}",
+                render_expr(expr)
+            )
+        }
     }
 }
 
@@ -1017,6 +1029,7 @@ fn render_opcode(op: &Opcode) -> String {
         // implementation at that point, not before.
         Opcode::HashBuild { .. }
         | Opcode::HashProbe { .. }
+        | Opcode::Unnest { .. }
         | Opcode::HashProbeGroupReduce { .. }
         | Opcode::Window { .. }
         | Opcode::Call { .. }
@@ -1070,6 +1083,7 @@ fn render_map_op(op: MapOp) -> String {
         MapOp::Concat => "Concat".to_string(),
         MapOp::Neg => "Neg".to_string(),
         MapOp::MaskIf => "MaskIf".to_string(),
+        MapOp::Copy => "Copy".to_string(),
         MapOp::Like { negated, nocase } => {
             format!("Like {{ negated: {negated}, nocase: {nocase} }}")
         }

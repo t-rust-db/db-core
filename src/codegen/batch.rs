@@ -639,6 +639,7 @@ fn build_projection(
 ) -> Result<Vec<Opcode>> {
     let mut ctx = Ctx {
         next_reg: 0,
+        post_unnest: false,
         column_regs: HashMap::new(),
         program: Vec::new(),
     };
@@ -995,6 +996,9 @@ fn table_name(from: &AstFromClause) -> Result<&str> {
         TableRefKind::Subquery(_) => from.first.alias.as_deref().ok_or_else(|| {
             PlanError::Internal("FROM subquery reached the planner without an alias".into())
         }),
+        TableRefKind::Unnest { .. } => Err(PlanError::Internal(
+            "UNNEST reached the planner as the first FROM entry".into(),
+        )),
     }
 }
 
@@ -1296,6 +1300,19 @@ fn order_by_text(terms: &[(String, bool)]) -> String {
 /// Returns [`PlanError::StarWithAggregation`] if `*` is combined with
 /// `GROUP BY` or an aggregate/window select item.
 pub fn expand_star(select: &Select, schema: &[String]) -> Result<Select> {
+    // The unnested value is a column of the query (#802).
+    let with_unnest: Vec<String>;
+    let schema = match unnest_of(select) {
+        Some((_, column)) => {
+            with_unnest = schema
+                .iter()
+                .cloned()
+                .chain(std::iter::once(column.to_string()))
+                .collect();
+            &with_unnest[..]
+        }
+        None => schema,
+    };
     let select = &resolve_group_by(select, schema)?;
     let select = &lower_table_star(select)?;
     let items = classify_items(select)?;
@@ -1465,6 +1482,9 @@ fn map_bin_op(op: AstBinOp) -> MapOp {
 
 /// Register allocator + column memo shared by [`compile`]'s helpers.
 struct Ctx {
+    /// Set once an [`Opcode::Unnest`] has run (#802): rows no longer line up
+    /// with the file's columns, so nothing may be loaded afterwards.
+    post_unnest: bool,
     next_reg: usize,
     column_regs: HashMap<String, usize>,
     program: Vec<Instruction>,
@@ -1860,6 +1880,7 @@ pub fn bool_expr_columns(expr: &AstExpr) -> Vec<String> {
 pub fn compile_bool_expr(expr: &AstExpr) -> Program {
     let mut ctx = Ctx {
         next_reg: 0,
+        post_unnest: false,
         column_regs: HashMap::new(),
         program: Vec::new(),
     };
@@ -1940,8 +1961,18 @@ pub fn compile(select: &Select) -> Result<Program> {
     }
     let mut ctx = Ctx {
         next_reg: 0,
+        post_unnest: false,
         column_regs: HashMap::new(),
         program: Vec::new(),
+    };
+
+    let unnested;
+    let select = match unnest_prologue(select, &mut ctx)? {
+        Some(rest) => {
+            unnested = rest;
+            &unnested
+        }
+        None => select,
     };
 
     let items = classify_items(select)?;
@@ -1999,6 +2030,22 @@ pub fn compile(select: &Select) -> Result<Program> {
                     // `GroupReduce` overwrites with the groups' keys: it
                     // gets a register of its own, not one an aggregate or
                     // a real key also reads (#633).
+                    AggArg::Column(name) if *distinct && ctx.post_unnest => {
+                        // Columns were loaded before the unnest and cannot
+                        // be loaded again; a copy keeps the key's own register.
+                        let src = ctx.load_column(name);
+                        let reg = ctx.alloc();
+                        ctx.push_commented(
+                            Opcode::Map {
+                                dst: reg,
+                                op: MapOp::Copy,
+                                a: src,
+                                b: src,
+                            },
+                            format!("r{reg} = {name} (COUNT DISTINCT key)"),
+                        );
+                        reg
+                    }
                     AggArg::Column(name) if *distinct => {
                         let reg = ctx.alloc();
                         ctx.push_commented(
@@ -2304,6 +2351,98 @@ pub fn compile(select: &Select) -> Result<Program> {
     }
 
     Ok(Program::new(ctx.program))
+}
+
+/// The `UNNEST` of a validated query (#802): the list expression and the
+/// name of the column its elements are read from.
+fn unnest_of(select: &Select) -> Option<(&AstExpr, &str)> {
+    select
+        .from
+        .as_ref()?
+        .joins
+        .iter()
+        .find_map(|j| match &j.table.kind {
+            TableRefKind::Unnest { expr, column } => {
+                Some((&**expr, column.as_deref().unwrap_or("unnest")))
+            }
+            _ => None,
+        })
+}
+
+/// `select` without its `UNNEST` join.
+fn without_unnest(select: &Select) -> Select {
+    let mut out = select.clone();
+    if let Some(from) = out.from.as_mut() {
+        from.joins
+            .retain(|j| !matches!(j.table.kind, TableRefKind::Unnest { .. }));
+    }
+    out
+}
+
+/// Folds `operands` back into one `AND` chain.
+fn and_chain(operands: &[&AstExpr]) -> Option<AstExpr> {
+    operands
+        .iter()
+        .map(|e| (*e).clone())
+        .reduce(|lhs, rhs| AstExpr {
+            span: lhs.span,
+            kind: ExprKind::Binary {
+                op: AstBinOp::And,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+        })
+}
+
+/// #802: the part of a query that runs before its `UNNEST`, and the rest of
+/// the query. Rows of the file's columns stop lining up once a list is
+/// expanded, so every column is loaded first: the list's, the `WHERE`
+/// conditions that do not read the unnested value (they filter before the
+/// expansion), then every other column the query reads. The returned
+/// `Select` is what `compile` goes on with, its columns already live and
+/// the unnested value in a register of its own; `None` when there is no
+/// `UNNEST`.
+fn unnest_prologue(select: &Select, ctx: &mut Ctx) -> Result<Option<Select>> {
+    let Some((list, column)) = unnest_of(select) else {
+        return Ok(None);
+    };
+    let mut rest = without_unnest(select);
+    let list_reg = compile_expr(list, ctx);
+
+    let conditions = select
+        .where_clause
+        .as_ref()
+        .map(|w| chain_operands(w, AstBinOp::And))
+        .unwrap_or_default();
+    let (late, early): (Vec<&AstExpr>, Vec<&AstExpr>) = conditions.into_iter().partition(|c| {
+        let mut columns = Vec::new();
+        collect_expr_columns(c, &mut columns);
+        columns.iter().any(|name| name == column)
+    });
+    if let Some(early) = and_chain(&early) {
+        let predicate = compile_expr(&early, ctx);
+        ctx.push_commented(
+            Opcode::Filter { predicate },
+            format!("WHERE {}", expr_to_string(&early)),
+        );
+    }
+    rest.where_clause = and_chain(&late);
+
+    let mut columns = referenced_columns(&rest)?;
+    if let Some(having) = &select.having {
+        collect_expr_columns(having, &mut columns);
+    }
+    for name in columns.iter().filter(|name| *name != column) {
+        ctx.load_column(name);
+    }
+    let dst = ctx.alloc();
+    ctx.push_commented(
+        Opcode::Unnest { src: list_reg, dst },
+        format!("r{dst} = UNNEST({})", expr_to_string(list)),
+    );
+    ctx.column_regs.insert(column.to_string(), dst);
+    ctx.post_unnest = true;
+    Ok(Some(rest))
 }
 
 /// Whether `select`'s WHERE, HAVING or select list holds an `IN (SELECT
@@ -3012,6 +3151,7 @@ pub fn compile_window(select: &Select) -> Result<Program> {
     // since nothing here reshapes registers the way `compile`'s `WHERE`
     // `Opcode::Filter` does.
     let mut ctx = Ctx {
+        post_unnest: false,
         next_reg: needed.len(),
         column_regs: needed
             .iter()
@@ -3271,7 +3411,9 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
             ..
         })
     );
-    let from = select.from.as_ref();
+    // An `UNNEST` is no join (#802): it has its own node, below.
+    let joinless = without_unnest(select);
+    let from = joinless.from.as_ref();
     // No FROM is a legitimate (table-less) SELECT: empty name, no joins.
     let from_name = from.map(table_name).transpose()?.unwrap_or_default();
     let joins = from.map(extract_joins).transpose()?.unwrap_or_default();
@@ -3373,6 +3515,10 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
             };
             b.push(0, format!("{kind}: {} = {}", join.left_col, join.right_col));
         }
+    }
+
+    if let Some((list, column)) = unnest_of(select) {
+        b.push(0, format!("UNNEST: {} AS {column}", expr_to_string(list)));
     }
 
     if has_window {
@@ -3528,6 +3674,7 @@ fn render_operands(op: &Opcode) -> String {
             payload_dst,
             kind,
         } => format!("key_cols={key_cols:?} table={table} payload_dst={payload_dst:?} kind={kind:?}"),
+        Opcode::Unnest { src, dst } => format!("src={src} dst={dst}"),
         Opcode::HashProbeGroupReduce {
             key_cols,
             table,
@@ -4859,6 +5006,37 @@ mod tests {
             rows: 5000,
             source: None,
         }
+    }
+
+    /// #802: `EXPLAIN` lists the unnest between the loads and the filter, and
+    /// its opcode in the program listing.
+    #[test]
+    fn explain_shows_the_unnest_step() {
+        let query = sql::parse(
+            "SELECT label, COUNT(*) FROM events, UNNEST(labels) AS l(label) \
+             WHERE ts > 5 AND label <> 'x' GROUP BY label",
+        )
+        .unwrap();
+        let nodes = explain(&query, stats).unwrap();
+        let listed = details(&nodes);
+        assert!(listed.contains(&"LOAD COLUMNS: labels, ts"), "{listed:?}");
+        assert!(listed.contains(&"UNNEST: labels AS label"), "{listed:?}");
+        assert!(listed.contains(&"GROUP BY: label"), "{listed:?}");
+        let program = compile(&query).unwrap();
+        let unnest = program
+            .opcodes()
+            .position(|op| matches!(op, Opcode::Unnest { .. }))
+            .unwrap();
+        let filters: Vec<usize> = program
+            .opcodes()
+            .enumerate()
+            .filter(|(_, op)| matches!(op, Opcode::Filter { .. }))
+            .map(|(i, _)| i)
+            .collect();
+        // `ts > 5` filters the rows before the expansion, `label <> 'x'` after.
+        assert_eq!(filters.len(), 2);
+        assert!(filters[0] < unnest && unnest < filters[1]);
+        assert!(!program.columns_to_load().iter().any(|name| name == "label"));
     }
 
     #[test]
@@ -6218,6 +6396,7 @@ mod tests {
         list.resize(arity, first);
         let mut ctx = Ctx {
             next_reg: 0,
+            post_unnest: false,
             column_regs: HashMap::new(),
             program: Vec::new(),
         };

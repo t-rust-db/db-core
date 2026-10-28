@@ -1670,6 +1670,9 @@ impl core::marker::StructuralPartialEq for db_core::parser::ast::TableConstraint
 pub enum db_core::parser::ast::TableRefKind
 pub db_core::parser::ast::TableRefKind::Name(alloc::string::String)
 pub db_core::parser::ast::TableRefKind::Subquery(alloc::boxed::Box<db_core::parser::ast::Select>)
+pub db_core::parser::ast::TableRefKind::Unnest
+pub db_core::parser::ast::TableRefKind::Unnest::column: core::option::Option<alloc::string::String>
+pub db_core::parser::ast::TableRefKind::Unnest::expr: alloc::boxed::Box<db_core::parser::ast::Expr>
 impl core::clone::Clone for db_core::parser::ast::TableRefKind
 pub fn db_core::parser::ast::TableRefKind::clone(&self) -> Self
 impl core::cmp::PartialEq for db_core::parser::ast::TableRefKind
@@ -8237,6 +8240,7 @@ pub enum db_core::vm::batch::MapOp
 pub db_core::vm::batch::MapOp::Add
 pub db_core::vm::batch::MapOp::And
 pub db_core::vm::batch::MapOp::Concat
+pub db_core::vm::batch::MapOp::Copy
 pub db_core::vm::batch::MapOp::Div
 pub db_core::vm::batch::MapOp::Eq
 pub db_core::vm::batch::MapOp::Ge
@@ -8337,6 +8341,9 @@ pub db_core::vm::batch::Opcode::Select::then: db_core::vm::batch::Branch
 pub db_core::vm::batch::Opcode::Sort
 pub db_core::vm::batch::Opcode::Sort::hidden: usize
 pub db_core::vm::batch::Opcode::Sort::keys: alloc::borrow::Cow<'static, [(usize, bool)]>
+pub db_core::vm::batch::Opcode::Unnest
+pub db_core::vm::batch::Opcode::Unnest::dst: usize
+pub db_core::vm::batch::Opcode::Unnest::src: usize
 pub db_core::vm::batch::Opcode::Window
 pub db_core::vm::batch::Opcode::Window::arg: core::option::Option<usize>
 pub db_core::vm::batch::Opcode::Window::dst: usize

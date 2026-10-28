@@ -116,6 +116,7 @@ fn table_ref_references_view(table_ref: &TableRef, views: &[ResolvedView]) -> bo
     match &table_ref.kind {
         TableRefKind::Name(name) => views.iter().any(|v| v.name.eq_ignore_ascii_case(name)),
         TableRefKind::Subquery(inner) => select_references_any_view(inner, views),
+        TableRefKind::Unnest { .. } => false,
     }
 }
 
@@ -185,6 +186,7 @@ fn expand_table_ref(
             Ok(())
         }
         TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack),
+        TableRefKind::Unnest { .. } => Ok(()),
     }
 }
 

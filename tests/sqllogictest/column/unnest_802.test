@@ -1,0 +1,149 @@
+# #802: UNNEST of a LIST<VARCHAR> column, in FROM and in the SELECT list.
+# Table events: six rows; labels is NULL (4), empty (3), holds a NULL
+# element and a repeated one (5). Expected results come from DuckDB (make
+# refresh-column-sqllogictest).
+
+# 1. In the SELECT list: an empty or NULL list gives no row, a NULL element
+# gives a NULL row.
+
+query IT nosort
+SELECT event_id, UNNEST(labels) AS label FROM events ORDER BY event_id, label
+----
+1
+x
+1
+y
+2
+y
+5
+x
+5
+x
+5
+NULL
+6
+y
+6
+z
+
+# 2. In FROM, comma and CROSS JOIN, with the column alias.
+
+query IT nosort
+SELECT event_id, label FROM events, UNNEST(labels) AS l(label) ORDER BY event_id, label
+----
+1
+x
+1
+y
+2
+y
+5
+x
+5
+x
+5
+NULL
+6
+y
+6
+z
+
+query IT nosort
+SELECT event_id, l.label FROM events CROSS JOIN UNNEST(labels) AS l(label) ORDER BY event_id, label
+----
+1
+x
+1
+y
+2
+y
+5
+x
+5
+x
+5
+NULL
+6
+y
+6
+z
+
+# 3. WHERE on the base table's columns, GROUP BY and count(DISTINCT ...)
+# on the unnested value.
+
+query TII nosort
+SELECT label, count(DISTINCT event_id) AS events, count(*) AS n FROM events, UNNEST(labels) AS l(label) WHERE ts >= 10 AND severity = 'high' GROUP BY label ORDER BY events DESC, label
+----
+x
+2
+3
+y
+2
+2
+NULL
+1
+1
+
+query TI nosort
+SELECT source, count(DISTINCT label) AS n FROM events, UNNEST(labels) AS l(label) GROUP BY source ORDER BY source
+----
+a
+2
+b
+2
+
+# 4. WHERE on the unnested value, alone and with a base column.
+
+query I nosort
+SELECT event_id FROM events, UNNEST(labels) AS l(label) WHERE label = 'y' ORDER BY event_id
+----
+1
+2
+6
+
+query IT nosort
+SELECT event_id, label FROM events, UNNEST(labels) AS l(label) WHERE label = 'y' AND ts > 15 ORDER BY event_id
+----
+2
+y
+6
+y
+
+query I nosort
+SELECT count(*) FROM events, UNNEST(labels) AS l(label) WHERE label IS NULL
+----
+1
+
+# 5. Without a column alias the value is `unnest`.
+
+query IT nosort
+SELECT event_id, unnest FROM events, UNNEST(labels) ORDER BY event_id, unnest
+----
+1
+x
+1
+y
+2
+y
+5
+x
+5
+x
+5
+NULL
+6
+y
+6
+z
+
+# 6. LIMIT over the expanded rows.
+
+query IT nosort
+SELECT event_id, UNNEST(labels) AS label FROM events ORDER BY event_id, label LIMIT 3
+----
+1
+x
+1
+y
+2
+y

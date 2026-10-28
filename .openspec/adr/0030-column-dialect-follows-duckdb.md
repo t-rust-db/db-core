@@ -105,3 +105,38 @@ them with DuckDB's answers.
   an aggregate over one.
 - **Also fixed.** `TRUE` and `FALSE` literals compiled to NULL in the batch
   planner (`WHERE x = true` matched nothing); they are booleans now.
+
+## As built (#802): UNNEST of a list column
+
+`UNNEST(list)` turns one row holding a `LIST<VARCHAR>` into one row per
+element, in DuckDB's two places: `FROM events, UNNEST(labels) AS l(label)`
+(also `CROSS JOIN UNNEST(...)`), and `SELECT id, UNNEST(labels) AS label`.
+A NULL or empty list gives no row; a NULL element gives a row holding NULL.
+Without a column alias the value is named `unnest`.
+
+- **Parse.** The row grammar reads `UNNEST(expr) [AS alias[(column)]]` as a
+  `TableRefKind::Unnest` (the row dialect's codegen rejects it).
+  `parser::column` brings both forms to one shape: a single `Cross` join
+  holding the `Unnest`, whose `column` names the virtual column the elements
+  are read from. A select-list `UNNEST` moves its list into that join and
+  becomes a read of the column, so the planner sees one form. `l.label`
+  loses its qualifier. One `UNNEST` per query; it needs a table before it,
+  and is no join with a condition. The CROSS JOIN `LIMIT` rule does not
+  apply, as an `UNNEST` is bounded by its row.
+- **Plan.** Expanding a list changes the row count, so nothing can be
+  loaded from the file afterwards. `unnest_prologue` runs first: the list,
+  the `WHERE` conditions that do not read the unnested value (they filter
+  before the expansion), every other column the query reads, then
+  `Opcode::Unnest`, which repeats each live register per element and writes
+  the elements to a register of its own. What follows is the ordinary plan,
+  with the conditions on the unnested value left as its `WHERE`. A
+  `COUNT(DISTINCT x)` key, which wants a register of its own, copies `x`
+  (`MapOp::Copy`) instead of loading it again.
+- **Where.** The opcode works on segments, so a table directory's files and
+  its live WAL pages need nothing else. `EXPLAIN` shows an `UNNEST: list AS
+  column` node between the loads and the filter.
+- **Not yet.** A literal list, several `UNNEST`s, a lateral reference to
+  another joined table, and `UNNEST` over a multi-table (cross-mode) query.
+  A non-list value is a `MalformedProgram` execute error. Naming the value
+  by its alias in `WHERE`/`GROUP BY` works; `UNNEST(...)` written there does
+  not.

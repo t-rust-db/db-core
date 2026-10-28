@@ -165,17 +165,93 @@ fn ast_binop_allowed(op: AstBinOp, span: Span) -> Result<()> {
     }
 }
 
+/// The column an `UNNEST` expands into when neither an `AS alias(column)`
+/// nor a select-list alias names it (#802).
+const UNNEST_COLUMN: &str = "unnest";
+
+/// `UNNEST(list)` as a select item: the list expression, when `expr` is
+/// exactly that call (#802).
+fn select_list_unnest(expr: &AstExpr) -> Option<&AstExpr> {
+    let ExprKind::FunctionCall {
+        name,
+        distinct: false,
+        args: FunctionArgs::List(args),
+        tail: None,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    match args.as_slice() {
+        [arg] if name.eq_ignore_ascii_case("unnest") => Some(arg),
+        _ => None,
+    }
+}
+
+/// Canonical form of `UNNEST` (#802): exactly one `FROM` entry
+/// `Join { Cross, Unnest { expr, column } }` whose `column` is the virtual
+/// column the expanded values are read from. A select-list
+/// `UNNEST(list) [AS a]` moves its list into such a join and becomes a
+/// plain read of that column.
+fn normalize_select_list_unnest(select: &mut Select) -> Result<()> {
+    let Some(from) = select.from.as_mut() else {
+        return Ok(());
+    };
+    let mut found = false;
+    for col in &mut select.columns {
+        let crate::parser::ast::ResultColumn::Expr { expr, alias } = col else {
+            continue;
+        };
+        let Some(list) = select_list_unnest(expr) else {
+            continue;
+        };
+        if found {
+            return Err(unsupported(expr.span, "more than one UNNEST".into()));
+        }
+        found = true;
+        let span = expr.span;
+        from.joins.push(crate::parser::ast::Join {
+            op: JoinOp::Cross,
+            table: crate::parser::ast::TableRef {
+                kind: TableRefKind::Unnest {
+                    expr: Box::new(list.clone()),
+                    column: Some(UNNEST_COLUMN.to_string()),
+                },
+                alias: None,
+                span,
+            },
+            constraint: None,
+            natural: false,
+        });
+        *alias = alias.take().or_else(|| Some(UNNEST_COLUMN.to_string()));
+        *expr = AstExpr {
+            kind: ExprKind::Column {
+                table: None,
+                catalog: None,
+                name: UNNEST_COLUMN.to_string(),
+            },
+            span,
+        };
+    }
+    Ok(())
+}
+
 /// Rewrite `alias.col` to `real_table.col` in place, for every qualified
 /// column name reachable from `expr` (recursing through every operator
 /// this subset's grammar can produce). A subquery has its own `FROM`/alias
 /// scope -- its column refs are resolved when *it* is validated, not
-/// against the outer query's aliases.
+/// against the outer query's aliases. An alias mapped to `""` is dropped
+/// instead (`l.label` becomes `label`): the virtual column of an `UNNEST`
+/// has no table to qualify it (#802).
 fn resolve_expr_aliases(expr: &mut AstExpr, aliases: &HashMap<String, String>) {
     match &mut expr.kind {
         ExprKind::Column { table, .. } => {
             if let Some(t) = table {
                 if let Some(real) = aliases.get(t) {
-                    *t = real.clone();
+                    if real.is_empty() {
+                        *table = None;
+                    } else {
+                        *t = real.clone();
+                    }
                 }
             }
         }
@@ -1138,6 +1214,10 @@ fn validate_select(select: &mut Select) -> Result<()> {
     let mut alias_order: Vec<(String, String)> = Vec::new();
     let from_name;
     let mut has_cross_join = false;
+    // The alias that qualifies an `UNNEST`'s column, `l` in `UNNEST(x) AS l`.
+    let mut unnest_alias: Option<String> = None;
+    let mut unnests = 0usize;
+    normalize_select_list_unnest(select)?;
     {
         let Some(from_clause) = select.from.as_mut() else {
             return Err(unsupported(select.span, "SELECT without FROM".into()));
@@ -1157,6 +1237,12 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 validate_select(subselect)?;
                 alias
             }
+            TableRefKind::Unnest { .. } => {
+                return Err(unsupported(
+                    from_clause.first.span,
+                    "UNNEST needs a table before it in FROM".into(),
+                ))
+            }
         };
         if let Some(alias) = &from_clause.first.alias {
             alias_order.push((alias.clone(), from_name.clone()));
@@ -1166,10 +1252,33 @@ fn validate_select(select: &mut Select) -> Result<()> {
             if j.natural {
                 return Err(unsupported(j.table.span, "NATURAL join".into()));
             }
-            let table = match &j.table.kind {
+            let table = match &mut j.table.kind {
                 TableRefKind::Name(table) => table.clone(),
                 TableRefKind::Subquery(_) => {
                     return Err(unsupported(j.table.span, "subquery in JOIN".into()))
+                }
+                TableRefKind::Unnest { expr, column } => {
+                    unnests = unnests.saturating_add(1);
+                    if unnests > 1 {
+                        return Err(unsupported(j.table.span, "more than one UNNEST".into()));
+                    }
+                    if j.op != JoinOp::Cross || j.constraint.is_some() {
+                        return Err(unsupported(
+                            j.table.span,
+                            "UNNEST takes a comma or CROSS JOIN, no ON".into(),
+                        ));
+                    }
+                    if matches!(expr.kind, ExprKind::Literal(_)) {
+                        return Err(unsupported(
+                            j.table.span,
+                            "UNNEST of a literal: it expands a list column".into(),
+                        ));
+                    }
+                    unnest_alias.clone_from(&j.table.alias);
+                    if column.is_none() {
+                        *column = Some(UNNEST_COLUMN.to_string());
+                    }
+                    continue;
                 }
             };
             if let Some(alias) = &j.table.alias {
@@ -1212,6 +1321,10 @@ fn validate_select(select: &mut Select) -> Result<()> {
         }
     }
 
+    if let Some(alias) = unnest_alias {
+        aliases.insert(alias, String::new());
+    }
+
     if !aliases.is_empty() {
         if let Some(where_clause) = &mut select.where_clause {
             resolve_expr_aliases(where_clause, &aliases);
@@ -1233,6 +1346,9 @@ fn validate_select(select: &mut Select) -> Result<()> {
         if let Some(from_clause) = select.from.as_mut() {
             for j in &mut from_clause.joins {
                 if let Some(JoinConstraint::On(expr)) = &mut j.constraint {
+                    resolve_expr_aliases(expr, &aliases);
+                }
+                if let TableRefKind::Unnest { expr, .. } = &mut j.table.kind {
                     resolve_expr_aliases(expr, &aliases);
                 }
             }
@@ -1872,7 +1988,9 @@ mod tests {
         let from = select.from.as_ref().unwrap();
         match &from.first.kind {
             TableRefKind::Name(name) => name,
-            TableRefKind::Subquery(_) => from.first.alias.as_deref().unwrap(),
+            TableRefKind::Subquery(_) | TableRefKind::Unnest { .. } => {
+                from.first.alias.as_deref().unwrap()
+            }
         }
     }
 
@@ -1914,6 +2032,51 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    /// The canonical form of #802: one `Unnest` join, its column named.
+    fn unnest_of(q: &Select) -> (String, Option<String>) {
+        let joins = &q.from.as_ref().unwrap().joins;
+        assert_eq!(joins.len(), 1);
+        let TableRefKind::Unnest { expr, column } = &joins[0].table.kind else {
+            panic!("not an UNNEST join: {:?}", joins[0]);
+        };
+        (expr.to_string(), column.clone())
+    }
+
+    #[test]
+    fn parses_unnest_in_from_and_the_select_list() {
+        for sql in [
+            "SELECT label FROM events, UNNEST(labels) AS l(label)",
+            "SELECT l.label FROM events CROSS JOIN UNNEST(labels) AS l(label)",
+        ] {
+            let q = parse(sql).unwrap();
+            assert_eq!(unnest_of(&q), ("labels".into(), Some("label".into())));
+            assert_eq!(col_names(&q), vec!["label".to_string()], "{sql}");
+        }
+        let q = parse("SELECT id, UNNEST(labels) AS label FROM events").unwrap();
+        assert_eq!(unnest_of(&q), ("labels".into(), Some("unnest".into())));
+        assert!(matches!(
+            &q.columns[1],
+            ResultColumn::Expr { alias: Some(a), .. } if a == "label"
+        ));
+        let q = parse("SELECT unnest FROM events, UNNEST(labels)").unwrap();
+        assert_eq!(unnest_of(&q), ("labels".into(), Some("unnest".into())));
+    }
+
+    #[test]
+    fn rejects_unsupported_unnest_shapes() {
+        for sql in [
+            "SELECT id FROM events, UNNEST(a) AS x(x), UNNEST(b) AS y(y)",
+            "SELECT UNNEST(a), UNNEST(b) FROM events",
+            "SELECT id FROM events, UNNEST(a) AS x(x) UNNEST(b)",
+            "SELECT id FROM events LEFT JOIN UNNEST(a) AS x(x) ON 1 = 1",
+            "SELECT id FROM UNNEST(a) AS x(x)",
+            "SELECT id FROM events, UNNEST(a) AS x(x, y)",
+            "SELECT id FROM events, UNNEST('a') AS x(x)",
+        ] {
+            assert!(parse(sql).is_err(), "{sql}");
+        }
     }
 
     #[test]

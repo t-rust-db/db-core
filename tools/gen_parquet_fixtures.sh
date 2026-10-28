@@ -35,6 +35,17 @@ duckdb -c "COPY (SELECT ['x']::VARCHAR[] AS lst, MAP {1: 'a'} AS ik,
     MAP {'a': 1} AS iv, MAP {'a': '1'} AS m, [1]::INTEGER[] AS il,
     {'a': 1} AS st) TO '$DIR/nested_shapes.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 
+# #802: events with a list column -- NULL list, empty list, a NULL element,
+# a repeated element, and filter / distinct-count columns beside it.
+duckdb -c "COPY (SELECT * FROM (VALUES
+    (1, 'a', 'high', 10, ['x', 'y']::VARCHAR[]),
+    (2, 'b', 'high', 20, ['y']::VARCHAR[]),
+    (3, 'a', 'low', 30, []::VARCHAR[]),
+    (4, 'c', 'high', 40, NULL::VARCHAR[]),
+    (5, 'a', 'high', 50, ['x', NULL, 'x']::VARCHAR[]),
+    (6, 'b', 'low', 60, ['z', 'y']::VARCHAR[])
+  ) t(event_id, source, severity, ts, labels) ORDER BY event_id) TO '$DIR/events.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+
 # #679: NULLs in every typed column, mixed-case and empty text, a decimal
 # and a timestamp -- the shapes the column engine answered wrongly
 # (three-valued AND/OR, quoted-value comparisons, timestamps, LIKE case).
@@ -64,4 +75,4 @@ duckdb -c "COPY (SELECT
   FROM range(1, 10001) t(i) ORDER BY id)
   TO '$DIR/typed_nulls.parquet' (FORMAT PARQUET, COMPRESSION 'snappy', ROW_GROUP_SIZE 2048);"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet"
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet"

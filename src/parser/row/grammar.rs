@@ -1889,6 +1889,9 @@ impl Parser {
             return self.unsupported("NOT INDEXED not yet supported");
         }
         if matches!(self.peek().kind, TokenKind::LParen) {
+            if name.eq_ignore_ascii_case("unnest") && alias.is_none() {
+                return self.unnest_ref(start);
+            }
             return self.unsupported("table-valued functions in FROM not yet supported");
         }
 
@@ -1896,6 +1899,36 @@ impl Parser {
             kind: TableRefKind::Name(name),
             alias,
             span,
+        })
+    }
+
+    /// `UNNEST ( expr ) [ [ "AS" ] alias [ "(" column ")" ] ]` (#802),
+    /// positioned at the `(` after the `UNNEST` identifier.
+    fn unnest_ref(&mut self, start: Span) -> PResult<TableRef> {
+        self.expect_punct(TokenKind::LParen, "'(' after UNNEST")?;
+        let expr = self.expr()?;
+        self.expect_punct(TokenKind::RParen, "')' to close UNNEST")?;
+        let alias = self.opt_alias()?;
+        let mut column = None;
+        if alias.is_some() && matches!(self.peek().kind, TokenKind::LParen) {
+            self.advance();
+            column = Some(self.identifier()?.0);
+            if matches!(self.peek().kind, TokenKind::Comma) {
+                return self.unsupported("UNNEST of a single list yields one column alias");
+            }
+            self.expect_punct(TokenKind::RParen, "')' to close the UNNEST column alias")?;
+        }
+        let end = self
+            .tokens
+            .get(self.pos.saturating_sub(1))
+            .map_or(start, |t| t.span);
+        Ok(TableRef {
+            kind: TableRefKind::Unnest {
+                expr: Box::new(expr),
+                column,
+            },
+            alias,
+            span: join_span(start, end),
         })
     }
 

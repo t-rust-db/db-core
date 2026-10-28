@@ -177,6 +177,9 @@ pub fn resolve_from_table_schema(
             .ok_or_else(|| CodegenError::Unsupported {
                 reason: format!("no such table: {name}"),
             }),
+        crate::parser::ast::TableRefKind::Unnest { .. } => Err(CodegenError::Unsupported {
+            reason: "UNNEST is only available in the column dialect".into(),
+        }),
         crate::parser::ast::TableRefKind::Subquery(subquery) => {
             let table_refs = subquery_own_table_refs(subquery)?;
             let schemas = resolve_subquery_schemas(&table_refs, catalog)?;
@@ -332,6 +335,11 @@ pub(crate) fn materialize_from_subquery(
                     root_page,
                     0,
                 ));
+            }
+            TableRefKind::Unnest { .. } => {
+                return Err(CodegenError::Unsupported {
+                    reason: "UNNEST is only available in the column dialect".into(),
+                })
             }
             TableRefKind::Subquery(inner) => {
                 // A subquery-in-FROM nested inside this one (#376: a CTE
