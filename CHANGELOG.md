@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.197.0] - 2026-10-28
+
+### Changed
+
+- Faster `COUNT(DISTINCT x)` over a string column, grouped or not, including after `UNNEST`: 2.8x on a high-cardinality column, within 3x of DuckDB at 300k events (#820).
+
 ## [0.196.1] - 2026-10-28
 
 ### Fixed
