@@ -228,6 +228,7 @@ pub fn db_core::codegen::batch::compile_join(&db_core::parser::ast::Select, db_c
 pub fn db_core::codegen::batch::compile_join_build_side(&db_core::parser::ast::Select, &str, db_core::codegen::batch::BuildSourceKind) -> db_core::codegen::batch::Result<db_core::vm::engine::JoinProgram>
 pub fn db_core::codegen::batch::compile_semi_join(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::codegen::batch::SemiJoinProgram>
 pub fn db_core::codegen::batch::compile_window(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
+pub fn db_core::codegen::batch::compile_with_int_columns(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::vm::batch::Program>
 pub fn db_core::codegen::batch::expand_star(&db_core::parser::ast::Select, &[alloc::string::String]) -> db_core::codegen::batch::Result<db_core::parser::ast::Select>
 pub fn db_core::codegen::batch::explain(&db_core::parser::ast::Select, impl core::ops::function::Fn(&str) -> db_core::codegen::batch::TableStats) -> db_core::codegen::batch::Result<alloc::vec::Vec<db_core::codegen::batch::PlanNode>>
 pub fn db_core::codegen::batch::explain_opcodes(&db_core::parser::ast::Select) -> db_core::codegen::batch::Result<alloc::vec::Vec<db_core::codegen::batch::OpcodeSection>>
@@ -8128,6 +8129,7 @@ pub db_core::vm::batch::AggFunc::ApproxCountDistinct
 pub db_core::vm::batch::AggFunc::Avg
 pub db_core::vm::batch::AggFunc::AvgSum
 pub db_core::vm::batch::AggFunc::Count
+pub db_core::vm::batch::AggFunc::ExactCountDistinct
 pub db_core::vm::batch::AggFunc::Max
 pub db_core::vm::batch::AggFunc::Min
 pub db_core::vm::batch::AggFunc::Sum
@@ -8160,6 +8162,7 @@ pub db_core::vm::batch::AggPart::ApproxCountDistinct
 pub db_core::vm::batch::AggPart::Avg(usize, usize)
 pub db_core::vm::batch::AggPart::Count
 pub db_core::vm::batch::AggPart::DistinctKey
+pub db_core::vm::batch::AggPart::ExactCountDistinct
 pub db_core::vm::batch::AggPart::Expr(db_core::vm::batch::MapOp, db_core::vm::batch::AggOperand, db_core::vm::batch::AggOperand)
 pub db_core::vm::batch::AggPart::GroupKey
 pub db_core::vm::batch::AggPart::Hidden(db_core::vm::batch::HiddenPart)

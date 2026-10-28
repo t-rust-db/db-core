@@ -252,7 +252,8 @@ pub fn query_snapshot(
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
     let (schema, select) = parsed_select(snapshot, table, sql)?;
-    let program: Program = planner::compile(&select).map_err(plan_err)?;
+    let program: Program = planner::compile_with_int_columns(&select, &schema_int_columns(&schema))
+        .map_err(plan_err)?;
     let requests = resolve(&schema, &program.columns_to_load(), &[])?;
     let keep = file_flags(snapshot, &schema, select.where_clause.as_ref());
     let files = snapshot
@@ -587,6 +588,16 @@ fn schema_timestamps(schema: &[ColumnSpec]) -> Vec<(String, i64)> {
             ColumnType::TimestampNanos => Some((s.name.clone(), 1_000_000_000)),
             _ => None,
         })
+        .collect()
+}
+
+/// The schema's integer columns, for [`planner::compile_with_int_columns`]
+/// (#817).
+fn schema_int_columns(schema: &[ColumnSpec]) -> Vec<String> {
+    schema
+        .iter()
+        .filter(|s| matches!(s.column_type, ColumnType::Int32 | ColumnType::Int64))
+        .map(|s| s.name.clone())
         .collect()
 }
 

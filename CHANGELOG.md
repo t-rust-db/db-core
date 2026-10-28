@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.196.0] - 2026-10-28
+
+### Changed
+
+- Faster `COUNT(DISTINCT x)` over an integer column, grouped or not, including after `UNNEST` (#817).
+
 ## [0.195.0] - 2026-10-28
 
 ### Changed

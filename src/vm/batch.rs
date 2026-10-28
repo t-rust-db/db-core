@@ -53,6 +53,13 @@ pub enum AggFunc {
     /// distinct non-null values. Its partial is the encoded sketch
     /// ([`Value::Bytes`]), which `Combine` merges and finalizes.
     ApproxCountDistinct,
+    /// `COUNT(DISTINCT x)` of an integer column (#817). Internal: the
+    /// planner lowers a distinct count to this when told `x` is an integer
+    /// column, so a group collects its distinct values instead of one group
+    /// per `(keys, x)` pair; no SQL name parses to it. Its partial is the
+    /// group's sorted distinct values ([`Value::Bytes`], 8 bytes each),
+    /// which `Combine` unions and counts.
+    ExactCountDistinct,
 }
 
 impl AggFunc {
@@ -71,6 +78,7 @@ impl AggFunc {
             AggFunc::Max => "MAX",
             AggFunc::AvgSum => "SUM",
             AggFunc::ApproxCountDistinct => "APPROX_COUNT_DISTINCT",
+            AggFunc::ExactCountDistinct => "COUNT",
         }
     }
 
@@ -87,6 +95,12 @@ impl AggFunc {
             _ => None,
         }
     }
+}
+
+/// `values` (sorted, without repeats) as an exact distinct count's partial:
+/// 8 little-endian bytes each (#817).
+pub(crate) fn encode_int_set(values: &[i64]) -> Vec<u8> {
+    values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
 
 /// A runtime row value, or a `SELECT`-list literal baked into an
@@ -548,6 +562,10 @@ pub enum AggPart {
     /// sketch, merged register-wise and replaced by its estimate once
     /// everything is merged.
     ApproxCountDistinct,
+    /// An exact `COUNT(DISTINCT <integer>)` partial (#817): the sorted
+    /// distinct values, unioned across segments and replaced by their count
+    /// once everything is merged.
+    ExactCountDistinct,
     /// `(sum_index, count_index)` into the emitted row, combined at the end.
     Avg(usize, usize),
     /// A partial `SUM`/`COUNT`/`MIN`/`MAX`, merged the same as its plain
@@ -3977,9 +3995,34 @@ enum Extremes {
     /// aggregate of the same accumulator uses, so `RunningAgg` stays its
     /// size.
     Sketch(Box<Hll>),
+    /// `COUNT(DISTINCT <integer>)`'s values so far (#817), unsorted and
+    /// with repeats until [`RunningAgg::finalize`].
+    Ints(Vec<i64>),
+    /// A value that is not an integer reached an integer distinct count:
+    /// the plan was wrong about the column, reported at finalize.
+    NotInts,
 }
 
 impl RunningAgg {
+    /// Folds one value into an exact integer distinct count (#817); `Null`
+    /// is skipped, as `COUNT(x)` skips it.
+    fn push_set(&mut self, value: &Value) {
+        match value {
+            Value::Null => {}
+            Value::Int(x) => self.push_set_i64(*x),
+            _ => self.extremes = Extremes::NotInts,
+        }
+    }
+
+    /// [`Self::push_set`] for an integer read straight from a typed column.
+    fn push_set_i64(&mut self, x: i64) {
+        match &mut self.extremes {
+            Extremes::Ints(values) => values.push(x),
+            Extremes::NotInts => {}
+            other => *other = Extremes::Ints(vec![x]),
+        }
+    }
+
     /// Folds one value into the `approx_count_distinct` sketch (#603);
     /// `Null` is skipped, as `COUNT(x)` skips it.
     fn push_sketch(&mut self, value: &Value) {
@@ -4018,7 +4061,9 @@ impl RunningAgg {
     /// primitives seen so far first.
     fn push_extreme(&mut self, value: &Value) {
         let (mut min, mut max) = match std::mem::take(&mut self.extremes) {
-            Extremes::Empty | Extremes::Sketch(_) => (value.clone(), value.clone()),
+            Extremes::Empty | Extremes::Sketch(_) | Extremes::Ints(_) | Extremes::NotInts => {
+                (value.clone(), value.clone())
+            }
             Extremes::Int(min, max) => (Value::Int(min), Value::Int(max)),
             Extremes::Float(min, max) => (Value::Float(min), Value::Float(max)),
             Extremes::Boxed(min, max) => (min, max),
@@ -4163,13 +4208,17 @@ impl RunningAgg {
                 Value::Float(self.total() / count)
             }
             AggFunc::Min => match &self.extremes {
-                Extremes::Empty | Extremes::Sketch(_) => Value::Null,
+                Extremes::Empty | Extremes::Sketch(_) | Extremes::Ints(_) | Extremes::NotInts => {
+                    Value::Null
+                }
                 Extremes::Int(min, _) => Value::Int(*min),
                 Extremes::Float(min, _) => Value::Float(*min),
                 Extremes::Boxed(min, _) => min.clone(),
             },
             AggFunc::Max => match &self.extremes {
-                Extremes::Empty | Extremes::Sketch(_) => Value::Null,
+                Extremes::Empty | Extremes::Sketch(_) | Extremes::Ints(_) | Extremes::NotInts => {
+                    Value::Null
+                }
                 Extremes::Int(_, max) => Value::Int(*max),
                 Extremes::Float(_, max) => Value::Float(*max),
                 Extremes::Boxed(_, max) => max.clone(),
@@ -4179,6 +4228,24 @@ impl RunningAgg {
             AggFunc::ApproxCountDistinct => match &self.extremes {
                 Extremes::Sketch(sketch) => Value::Bytes(sketch.encode().into()),
                 _ => Value::Bytes(Hll::default().encode().into()),
+            },
+            // The partial, sorted and without repeats: `Combine` unions it
+            // with the other segments', then counts (#817).
+            AggFunc::ExactCountDistinct => match &self.extremes {
+                Extremes::Ints(values) => {
+                    let mut values = values.clone();
+                    values.sort_unstable();
+                    values.dedup();
+                    Value::Bytes(encode_int_set(&values).into())
+                }
+                Extremes::NotInts => {
+                    return Err(VmError::MalformedProgram {
+                        opcode,
+                        reason: "an exact COUNT(DISTINCT) read a value that is not an integer"
+                            .to_string(),
+                    })
+                }
+                _ => Value::Bytes(encode_int_set(&[]).into()),
             },
         })
     }
@@ -4349,6 +4416,8 @@ fn fold_group_row(
             Some(s) => with_value_source(*s, probe_columns, probe_row, bt, build_row, |value| {
                 if *func == AggFunc::ApproxCountDistinct {
                     accumulators[i][group].push_sketch(value);
+                } else if *func == AggFunc::ExactCountDistinct {
+                    accumulators[i][group].push_set(value);
                 } else {
                     accumulators[i][group].push(Some(value));
                 }
@@ -5915,6 +5984,33 @@ impl Vm {
                         accs[*group].push_sketch(&values[physical(row)]);
                     }
                 }
+                // #817: an exact integer distinct count reads a typed `Int`
+                // column straight from its packed `data`, anything else as
+                // `Value`s (a non-integer is reported at finalize).
+                Some(reg) if *func == AggFunc::ExactCountDistinct => {
+                    let typed = self
+                        .typed_registers
+                        .get(reg)
+                        .map(Arc::clone)
+                        .filter(|c| c.len() == base_len);
+                    if let Some(Column::Int { data, valid }) = typed.as_deref() {
+                        for (row, group) in row_group.iter().enumerate() {
+                            let p = physical(row);
+                            if valid.get(p) {
+                                accs[*group].push_set_i64(data[p]);
+                            }
+                        }
+                    } else {
+                        self.ensure_materialized(*reg);
+                        let values = self.reg(*reg, opcode)?;
+                        if values.len() != base_len {
+                            return Err(VmError::RegisterLengthMismatch { opcode });
+                        }
+                        for (row, group) in row_group.iter().enumerate() {
+                            accs[*group].push_set(&values[physical(row)]);
+                        }
+                    }
+                }
                 Some(reg) => match self.typed_registers.get(reg).map(Arc::clone) {
                     // #477: read straight from the typed column's
                     // packed `data`/`valid` for `Int`/`Float` --
@@ -7015,7 +7111,10 @@ fn reduce_count_star(func: AggFunc, num_rows: usize) -> Value {
 /// so the caller falls back to [`reduce_values`] over the materialized
 /// register.
 fn typed_reduce_values(func: AggFunc, column: &Column) -> Option<Result<Value>> {
-    if func == AggFunc::ApproxCountDistinct {
+    if matches!(
+        func,
+        AggFunc::ApproxCountDistinct | AggFunc::ExactCountDistinct
+    ) {
         return None;
     }
     let mut acc = RunningAgg::default();
@@ -7107,6 +7206,8 @@ fn reduce_values(func: AggFunc, values: &[Value]) -> Result<Value> {
     for value in values {
         if func == AggFunc::ApproxCountDistinct {
             acc.push_sketch(value);
+        } else if func == AggFunc::ExactCountDistinct {
+            acc.push_set(value);
         } else {
             acc.push(Some(value));
         }
@@ -10526,6 +10627,87 @@ mod tests {
             &[Value::Null, Value::Str("east".into())]
         );
         assert_eq!(vm.register(2).unwrap(), &[Value::Int(8), Value::Int(2)]);
+    }
+
+    /// #817: an exact integer distinct count of a typed `Int` column
+    /// (NULLs skipped, repeats merged) and of `Value`s gives the sorted set;
+    /// a value that is not an integer is an error, not a miscount.
+    #[test]
+    fn exact_distinct_collects_integers_and_refuses_anything_else() {
+        let run = |batch: &Batch, grouped: bool| {
+            let mut vm = Vm::new();
+            let mut program = vec![
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "x".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "k".into(),
+                },
+            ];
+            program.push(if grouped {
+                Opcode::GroupReduce {
+                    group_by: vec![1].into(),
+                    aggs: vec![(AggFunc::ExactCountDistinct, Some(0))].into(),
+                    agg_dst: vec![2].into(),
+                }
+            } else {
+                Opcode::Reduce {
+                    func: AggFunc::ExactCountDistinct,
+                    src: Some(0),
+                    dst: 2,
+                }
+            });
+            vm.execute(batch, &program).map(|()| vm)
+        };
+        let keys = vec![
+            Value::Str("a".into()),
+            Value::Str("b".into()),
+            Value::Str("a".into()),
+            Value::Str("a".into()),
+            Value::Str("b".into()),
+        ];
+        let ints = vec![
+            Value::Int(7),
+            Value::Null,
+            Value::Int(-3),
+            Value::Int(7),
+            Value::Null,
+        ];
+        let typed = Batch::new(5)
+            .with_column("k", keys.clone())
+            .with_typed_column("x", Column::from(ints.clone()));
+        let boxed = Batch::new(5)
+            .with_column("k", keys.clone())
+            .with_column("x", ints.clone());
+        for batch in [&typed, &boxed] {
+            let mut grouped = run(batch, true).unwrap();
+            assert_eq!(
+                grouped.register(2).unwrap(),
+                &[
+                    Value::Bytes(encode_int_set(&[-3, 7]).into()),
+                    Value::Bytes(encode_int_set(&[]).into())
+                ]
+            );
+            let mut whole = run(batch, false).unwrap();
+            assert_eq!(
+                whole.register(2).unwrap(),
+                &[Value::Bytes(encode_int_set(&[-3, 7]).into())]
+            );
+        }
+        let mixed = Batch::new(5).with_column("k", keys).with_column(
+            "x",
+            vec![
+                Value::Int(1),
+                Value::Str("1".into()),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ],
+        );
+        assert!(run(&mixed, true).is_err());
+        assert!(run(&mixed, false).is_err());
     }
 
     /// #815: `<>`/`=` against a literal on a typed `Str` column compares
