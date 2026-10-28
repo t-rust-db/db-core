@@ -519,23 +519,15 @@ impl Column {
         }
     }
 
-    /// [`Self::take`] of a [`Column::List`] over a [`Column::Dict`] of
-    /// elements (#809): the listed rows' elements, back to back, so a
-    /// selection or a repeat (`UNNEST`) keeps the list flat.
+    /// [`Self::take`] of a [`Column::List`] (#809): the listed rows'
+    /// elements, back to back, so a selection or a repeat (`UNNEST`) keeps
+    /// the list flat.
     fn take_list(&self, rows: &[usize]) -> Option<Column> {
         let Column::List {
             offsets,
             elements,
             valid,
         } = self
-        else {
-            return None;
-        };
-        let Column::Dict {
-            dict,
-            indices,
-            valid: element_valid,
-        } = elements.as_ref()
         else {
             return None;
         };
@@ -547,30 +539,22 @@ impl Column {
         };
         let mut taken_offsets = Vec::with_capacity(rows.len().saturating_add(1));
         taken_offsets.push(0u32);
-        let mut taken_indices: Vec<u32> = Vec::new();
-        let mut taken_element_valid: Vec<bool> = Vec::new();
+        let mut positions: Vec<usize> = Vec::new();
         let mut taken_valid: Vec<bool> = Vec::with_capacity(rows.len());
         for &row in rows {
-            for j in at(row)..at(row.saturating_add(1)) {
-                taken_indices.push(*indices.get(j)?);
-                taken_element_valid.push(element_valid.get(j));
-            }
-            taken_offsets.push(u32::try_from(taken_indices.len()).ok()?);
+            positions.extend(at(row)..at(row.saturating_add(1)));
+            taken_offsets.push(u32::try_from(positions.len()).ok()?);
             taken_valid.push(valid.get(row));
         }
         Some(Column::List {
             offsets: taken_offsets,
-            elements: Box::new(Column::Dict {
-                dict: dict.clone(),
-                indices: taken_indices,
-                valid: Bitmap::from_bools(taken_element_valid.into_iter()),
-            }),
+            elements: Box::new(elements.take(&positions)?),
             valid: Bitmap::from_bools(taken_valid.into_iter()),
         })
     }
 
-    /// Row `i` of a [`Column::Dict`] as its shared string (`None` for NULL,
-    /// out of range, or any other variant).
+    /// Row `i` of a [`Column::Dict`] or [`Column::Str`] as a shared string
+    /// (`None` for NULL, out of range, or any other variant).
     pub(crate) fn shared_str(&self, i: usize) -> Option<Arc<str>> {
         match self {
             Column::Dict {
@@ -581,6 +565,11 @@ impl Column {
                 .get(i)
                 .and_then(|&code| dict.get(usize::try_from(code).unwrap_or(usize::MAX)))
                 .cloned(),
+            Column::Str {
+                offsets,
+                data,
+                valid,
+            } if valid.get(i) => str_at(offsets, data, i).map(Arc::from),
             _ => None,
         }
     }
