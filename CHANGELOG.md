@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.198.0] - 2026-10-28
+
+### Changed
+
+- Faster `COUNT(DISTINCT <string>)` with many small groups: no per-group allocation for a group with one string (#823).
+
 ## [0.197.0] - 2026-10-28
 
 ### Changed
