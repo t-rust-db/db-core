@@ -3,6 +3,7 @@
 //!
 //! File layout: `[data ...][metadata][4-byte metadata length][b"PAR1"]`
 
+use crate::storage::parquet::page::Encoding;
 use crate::storage::parquet::schema_tree;
 use crate::storage::parquet::thrift::{self, ThriftError, Value};
 use std::fmt;
@@ -124,8 +125,7 @@ pub struct SchemaElement {
     pub type_length: Option<i32>,
     /// Old-style (`ConvertedType`) logical type annotation, e.g. `DECIMAL`
     /// or `TIMESTAMP_MICROS`. Real writers (DuckDB, pyarrow, Spark) still
-    /// set this alongside the newer `LogicalType` union, which this reader
-    /// doesn't parse.
+    /// set this alongside the newer [`LogicalType`] union.
     pub converted_type: Option<ConvertedType>,
     /// `DECIMAL`'s scale (digits after the decimal point).
     pub scale: Option<i32>,
@@ -136,6 +136,64 @@ pub struct SchemaElement {
     /// timestamps have no `ConvertedType`, so this is the only place their
     /// unit is recorded.
     pub timestamp_units: Option<i64>,
+    /// The `LogicalType` union (field 10), for describing the file. The
+    /// reader decodes by `converted_type` and `timestamp_units`.
+    pub logical_type: Option<LogicalType>,
+}
+
+/// `parquet.thrift` `LogicalType` union: what a physical value means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogicalType {
+    /// `STRING` (1).
+    String,
+    /// `MAP` (2).
+    Map,
+    /// `LIST` (3).
+    List,
+    /// `ENUM` (4).
+    Enum,
+    /// `DECIMAL` (5).
+    Decimal {
+        /// Digits after the decimal point.
+        scale: i32,
+        /// Total significant digits.
+        precision: i32,
+    },
+    /// `DATE` (6).
+    Date,
+    /// `TIME` (7).
+    Time {
+        /// Units per second (1 000, 1 000 000 or 1 000 000 000), if known.
+        units: Option<i64>,
+        /// `isAdjustedToUTC`.
+        utc: bool,
+    },
+    /// `TIMESTAMP` (8).
+    Timestamp {
+        /// Units per second (1 000, 1 000 000 or 1 000 000 000), if known.
+        units: Option<i64>,
+        /// `isAdjustedToUTC`: an instant, not a local wall-clock time.
+        utc: bool,
+    },
+    /// `INTEGER` (10).
+    Integer {
+        /// 8, 16, 32 or 64.
+        bit_width: i32,
+        /// Whether the value is signed.
+        signed: bool,
+    },
+    /// `UNKNOWN` (11): always null.
+    Unknown,
+    /// `JSON` (12).
+    Json,
+    /// `BSON` (13).
+    Bson,
+    /// `UUID` (14).
+    Uuid,
+    /// `FLOAT16` (15).
+    Float16,
+    /// Any other member of the union, by field id.
+    Other(i16),
 }
 
 /// `parquet.thrift` `ConvertedType` enum (values relevant to this reader).
@@ -205,6 +263,8 @@ impl From<i32> for Codec {
 pub struct ColumnMetaData {
     /// Physical type (field 1); `Unknown(-1)` when absent.
     pub physical_type: PhysicalType,
+    /// Encodings used by the chunk's pages, levels included (field 2).
+    pub encodings: Vec<Encoding>,
     /// Compression codec (field 4); `Uncompressed` when absent.
     pub codec: Codec,
     /// Path from the schema root to this leaf (field 3).
@@ -367,18 +427,8 @@ fn parse_schema_element(v: &Value) -> SchemaElement {
     // LogicalType (10) is a union; TIMESTAMP is its field 8, a
     // TimestampType whose `unit` (2) is the TimeUnit union MILLIS (1),
     // MICROS (2) or NANOS (3).
-    let timestamp_units = v
-        .field(10)
-        .and_then(|l| l.field(8))
-        .and_then(|t| t.field(2))
-        .and_then(Value::as_struct)
-        .and_then(|unit| unit.first())
-        .and_then(|(id, _)| match id {
-            1 => Some(1_000),
-            2 => Some(1_000_000),
-            3 => Some(1_000_000_000),
-            _ => None,
-        });
+    let timestamp_units = v.field(10).and_then(|l| l.field(8)).and_then(time_units);
+    let logical_type = v.field(10).and_then(parse_logical_type);
     SchemaElement {
         name,
         physical_type,
@@ -389,7 +439,56 @@ fn parse_schema_element(v: &Value) -> SchemaElement {
         scale,
         precision,
         timestamp_units,
+        logical_type,
     }
+}
+
+/// A TimeType or TimestampType's `unit` (2), the TimeUnit union, as units
+/// per second.
+fn time_units(t: &Value) -> Option<i64> {
+    let unit = t.field(2).and_then(Value::as_struct)?;
+    match unit.first()?.0 {
+        1 => Some(1_000),
+        2 => Some(1_000_000),
+        3 => Some(1_000_000_000),
+        _ => None,
+    }
+}
+
+/// The `LogicalType` union: its one set field names the member.
+fn parse_logical_type(v: &Value) -> Option<LogicalType> {
+    let (id, member) = v.as_struct()?.first()?;
+    let int = |field| member.field(field).and_then(Value::as_i32).unwrap_or(0);
+    let utc = member.field(1).and_then(Value::as_bool).unwrap_or(false);
+    Some(match id {
+        1 => LogicalType::String,
+        2 => LogicalType::Map,
+        3 => LogicalType::List,
+        4 => LogicalType::Enum,
+        5 => LogicalType::Decimal {
+            scale: int(1),
+            precision: int(2),
+        },
+        6 => LogicalType::Date,
+        7 => LogicalType::Time {
+            units: time_units(member),
+            utc,
+        },
+        8 => LogicalType::Timestamp {
+            units: time_units(member),
+            utc,
+        },
+        10 => LogicalType::Integer {
+            bit_width: int(1),
+            signed: member.field(2).and_then(Value::as_bool).unwrap_or(false),
+        },
+        11 => LogicalType::Unknown,
+        12 => LogicalType::Json,
+        13 => LogicalType::Bson,
+        14 => LogicalType::Uuid,
+        15 => LogicalType::Float16,
+        other => LogicalType::Other(*other),
+    })
 }
 
 fn parse_row_group(v: &Value) -> RowGroup {
@@ -422,6 +521,17 @@ fn parse_column_meta_data(v: &Value) -> ColumnMetaData {
         .and_then(Value::as_i32)
         .map(PhysicalType::from)
         .unwrap_or(PhysicalType::Unknown(-1));
+    let encodings = v
+        .field(2)
+        .and_then(Value::as_list)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_i32)
+                .map(Encoding::from)
+                .collect()
+        })
+        .unwrap_or_default();
     let codec = v
         .field(4)
         .and_then(Value::as_i32)
@@ -446,6 +556,7 @@ fn parse_column_meta_data(v: &Value) -> ColumnMetaData {
     let statistics = v.field(12).map(parse_statistics);
     ColumnMetaData {
         physical_type,
+        encodings,
         codec,
         path_in_schema,
         num_values,

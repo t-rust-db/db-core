@@ -23,7 +23,8 @@
 
 use std::io::{self, Write};
 
-use db_core::storage::parquet::footer::{Codec, Statistics};
+use db_core::storage::parquet::footer::{Codec, LogicalType, Statistics};
+use db_core::storage::parquet::page::Encoding;
 use db_core::storage::parquet::writer::*;
 use db_core::storage::parquet::ParquetFile;
 use proptest::prelude::*;
@@ -94,6 +95,90 @@ fn options(compression: Compression, dictionary: bool, row_group_rows: usize) ->
         dictionary,
         ..WriterOptions::default()
     }
+}
+
+/// The footer reads back the `LogicalType` union and each chunk's
+/// encodings the writer recorded, for tools that describe a file.
+#[test]
+fn the_footer_reads_back_logical_types_and_encodings() {
+    let schema = vec![
+        ColumnSpec::new("s", ColumnType::Utf8, true),
+        ColumnSpec::new("us", ColumnType::TimestampMicros, false),
+        ColumnSpec::new("ns", ColumnType::TimestampNanos, false),
+        ColumnSpec::new("u8", ColumnType::UInt8, true),
+        ColumnSpec::new("d", decimal(9, 2), true),
+        ColumnSpec::new("labels", ColumnType::ListUtf8, true),
+        ColumnSpec::new("i", ColumnType::Int32, false),
+    ];
+    let batch = vec![
+        ColumnValues::Utf8(vec![Some("a".into()), Some("a".into())]),
+        ColumnValues::TimestampMicros(vec![Some(1), Some(2)]),
+        ColumnValues::TimestampNanos(vec![Some(1), Some(2)]),
+        ColumnValues::UInt8(vec![Some(1), None]),
+        ColumnValues::Decimal(vec![Some(100), None]),
+        ColumnValues::List(vec![list(&[Some("x")]), None]),
+        ColumnValues::Int32(vec![Some(1), Some(2)]),
+    ];
+    let bytes = write(
+        schema,
+        options(Compression::Uncompressed, true, 100),
+        vec![batch],
+    );
+    let file = ParquetFile::open(&bytes).unwrap();
+    let meta = file.metadata();
+    let logical: Vec<_> = meta
+        .schema
+        .iter()
+        .map(|e| (e.name.as_str(), e.logical_type))
+        .collect();
+    assert_eq!(
+        logical,
+        [
+            ("schema", None),
+            ("s", Some(LogicalType::String)),
+            (
+                "us",
+                Some(LogicalType::Timestamp {
+                    units: Some(1_000_000),
+                    utc: true
+                })
+            ),
+            (
+                "ns",
+                Some(LogicalType::Timestamp {
+                    units: Some(1_000_000_000),
+                    utc: false
+                })
+            ),
+            (
+                "u8",
+                Some(LogicalType::Integer {
+                    bit_width: 8,
+                    signed: false
+                })
+            ),
+            (
+                "d",
+                Some(LogicalType::Decimal {
+                    scale: 2,
+                    precision: 9
+                })
+            ),
+            ("labels", Some(LogicalType::List)),
+            ("list", None),
+            ("element", Some(LogicalType::String)),
+            ("i", None),
+        ]
+    );
+    let encodings = |leaf: usize| {
+        let chunk = meta.row_groups[0].columns[leaf].meta_data.as_ref().unwrap();
+        chunk.encodings.clone()
+    };
+    assert_eq!(
+        encodings(0),
+        [Encoding::Plain, Encoding::Rle, Encoding::RleDictionary]
+    );
+    assert_eq!(encodings(6)[..2], [Encoding::Plain, Encoding::Rle]);
 }
 
 /// One row group's column, read back as the variant it was written as.

@@ -344,6 +344,7 @@ mod tests {
             scale: None,
             precision: None,
             timestamp_units: None,
+            logical_type: None,
         }
     }
 
@@ -373,6 +374,7 @@ mod tests {
             scale: None,
             precision: None,
             timestamp_units: None,
+            logical_type: None,
         }
     }
 
