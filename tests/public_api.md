@@ -2804,6 +2804,39 @@ impl core::fmt::Debug for db_core::storage::parquet::footer::FooterError
 pub fn db_core::storage::parquet::footer::FooterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::footer::FooterError
 pub fn db_core::storage::parquet::footer::FooterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::column::parquet::footer::LogicalType
+pub db_core::storage::column::parquet::footer::LogicalType::Bson
+pub db_core::storage::column::parquet::footer::LogicalType::Date
+pub db_core::storage::column::parquet::footer::LogicalType::Decimal
+pub db_core::storage::column::parquet::footer::LogicalType::Decimal::precision: i32
+pub db_core::storage::column::parquet::footer::LogicalType::Decimal::scale: i32
+pub db_core::storage::column::parquet::footer::LogicalType::Enum
+pub db_core::storage::column::parquet::footer::LogicalType::Float16
+pub db_core::storage::column::parquet::footer::LogicalType::Integer
+pub db_core::storage::column::parquet::footer::LogicalType::Integer::bit_width: i32
+pub db_core::storage::column::parquet::footer::LogicalType::Integer::signed: bool
+pub db_core::storage::column::parquet::footer::LogicalType::Json
+pub db_core::storage::column::parquet::footer::LogicalType::List
+pub db_core::storage::column::parquet::footer::LogicalType::Map
+pub db_core::storage::column::parquet::footer::LogicalType::Other(i16)
+pub db_core::storage::column::parquet::footer::LogicalType::String
+pub db_core::storage::column::parquet::footer::LogicalType::Time
+pub db_core::storage::column::parquet::footer::LogicalType::Time::units: core::option::Option<i64>
+pub db_core::storage::column::parquet::footer::LogicalType::Time::utc: bool
+pub db_core::storage::column::parquet::footer::LogicalType::Timestamp
+pub db_core::storage::column::parquet::footer::LogicalType::Timestamp::units: core::option::Option<i64>
+pub db_core::storage::column::parquet::footer::LogicalType::Timestamp::utc: bool
+pub db_core::storage::column::parquet::footer::LogicalType::Unknown
+pub db_core::storage::column::parquet::footer::LogicalType::Uuid
+impl core::clone::Clone for db_core::storage::parquet::footer::LogicalType
+pub fn db_core::storage::parquet::footer::LogicalType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::footer::LogicalType
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::LogicalType
+pub fn db_core::storage::parquet::footer::LogicalType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::footer::LogicalType
+pub fn db_core::storage::parquet::footer::LogicalType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::footer::LogicalType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::LogicalType
 pub enum db_core::storage::column::parquet::footer::PhysicalType
 pub db_core::storage::column::parquet::footer::PhysicalType::Boolean
 pub db_core::storage::column::parquet::footer::PhysicalType::ByteArray
@@ -2855,6 +2888,7 @@ pub struct db_core::storage::column::parquet::footer::ColumnMetaData
 pub db_core::storage::column::parquet::footer::ColumnMetaData::codec: db_core::storage::parquet::footer::Codec
 pub db_core::storage::column::parquet::footer::ColumnMetaData::data_page_offset: i64
 pub db_core::storage::column::parquet::footer::ColumnMetaData::dictionary_page_offset: core::option::Option<i64>
+pub db_core::storage::column::parquet::footer::ColumnMetaData::encodings: alloc::vec::Vec<db_core::storage::parquet::page::Encoding>
 pub db_core::storage::column::parquet::footer::ColumnMetaData::num_values: i64
 pub db_core::storage::column::parquet::footer::ColumnMetaData::path_in_schema: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::column::parquet::footer::ColumnMetaData::physical_type: db_core::storage::parquet::footer::PhysicalType
@@ -2895,6 +2929,7 @@ pub fn db_core::storage::parquet::footer::RowGroup::fmt(&self, &mut core::fmt::F
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::RowGroup
 pub struct db_core::storage::column::parquet::footer::SchemaElement
 pub db_core::storage::column::parquet::footer::SchemaElement::converted_type: core::option::Option<db_core::storage::parquet::footer::ConvertedType>
+pub db_core::storage::column::parquet::footer::SchemaElement::logical_type: core::option::Option<db_core::storage::parquet::footer::LogicalType>
 pub db_core::storage::column::parquet::footer::SchemaElement::name: alloc::string::String
 pub db_core::storage::column::parquet::footer::SchemaElement::num_children: core::option::Option<i32>
 pub db_core::storage::column::parquet::footer::SchemaElement::physical_type: core::option::Option<db_core::storage::parquet::footer::PhysicalType>
@@ -3358,6 +3393,7 @@ pub db_core::storage::column::parquet::thrift::Value::Map(alloc::vec::Vec<(db_co
 pub db_core::storage::column::parquet::thrift::Value::Struct(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>)
 impl db_core::storage::parquet::thrift::Value
 pub fn db_core::storage::parquet::thrift::Value::as_binary(&self) -> core::option::Option<&[u8]>
+pub fn db_core::storage::parquet::thrift::Value::as_bool(&self) -> core::option::Option<bool>
 pub fn db_core::storage::parquet::thrift::Value::as_i32(&self) -> core::option::Option<i32>
 pub fn db_core::storage::parquet::thrift::Value::as_i64(&self) -> core::option::Option<i64>
 pub fn db_core::storage::parquet::thrift::Value::as_list(&self) -> core::option::Option<&[db_core::storage::parquet::thrift::Value]>
@@ -4086,6 +4122,7 @@ pub fn db_core::storage::ingest::manifest::Manifest::parse(&str) -> core::result
 pub fn db_core::storage::ingest::manifest::Manifest::read(&std::path::Path) -> core::result::Result<core::option::Option<db_core::storage::ingest::manifest::Manifest>, db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::replacing(&self, core::ops::range::Range<usize>, alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::to_json(&self) -> alloc::string::String
+pub fn db_core::storage::ingest::manifest::Manifest::version(&self) -> i64
 pub fn db_core::storage::ingest::manifest::Manifest::with_file(&self, db_core::storage::ingest::manifest::FileEntry) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::write(&self, &std::path::Path) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 impl core::clone::Clone for db_core::storage::ingest::manifest::Manifest
@@ -4550,6 +4587,7 @@ pub fn db_core::storage::ingest::manifest::Manifest::parse(&str) -> core::result
 pub fn db_core::storage::ingest::manifest::Manifest::read(&std::path::Path) -> core::result::Result<core::option::Option<db_core::storage::ingest::manifest::Manifest>, db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::replacing(&self, core::ops::range::Range<usize>, alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::to_json(&self) -> alloc::string::String
+pub fn db_core::storage::ingest::manifest::Manifest::version(&self) -> i64
 pub fn db_core::storage::ingest::manifest::Manifest::with_file(&self, db_core::storage::ingest::manifest::FileEntry) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::write(&self, &std::path::Path) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 impl core::clone::Clone for db_core::storage::ingest::manifest::Manifest
@@ -4891,6 +4929,39 @@ impl core::fmt::Debug for db_core::storage::parquet::footer::FooterError
 pub fn db_core::storage::parquet::footer::FooterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::parquet::footer::FooterError
 pub fn db_core::storage::parquet::footer::FooterError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum db_core::storage::parquet::footer::LogicalType
+pub db_core::storage::parquet::footer::LogicalType::Bson
+pub db_core::storage::parquet::footer::LogicalType::Date
+pub db_core::storage::parquet::footer::LogicalType::Decimal
+pub db_core::storage::parquet::footer::LogicalType::Decimal::precision: i32
+pub db_core::storage::parquet::footer::LogicalType::Decimal::scale: i32
+pub db_core::storage::parquet::footer::LogicalType::Enum
+pub db_core::storage::parquet::footer::LogicalType::Float16
+pub db_core::storage::parquet::footer::LogicalType::Integer
+pub db_core::storage::parquet::footer::LogicalType::Integer::bit_width: i32
+pub db_core::storage::parquet::footer::LogicalType::Integer::signed: bool
+pub db_core::storage::parquet::footer::LogicalType::Json
+pub db_core::storage::parquet::footer::LogicalType::List
+pub db_core::storage::parquet::footer::LogicalType::Map
+pub db_core::storage::parquet::footer::LogicalType::Other(i16)
+pub db_core::storage::parquet::footer::LogicalType::String
+pub db_core::storage::parquet::footer::LogicalType::Time
+pub db_core::storage::parquet::footer::LogicalType::Time::units: core::option::Option<i64>
+pub db_core::storage::parquet::footer::LogicalType::Time::utc: bool
+pub db_core::storage::parquet::footer::LogicalType::Timestamp
+pub db_core::storage::parquet::footer::LogicalType::Timestamp::units: core::option::Option<i64>
+pub db_core::storage::parquet::footer::LogicalType::Timestamp::utc: bool
+pub db_core::storage::parquet::footer::LogicalType::Unknown
+pub db_core::storage::parquet::footer::LogicalType::Uuid
+impl core::clone::Clone for db_core::storage::parquet::footer::LogicalType
+pub fn db_core::storage::parquet::footer::LogicalType::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::parquet::footer::LogicalType
+impl core::cmp::PartialEq for db_core::storage::parquet::footer::LogicalType
+pub fn db_core::storage::parquet::footer::LogicalType::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::parquet::footer::LogicalType
+pub fn db_core::storage::parquet::footer::LogicalType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::parquet::footer::LogicalType
+impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::LogicalType
 pub enum db_core::storage::parquet::footer::PhysicalType
 pub db_core::storage::parquet::footer::PhysicalType::Boolean
 pub db_core::storage::parquet::footer::PhysicalType::ByteArray
@@ -4942,6 +5013,7 @@ pub struct db_core::storage::parquet::footer::ColumnMetaData
 pub db_core::storage::parquet::footer::ColumnMetaData::codec: db_core::storage::parquet::footer::Codec
 pub db_core::storage::parquet::footer::ColumnMetaData::data_page_offset: i64
 pub db_core::storage::parquet::footer::ColumnMetaData::dictionary_page_offset: core::option::Option<i64>
+pub db_core::storage::parquet::footer::ColumnMetaData::encodings: alloc::vec::Vec<db_core::storage::parquet::page::Encoding>
 pub db_core::storage::parquet::footer::ColumnMetaData::num_values: i64
 pub db_core::storage::parquet::footer::ColumnMetaData::path_in_schema: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::parquet::footer::ColumnMetaData::physical_type: db_core::storage::parquet::footer::PhysicalType
@@ -4982,6 +5054,7 @@ pub fn db_core::storage::parquet::footer::RowGroup::fmt(&self, &mut core::fmt::F
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::RowGroup
 pub struct db_core::storage::parquet::footer::SchemaElement
 pub db_core::storage::parquet::footer::SchemaElement::converted_type: core::option::Option<db_core::storage::parquet::footer::ConvertedType>
+pub db_core::storage::parquet::footer::SchemaElement::logical_type: core::option::Option<db_core::storage::parquet::footer::LogicalType>
 pub db_core::storage::parquet::footer::SchemaElement::name: alloc::string::String
 pub db_core::storage::parquet::footer::SchemaElement::num_children: core::option::Option<i32>
 pub db_core::storage::parquet::footer::SchemaElement::physical_type: core::option::Option<db_core::storage::parquet::footer::PhysicalType>
@@ -5445,6 +5518,7 @@ pub db_core::storage::parquet::thrift::Value::Map(alloc::vec::Vec<(db_core::stor
 pub db_core::storage::parquet::thrift::Value::Struct(alloc::vec::Vec<(i16, db_core::storage::parquet::thrift::Value)>)
 impl db_core::storage::parquet::thrift::Value
 pub fn db_core::storage::parquet::thrift::Value::as_binary(&self) -> core::option::Option<&[u8]>
+pub fn db_core::storage::parquet::thrift::Value::as_bool(&self) -> core::option::Option<bool>
 pub fn db_core::storage::parquet::thrift::Value::as_i32(&self) -> core::option::Option<i32>
 pub fn db_core::storage::parquet::thrift::Value::as_i64(&self) -> core::option::Option<i64>
 pub fn db_core::storage::parquet::thrift::Value::as_list(&self) -> core::option::Option<&[db_core::storage::parquet::thrift::Value]>

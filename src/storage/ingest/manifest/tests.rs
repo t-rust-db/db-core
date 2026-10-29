@@ -338,6 +338,8 @@ fn key_ranges_round_trip_as_version_4() {
     assert_eq!(Manifest::parse(&text).unwrap(), records);
     // Without key ranges the versions stay as before.
     assert!(two_files().to_json().contains("\"version\":2"));
+    assert_eq!(records.version(), 4);
+    assert_eq!(two_files().version(), 2);
 }
 
 #[test]

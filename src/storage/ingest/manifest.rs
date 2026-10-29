@@ -352,11 +352,12 @@ impl Manifest {
         next
     }
 
-    /// The JSON text.
-    pub fn to_json(&self) -> String {
-        let mut out = String::new();
+    /// The format version this manifest is written as: the lowest one
+    /// that holds everything in it, so a reader that predates a feature
+    /// the table uses refuses it.
+    pub fn version(&self) -> i64 {
         let keys = |f: &FileEntry| f.keys.iter().any(KeyRange::writable);
-        let version = if self.session_key.is_some() {
+        if self.session_key.is_some() {
             SESSION_VERSION
         } else if self.evolved {
             EVOLVED_VERSION
@@ -366,7 +367,13 @@ impl Manifest {
             RECORDS_VERSION
         } else {
             VERSION
-        };
+        }
+    }
+
+    /// The JSON text.
+    pub fn to_json(&self) -> String {
+        let mut out = String::new();
+        let version = self.version();
         out.push_str(&format!(
             "{{\"version\":{version},\"format\":\"{}\",\"layout\":\"{}\",",
             self.format.as_str(),

@@ -112,6 +112,7 @@ const VARIADIC: usize = usize::MAX;
 
 /// Whether `name(..arity args)` is a map function call -- the parser's
 /// and the planner's check of a call by name and arity.
+#[cfg(any(feature = "parser-column", feature = "codegen-batch"))]
 pub(crate) fn is_map_function_call(name: &str, arity: usize) -> bool {
     MAP_FUNCTIONS
         .iter()
@@ -416,6 +417,7 @@ fn slice(items: &ListItems, begin: i64, end: i64) -> Value {
 /// plan-time check (#828): `list_aggr`'s aggregate and `list_sort`'s
 /// order must be string literals DuckDB accepts here. `value` is the
 /// argument when it is a string literal.
+#[cfg(feature = "parser-column")]
 pub(crate) fn literal_arg_error(
     name: &str,
     position: usize,
@@ -850,6 +852,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "parser-column")]
     fn literal_args_are_checked() {
         assert_eq!(literal_arg_error("list_aggr", 1, Some("String_Agg")), None);
         assert!(literal_arg_error("list_aggr", 1, Some("avg")).is_some());

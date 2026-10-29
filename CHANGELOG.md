@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.202.0] - 2026-10-29
+
+### Added
+
+- The Parquet footer reads each column chunk's `encodings` (`ColumnMetaData.encodings`) and the `LogicalType` union (`SchemaElement.logical_type`: `STRING`, `LIST`, `MAP`, `DECIMAL`, `TIMESTAMP` with its unit and `isAdjustedToUTC`, `INTEGER` and the rest), for tools that describe a file (tools#86). `Value::as_bool` for the Thrift decoder.
+- `Manifest::version()`: the format version a manifest is written as (tools#86).
+
 ## [0.201.0] - 2026-10-29
 
 ### Added
