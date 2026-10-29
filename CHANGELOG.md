@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.201.0] - 2026-10-29
+
+### Added
+
+- List transforms (#828): `array_to_string`, `list_aggr` / `list_aggregate` (`string_agg`, `count`, `min`, `max`, `first`, `last`), `list_distinct`, `list_unique`, `list_sort`, `list_reverse_sort`, `list_reverse`, `list_slice` and `list_concat` (`list_cat`, `array_concat`, `array_cat`), with their `array_` aliases and DuckDB's NULL semantics. An unknown `list_aggr` aggregate or `list_sort` order is refused at plan time.
+
 ## [0.200.0] - 2026-10-29
 
 ### Added

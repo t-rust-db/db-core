@@ -1,0 +1,264 @@
+# #828: list transforms -- array_to_string, list_aggr, list_distinct,
+# list_unique, list_sort, list_reverse_sort, list_reverse, list_slice,
+# list_concat, with their aliases. Table events: six rows; labels is NULL
+# (4), empty (3), holds a NULL element and a repeated one (5). A list is
+# read through array_to_string, len or UNNEST, not printed: DuckDB prints
+# a list differently from the column engine. Expected results come from
+# DuckDB (make refresh-column-sqllogictest).
+
+# 1. array_to_string: NULL elements skipped, a NULL separator is ','.
+
+query ITTT nosort
+SELECT event_id, array_to_string(labels, '|'), array_to_string(labels, ''), array_to_string(labels, NULL) FROM events ORDER BY event_id
+----
+1
+x|y
+xy
+x,y
+2
+y
+y
+y
+3
+(empty)
+(empty)
+(empty)
+4
+NULL
+NULL
+NULL
+5
+x|x
+xx
+x,x
+6
+z|y
+zy
+z,y
+
+# 2. list_aggr / list_aggregate over strings.
+
+query ITITTTT nosort
+SELECT event_id, list_aggr(labels, 'string_agg', '-'), list_aggr(labels, 'count'), list_aggregate(labels, 'min'), list_aggr(labels, 'max'), list_aggr(labels, 'first'), list_aggr(labels, 'last') FROM events ORDER BY event_id
+----
+1
+x-y
+2
+x
+y
+x
+y
+2
+y
+1
+y
+y
+y
+y
+3
+NULL
+0
+NULL
+NULL
+NULL
+NULL
+4
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+5
+x-x
+2
+x
+x
+x
+x
+6
+z-y
+2
+y
+z
+z
+y
+
+query T nosort
+SELECT list_aggr(['b', NULL, 'a'], 'STRING_AGG') FROM events WHERE event_id = 1
+----
+b,a
+
+# 3. list_distinct (its order is DuckDB's to choose, so sorted here) and
+# list_unique.
+
+query ITIII nosort
+SELECT event_id, array_to_string(list_sort(list_distinct(labels)), ','), len(array_distinct(labels)), list_unique(labels), array_unique(labels) FROM events ORDER BY event_id
+----
+1
+x,y
+2
+2
+2
+2
+y
+1
+1
+1
+3
+(empty)
+0
+0
+0
+4
+NULL
+NULL
+NULL
+NULL
+5
+x
+1
+1
+1
+6
+y,z
+2
+2
+2
+
+# 4. Sorting: NULLs last by default, each order and NULL placement.
+
+query T nosort
+SELECT UNNEST(list_sort(['b', NULL, 'a', 'c'])) AS v FROM events WHERE event_id = 1
+----
+a
+b
+c
+NULL
+
+query TTTTT nosort
+SELECT list_sort(['b', NULL, 'a'])[3], list_sort(['b', NULL, 'a'], 'DESC')[1], list_sort(['b', NULL, 'a'], 'asc', 'nulls first')[1], array_sort(['b', NULL, 'a'], 'DESC', 'NULLS FIRST')[2], list_sort(['b', NULL, 'a'], 'ASC', 'NULLS LAST')[1] FROM events WHERE event_id = 1
+----
+NULL
+b
+NULL
+b
+a
+
+query TTTT nosort
+SELECT list_reverse_sort(['b', NULL, 'a'])[1], list_reverse_sort(['b', NULL, 'a'])[3], array_reverse_sort(['b', NULL, 'a'], 'NULLS FIRST')[1], array_reverse_sort(['b', NULL, 'a'], 'NULLS FIRST')[2] FROM events WHERE event_id = 1
+----
+b
+NULL
+NULL
+b
+
+query IT nosort
+SELECT event_id, array_to_string(list_sort(labels, 'DESC'), ',') FROM events ORDER BY event_id
+----
+1
+y,x
+2
+y
+3
+(empty)
+4
+NULL
+5
+x,x
+6
+z,y
+
+# 5. list_reverse keeps NULL elements.
+
+query IT nosort
+SELECT event_id, list_reverse(labels)[1] FROM events ORDER BY event_id
+----
+1
+y
+2
+y
+3
+NULL
+4
+NULL
+5
+x
+6
+y
+
+query I nosort
+SELECT len(array_reverse(['a', NULL, 'b'])) FROM events WHERE event_id = 1
+----
+3
+
+# 6. list_slice: 1-based and inclusive, negative from the end, clipped.
+
+query TTTTTTT nosort
+SELECT array_to_string(list_slice(['a', 'b', 'c', 'd'], 2, 3), ','), array_to_string(list_slice(['a', 'b', 'c', 'd'], -2, -1), ','), array_to_string(list_slice(['a', 'b', 'c', 'd'], 0, 2), ','), array_to_string(list_slice(['a', 'b', 'c', 'd'], 3, 10), ','), array_to_string(list_slice(['a', 'b', 'c', 'd'], 3, 2), ','), array_to_string(array_slice(['a', 'b', 'c', 'd'], -10, 2), ','), array_to_string(list_slice(['a', 'b', 'c', 'd'], 1, -10), ',') FROM events WHERE event_id = 1
+----
+b,c
+c,d
+a,b
+c,d
+(empty)
+a,b
+(empty)
+
+query IT nosort
+SELECT event_id, array_to_string(list_slice(labels, 1, 1), ',') FROM events ORDER BY event_id
+----
+1
+x
+2
+y
+3
+(empty)
+4
+NULL
+5
+x
+6
+z
+
+# 7. list_concat and aliases: a NULL list counts as empty.
+
+query IIT nosort
+SELECT event_id, len(list_concat(labels, ['q'])), array_to_string(list_cat(['q'], labels), ',') FROM events ORDER BY event_id
+----
+1
+3
+q,x,y
+2
+2
+q,y
+3
+1
+q
+4
+1
+q
+5
+4
+q,x,x
+6
+3
+q,z,y
+
+query III nosort
+SELECT len(array_concat(NULL, ['a'])), len(array_cat(['a'], NULL)), len(list_concat(['a'], ['b', NULL])) FROM events WHERE event_id = 1
+----
+1
+1
+3
+
+# 8. An unknown aggregate or sort order is refused.
+
+statement error
+SELECT list_aggr(labels, 'avg') FROM events
+
+statement error
+SELECT list_sort(labels, 'SIDEWAYS') FROM events
+
+statement error
+SELECT list_reverse_sort(labels, 'DESC') FROM events
