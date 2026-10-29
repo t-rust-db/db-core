@@ -32,13 +32,55 @@
 //! is the 1-based position of the first element equal to `v` -- a NULL `v`
 //! finds a NULL element -- or NULL when there is none.
 //!
+//! #828, transforms (each with its `array_` alias where DuckDB has one):
+//!
+//! | call | result |
+//! |---|---|
+//! | `array_to_string(l, sep)` | the non-NULL elements joined by `sep` (NULL `sep`: `,`) |
+//! | `list_aggr(l, agg[, sep])` | `string_agg`, `count`, `min`, `max`, `first`, `last` of the elements |
+//! | `list_distinct(l)` / `list_unique(l)` | the distinct non-NULL elements / their count |
+//! | `list_sort(l[, 'ASC'\|'DESC'[, 'NULLS FIRST'\|'NULLS LAST']])` | sorted, NULLs last by default |
+//! | `list_reverse_sort(l[, nulls])` / `list_reverse(l)` | sorted descending / reversed |
+//! | `list_slice(l, begin, end)` | elements `begin..=end`, 1-based, negative from the end |
+//! | `list_concat(a, b)` (`list_cat`, `array_concat`, `array_cat`) | `a` then `b`, a NULL list as empty |
+//!
+//! `list_aggr`'s aggregate and `list_sort`'s order are string literals,
+//! checked at plan time ([`literal_arg_error`]).
+//!
 //! A NULL map gives NULL. A value that is not a map (or a key that is not a
 //! string) gives NULL too: column types are only known per row here.
 
 use super::batch::{ListItems, MapEntries, SlotState, Value};
 
 /// The functions handled here, with their arities.
-pub(crate) const MAP_FUNCTIONS: [(&str, usize); 24] = [
+pub(crate) const MAP_FUNCTIONS: &[(&str, usize)] = &[
+    ("array_to_string", 2),
+    ("list_aggr", 2),
+    ("list_aggr", 3),
+    ("list_aggregate", 2),
+    ("list_aggregate", 3),
+    ("list_distinct", 1),
+    ("array_distinct", 1),
+    ("list_unique", 1),
+    ("array_unique", 1),
+    ("list_sort", 1),
+    ("list_sort", 2),
+    ("list_sort", 3),
+    ("array_sort", 1),
+    ("array_sort", 2),
+    ("array_sort", 3),
+    ("list_reverse_sort", 1),
+    ("list_reverse_sort", 2),
+    ("array_reverse_sort", 1),
+    ("array_reverse_sort", 2),
+    ("list_reverse", 1),
+    ("array_reverse", 1),
+    ("list_slice", 3),
+    ("array_slice", 3),
+    ("list_concat", 2),
+    ("list_cat", 2),
+    ("array_concat", 2),
+    ("array_cat", 2),
     ("list_value", VARIADIC),
     ("list_has_any", 2),
     ("array_has_any", 2),
@@ -125,6 +167,12 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
     if name.eq_ignore_ascii_case("list_value") {
         return list_value(args);
     }
+    if is_list_concat(name) {
+        return match args {
+            [a, b] => list_concat(a, b),
+            _ => Value::Null,
+        };
+    }
     if is_list_contains(name) {
         return match args {
             [list, value] => list_contains(list, value),
@@ -200,8 +248,197 @@ fn list_call(name: &str, items: &ListItems, rest: &[&Value]) -> Value {
         ("list_position" | "list_indexof" | "array_position" | "array_indexof", [value]) => {
             list_position(items, value)
         }
+        ("array_to_string", [sep]) => join(items, sep),
+        ("list_aggr" | "list_aggregate", [Value::Str(agg), sep @ ..]) => {
+            aggregate(items, agg, sep.first().copied().unwrap_or(&Value::Null))
+        }
+        ("list_distinct" | "array_distinct", []) => Value::List(std::sync::Arc::new(
+            distinct(items)
+                .into_iter()
+                .map(|s| Some(s.clone()))
+                .collect(),
+        )),
+        ("list_unique" | "array_unique", []) => {
+            Value::Int(i64::try_from(distinct(items).len()).unwrap_or(i64::MAX))
+        }
+        ("list_sort" | "array_sort", order) => match sort_order(order) {
+            Some((desc, nulls_first)) => sorted(items, desc, nulls_first),
+            None => Value::Null,
+        },
+        ("list_reverse_sort" | "array_reverse_sort", nulls) => {
+            match sort_order(&[
+                &Value::Str("DESC".into()),
+                nulls.first().copied().unwrap_or(&Value::Null),
+            ]) {
+                Some((desc, nulls_first)) => sorted(items, desc, nulls_first),
+                None => Value::Null,
+            }
+        }
+        ("list_reverse" | "array_reverse", []) => {
+            Value::List(std::sync::Arc::new(items.iter().rev().cloned().collect()))
+        }
+        ("list_slice" | "array_slice", [Value::Int(begin), Value::Int(end)]) => {
+            slice(items, *begin, *end)
+        }
         _ => Value::Null,
     }
+}
+
+/// Whether `name` (any case) is `list_concat` or one of its aliases.
+fn is_list_concat(name: &str) -> bool {
+    ["list_concat", "list_cat", "array_concat", "array_cat"]
+        .iter()
+        .any(|f| f.eq_ignore_ascii_case(name))
+}
+
+/// `a` then `b`; a NULL list counts as empty, as in DuckDB.
+fn list_concat(a: &Value, b: &Value) -> Value {
+    match (list_part(a), list_part(b)) {
+        (Some(a), Some(b)) => {
+            Value::List(std::sync::Arc::new(a.iter().chain(b).cloned().collect()))
+        }
+        _ => Value::Null,
+    }
+}
+
+/// A list's elements, a NULL list as none; `None` for a non-list.
+fn list_part(v: &Value) -> Option<&[Option<std::sync::Arc<str>>]> {
+    match v {
+        Value::List(items) => Some(items.as_slice()),
+        Value::Null => Some(&[]),
+        _ => None,
+    }
+}
+
+/// A separator argument: NULL is DuckDB's default, `,`.
+fn separator(sep: &Value) -> String {
+    match sep {
+        Value::Null => ",".to_string(),
+        sep => sep.to_string(),
+    }
+}
+
+/// The non-NULL elements joined by `sep`.
+fn join(items: &ListItems, sep: &Value) -> Value {
+    let parts: Vec<&str> = items.iter().flatten().map(|s| &**s).collect();
+    Value::Str(parts.join(&separator(sep)).into())
+}
+
+fn text(item: Option<&std::sync::Arc<str>>) -> Value {
+    item.map_or(Value::Null, |s| Value::Str(s.to_string().into()))
+}
+
+/// `agg` over the elements: the aggregates that make sense of strings.
+fn aggregate(items: &ListItems, agg: &str, sep: &Value) -> Value {
+    let values = items.iter().flatten();
+    match agg.to_ascii_lowercase().as_str() {
+        // Like the `string_agg` aggregate: nothing to join is NULL, where
+        // `array_to_string` gives ''.
+        "string_agg" if items.iter().all(Option::is_none) => Value::Null,
+        "string_agg" => join(items, sep),
+        "count" => Value::Int(i64::try_from(values.count()).unwrap_or(i64::MAX)),
+        "min" => text(values.min()),
+        "max" => text(values.max()),
+        "first" => text(items.first().and_then(Option::as_ref)),
+        "last" => text(items.last().and_then(Option::as_ref)),
+        _ => Value::Null,
+    }
+}
+
+/// The distinct non-NULL elements, in first-seen order.
+fn distinct(items: &ListItems) -> Vec<&std::sync::Arc<str>> {
+    let mut seen = std::collections::HashSet::new();
+    items
+        .iter()
+        .flatten()
+        .filter(|s| seen.insert(&***s))
+        .collect()
+}
+
+/// `list_sort`'s order arguments: (descending, NULLs first). NULLs come
+/// last unless asked; an unknown word is `None` (the parser refuses it).
+fn sort_order(args: &[&Value]) -> Option<(bool, bool)> {
+    let word = |i: usize| match args.get(i) {
+        None | Some(Value::Null) => Some(None),
+        Some(Value::Str(s)) => Some(Some(s.trim().to_ascii_uppercase())),
+        Some(_) => None,
+    };
+    let desc = match word(0)?.as_deref() {
+        None | Some("ASC") => false,
+        Some("DESC") => true,
+        Some(_) => return None,
+    };
+    let nulls_first = match word(1)?.as_deref() {
+        None | Some("NULLS LAST") => false,
+        Some("NULLS FIRST") => true,
+        Some(_) => return None,
+    };
+    Some((desc, nulls_first))
+}
+
+fn sorted(items: &ListItems, desc: bool, nulls_first: bool) -> Value {
+    let mut values: Vec<&std::sync::Arc<str>> = items.iter().flatten().collect();
+    values.sort();
+    if desc {
+        values.reverse();
+    }
+    let nulls = std::iter::repeat_n(None, items.len().saturating_sub(values.len()));
+    let values = values.into_iter().map(|s| Some(s.clone()));
+    Value::List(std::sync::Arc::new(if nulls_first {
+        nulls.chain(values).collect()
+    } else {
+        values.chain(nulls).collect()
+    }))
+}
+
+/// Elements `begin..=end`, 1-based; a negative bound counts from the end,
+/// and the range is clipped to the list.
+fn slice(items: &ListItems, begin: i64, end: i64) -> Value {
+    let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
+    let from_end = |i: i64| {
+        if i < 0 {
+            len.saturating_add(i).saturating_add(1)
+        } else {
+            i
+        }
+    };
+    let begin = from_end(begin).max(1);
+    let end = from_end(end).min(len);
+    let part = usize::try_from(begin.saturating_sub(1))
+        .ok()
+        .zip(usize::try_from(end).ok())
+        .and_then(|(b, e)| items.get(b..e))
+        .unwrap_or(&[]);
+    Value::List(std::sync::Arc::new(part.to_vec()))
+}
+
+/// Why literal argument `position` of `name` is not usable, for the
+/// plan-time check (#828): `list_aggr`'s aggregate and `list_sort`'s
+/// order must be string literals DuckDB accepts here. `value` is the
+/// argument when it is a string literal.
+pub(crate) fn literal_arg_error(
+    name: &str,
+    position: usize,
+    value: Option<&str>,
+) -> Option<String> {
+    let allowed: &[&str] = match (name.to_ascii_lowercase().as_str(), position) {
+        ("list_aggr" | "list_aggregate", 1) => {
+            &["string_agg", "count", "min", "max", "first", "last"]
+        }
+        ("list_sort" | "array_sort", 1) => &["asc", "desc"],
+        ("list_sort" | "array_sort", 2) | ("list_reverse_sort" | "array_reverse_sort", 1) => {
+            &["nulls first", "nulls last"]
+        }
+        _ => return None,
+    };
+    let ok = value.is_some_and(|v| allowed.contains(&v.trim().to_ascii_lowercase().as_str()));
+    (!ok).then(|| {
+        format!(
+            "{name}: argument {} must be one of {}",
+            position.saturating_add(1),
+            allowed.join(", ")
+        )
+    })
 }
 
 /// Whether `items` holds the non-NULL element `wanted`.
@@ -534,6 +771,97 @@ mod tests {
         assert_eq!(pos("array_position", &Value::Null), Value::Int(2));
         assert_eq!(pos("array_indexof", &s("z")), Value::Null);
         assert_eq!(call("list_position", &[&Value::Null, &s("a")]), Value::Null);
+    }
+
+    #[test]
+    fn list_transforms_follow_duckdb() {
+        let l = Value::List(Arc::new(vec![
+            Some("b".into()),
+            None,
+            Some("a".into()),
+            Some("b".into()),
+        ]));
+        assert_eq!(call("array_to_string", &[&l, &s("-")]), s("b-a-b"));
+        assert_eq!(call("array_to_string", &[&l, &Value::Null]), s("b,a,b"));
+        assert_eq!(call("array_to_string", &[&list(&[]), &s(",")]), s(""));
+        let agg = |a: &str| call("list_aggr", &[&l, &s(a)]);
+        assert_eq!(agg("string_agg"), s("b,a,b"));
+        assert_eq!(
+            call("list_aggr", &[&l, &s("string_agg"), &s("|")]),
+            s("b|a|b")
+        );
+        assert_eq!(
+            call("list_aggr", &[&list(&[]), &s("string_agg")]),
+            Value::Null
+        );
+        assert_eq!(agg("COUNT"), Value::Int(3));
+        assert_eq!(agg("min"), s("a"));
+        assert_eq!(agg("max"), s("b"));
+        assert_eq!(agg("first"), s("b"));
+        assert_eq!(agg("last"), s("b"));
+        assert_eq!(agg("avg"), Value::Null);
+        assert_eq!(call("list_aggr", &[&l, &Value::Null]), Value::Null);
+        assert_eq!(call("list_distinct", &[&l]), list(&["b", "a"]));
+        assert_eq!(call("list_unique", &[&l]), Value::Int(2));
+        let with_null = |v: &[Option<&str>]| {
+            Value::List(Arc::new(v.iter().map(|x| x.map(Arc::from)).collect()))
+        };
+        assert_eq!(
+            call("list_sort", &[&l]),
+            with_null(&[Some("a"), Some("b"), Some("b"), None])
+        );
+        assert_eq!(
+            call("list_sort", &[&l, &s("desc"), &s(" nulls first ")]),
+            with_null(&[None, Some("b"), Some("b"), Some("a")])
+        );
+        assert_eq!(
+            call("list_reverse_sort", &[&l]),
+            with_null(&[Some("b"), Some("b"), Some("a"), None])
+        );
+        assert_eq!(call("list_sort", &[&l, &s("sideways")]), Value::Null);
+        assert_eq!(
+            call("list_sort", &[&l, &s("ASC"), &s("middle")]),
+            Value::Null
+        );
+        assert_eq!(call("list_sort", &[&l, &Value::Int(1)]), Value::Null);
+        assert_eq!(
+            call("list_reverse", &[&l]),
+            with_null(&[Some("b"), Some("a"), None, Some("b")])
+        );
+        let abcd = list(&["a", "b", "c", "d"]);
+        let sl = |b: i64, e: i64| call("list_slice", &[&abcd, &Value::Int(b), &Value::Int(e)]);
+        assert_eq!(sl(2, 3), list(&["b", "c"]));
+        assert_eq!(sl(-2, -1), list(&["c", "d"]));
+        assert_eq!(sl(0, 2), list(&["a", "b"]));
+        assert_eq!(sl(3, 10), list(&["c", "d"]));
+        assert_eq!(sl(3, 2), list(&[]));
+        assert_eq!(sl(1, -10), list(&[]));
+        assert_eq!(sl(i64::MIN, i64::MAX), abcd);
+        assert_eq!(
+            call("list_slice", &[&abcd, &Value::Null, &Value::Int(2)]),
+            Value::Null
+        );
+        assert_eq!(
+            call("list_concat", &[&list(&["a"]), &list(&["b"])]),
+            list(&["a", "b"])
+        );
+        assert_eq!(call("array_cat", &[&Value::Null, &Value::Null]), list(&[]));
+        assert_eq!(call("list_cat", &[&s("a"), &list(&["b"])]), Value::Null);
+    }
+
+    #[test]
+    fn literal_args_are_checked() {
+        assert_eq!(literal_arg_error("list_aggr", 1, Some("String_Agg")), None);
+        assert!(literal_arg_error("list_aggr", 1, Some("avg")).is_some());
+        assert!(literal_arg_error("list_aggregate", 1, None).is_some());
+        assert_eq!(literal_arg_error("list_sort", 1, Some("desc")), None);
+        assert!(literal_arg_error("array_sort", 2, Some("desc")).is_some());
+        assert_eq!(
+            literal_arg_error("list_reverse_sort", 1, Some("NULLS FIRST")),
+            None
+        );
+        assert_eq!(literal_arg_error("list_sort", 0, None), None);
+        assert_eq!(literal_arg_error("string_split", 1, None), None);
     }
 
     #[test]

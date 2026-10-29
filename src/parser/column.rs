@@ -536,6 +536,22 @@ fn lower_in_between_expr(expr: &mut AstExpr) -> Result<()> {
     Ok(())
 }
 
+/// #828: `list_aggr`'s aggregate and `list_sort`'s order are string
+/// literals from a short list, refused here rather than answered with NULL
+/// per row.
+fn check_literal_args(name: &str, args: &[AstExpr]) -> Result<()> {
+    for (i, arg) in args.iter().enumerate() {
+        let value = match &arg.kind {
+            ExprKind::Literal(AstLiteral::Str(s)) => Some(s.as_str()),
+            _ => None,
+        };
+        if let Some(why) = crate::vm::map_fns::literal_arg_error(name, i, value) {
+            return Err(unsupported(arg.span, why));
+        }
+    }
+    Ok(())
+}
+
 /// `__select(cond, then, otherwise)` (see [`crate::functions::SELECT_FN`]).
 fn select_call(span: Span, cond: AstExpr, then: AstExpr, otherwise: AstExpr) -> AstExpr {
     AstExpr {
@@ -1160,6 +1176,7 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
             args: FunctionArgs::List(args),
             tail: None,
         } if is_known_scalar_function(name, args.len()) => {
+            check_literal_args(name, args)?;
             // Only a numeric or branching scalar may wrap an aggregate
             // (#788, #725).
             let allow = allow_agg && crate::functions::takes_any_expression(name, args.len());
