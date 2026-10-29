@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.200.0] - 2026-10-29
+
+### Added
+
+- List literals `['a', 'b']` in the column dialect, with `list_has_any` / `list_has_all` and `list_position` (and their `array_` and `list_indexof` aliases), with DuckDB's NULL semantics (#827). A list of non-string literals such as `[1, 2]` is refused.
+- Fixed a call with no arguments, such as `list_value()`, returning the batch's row count instead of the rows left after a `WHERE` (#827).
+
 ## [0.199.1] - 2026-10-29
 
 ### Fixed
