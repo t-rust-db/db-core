@@ -8,6 +8,7 @@
     {"file": "in_list_716.test", "pass": 22, "skip": 0, "fail": 0},
     {"file": "list_contains_825.test", "pass": 9, "skip": 0, "fail": 0},
     {"file": "list_index_826.test", "pass": 7, "skip": 0, "fail": 0},
+    {"file": "list_literal_827.test", "pass": 9, "skip": 0, "fail": 0},
     {"file": "oracle.test", "pass": 21, "skip": 0, "fail": 0},
     {"file": "order_by_645.test", "pass": 8, "skip": 1, "fail": 0},
     {"file": "order_by_ordinal_752.test", "pass": 9, "skip": 0, "fail": 0},
@@ -17,5 +18,5 @@
     {"file": "unnest_filters_812.test", "pass": 7, "skip": 2, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 255, "skip": 7, "fail": 0}
+  "total": {"pass": 264, "skip": 7, "fail": 0}
 }

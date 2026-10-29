@@ -782,6 +782,21 @@ impl Tokenizer {
         out
     }
 
+    /// Whether the `[` at the cursor opens a list literal (#827): the next
+    /// non-blank character starts a string, a number or `]`, or the next
+    /// word is `NULL`.
+    fn opens_list(&self, src: &str) -> bool {
+        let after = rest(src, self.pos).get(1..).unwrap_or("").trim_start();
+        let null_word = after
+            .get(..4)
+            .is_some_and(|w| w.eq_ignore_ascii_case("null"))
+            && !after
+                .get(4..)
+                .and_then(|r| r.chars().next())
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        matches!(after.chars().next(), Some('\'' | ']' | '-' | '0'..='9')) || null_word
+    }
+
     fn peek_char(&self, src: &str) -> Option<char> {
         rest(src, self.pos).chars().next()
     }
@@ -925,6 +940,14 @@ impl Tokenizer {
                 self.bump(src);
                 self.open_brackets = self.open_brackets.saturating_sub(1);
                 TokenKind::RBracket
+            }
+            // #827: elsewhere in the column dialect, `[` opening a string,
+            // number, NULL or `]` is a list literal (`['a', 'b']`); any
+            // other `[` still quotes an identifier.
+            '[' if self.subscripts && self.opens_list(src) => {
+                self.bump(src);
+                self.open_brackets = self.open_brackets.saturating_add(1);
+                TokenKind::LBracket
             }
             '[' => self.scan_quoted_identifier(src, '[', ']'),
             '`' => self.scan_quoted_identifier(src, '`', '`'),
@@ -1941,6 +1964,72 @@ mod mcdc_subscript_vectors {
             second(Tokenizer::tokenize_with_subscripts("SELECT [k]")),
             TokenKind::Identifier("k".into())
         );
+    }
+
+    // parser_row_tokenizer_next_token_dbc144f1: `self.subscripts && self.opens_list(src)` (#827)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_dbc144f1__v1_a_string_after_the_bracket_opens_a_list()
+    {
+        assert_eq!(
+            second(Tokenizer::tokenize_with_subscripts("SELECT ['a']")),
+            TokenKind::LBracket
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_dbc144f1__v2_the_sqlite_dialect_has_no_list_literal() {
+        assert_eq!(
+            second(Tokenizer::tokenize("SELECT ['a']")),
+            TokenKind::Identifier("'a'".into())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_dbc144f1__v3_a_name_after_the_bracket_quotes_it() {
+        assert_eq!(
+            second(Tokenizer::tokenize_with_subscripts("SELECT [k]")),
+            TokenKind::Identifier("k".into())
+        );
+    }
+
+    /// #827: what opens a list literal in the column dialect, and what
+    /// still quotes an identifier.
+    #[test]
+    fn a_list_literal_opens_on_a_string_number_null_or_empty_list() {
+        for list in [
+            "[]",
+            "[ ]",
+            "['a']",
+            "[ 'a']",
+            "[1]",
+            "[-1]",
+            "[NULL]",
+            "[null, 'a']",
+        ] {
+            assert_eq!(
+                second(Tokenizer::tokenize_with_subscripts(&format!(
+                    "SELECT {list}"
+                ))),
+                TokenKind::LBracket,
+                "{list}"
+            );
+        }
+        for (quoted, name) in [
+            ("[k]", "k"),
+            ("[nullable]", "nullable"),
+            ("[null_x]", "null_x"),
+        ] {
+            assert_eq!(
+                second(Tokenizer::tokenize_with_subscripts(&format!(
+                    "SELECT {quoted}"
+                ))),
+                TokenKind::Identifier(name.into()),
+                "{quoted}"
+            );
+        }
     }
 
     // parser_row_tokenizer_tokenize_mode_4d0617f3: subscripts && matches!(.. "ilike")

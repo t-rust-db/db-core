@@ -2765,11 +2765,37 @@ impl Parser {
                     span,
                 })
             }
+            TokenKind::LBracket => self.list_literal(),
             other => Err(ParseFail::Invalid {
                 message: format!("expected column or expression, found {other:?}"),
                 span: self.peek().span,
             }),
         }
+    }
+
+    /// A list literal `['a', 'b']` (#827; column dialect only: the
+    /// tokenizer emits `LBracket` before an expression only in subscript
+    /// mode) is DuckDB's `list_value('a', 'b')`, so no walker sees a new
+    /// form. Out of line so `primary_expr`'s frame -- one per nesting
+    /// level -- stays small.
+    #[inline(never)]
+    fn list_literal(&mut self) -> PResult<Expr> {
+        let start = self.advance_span();
+        let args = if matches!(self.peek().kind, TokenKind::RBracket) {
+            Vec::new()
+        } else {
+            self.expr_list()?
+        };
+        let end = self.expect_punct(TokenKind::RBracket, "']' to close the list")?;
+        Ok(Expr {
+            kind: ExprKind::FunctionCall {
+                name: "list_value".to_string(),
+                distinct: false,
+                args: FunctionArgs::List(args),
+                tail: None,
+            },
+            span: join_span(start, end),
+        })
     }
 
     fn function_call(&mut self, name: String, start: Span) -> PResult<Expr> {

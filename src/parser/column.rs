@@ -820,9 +820,7 @@ pub(crate) fn is_known_scalar_function(name: &str, arity: usize) -> bool {
         (name.to_ascii_lowercase().as_str(), arity),
         ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
     ) || crate::functions::takes_any_expression(name, arity)
-        || crate::vm::map_fns::MAP_FUNCTIONS
-            .iter()
-            .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
+        || crate::vm::map_fns::is_map_function_call(name, arity)
 }
 
 fn arg_count(args: &FunctionArgs) -> usize {
@@ -1131,6 +1129,29 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
             expr.span,
             format!("aggregate function {name} not allowed here"),
         )),
+        // #827: a list literal's elements. db-core's lists hold strings,
+        // so `[1, 2]` is refused rather than turned into `['1', '2']`
+        // (which would then sort `'10'` before `'9'`).
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(args),
+            tail: None,
+            ..
+        } if name.eq_ignore_ascii_case("list_value") => args
+            .iter()
+            .find(|a| {
+                !matches!(
+                    a.kind,
+                    ExprKind::Literal(AstLiteral::Str(_) | AstLiteral::Null)
+                )
+            })
+            .map_or(Ok(()), |a| {
+                Err(unsupported(
+                    a.span,
+                    "a list holds string literals or NULL (db-core lists are lists of strings)"
+                        .into(),
+                ))
+            }),
         // A scalar function (json_extract, the map functions of #621...)
         // anywhere an expression is: `WHERE map_get_ci(h, 'host') = 'x'`.
         ExprKind::FunctionCall {
