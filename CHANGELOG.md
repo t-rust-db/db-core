@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.204.0] - 2026-10-30
+
+### Changed
+
+- Parquet writer: ZSTD pages come from an encoder of our own: about half the size of `ruzstd`'s `Fastest` on the `parquet-codecs` table and faster to write; output stays valid ZSTD for every reader (#692).
+
+## [0.203.0] - 2026-10-30
+
+### Changed
+
+- **A join on a unique, dense integer key looks up its build row by position** (tools#88). When every build key is an `Int`, no key repeats and the keys span at most 4 slots per build row, `HashBuild` also keeps a direct index (`key - min` → build row), and the three join probes (`HashProbe`, `HashProbeGroupReduce`'s grouped and general folds) find a probe row's match with one array read. They skip the per-row hash and the slot walk through the 70%-load hash table. Any other key keeps the hash table, and results are unchanged: only an `Int` probe key matches, and NULL never does. On column-rs's parity join (10M fact rows joined to 100,000 customers keyed `0..99,999`, hyperfine mean of 30): 79.1 → 56.2 ms wall, CPU 558 → 307 ms, 1.66x → 1.18x DuckDB. Peak RSS barely changes (274 → 263 MB).
+
 ## [0.202.0] - 2026-10-29
 
 ### Added
