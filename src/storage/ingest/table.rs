@@ -94,6 +94,10 @@ pub struct TableOptions {
     /// written. With `n > 0` the hand-off returns at once and an append
     /// waits only when `n` jobs are already queued; see
     /// [`TableWriter::flush_status`].
+    ///
+    /// The default stays `0` (#864): queued pages stay in memory until
+    /// their commit, so `n > 0` trades memory for append latency. A live
+    /// ingester that cannot absorb a flush stall should set `2`.
     pub flush_queue: usize,
 }
 
