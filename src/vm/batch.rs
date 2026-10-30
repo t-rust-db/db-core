@@ -3780,6 +3780,11 @@ struct BuildTable {
     /// access per probe row). `None` for composite keys, non-`Int` keys,
     /// or a `Null` among the build keys (which must never match).
     int_keys: Option<Vec<i64>>,
+    /// tools#88: for an `int_keys` table whose keys are unique and dense,
+    /// the build row of each key by position (see [`DirectIndex`]), so a
+    /// probe row finds its match by one array read instead of hashing and
+    /// walking `index`.
+    direct: Option<DirectIndex>,
     /// #514: each build row's group id under a `GROUP BY` of payload
     /// columns, computed once per table on first use (see
     /// [`BuildTable::payload_groups`]) and shared by every probe worker.
@@ -3860,6 +3865,58 @@ struct PayloadGroups {
     columns: Vec<usize>,
     group_of: Vec<u32>,
     keys: Vec<Vec<Value>>,
+}
+
+/// The build row of key `min + i` at `rows[i]`, or [`DirectIndex::NONE`]
+/// (tools#88): a perfect-hash join for a unique `Int` key whose range is
+/// at most [`DirectIndex::SPREAD`] times the build row count -- e.g. a
+/// dimension table's `0..n` ids, which DuckDB answers the same way.
+struct DirectIndex {
+    min: i64,
+    rows: Vec<u32>,
+}
+
+impl DirectIndex {
+    /// A slot no build row has.
+    const NONE: u32 = u32::MAX;
+    /// Slots allowed per build row: the index stays within 16 bytes a
+    /// row, and the slots a probe touches stay close together.
+    const SPREAD: usize = 4;
+
+    /// The index of `keys`, or `None` when it would be too sparse, a key
+    /// repeats (a probe row then has several matches) or a row number
+    /// doesn't fit a `u32`.
+    fn build(keys: &[i64]) -> Option<DirectIndex> {
+        let min = *keys.iter().min()?;
+        let max = *keys.iter().max()?;
+        let span = usize::try_from(max.checked_sub(min)?)
+            .ok()?
+            .checked_add(1)?;
+        if span > keys.len().checked_mul(Self::SPREAD)? {
+            return None;
+        }
+        let mut rows = vec![Self::NONE; span];
+        for (row, key) in keys.iter().enumerate() {
+            let slot = rows.get_mut(Self::offset(min, *key)?)?;
+            if *slot != Self::NONE {
+                return None;
+            }
+            *slot = u32::try_from(row).ok().filter(|r| *r != Self::NONE)?;
+        }
+        Some(DirectIndex { min, rows })
+    }
+
+    fn offset(min: i64, key: i64) -> Option<usize> {
+        usize::try_from(key.checked_sub(min)?).ok()
+    }
+
+    /// The build row whose key is `key`.
+    fn get(&self, key: i64) -> Option<usize> {
+        let row = *self.rows.get(Self::offset(self.min, key)?)?;
+        (row != Self::NONE)
+            .then(|| usize::try_from(row).ok())
+            .flatten()
+    }
 }
 
 impl BuildTable {
@@ -3990,6 +4047,44 @@ impl BuildTable {
             return matches!(column.get(probe_row), Some(Value::Int(v)) if ints.get(build_row) == Some(v));
         }
         join_keys_match(probe_columns, probe_row, &self.keys, build_row)
+    }
+
+    /// Calls `f` with every build row whose key equals probe row
+    /// `probe_row`'s, in `index` order. `hash` is that row's
+    /// [`hash_columns_by_row`] hash; a table with a [`DirectIndex`] never
+    /// reads it (see [`BuildTable::needs_hashes`]).
+    fn for_each_match(
+        &self,
+        probe_columns: &[&[Value]],
+        probe_row: usize,
+        hash: Option<&u64>,
+        mut f: impl FnMut(usize),
+    ) {
+        if let (Some(direct), [column]) = (&self.direct, probe_columns) {
+            // Only an `Int` matches, as in `keys_match`'s typed path.
+            if let Some(Value::Int(key)) = column.get(probe_row) {
+                if let Some(build_row) = direct.get(*key) {
+                    f(build_row);
+                }
+            }
+            return;
+        }
+        let Some(hash) = hash else {
+            return;
+        };
+        self.index.for_each_match_slot(hash, |slot| {
+            if let Some(&build_row) = self.index.value_at(slot) {
+                if self.keys_match(probe_columns, probe_row, build_row) {
+                    f(build_row);
+                }
+            }
+        });
+    }
+
+    /// Whether a probe needs [`hash_columns_by_row`] for
+    /// [`BuildTable::for_each_match`].
+    fn needs_hashes(&self) -> bool {
+        self.direct.is_none()
     }
 }
 
@@ -6469,6 +6564,7 @@ impl Vm {
                 index,
                 keys,
                 payload,
+                direct: int_keys.as_deref().and_then(DirectIndex::build),
                 int_keys,
                 payload_groups: std::sync::OnceLock::new(),
             }),
@@ -6533,18 +6629,16 @@ impl Vm {
         // `bt.index` by hash; `join_keys_match` resolves both
         // genuine hash collisions and NULL-never-matches against
         // `bt.keys` before a candidate counts as a real match.
-        let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);
+        let hashes = if bt.needs_hashes() {
+            hash_columns_by_row(&key_columns, num_rows, |row| row)
+        } else {
+            Vec::new()
+        };
         let mut emitted: Vec<(usize, Option<usize>)> = Vec::with_capacity(num_rows);
         for row in 0..num_rows {
             let mut matched = false;
             let emit_payload = !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
-            bt.index.for_each_match_slot(&hashes[row], |slot| {
-                let Some(&build_row) = bt.index.value_at(slot) else {
-                    return;
-                };
-                if !bt.keys_match(&key_columns, row, build_row) {
-                    return;
-                }
+            bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
                 matched = true;
                 if emit_payload {
                     emitted.push((row, Some(build_row)));
@@ -6832,7 +6926,11 @@ impl Vm {
         // all (this is the whole point of #441): a join feeding
         // only an aggregate never allocates one register set per
         // matched row, only one `RunningAgg` per *group*.
-        let hashes = hash_columns_by_row(&key_columns, num_rows, |row| row);
+        let hashes = if bt.needs_hashes() {
+            hash_columns_by_row(&key_columns, num_rows, |row| row)
+        } else {
+            Vec::new()
+        };
         let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
         let mut group_keys: Vec<Vec<Value>> = Vec::new();
         let mut accumulators: Vec<Vec<RunningAgg>> = vec![Vec::new(); aggs.len()];
@@ -6871,13 +6969,7 @@ impl Vm {
             // the general fold numbers them.
             let mut seen: Vec<u32> = vec![u32::MAX; groups.keys.len()];
             for row in 0..num_rows {
-                bt.index.for_each_match_slot(&hashes[row], |slot| {
-                    let Some(&build_row) = bt.index.value_at(slot) else {
-                        return;
-                    };
-                    if !bt.keys_match(&key_columns, row, build_row) {
-                        return;
-                    }
+                bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
                     let Some(&bg) = groups.group_of.get(build_row) else {
                         return;
                     };
@@ -6926,13 +7018,7 @@ impl Vm {
                 let mut matched = false;
                 let emit_payload =
                     !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
-                bt.index.for_each_match_slot(&hashes[row], |slot| {
-                    let Some(&build_row) = bt.index.value_at(slot) else {
-                        return;
-                    };
-                    if !bt.keys_match(&key_columns, row, build_row) {
-                        return;
-                    }
+                bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
                     matched = true;
                     if emit_payload {
                         fold_group_row(
@@ -12916,6 +13002,89 @@ mod tests {
             "a second column set is not served"
         );
         assert!(bt.payload_groups(&[0]).is_some(), "the cached one still is");
+    }
+
+    /// tools#88: a direct index only for unique `Int` keys spanning at
+    /// most `SPREAD` slots a row, without overflow at the `i64` extremes.
+    #[test]
+    fn direct_index_covers_unique_dense_int_keys_only() {
+        let d = DirectIndex::build(&[5, 3, 4]).expect("dense and unique");
+        assert_eq!((d.get(3), d.get(4), d.get(5)), (Some(1), Some(2), Some(0)));
+        assert_eq!((d.get(2), d.get(6)), (None, None));
+        assert_eq!((d.get(i64::MIN), d.get(i64::MAX)), (None, None));
+        let negative = DirectIndex::build(&[-2, -1, 0]).expect("negative keys");
+        assert_eq!(negative.get(-2), Some(0));
+        // Two rows, so up to 8 slots: 0..=7 fits, 0..=8 doesn't.
+        assert!(DirectIndex::build(&[0, 7]).is_some());
+        assert!(DirectIndex::build(&[0, 8]).is_none());
+        assert!(DirectIndex::build(&[1, 1]).is_none(), "a repeated key");
+        assert!(DirectIndex::build(&[]).is_none());
+        assert!(DirectIndex::build(&[i64::MIN, i64::MAX]).is_none());
+    }
+
+    /// The build table of one key column `keys`, as `HashBuild` makes it.
+    fn build_table_of(keys: Vec<Value>) -> Arc<BuildTable> {
+        let batch = Batch::new(keys.len()).with_column("k", keys);
+        let mut vm = Vm::new();
+        vm.execute(
+            &batch,
+            &[
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "k".into(),
+                },
+                Opcode::HashBuild {
+                    key_cols: vec![0].into(),
+                    payload_cols: Vec::new().into(),
+                    table: 0,
+                },
+            ],
+        )
+        .unwrap();
+        Arc::clone(vm.join_tables().0.get(&0).unwrap())
+    }
+
+    /// tools#88: `for_each_match` finds exactly the build rows a scan with
+    /// `keys_match` finds, through the direct index or the hash table: a
+    /// probe NULL, string, float or out-of-range key matches nothing.
+    #[test]
+    fn for_each_match_agrees_with_a_scan_on_both_paths() {
+        let probe = vec![
+            Value::Int(0),
+            Value::Int(3),
+            Value::Int(-1),
+            Value::Int(4),
+            Value::Int(i64::MAX),
+            Value::Null,
+            Value::Str("1".into()),
+            Value::Float(2.0),
+            Value::Int(2),
+        ];
+        let dense = build_table_of((0..4).map(|k| Value::Int(3 - k)).collect());
+        let sparse = build_table_of([0, 1000, 2, 3].map(Value::Int).to_vec());
+        let duplicated = build_table_of([0, 2, 2, 3].map(Value::Int).to_vec());
+        let with_null = build_table_of(vec![Value::Int(0), Value::Null, Value::Int(2)]);
+        assert!(dense.direct.is_some());
+        for bt in [&sparse, &duplicated, &with_null] {
+            assert!(bt.direct.is_none());
+        }
+        let columns: [&[Value]; 1] = [&probe];
+        let hashes = hash_columns_by_row(&columns, probe.len(), |row| row);
+        for bt in [&dense, &sparse, &duplicated, &with_null] {
+            for (row, key) in probe.iter().enumerate() {
+                let mut found = Vec::new();
+                bt.for_each_match(&columns, row, hashes.get(row), |b| found.push(b));
+                found.sort_unstable();
+                let expected: Vec<usize> = (0..bt.keys[0].len())
+                    .filter(|b| bt.keys_match(&columns, row, *b))
+                    .collect();
+                assert_eq!(found, expected, "probe {key:?} in {bt:?}");
+            }
+        }
+        // The direct path never reads the hashes.
+        let mut found = Vec::new();
+        dense.for_each_match(&columns, 1, None, |b| found.push(b));
+        assert_eq!(found, [0]);
     }
 
     #[test]
