@@ -20,7 +20,10 @@
 use std::borrow::Cow;
 
 use crate::codegen::row::select::CodegenError;
-use crate::parser::ast::{CommonTableExpr, ResultColumn, Select, TableRef, TableRefKind};
+use crate::parser::ast::{
+    CommonTableExpr, Expr, ExprKind, FromClause, FunctionArgs, JoinConstraint, ResultColumn,
+    Select, TableRef, TableRefKind,
+};
 
 /// Most bytes of CTE/view SQL one statement may inline (#876). Every
 /// reference copies the referenced body, so this bounds the expanded AST
@@ -39,6 +42,9 @@ const MAX_EXPANSION_DEPTH: usize = 250;
 pub(super) struct Expansion {
     bytes_left: usize,
     depth: usize,
+    /// The CTEs whose bodies are being expanded, outermost first: a
+    /// reference to one of them from inside its own body is circular.
+    active: Vec<String>,
 }
 
 impl Expansion {
@@ -46,6 +52,7 @@ impl Expansion {
         Expansion {
             bytes_left: MAX_EXPANSION_BYTES,
             depth: 0,
+            active: Vec::new(),
         }
     }
 
@@ -80,47 +87,190 @@ impl Expansion {
 /// [`CodegenError::ExpansionTooLarge`] when inlining the CTEs would copy
 /// too much SQL or nest too deep (#876).
 pub fn expand_with_clause(select: &Select) -> Result<Cow<'_, Select>, CodegenError> {
-    expand_with_clause_within(select, &mut Expansion::new())
-}
-
-/// [`expand_with_clause`] charging `expansion` -- shared with view
-/// expansion, whose bodies may carry their own `WITH` clause.
-pub(super) fn expand_with_clause_within<'a>(
-    select: &'a Select,
-    expansion: &mut Expansion,
-) -> Result<Cow<'a, Select>, CodegenError> {
-    let Some(with) = &select.with_clause else {
+    if select.with_clause.is_none() {
         return Ok(Cow::Borrowed(select));
-    };
+    }
     let mut out = select.clone();
-    out.with_clause = None;
-    substitute_cte_refs(&mut out, &with.ctes, expansion)?;
+    expand_ctes_in(&mut out, &mut Expansion::new())?;
     Ok(Cow::Owned(out))
 }
 
-/// Substitutes every `FROM`/`JOIN` table reference in `select`'s own
-/// main `FROM` clause and each `UNION ALL` compound arm's `FROM` clause
-/// that names one of `ctes` (the CTEs visible at this point) with a
-/// `TableRefKind::Subquery` wrapping that CTE's query. Does not recurse
-/// into subquery *expressions* (scalar/`IN`/`EXISTS`) — a CTE is only
-/// visible in `FROM`/`JOIN` position in this pass, matching how #257's
-/// subquery-in-FROM support is itself scoped.
+/// Expands `select`'s own `WITH` clause, and any nested one, in place,
+/// charging `expansion` -- shared with view expansion, whose bodies may
+/// carry their own `WITH` clause.
+pub(super) fn expand_ctes_in(
+    select: &mut Select,
+    expansion: &mut Expansion,
+) -> Result<(), CodegenError> {
+    substitute_cte_refs(select, &[], expansion)
+}
+
+/// Substitutes every table reference to one of `ctes` (the CTEs visible
+/// at this point) with a `TableRefKind::Subquery` wrapping that CTE's
+/// query: in `select`'s `FROM`/`JOIN`s and compound arms, and in every
+/// subquery nested anywhere in its expressions (`IN`, `EXISTS`, scalar),
+/// which used to see the real same-named table instead (#885). A nested
+/// `WITH` is expanded here too, its CTEs shadowing same-named outer ones.
 fn substitute_cte_refs(
     select: &mut Select,
     ctes: &[CommonTableExpr],
     expansion: &mut Expansion,
 ) -> Result<(), CodegenError> {
-    if let Some(from) = &mut select.from {
-        substitute_table_ref(&mut from.first, ctes, expansion)?;
-        for join in &mut from.joins {
-            substitute_table_ref(&mut join.table, ctes, expansion)?;
+    let combined: Vec<CommonTableExpr>;
+    let ctes = match select.with_clause.take() {
+        Some(with) => {
+            combined = ctes.iter().cloned().chain(with.ctes).collect();
+            combined.as_slice()
         }
+        None => ctes,
+    };
+    if let Some(from) = &mut select.from {
+        substitute_in_from(from, ctes, expansion)?;
     }
     for arm in &mut select.compound {
         if let Some(from) = &mut arm.from {
-            substitute_table_ref(&mut from.first, ctes, expansion)?;
-            for join in &mut from.joins {
-                substitute_table_ref(&mut join.table, ctes, expansion)?;
+            substitute_in_from(from, ctes, expansion)?;
+        }
+        for col in &mut arm.columns {
+            if let ResultColumn::Expr { expr, .. } = col {
+                substitute_in_expr(expr, ctes, expansion)?;
+            }
+        }
+        for expr in arm
+            .where_clause
+            .iter_mut()
+            .chain(arm.group_by.iter_mut())
+            .chain(arm.having.iter_mut())
+        {
+            substitute_in_expr(expr, ctes, expansion)?;
+        }
+    }
+    for col in &mut select.columns {
+        if let ResultColumn::Expr { expr, .. } = col {
+            substitute_in_expr(expr, ctes, expansion)?;
+        }
+    }
+    let limit = select
+        .limit
+        .iter_mut()
+        .flat_map(|l| std::iter::once(&mut l.limit).chain(l.offset.iter_mut()));
+    for expr in select
+        .where_clause
+        .iter_mut()
+        .chain(select.group_by.iter_mut())
+        .chain(select.having.iter_mut())
+        .chain(select.order_by.iter_mut().map(|t| &mut t.expr))
+        .chain(limit)
+    {
+        substitute_in_expr(expr, ctes, expansion)?;
+    }
+    Ok(())
+}
+
+fn substitute_in_from(
+    from: &mut FromClause,
+    ctes: &[CommonTableExpr],
+    expansion: &mut Expansion,
+) -> Result<(), CodegenError> {
+    substitute_table_ref(&mut from.first, ctes, expansion)?;
+    for join in &mut from.joins {
+        substitute_table_ref(&mut join.table, ctes, expansion)?;
+        if let Some(JoinConstraint::On(on)) = &mut join.constraint {
+            substitute_in_expr(on, ctes, expansion)?;
+        }
+    }
+    Ok(())
+}
+
+/// Substitutes CTE references inside every subquery nested in `expr`.
+fn substitute_in_expr(
+    expr: &mut Expr,
+    ctes: &[CommonTableExpr],
+    expansion: &mut Expansion,
+) -> Result<(), CodegenError> {
+    match &mut expr.kind {
+        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => {}
+        ExprKind::Subquery(subquery) | ExprKind::Exists { subquery, .. } => {
+            substitute_cte_refs(subquery, ctes, expansion)?;
+        }
+        ExprKind::InSubquery { expr, subquery, .. } => {
+            substitute_in_expr(expr, ctes, expansion)?;
+            substitute_cte_refs(subquery, ctes, expansion)?;
+        }
+        ExprKind::InSubqueryMulti {
+            exprs, subquery, ..
+        } => {
+            for e in exprs {
+                substitute_in_expr(e, ctes, expansion)?;
+            }
+            substitute_cte_refs(subquery, ctes, expansion)?;
+        }
+        ExprKind::Unary { expr, .. }
+        | ExprKind::IsNull { expr, .. }
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::Collate { expr, .. }
+        | ExprKind::Paren(expr) => substitute_in_expr(expr, ctes, expansion)?,
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            substitute_in_expr(lhs, ctes, expansion)?;
+            substitute_in_expr(rhs, ctes, expansion)?;
+        }
+        ExprKind::Between { expr, lo, hi, .. } => {
+            substitute_in_expr(expr, ctes, expansion)?;
+            substitute_in_expr(lo, ctes, expansion)?;
+            substitute_in_expr(hi, ctes, expansion)?;
+        }
+        ExprKind::In { expr, list, .. } => {
+            substitute_in_expr(expr, ctes, expansion)?;
+            for e in list {
+                substitute_in_expr(e, ctes, expansion)?;
+            }
+        }
+        ExprKind::Like {
+            expr,
+            pattern,
+            escape,
+            ..
+        } => {
+            substitute_in_expr(expr, ctes, expansion)?;
+            substitute_in_expr(pattern, ctes, expansion)?;
+            if let Some(escape) = escape {
+                substitute_in_expr(escape, ctes, expansion)?;
+            }
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(operand) = operand {
+                substitute_in_expr(operand, ctes, expansion)?;
+            }
+            for (when, then) in whens {
+                substitute_in_expr(when, ctes, expansion)?;
+                substitute_in_expr(then, ctes, expansion)?;
+            }
+            if let Some(else_) = else_ {
+                substitute_in_expr(else_, ctes, expansion)?;
+            }
+        }
+        ExprKind::FunctionCall { args, tail, .. } => {
+            if let FunctionArgs::List(args) = args {
+                for e in args {
+                    substitute_in_expr(e, ctes, expansion)?;
+                }
+            }
+            if let Some(tail) = tail {
+                if let Some(filter) = &mut tail.filter {
+                    substitute_in_expr(filter, ctes, expansion)?;
+                }
+                if let Some(over) = &mut tail.over {
+                    for e in &mut over.partition_by {
+                        substitute_in_expr(e, ctes, expansion)?;
+                    }
+                    for term in &mut over.order_by {
+                        substitute_in_expr(&mut term.expr, ctes, expansion)?;
+                    }
+                }
             }
         }
     }
@@ -134,11 +284,26 @@ fn substitute_table_ref(
 ) -> Result<(), CodegenError> {
     match &mut table_ref.kind {
         TableRefKind::Name(name) => {
+            // The latest declaration wins: a nested `WITH` is appended
+            // after the CTEs it shadows.
             let Some((index, cte)) = ctes
                 .iter()
                 .enumerate()
+                .rev()
                 .find(|(_, c)| c.name.eq_ignore_ascii_case(name))
             else {
+                // Inside its own body a CTE isn't visible (no `WITH
+                // RECURSIVE`), so the name would silently fall through to
+                // a same-named real table: sqlite3 refuses it (#885).
+                if expansion
+                    .active
+                    .iter()
+                    .any(|active| active.eq_ignore_ascii_case(name))
+                {
+                    return Err(CodegenError::Rejected(format!(
+                        "circular reference: {name}"
+                    )));
+                }
                 return Ok(());
             };
             let earlier = ctes.get(..index).ok_or_else(|| CodegenError::Internal {
@@ -150,11 +315,13 @@ fn substitute_table_ref(
             // each earlier, already-expanded body into the next --
             // quadratic in a chain's length (#876).
             expansion.enter(&cte.query)?;
+            expansion.active.push(cte.name.clone());
             let mut query = (*cte.query).clone();
             substitute_cte_refs(&mut query, earlier, expansion)?;
+            expansion.active.pop();
             expansion.leave();
             if let Some(columns) = &cte.columns {
-                apply_column_aliases(&mut query, columns);
+                apply_column_aliases(&mut query, columns, &cte.name)?;
             }
             // A subquery-in-FROM's alias is mandatory to the rest of
             // codegen (`resolve_from_table_schema`'s doc comment) —
@@ -171,35 +338,50 @@ fn substitute_table_ref(
         // recurse into it the same way view expansion does, so a CTE
         // isn't only resolvable directly under a query's top-level FROM.
         TableRefKind::Subquery(inner) => substitute_cte_refs(inner, ctes, expansion),
-        TableRefKind::Unnest { .. } => Ok(()),
+        TableRefKind::Unnest { expr, .. } => substitute_in_expr(expr, ctes, expansion),
     }
 }
 
-/// Renames a CTE's own result columns to its explicit `(col, ...)` list
-/// by giving each result column an explicit alias — the synthetic
-/// schema #257's `subquery_output_columns` builds for a materialized
-/// `FROM`-subquery already prefers an explicit alias over any name it
-/// would otherwise derive, so this is the only hook needed to honor
-/// `WITH cte(a, b) AS (...)`. Only a same-length, all-`Expr` (no `*`/
-/// `table.*`) result-column list can be renamed positionally; anything
-/// else is left alone (the CTE still compiles, just exposed under its
-/// query's own natural column names instead of the declared list).
-pub(super) fn apply_column_aliases(query: &mut Select, columns: &[String]) {
-    if query.columns.len() != columns.len() {
-        return;
-    }
+/// Renames a CTE's (or view's) own result columns to its explicit
+/// `(col, ...)` list by giving each result column an explicit alias — the
+/// synthetic schema #257's `subquery_output_columns` builds for a
+/// materialized `FROM`-subquery already prefers an explicit alias over any
+/// name it would otherwise derive, so this is the only hook needed to
+/// honor `WITH cte(a, b) AS (...)`.
+///
+/// # Errors
+///
+/// sqlite3's `table {name} has N values for M columns` when the counts
+/// differ, and `Unsupported` for a `*`/`table.*` select list, whose width
+/// isn't known here: both used to be skipped silently, leaving the
+/// declared names unapplied (#885).
+pub(super) fn apply_column_aliases(
+    query: &mut Select,
+    columns: &[String],
+    name: &str,
+) -> Result<(), CodegenError> {
     if query
         .columns
         .iter()
         .any(|c| !matches!(c, ResultColumn::Expr { .. }))
     {
-        return;
+        return Err(CodegenError::Unsupported {
+            reason: format!("a column list for {name} over a `*` select list"),
+        });
     }
-    for (col, name) in query.columns.iter_mut().zip(columns) {
+    if query.columns.len() != columns.len() {
+        return Err(CodegenError::Rejected(format!(
+            "table {name} has {} values for {} columns",
+            query.columns.len(),
+            columns.len()
+        )));
+    }
+    for (col, column_name) in query.columns.iter_mut().zip(columns) {
         if let ResultColumn::Expr { alias, .. } = col {
-            *alias = Some(name.clone());
+            *alias = Some(column_name.clone());
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -226,6 +408,66 @@ mod tests {
 
     fn too_large<T: std::fmt::Debug>(result: Result<T, CodegenError>) -> bool {
         matches!(result, Err(CodegenError::ExpansionTooLarge { .. }))
+    }
+
+    /// Whether `select`'s `FROM` reads a substituted CTE body rather than
+    /// a named (real) table.
+    fn reads_a_cte(select: &Select) -> bool {
+        matches!(
+            select.from.as_ref().map(|f| &f.first.kind),
+            Some(TableRefKind::Subquery(_))
+        )
+    }
+
+    /// #885: a CTE shadowing a table was substituted only in `FROM`/`JOIN`,
+    /// so an `IN`/`EXISTS`/scalar subquery read the real table -- wrong
+    /// rows, silently. Every nested subquery now sees the CTE.
+    #[test]
+    fn subqueries_in_expressions_see_the_cte() {
+        let select = sel(
+            "WITH t AS (SELECT 42 AS a) SELECT (SELECT a FROM t) FROM t \
+             WHERE a IN (SELECT a FROM t) AND EXISTS (SELECT 1 FROM t) \
+             AND CASE WHEN a < (SELECT a FROM t) THEN 1 END",
+        );
+        let expanded = expand_with_clause(&select).unwrap();
+        assert!(reads_a_cte(&expanded));
+        let ResultColumn::Expr { expr, .. } = &expanded.columns[0] else {
+            panic!("{:?}", expanded.columns)
+        };
+        let ExprKind::Subquery(scalar) = &expr.kind else {
+            panic!("{expr:?}")
+        };
+        assert!(reads_a_cte(scalar), "scalar subquery");
+        let mut subqueries = Vec::new();
+        let mut stack = vec![expanded.where_clause.as_ref().unwrap()];
+        while let Some(e) = stack.pop() {
+            match &e.kind {
+                ExprKind::Binary { lhs, rhs, .. } => stack.extend([&**lhs, &**rhs]),
+                ExprKind::Case { whens, .. } => stack.extend(whens.iter().map(|(w, _)| w)),
+                ExprKind::InSubquery { subquery, .. }
+                | ExprKind::Exists { subquery, .. }
+                | ExprKind::Subquery(subquery) => subqueries.push(subquery),
+                _ => {}
+            }
+        }
+        assert_eq!(subqueries.len(), 3, "IN, EXISTS and the CASE's scalar");
+        assert!(subqueries.iter().all(|s| reads_a_cte(s)));
+    }
+
+    /// #885: sqlite3 refuses a non-recursive CTE that reads its own name
+    /// and a column list of the wrong width; both used to pass silently.
+    #[test]
+    fn circular_and_misdeclared_ctes_are_refused() {
+        let err = |sql: &str| expand_with_clause(&sel(sql)).unwrap_err().to_string();
+        assert_eq!(
+            err("WITH t AS (SELECT * FROM t) SELECT * FROM t"),
+            "circular reference: t"
+        );
+        assert_eq!(
+            err("WITH c(x, y) AS (SELECT 1) SELECT * FROM c"),
+            "table c has 1 values for 2 columns"
+        );
+        assert!(err("WITH c(x) AS (SELECT * FROM t) SELECT x FROM c").contains("`*`"));
     }
 
     /// #876: a linear chain nests one subquery per CTE. 250 levels is the

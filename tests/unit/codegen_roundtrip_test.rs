@@ -475,16 +475,21 @@ fn with_clause_applies_explicit_column_aliases() {
 }
 
 #[test]
-fn with_clause_mismatched_column_alias_count_leaves_natural_names() {
-    // `apply_column_aliases` only renames a same-length, all-`Expr`
-    // result list; a mismatched count is left alone, so the CTE is
-    // still queryable, just under its query's own column name.
-    let rows = run(
-        &[schema("t", &["a"])],
+fn with_clause_mismatched_column_alias_count_is_sqlite3s_error() {
+    // #885: a column list of the wrong length used to be skipped
+    // silently, leaving the CTE under its query's own column name;
+    // sqlite3 refuses it.
+    let err = compile_statement(
         "WITH renamed(x, y) AS (SELECT a FROM t) SELECT a FROM renamed",
-        vec![(1, ints(&[5]))],
+        &[schema("t", &["a"])],
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("table renamed has 1 values for 2 columns"),
+        "{err}"
     );
-    assert_eq!(rows, vec![ints(&[5])]);
 }
 
 #[test]
@@ -519,13 +524,38 @@ fn with_clause_over_a_union_all_compound_substitutes_every_arm() {
 fn with_clause_shadows_a_real_table_of_the_same_name() {
     // The CTE `t` shadows the real table `t` for this statement only --
     // `substitute_table_ref` rewrites the `FROM t` reference to the
-    // CTE's own (filtered) body rather than the real table.
-    let rows = run(
-        &[schema("t", &["a"])],
-        "WITH t AS (SELECT a FROM t WHERE a > 1) SELECT a FROM t",
-        vec![(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))],
+    // CTE's own body (over `u`) rather than the real table.
+    let schemas = [schema("t", &["a"]), schema_with_root("u", &["a"], 3)];
+    let program = compile_statement(
+        "WITH t AS (SELECT a FROM u WHERE a > 1) SELECT a FROM t",
+        &schemas,
+        &[],
+    )
+    .unwrap();
+    let opened: Vec<i32> = program
+        .instructions
+        .iter()
+        .filter(|i| i.opcode == Opcode::OpenRead)
+        .map(|i| i.p2)
+        .collect();
+    assert_eq!(
+        opened,
+        vec![3],
+        "only `u` (root 3) is read, never the real `t`"
     );
-    assert_eq!(rows, vec![ints(&[2]), ints(&[3])]);
+}
+
+#[test]
+fn a_cte_reading_its_own_name_is_a_circular_reference() {
+    // #885: inside its own body a (non-recursive) CTE isn't visible, so
+    // `FROM t` silently read the real table `t`; sqlite3 refuses it.
+    let err = compile_statement(
+        "WITH t AS (SELECT a FROM t WHERE a > 1) SELECT a FROM t",
+        &[schema("t", &["a"])],
+        &[],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("circular reference: t"), "{err}");
 }
 
 #[test]

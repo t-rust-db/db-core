@@ -13472,7 +13472,7 @@
   {
     "id": "codegen_row_subquery_cte_enter_565cb899",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 62,
+    "line": 69,
     "decision": "self.depth > MAX_EXPANSION_DEPTH",
     "conditions": 1,
     "vectors_required": 2,
@@ -13480,9 +13480,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_subquery_cte_expand_with_clause_da990f62",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 90,
+    "decision": "select.with_clause.is_none()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_cte_refs_b5b8cd8e",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 120,
+    "decision": "match select.with_clause.take() {\n        Some(with) => {\n            combined = ctes.iter().cloned().chain(with.ctes).collect();\n            combined.as_slice()\n        }\n        None => ctes,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_subquery_cte_substitute_cte_refs_f42b0018",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 113,
+    "line": 127,
     "decision": "let Some(from) = &mut select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -13492,7 +13512,7 @@
   {
     "id": "codegen_row_subquery_cte_substitute_cte_refs_650d5d42",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 120,
+    "line": 131,
     "decision": "let Some(from) = &mut arm.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -13500,30 +13520,140 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_subquery_cte_substitute_table_ref_a90ef9ea",
+    "id": "codegen_row_subquery_cte_substitute_cte_refs_be2ff6a2",
     "file": "src/codegen/row/subquery/cte.rs",
     "line": 135,
-    "decision": "match &mut table_ref.kind {\n        TableRefKind::Name(name) => {\n            let Some((index, cte)) = ctes\n                .iter()\n                .enumerate()\n                .find(|(_, c)| c.name.eq_ignore_ascii_case(name))\n            else {\n                return Ok(());\n            };\n            let earlier = ctes.get(..index).ok_or_else(|| CodegenError::Internal {\n                reason: format!(\"CTE {index} is past the {} declared\", ctes.len()),\n            })?;\n            // Each CTE is resolved against the CTEs declared before it\n            // (SQLite's non-recursive `WITH` visibility rule), and only\n            // when referenced: expanding every definition up front cloned\n            // each earlier, already-expanded body into the next --\n            // quadratic in a chain's length (#876).\n            expansion.enter(&cte.query)?;\n            let mut query = (*cte.query).clone();\n            substitute_cte_refs(&mut query, earlier, expansion)?;\n            expansion.leave();\n            if let Some(columns) = &cte.columns {\n                apply_column_aliases(&mut query, columns);\n            }\n            // A subquery-in-FROM's alias is mandatory to the rest of\n            // codegen (`resolve_from_table_schema`'s doc comment) —\n            // default it to the CTE's own name when the reference\n            // didn't supply one itself (the common `FROM cte_name`\n            // case, as opposed to `FROM cte_name AS c`).\n            let alias = table_ref.alias.clone().or_else(|| Some(cte.name.clone()));\n            table_ref.kind = TableRefKind::Subquery(Box::new(query));\n            table_ref.alias = alias;\n            Ok(())\n        }\n        // An inline derived table (`FROM (SELECT ... FROM cte_name) sub`)\n        // can itself reference an earlier-declared CTE in its own FROM —\n        // recurse into it the same way view expansion does, so a CTE\n        // isn't only resolvable directly under a query's top-level FROM.\n        TableRefKind::Subquery(inner) => substitute_cte_refs(inner, ctes, expansion),\n        TableRefKind::Unnest { .. } => Ok(()),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_subquery_cte_substitute_table_ref_87e1b013",
-    "file": "src/codegen/row/subquery/cte.rs",
-    "line": 156,
-    "decision": "let Some(columns) = &cte.columns",
+    "decision": "let ResultColumn::Expr { expr, .. } = col",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_subquery_cte_apply_column_aliases_9d9074f1",
+    "id": "codegen_row_subquery_cte_substitute_cte_refs_be2ff6a2_2",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 188,
-    "decision": "query.columns.len() != columns.len()",
+    "line": 149,
+    "decision": "let ResultColumn::Expr { expr, .. } = col",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_from_184240fb",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 178,
+    "decision": "let Some(JoinConstraint::On(on)) = &mut join.constraint",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_expr_5559c269",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 191,
+    "decision": "match &mut expr.kind {\n        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => {}\n        ExprKind::Subquery(subquery) | ExprKind::Exists { subquery, .. } => {\n            substitute_cte_refs(subquery, ctes, expansion)?;\n        }\n        ExprKind::InSubquery { expr, subquery, .. } => {\n            substitute_in_expr(expr, ctes, expansion)?;\n            substitute_cte_refs(subquery, ctes, expansion)?;\n        }\n        ExprKind::InSubqueryMulti {\n            exprs, subquery, ..\n        } => {\n            for e in exprs {\n                substitute_in_expr(e, ctes, expansion)?;\n            }\n            substitute_cte_refs(subquery, ctes, expansion)?;\n        }\n        ExprKind::Unary { expr, .. }\n        | ExprKind::IsNull { expr, .. }\n        | ExprKind::Cast { expr, .. }\n        | ExprKind::Collate { expr, .. }\n        | ExprKind::Paren(expr) => substitute_in_expr(expr, ctes, expansion)?,\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            substitute_in_expr(lhs, ctes, expansion)?;\n            substitute_in_expr(rhs, ctes, expansion)?;\n        }\n        ExprKind::Between { expr, lo, hi, .. } => {\n            substitute_in_expr(expr, ctes, expansion)?;\n            substitute_in_expr(lo, ctes, expansion)?;\n            substitute_in_expr(hi, ctes, expansion)?;\n        }\n        ExprKind::In { expr, list, .. } => {\n            substitute_in_expr(expr, ctes, expansion)?;\n            for e in list {\n                substitute_in_expr(e, ctes, expansion)?;\n            }\n        }\n        ExprKind::Like {\n            expr,\n            pattern,\n            escape,\n            ..\n        } => {\n            substitute_in_expr(expr, ctes, expansion)?;\n            substitute_in_expr(pattern, ctes, expansion)?;\n            if let Some(escape) = escape {\n                substitute_in_expr(escape, ctes, expansion)?;\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(operand) = operand {\n                substitute_in_expr(operand, ctes, expansion)?;\n            }\n            for (when, then) in whens {\n                substitute_in_expr(when, ctes, expansion)?;\n                substitute_in_expr(then, ctes, expansion)?;\n            }\n            if let Some(else_) = else_ {\n                substitute_in_expr(else_, ctes, expansion)?;\n            }\n        }\n        ExprKind::FunctionCall { args, tail, .. } => {\n            if let FunctionArgs::List(args) = args {\n                for e in args {\n                    substitute_in_expr(e, ctes, expansion)?;\n                }\n            }\n            if let Some(tail) = tail {\n                if let Some(filter) = &mut tail.filter {\n                    substitute_in_expr(filter, ctes, expansion)?;\n                }\n                if let Some(over) = &mut tail.over {\n                    for e in &mut over.partition_by {\n                        substitute_in_expr(e, ctes, expansion)?;\n                    }\n                    for term in &mut over.order_by {\n                        substitute_in_expr(&mut term.expr, ctes, expansion)?;\n                    }\n                }\n            }\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_expr_aa984c2f",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 236,
+    "decision": "let Some(escape) = escape",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_expr_bc32fa3b",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 245,
+    "decision": "let Some(operand) = operand",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_expr_a3d25d38",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 252,
+    "decision": "let Some(else_) = else_",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_expr_6912dc8e",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 257,
+    "decision": "let FunctionArgs::List(args) = args",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_expr_756219c6",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 262,
+    "decision": "let Some(tail) = tail",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_expr_a60126d0",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 263,
+    "decision": "let Some(filter) = &mut tail.filter",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_in_expr_442de5a8",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 266,
+    "decision": "let Some(over) = &mut tail.over",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_table_ref_aadd60ce",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 285,
+    "decision": "match &mut table_ref.kind {\n        TableRefKind::Name(name) => {\n            // The latest declaration wins: a nested `WITH` is appended\n            // after the CTEs it shadows.\n            let Some((index, cte)) = ctes\n                .iter()\n                .enumerate()\n                .rev()\n                .find(|(_, c)| c.name.eq_ignore_ascii_case(name))\n            else {\n                // Inside its own body a CTE isn't visible (no `WITH\n                // RECURSIVE`), so the name would silently fall through to\n                // a same-named real table: sqlite3 refuses it (#885).\n                if expansion\n                    .active\n                    .iter()\n                    .any(|active| active.eq_ignore_ascii_case(name))\n                {\n                    return Err(CodegenError::Rejected(format!(\n                        \"circular reference: {name}\"\n                    )));\n                }\n                return Ok(());\n            };\n            let earlier = ctes.get(..index).ok_or_else(|| CodegenError::Internal {\n                reason: format!(\"CTE {index} is past the {} declared\", ctes.len()),\n            })?;\n            // Each CTE is resolved against the CTEs declared before it\n            // (SQLite's non-recursive `WITH` visibility rule), and only\n            // when referenced: expanding every definition up front cloned\n            // each earlier, already-expanded body into the next --\n            // quadratic in a chain's length (#876).\n            expansion.enter(&cte.query)?;\n            expansion.active.push(cte.name.clone());\n            let mut query = (*cte.query).clone();\n            substitute_cte_refs(&mut query, earlier, expansion)?;\n            expansion.active.pop();\n            expansion.leave();\n            if let Some(columns) = &cte.columns {\n                apply_column_aliases(&mut query, columns, &cte.name)?;\n            }\n            // A subquery-in-FROM's alias is mandatory to the rest of\n            // codegen (`resolve_from_table_schema`'s doc comment) —\n            // default it to the CTE's own name when the reference\n            // didn't supply one itself (the common `FROM cte_name`\n            // case, as opposed to `FROM cte_name AS c`).\n            let alias = table_ref.alias.clone().or_else(|| Some(cte.name.clone()));\n            table_ref.kind = TableRefKind::Subquery(Box::new(query));\n            table_ref.alias = alias;\n            Ok(())\n        }\n        // An inline derived table (`FROM (SELECT ... FROM cte_name) sub`)\n        // can itself reference an earlier-declared CTE in its own FROM —\n        // recurse into it the same way view expansion does, so a CTE\n        // isn't only resolvable directly under a query's top-level FROM.\n        TableRefKind::Subquery(inner) => substitute_cte_refs(inner, ctes, expansion),\n        TableRefKind::Unnest { expr, .. } => substitute_in_expr(expr, ctes, expansion),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_table_ref_734b9287",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 298,
+    "decision": "expansion\n                    .active\n                    .iter()\n                    .any(|active| active.eq_ignore_ascii_case(name))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_substitute_table_ref_87e1b013",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 323,
+    "decision": "let Some(columns) = &cte.columns",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -13532,8 +13662,18 @@
   {
     "id": "codegen_row_subquery_cte_apply_column_aliases_47c53426",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 191,
+    "line": 363,
     "decision": "query\n        .columns\n        .iter()\n        .any(|c| !matches!(c, ResultColumn::Expr { .. }))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_apply_column_aliases_9d9074f1",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 372,
+    "decision": "query.columns.len() != columns.len()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -13542,7 +13682,7 @@
   {
     "id": "codegen_row_subquery_cte_apply_column_aliases_13ff31b0",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 199,
+    "line": 380,
     "decision": "let ResultColumn::Expr { alias, .. } = col",
     "conditions": 1,
     "vectors_required": 2,
@@ -13552,7 +13692,7 @@
   {
     "id": "codegen_row_subquery_cte_sel_2e123bd1",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 212,
+    "line": 394,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13560,9 +13700,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_subquery_cte_subqueries_in_expressions_see_the_cte_2df029ba",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 443,
+    "decision": "let Some(e) = stack.pop()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_cte_subqueries_in_expressions_see_the_cte_54ee0916",
+    "file": "src/codegen/row/subquery/cte.rs",
+    "line": 444,
+    "decision": "match &e.kind {\n                ExprKind::Binary { lhs, rhs, .. } => stack.extend([&**lhs, &**rhs]),\n                ExprKind::Case { whens, .. } => stack.extend(whens.iter().map(|(w, _)| w)),\n                ExprKind::InSubquery { subquery, .. }\n                | ExprKind::Exists { subquery, .. }\n                | ExprKind::Subquery(subquery) => subqueries.push(subquery),\n                _ => {}\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "codegen_row_subquery_cte_views_that_reference_each_view_twice_are_refused_acb70138",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 256,
+    "line": 498,
     "decision": "i == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -15090,10 +15250,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_subquery_views_expand_table_ref_c7ab1d62",
+    "id": "codegen_row_subquery_views_expand_table_ref_4ae7ff5f",
     "file": "src/codegen/row/subquery/views.rs",
     "line": 183,
-    "decision": "match &mut table_ref.kind {\n        TableRefKind::Name(name) => {\n            let Some(view) = views.iter().find(|v| v.name.eq_ignore_ascii_case(name)) else {\n                return Ok(());\n            };\n            if stack\n                .iter()\n                .any(|seen| seen.eq_ignore_ascii_case(&view.name))\n            {\n                return Err(CodegenError::CircularView {\n                    name: view.name.clone(),\n                });\n            }\n            // A view's own stored body may carry its own `WITH` clause\n            // (`CREATE VIEW v AS WITH cte AS (...) SELECT * FROM cte`) —\n            // that never runs through `expand_with_clause` otherwise,\n            // since only the outermost query gets that pass at the top\n            // of `compile_select_program`. Expanding it here, before\n            // recursing for nested views, mirrors the ordering already\n            // used at the top level (CTEs first, then views).\n            // Every view reference inlines the view's body, so it is\n            // charged against the statement's expansion budget (#876).\n            expansion.enter(&view.query)?;\n            let mut query = expand_with_clause_within(&view.query, expansion)?.into_owned();\n            if let Some(columns) = &view.columns {\n                apply_column_aliases(&mut query, columns);\n            }\n            stack.push(view.name.clone());\n            let result = expand_views_in_select(&mut query, views, stack, expansion);\n            stack.pop();\n            result?;\n            expansion.leave();\n            // Same alias-defaulting rule as CTE substitution (#376): a\n            // bare `FROM view_name` (no explicit alias) needs the\n            // subquery's alias set to the view's own name, since a\n            // `TableRefKind::Subquery`'s alias is mandatory to the rest\n            // of codegen (`resolve_from_table_schema`'s doc comment).\n            let alias = table_ref.alias.clone().or_else(|| Some(view.name.clone()));\n            table_ref.kind = TableRefKind::Subquery(Box::new(query));\n            table_ref.alias = alias;\n            Ok(())\n        }\n        TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack, expansion),\n        TableRefKind::Unnest { .. } => Ok(()),\n    }",
+    "decision": "match &mut table_ref.kind {\n        TableRefKind::Name(name) => {\n            let Some(view) = views.iter().find(|v| v.name.eq_ignore_ascii_case(name)) else {\n                return Ok(());\n            };\n            if stack\n                .iter()\n                .any(|seen| seen.eq_ignore_ascii_case(&view.name))\n            {\n                return Err(CodegenError::CircularView {\n                    name: view.name.clone(),\n                });\n            }\n            // A view's own stored body may carry its own `WITH` clause\n            // (`CREATE VIEW v AS WITH cte AS (...) SELECT * FROM cte`) —\n            // that never runs through `expand_with_clause` otherwise,\n            // since only the outermost query gets that pass at the top\n            // of `compile_select_program`. Expanding it here, before\n            // recursing for nested views, mirrors the ordering already\n            // used at the top level (CTEs first, then views).\n            // Every view reference inlines the view's body, so it is\n            // charged against the statement's expansion budget (#876).\n            expansion.enter(&view.query)?;\n            let mut query = (*view.query).clone();\n            expand_ctes_in(&mut query, expansion)?;\n            if let Some(columns) = &view.columns {\n                apply_column_aliases(&mut query, columns, &view.name)?;\n            }\n            stack.push(view.name.clone());\n            let result = expand_views_in_select(&mut query, views, stack, expansion);\n            stack.pop();\n            result?;\n            expansion.leave();\n            // Same alias-defaulting rule as CTE substitution (#376): a\n            // bare `FROM view_name` (no explicit alias) needs the\n            // subquery's alias set to the view's own name, since a\n            // `TableRefKind::Subquery`'s alias is mandatory to the rest\n            // of codegen (`resolve_from_table_schema`'s doc comment).\n            let alias = table_ref.alias.clone().or_else(|| Some(view.name.clone()));\n            table_ref.kind = TableRefKind::Subquery(Box::new(query));\n            table_ref.alias = alias;\n            Ok(())\n        }\n        TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack, expansion),\n        TableRefKind::Unnest { .. } => Ok(()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -15112,7 +15272,7 @@
   {
     "id": "codegen_row_subquery_views_expand_table_ref_1ab13b46",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 207,
+    "line": 208,
     "decision": "let Some(columns) = &view.columns",
     "conditions": 1,
     "vectors_required": 2,
@@ -15122,7 +15282,7 @@
   {
     "id": "codegen_row_subquery_views_sel_2e123bd1",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 244,
+    "line": 245,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15132,7 +15292,7 @@
   {
     "id": "codegen_row_subquery_views_mcdc__codegen_row_subquery_views_expand_views_08fa764e__v3_referenced_view_is_expanded_into_an_owned_copy_b36fb835",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 316,
+    "line": 317,
     "decision": "match select.expand_views(&resolved) {\n            Ok(Cow::Owned(expanded)) => assert!(matches!(\n                expanded.from.as_ref().unwrap().first.kind,\n                TableRefKind::Subquery(_)\n            )),\n            other => panic!(\"expected an owned expansion, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

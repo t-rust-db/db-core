@@ -24,7 +24,7 @@ use crate::parser::row::error::ParseOutcome;
 
 use crate::codegen::row::select::CodegenError;
 
-use super::cte::{apply_column_aliases, expand_with_clause_within, Expansion};
+use super::cte::{apply_column_aliases, expand_ctes_in, Expansion};
 
 /// A view's catalog entry, pre-parsed once per query by the caller
 /// (`bin/sqlite-rs/query.rs`) from `schema::ViewSchema::sql`.
@@ -203,9 +203,10 @@ fn expand_table_ref(
             // Every view reference inlines the view's body, so it is
             // charged against the statement's expansion budget (#876).
             expansion.enter(&view.query)?;
-            let mut query = expand_with_clause_within(&view.query, expansion)?.into_owned();
+            let mut query = (*view.query).clone();
+            expand_ctes_in(&mut query, expansion)?;
             if let Some(columns) = &view.columns {
-                apply_column_aliases(&mut query, columns);
+                apply_column_aliases(&mut query, columns, &view.name)?;
             }
             stack.push(view.name.clone());
             let result = expand_views_in_select(&mut query, views, stack, expansion);
