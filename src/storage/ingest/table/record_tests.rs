@@ -279,7 +279,7 @@ fn rows_round_trip_through_replay_and_flush_with_exactly_the_schema() {
     assert_eq!(w.manifest().schema.as_deref(), Some(schema().as_slice()));
     let text = fs::read_to_string(t.0.join("manifest.json")).unwrap();
     assert!(text.starts_with(r#"{"version":3,"#), "{text}");
-    assert_eq!(Manifest::parse(&text).unwrap(), *w.manifest());
+    assert_eq!(Manifest::parse(&text).unwrap(), w.manifest());
 }
 
 #[test]
@@ -678,7 +678,7 @@ fn a_nullable_column_can_be_appended_to_the_schema() {
     let mut w = TableWriter::open(&t.0, evolved()).unwrap();
     let text = fs::read_to_string(t.0.join("manifest.json")).unwrap();
     assert!(text.starts_with(r#"{"version":5,"#), "{text}");
-    assert_eq!(Manifest::parse(&text).unwrap(), *w.manifest());
+    assert_eq!(Manifest::parse(&text).unwrap(), w.manifest());
     assert_eq!(Snapshot::open(&t.0).unwrap().schema().unwrap().len(), 10);
 
     for i in 8..10 {

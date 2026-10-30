@@ -36712,7 +36712,7 @@
   {
     "id": "storage_ingest_table_open_bf604652",
     "file": "src/storage/ingest/table.rs",
-    "line": 136,
+    "line": 143,
     "decision": "match e {\n            LockError::Held => IngestError::Wal(WalError::Locked),\n            LockError::Io(e) => IngestError::Io(e),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36722,7 +36722,7 @@
   {
     "id": "storage_ingest_table_open_bb33e65a",
     "file": "src/storage/ingest/table.rs",
-    "line": 140,
+    "line": 147,
     "decision": "let Some(schema) = &options.schema",
     "conditions": 1,
     "vectors_required": 2,
@@ -36732,7 +36732,7 @@
   {
     "id": "storage_ingest_table_open_84b22fe0",
     "file": "src/storage/ingest/table.rs",
-    "line": 141,
+    "line": 148,
     "decision": "let Some(why) = invalid_schema(schema)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36742,7 +36742,7 @@
   {
     "id": "storage_ingest_table_open_c6e6a7ca",
     "file": "src/storage/ingest/table.rs",
-    "line": 144,
+    "line": 151,
     "decision": "let Layout::Tiered(tier) = &options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -36752,7 +36752,7 @@
   {
     "id": "storage_ingest_table_open_ded237a9",
     "file": "src/storage/ingest/table.rs",
-    "line": 151,
+    "line": 158,
     "decision": "let Some(key) = tier.sort_key.iter().find(|k| !sortable(k))",
     "conditions": 1,
     "vectors_required": 2,
@@ -36762,7 +36762,7 @@
   {
     "id": "storage_ingest_table_open_444a8375",
     "file": "src/storage/ingest/table.rs",
-    "line": 156,
+    "line": 163,
     "decision": "let Some(key) = &tier.session_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -36772,7 +36772,7 @@
   {
     "id": "storage_ingest_table_open_f1954601",
     "file": "src/storage/ingest/table.rs",
-    "line": 161,
+    "line": 168,
     "decision": "!integer",
     "conditions": 1,
     "vectors_required": 2,
@@ -36782,7 +36782,7 @@
   {
     "id": "storage_ingest_table_open_7bfc05c8",
     "file": "src/storage/ingest/table.rs",
-    "line": 170,
+    "line": 177,
     "decision": "match Manifest::read(table)? {\n            Some(m) => m,\n            None => {\n                let mut m = Manifest::new(options.format, options.layout.kind());\n                m.schema.clone_from(&options.schema);\n                m.write(table)?;\n                m\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36792,7 +36792,7 @@
   {
     "id": "storage_ingest_table_open_f11309de",
     "file": "src/storage/ingest/table.rs",
-    "line": 179,
+    "line": 186,
     "decision": "manifest.schema != options.schema",
     "conditions": 1,
     "vectors_required": 2,
@@ -36802,7 +36802,7 @@
   {
     "id": "storage_ingest_table_open_01e4a6bc",
     "file": "src/storage/ingest/table.rs",
-    "line": 186,
+    "line": 193,
     "decision": "!extends_schema(stored, requested)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36812,7 +36812,7 @@
   {
     "id": "storage_ingest_table_open_a1f994f2",
     "file": "src/storage/ingest/table.rs",
-    "line": 196,
+    "line": 203,
     "decision": "match &options.layout {\n            Layout::Tiered(tier) => tier.session_key.clone(),\n            Layout::Flat => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36822,7 +36822,7 @@
   {
     "id": "storage_ingest_table_open_a136b6da",
     "file": "src/storage/ingest/table.rs",
-    "line": 200,
+    "line": 207,
     "decision": "manifest.session_key != session_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -36832,7 +36832,7 @@
   {
     "id": "storage_ingest_table_open_e26f89e4",
     "file": "src/storage/ingest/table.rs",
-    "line": 204,
+    "line": 211,
     "decision": "manifest.schema.is_none() && manifest.format != options.format",
     "conditions": 2,
     "vectors_required": 3,
@@ -36842,8 +36842,18 @@
   {
     "id": "storage_ingest_table_open_f8609734",
     "file": "src/storage/ingest/table.rs",
-    "line": 210,
+    "line": 217,
     "decision": "manifest.layout != options.layout.kind()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_open_b34c4bae",
+    "file": "src/storage/ingest/table.rs",
+    "line": 237,
+    "decision": "options.flush_queue > 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -36852,7 +36862,7 @@
   {
     "id": "storage_ingest_table_open_8b58671f",
     "file": "src/storage/ingest/table.rs",
-    "line": 219,
+    "line": 242,
     "decision": "match &manifest.schema {\n            Some(schema) => HeadPage::for_records(Arc::from(schema.as_slice())),\n            None => HeadPage::default(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36860,10 +36870,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_open_e0b92d04",
+    "id": "storage_ingest_table_open_b047bb9f",
     "file": "src/storage/ingest/table.rs",
-    "line": 241,
-    "decision": "match writer.manifest.schema.as_deref() {\n                Some(schema) => {\n                    let row = decode_row(body)\n                        .map(|row| pad_row(schema, row))\n                        .filter(|row| check_row(schema, row).is_none())\n                        .ok_or_else(corrupt)?;\n                    writer.push(observed, |head| head.push_row(lsn, observed, row))?;\n                }\n                None => writer.push(observed, |head| head.push(lsn, observed, body))?,\n            }",
+    "line": 265,
+    "decision": "match writer.options.schema.as_deref() {\n                Some(schema) => {\n                    let row = decode_row(body)\n                        .map(|row| pad_row(schema, row))\n                        .filter(|row| check_row(schema, row).is_none())\n                        .ok_or_else(corrupt)?;\n                    writer.push(observed, |head| head.push_row(lsn, observed, row))?;\n                }\n                None => writer.push(observed, |head| head.push(lsn, observed, body))?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -36872,7 +36882,7 @@
   {
     "id": "storage_ingest_table_push_bc95699f",
     "file": "src/storage/ingest/table.rs",
-    "line": 263,
+    "line": 287,
     "decision": "other_hour && self.options.layout.kind() == LayoutKind::Tiered",
     "conditions": 2,
     "vectors_required": 3,
@@ -36882,7 +36892,7 @@
   {
     "id": "storage_ingest_table_push_bb94a090",
     "file": "src/storage/ingest/table.rs",
-    "line": 267,
+    "line": 291,
     "decision": "self.head.is_full()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36890,10 +36900,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_append_1a8220c4",
+    "id": "storage_ingest_table_append_aff60f34",
     "file": "src/storage/ingest/table.rs",
-    "line": 283,
-    "decision": "self.manifest.schema.is_some()",
+    "line": 307,
+    "decision": "self.options.schema.is_some()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -36902,7 +36912,7 @@
   {
     "id": "storage_ingest_table_append_7c5bb3a4",
     "file": "src/storage/ingest/table.rs",
-    "line": 288,
+    "line": 312,
     "decision": "let Some(why) = invalid_line(line)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36912,7 +36922,7 @@
   {
     "id": "storage_ingest_table_append_row_dd5b95aa",
     "file": "src/storage/ingest/table.rs",
-    "line": 306,
+    "line": 330,
     "decision": "let Some(why) = check_row(schema, &row)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36922,7 +36932,7 @@
   {
     "id": "storage_ingest_table_append_record_934749ae",
     "file": "src/storage/ingest/table.rs",
-    "line": 328,
+    "line": 353,
     "decision": "match ack {\n            Ack::Flushed => Ack::Durable,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36932,7 +36942,7 @@
   {
     "id": "storage_ingest_table_append_record_3da5fd41",
     "file": "src/storage/ingest/table.rs",
-    "line": 335,
+    "line": 360,
     "decision": "ack == Ack::Flushed",
     "conditions": 1,
     "vectors_required": 2,
@@ -36942,7 +36952,7 @@
   {
     "id": "storage_ingest_table_seal_head_a79440f4",
     "file": "src/storage/ingest/table.rs",
-    "line": 349,
+    "line": 376,
     "decision": "let Layout::Tiered(tier) = &self.options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -36952,7 +36962,7 @@
   {
     "id": "storage_ingest_table_seal_head_23579351",
     "file": "src/storage/ingest/table.rs",
-    "line": 354,
+    "line": 381,
     "decision": "sealed > tier.spill_rows || over_bytes",
     "conditions": 2,
     "vectors_required": 3,
@@ -36962,7 +36972,7 @@
   {
     "id": "storage_ingest_table_seal_1bfebd78",
     "file": "src/storage/ingest/table.rs",
-    "line": 364,
+    "line": 391,
     "decision": "self.head.len() == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36970,19 +36980,159 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_flush_726fcc45",
+    "id": "storage_ingest_table_submit_30d0b0f1",
     "file": "src/storage/ingest/table.rs",
-    "line": 383,
-    "decision": "match self.options.layout.kind() {\n            LayoutKind::Flat => Ok(self.flush_flat()?.into_iter().collect()),\n            LayoutKind::Tiered => self.flush_hours(),\n        }",
+    "line": 414,
+    "decision": "match self.runner {\n                Runner::Inline(_) => usize::MAX,\n                Runner::Background { .. } => self.options.flush_queue,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_table_submit_8bf774f7",
+    "file": "src/storage/ingest/table.rs",
+    "line": 421,
+    "decision": "view.failed.is_some()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_submit_aef7952f",
+    "file": "src/storage/ingest/table.rs",
+    "line": 424,
+    "decision": "view.queued < cap",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_submit_5f5ec526",
+    "file": "src/storage/ingest/table.rs",
+    "line": 434,
+    "decision": "stalled",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_submit_844e8e8f",
+    "file": "src/storage/ingest/table.rs",
+    "line": 438,
+    "decision": "let Some(why) = &view.failed",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_submit_aebd16f3",
+    "file": "src/storage/ingest/table.rs",
+    "line": 446,
+    "decision": "!pages.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_submit_a108c261",
+    "file": "src/storage/ingest/table.rs",
+    "line": 457,
+    "decision": "match &mut self.runner {\n            Runner::Inline(flusher) => match flusher.run(job) {\n                Ok(added) => Ok(added),\n                Err(e) => {\n                    self.reclaim();\n                    Err(e)\n                }\n            },\n            Runner::Background { tx, .. } => {\n                let sent = tx.as_ref().is_some_and(|tx| tx.send(job).is_ok());\n                if sent {\n                    return Ok(Vec::new());\n                }\n                // The thread is gone: its reason is in the view.\n                let view = self.shared.lock();\n                Err(failure(\n                    view.failed.as_deref().unwrap_or(\"the flusher stopped\"),\n                ))\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_submit_17c24505",
+    "file": "src/storage/ingest/table.rs",
+    "line": 458,
+    "decision": "match flusher.run(job) {\n                Ok(added) => Ok(added),\n                Err(e) => {\n                    self.reclaim();\n                    Err(e)\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_submit_f91419e7",
+    "file": "src/storage/ingest/table.rs",
+    "line": 467,
+    "decision": "sent",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_check_flusher_b61f7942",
+    "file": "src/storage/ingest/table.rs",
+    "line": 503,
+    "decision": "match &self.shared.lock().failed {\n            Some(why) => Err(failure(why)),\n            None => Ok(()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_drain_8bf774f7",
+    "file": "src/storage/ingest/table.rs",
+    "line": 520,
+    "decision": "view.failed.is_some()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_drain_9e0d48b4",
+    "file": "src/storage/ingest/table.rs",
+    "line": 523,
+    "decision": "view.queued == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_drain_844e8e8f",
+    "file": "src/storage/ingest/table.rs",
+    "line": 532,
+    "decision": "let Some(why) = &view.failed",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flush_a1fa35bf",
+    "file": "src/storage/ingest/table.rs",
+    "line": 558,
+    "decision": "match self.options.layout.kind() {\n            LayoutKind::Flat => self.flush_flat()?,\n            LayoutKind::Tiered => self.flush_hours()?,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flush_flat_7cb269da",
+    "file": "src/storage/ingest/table.rs",
+    "line": 567,
+    "decision": "self.sealed.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_ingest_table_flush_hours_60dc24c4",
     "file": "src/storage/ingest/table.rs",
-    "line": 454,
+    "line": 588,
     "decision": "self\n            .head\n            .first_observed()\n            .is_some_and(|t| hour_of(t) < open_hour)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36990,10 +37140,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_flush_hours_096d2cfa",
+    "id": "storage_ingest_table_flush_hours_3c29e52c",
     "file": "src/storage/ingest/table.rs",
-    "line": 463,
-    "decision": "let Some(hour) = self\n            .staging_hour()\n            .or_else(|| self.sealed.first().and_then(page_hour))",
+    "line": 598,
+    "decision": "let Some(hour) = self\n            .spilled_hour\n            .or_else(|| self.sealed.first().and_then(page_hour))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -37002,7 +37152,7 @@
   {
     "id": "storage_ingest_table_flush_hours_6698cede",
     "file": "src/storage/ingest/table.rs",
-    "line": 467,
+    "line": 602,
     "decision": "hour >= open_hour",
     "conditions": 1,
     "vectors_required": 2,
@@ -37010,59 +37160,59 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_flush_hour_328fb315",
+    "id": "storage_ingest_table_flush_hours_6ac89950",
     "file": "src/storage/ingest/table.rs",
-    "line": 628,
-    "decision": "count > 0",
+    "line": 615,
+    "decision": "submitted",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_retain_faaf46ac",
+    "id": "storage_ingest_table_flush_hours_65eec6c1",
     "file": "src/storage/ingest/table.rs",
-    "line": 694,
-    "decision": "count == 0",
+    "line": 619,
+    "decision": "!self.shared.lock().pending_deletes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_delete_expired_a1e9aa27",
+    "id": "storage_ingest_table_spill_5c4a2999",
     "file": "src/storage/ingest/table.rs",
-    "line": 778,
-    "decision": "match fs::remove_file(&path) {\n                Ok(()) => {}\n                Err(e) if e.kind() == io::ErrorKind::NotFound => {}\n                Err(e) => return Err(e.into()),\n            }",
+    "line": 630,
+    "decision": "!matches!(self.options.layout, Layout::Tiered(_))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_compact_5c4a2999",
+    "file": "src/storage/ingest/table.rs",
+    "line": 652,
+    "decision": "!matches!(self.options.layout, Layout::Tiered(_))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_close_343c87ad",
+    "file": "src/storage/ingest/table.rs",
+    "line": 735,
+    "decision": "match failed {\n            Some(why) => Err(failure(&why)),\n            None => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_delete_expired_20fc5e15",
-    "file": "src/storage/ingest/table.rs",
-    "line": 780,
-    "decision": "e.kind() == io::ErrorKind::NotFound",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_ingest_table_crash_point_791d8530",
-    "file": "src/storage/ingest/table.rs",
-    "line": 845,
-    "decision": "self.crash_after == Some(step)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "storage_ingest_table_remove_empty_parents_b71c29ab",
     "file": "src/storage/ingest/table.rs",
-    "line": 905,
+    "line": 806,
     "decision": "let Some(d) = dir",
     "conditions": 1,
     "vectors_required": 2,
@@ -37072,7 +37222,7 @@
   {
     "id": "storage_ingest_table_remove_empty_parents_58e0bb1d",
     "file": "src/storage/ingest/table.rs",
-    "line": 906,
+    "line": 807,
     "decision": "d == table || d.parent() == Some(table) || fs::remove_dir(d).is_err()",
     "conditions": 3,
     "vectors_required": 4,
@@ -37082,7 +37232,7 @@
   {
     "id": "storage_ingest_table_clean_up_322d979c",
     "file": "src/storage/ingest/table.rs",
-    "line": 920,
+    "line": 821,
     "decision": "tmp.exists()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37092,7 +37242,7 @@
   {
     "id": "storage_ingest_table_clean_dir_6f777079",
     "file": "src/storage/ingest/table.rs",
-    "line": 940,
+    "line": 841,
     "decision": "entry.file_type()?.is_dir()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37102,7 +37252,7 @@
   {
     "id": "storage_ingest_table_clean_dir_b4151af7",
     "file": "src/storage/ingest/table.rs",
-    "line": 941,
+    "line": 842,
     "decision": "clean_dir(&entry.path(), &path, manifest)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -37112,8 +37262,128 @@
   {
     "id": "storage_ingest_table_clean_dir_b0d759e3",
     "file": "src/storage/ingest/table.rs",
-    "line": 946,
+    "line": 847,
     "decision": "manifest.files.iter().any(|f| f.path == path)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_finish_b5cfe8f5",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 147,
+    "decision": "let Runner::Background { tx, thread } = self",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_finish_8ee7714f",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 149,
+    "decision": "let Some(thread) = thread.take()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_drop_fb7d46cc",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 192,
+    "decision": "self.done",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_run_all_f7d435f2",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 244,
+    "decision": "let Err(e) = self.run(job)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_run_18e50a69",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 267,
+    "decision": "self.background",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_execute_dd054623",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 285,
+    "decision": "match job.work {\n            Work::Flat => Ok(self.flush_flat(pages)?.into_iter().collect()),\n            Work::Spill => {\n                self.spill(pages)?;\n                Ok(Vec::new())\n            }\n            Work::Close { hour } => {\n                self.delete_expired(job.now)?;\n                self.flush_hour(hour, pages, job.now)\n            }\n            Work::Compact => {\n                self.delete_expired(job.now)?;\n                self.compact(job.now)\n            }\n            Work::Sweep => {\n                self.delete_expired(job.now)?;\n                Ok(Vec::new())\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_adopt_2e165c65",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 311,
+    "decision": "release",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_flush_hour_aebd16f3",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 495,
+    "decision": "!pages.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_retain_faaf46ac",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 556,
+    "decision": "count == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_delete_expired_a1e9aa27",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 640,
+    "decision": "match fs::remove_file(&path) {\n                Ok(()) => {}\n                Err(e) if e.kind() == io::ErrorKind::NotFound => {}\n                Err(e) => return Err(e.into()),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_delete_expired_20fc5e15",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 642,
+    "decision": "e.kind() == io::ErrorKind::NotFound",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_flusher_crash_point_791d8530",
+    "file": "src/storage/ingest/table/flusher.rs",
+    "line": 652,
+    "decision": "self.crash_after == Some(step)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -37224,6 +37494,16 @@
     "file": "src/storage/ingest/table/tiered_tests.rs",
     "line": 608,
     "decision": "closing",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_table_tiered_tests_a_background_spill_and_close_leave_one_file_per_hour_949f5452",
+    "file": "src/storage/ingest/table/tiered_tests.rs",
+    "line": 951,
+    "decision": "i % 5 == 4",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,

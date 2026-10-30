@@ -313,12 +313,21 @@ fn ingest(dir: &Path) {
 /// Appends `rows` (arrival time in ns, row) to a fresh table at `dir`,
 /// flushing each hour as it closes, then compacts, and prints the timings
 /// and each phase's peak memory.
-fn drive(dir: &Path, options: TableOptions, rows: impl Iterator<Item = (i64, Vec<RecordValue>)>) {
+fn drive(
+    dir: &Path,
+    mut options: TableOptions,
+    rows: impl Iterator<Item = (i64, Vec<RecordValue>)>,
+) {
     std::fs::remove_dir_all(dir).ok();
     let sync_every = env("SYNC_EVERY", 10_000);
+    // The background flusher (#855); `FLUSH_QUEUE=0` writes each closed hour
+    // on the appending thread, as before.
+    options.flush_queue = usize::try_from(env("FLUSH_QUEUE", 2)).unwrap_or(2);
     let mut writer = TableWriter::open(dir, options).expect("open table");
     let (mut count, mut syncs) = (0_u64, 0_u64);
     let mut flush_s = 0.0;
+    let mut stall_max_s = 0.0_f64;
+    let mut latencies_ns: Vec<u32> = Vec::new();
     let (mut peak_append, mut peak_flush) = (0.0_f64, 0.0_f64);
     let peaks = Peaks::start();
     let mut hour = BASE_NS / HOUR_NS;
@@ -331,10 +340,14 @@ fn drive(dir: &Path, options: TableOptions, rows: impl Iterator<Item = (i64, Vec
             peak_append = peak_append.max(peaks.take());
             let t = Instant::now();
             writer.flush().expect("flush");
-            flush_s += t.elapsed().as_secs_f64();
+            let took = t.elapsed().as_secs_f64();
+            flush_s += took;
+            stall_max_s = stall_max_s.max(took);
             peak_flush = peak_flush.max(peaks.take());
         }
+        let t = Instant::now();
         writer.append_row(row, Ack::Memory).expect("append");
+        latencies_ns.push(u32::try_from(t.elapsed().as_nanos()).unwrap_or(u32::MAX));
         count += 1;
         if count % sync_every == 0 {
             writer.sync().expect("sync");
@@ -344,10 +357,16 @@ fn drive(dir: &Path, options: TableOptions, rows: impl Iterator<Item = (i64, Vec
     writer.sync().expect("sync");
     let ingest_s = start.elapsed().as_secs_f64();
     peak_append = peak_append.max(peaks.take());
+    // The hours still queued behind the flusher.
+    let t = Instant::now();
+    writer.drain().expect("drain");
+    let drain_s = t.elapsed().as_secs_f64();
+    let stalled_s = writer.flush_status().stalled.as_secs_f64();
     // Past the last day: every hour and day is closed.
     NOW.fetch_add(DAY_NS, Ordering::SeqCst);
     let t = Instant::now();
     writer.compact().expect("compact");
+    writer.drain().expect("drain");
     let compact_s = t.elapsed().as_secs_f64();
     let peak_merge = peaks.take();
     writer.close().expect("close");
@@ -357,6 +376,19 @@ fn drive(dir: &Path, options: TableOptions, rows: impl Iterator<Item = (i64, Vec
     println!("events_per_s={:.0}", count as f64 / ingest_s);
     println!("hour_flush_s={flush_s:.3}");
     println!("day_compact_s={compact_s:.3}");
+    println!("drain_s={drain_s:.3}");
+    println!("queue_stalled_s={stalled_s:.3}");
+    println!("hour_flush_stall_max_s={stall_max_s:.3}");
+    latencies_ns.sort_unstable();
+    let at = |q: f64| {
+        let i =
+            ((latencies_ns.len() as f64 * q) as usize).min(latencies_ns.len().saturating_sub(1));
+        f64::from(latencies_ns.get(i).copied().unwrap_or(0)) / 1_000.0
+    };
+    println!("append_p50_us={:.1}", at(0.50));
+    println!("append_p99_us={:.1}", at(0.99));
+    println!("append_p999_us={:.1}", at(0.999));
+    println!("append_max_us={:.1}", at(1.0));
     println!("peak_append_mb={peak_append:.1}");
     println!("peak_flush_mb={peak_flush:.1}");
     println!("peak_merge_mb={peak_merge:.1}");

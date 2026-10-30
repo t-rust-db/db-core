@@ -4,6 +4,19 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.213.0] - 2026-10-30
+
+### Added
+
+- `TableOptions::flush_queue` (#855): a background flusher for a table's writes. With `flush_queue = n > 0` a closed hour, a spill to `staging/` and a day merge are handed to a flusher thread and the appender goes on; it waits only when `n` jobs are already queued. `0` (the default) keeps the old behaviour, each flush on the appending thread. The flusher runs jobs in order and is the only writer of the manifest after open, so commits stay single-writer and `flushed_lsn` stays contiguous; a crash with hours queued recovers from the WAL as before.
+- `TableWriter::drain` waits for the queued jobs and returns the files they committed; `TableWriter::flush_status` returns `FlushStatus` (queued jobs and rows, total time appends waited for the queue), so back-pressure is visible, not just a stall. A failed flush stops the flusher, and the next append, flush or drain reports why.
+- `make bench-events` reports append latency (p50, p99, p99.9, max), the longest hour-boundary stall and the queue wait; `FLUSH_QUEUE=0` measures the old path.
+
+### Changed
+
+- `TableWriter::manifest` returns the manifest by value and `pending_deletes` yields owned paths: the flusher owns both. `flush` and `compact` with a background flusher return the files committed so far; `flush_all`, `Ack::Flushed` and `close` wait for the queue. A snapshot includes pages queued for the flusher, so no row is missing or doubled while an hour is being written.
+- 3M events over 2 days, local: hour flushes cost the appender 3.56 s and a longest stall of 100 ms with `FLUSH_QUEUE=0`, 0.002 s and none with 2; events/s 220k to 260k, peak RSS 78 to 91 MB (queued pages stay in memory until their commit).
+
 ## [0.212.0] - 2026-10-30
 
 ### Changed

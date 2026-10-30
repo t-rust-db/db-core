@@ -18,7 +18,7 @@
 # on session_key with timestamped session ids, #599)
 set -euo pipefail
 
-export EVENTS="${EVENTS:-10000000}" DAYS="${DAYS:-7}" SEED="${SEED:-42}" SYNC_EVERY="${SYNC_EVERY:-10000}"
+export EVENTS="${EVENTS:-10000000}" DAYS="${DAYS:-7}" SEED="${SEED:-42}" SYNC_EVERY="${SYNC_EVERY:-10000}" FLUSH_QUEUE="${FLUSH_QUEUE:-2}"
 OUT=target/perf/events
 REPORT_MD=target/perf/bench_events.md
 REPORT_JSON=target/perf/bench_events.json
@@ -196,7 +196,10 @@ lines = [
     "| | wall s | events/s | peak RSS MB |",
     "|---|---:|---:|---:|",
     f"| db-core: append + group commit (sync every {os.environ['SYNC_EVERY']}) | {i['ingest_s']:.2f} | {i['events_per_s']:,.0f} | |",
-    f"| db-core: of which hour flushes | {i['hour_flush_s']:.2f} | | |",
+    f"| db-core: of which hour flushes (the appender's wait, FLUSH_QUEUE={os.environ.get('FLUSH_QUEUE', '2')}) | {i['hour_flush_s']:.2f} | | |",
+    f"| db-core: longest hour-boundary stall | {i['hour_flush_stall_max_s']:.2f} | | |",
+    f"| db-core: append p50 / p99 / p99.9 / max (us) | {i['append_p50_us']:.1f} / {i['append_p99_us']:.1f} / {i['append_p999_us']:.1f} / {i['append_max_us']:.1f} | | |",
+    f"| db-core: queued hours drained at the end / appends waiting for the queue | {i['drain_s']:.2f} / {i['queue_stalled_s']:.2f} | | |",
     f"| db-core: day merge (compact) | {i['day_compact_s']:.2f} | | |",
     f"| db-core: whole process | {i['wall_s']:.2f} | | {i['peak_rss_mb']:.0f} |",
     f"| SQLite: bulk CSV import + 3 indexes | {d['wall_s']:.2f} | {events / d['wall_s']:,.0f} | {d['peak_rss_mb']:.0f} |",

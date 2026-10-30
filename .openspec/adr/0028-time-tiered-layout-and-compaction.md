@@ -474,3 +474,30 @@ sort key. A build side read with `read_snapshot_where` on `day = D` reads
 142,857 of 1,000,000 rows from 1 of 7 files. The bench has no SQL join, so
 `build` reads a build side as column-rs would (`sid <n>` finds a session's
 id, `SESSION_KEY_SECS` turns the option on).
+
+## As built (#855)
+
+The compactor thread above is the writer's **flusher**: a thread per
+`TableWriter` when `TableOptions::flush_queue` is above zero, and the same
+code run inline when it is zero. The writer seals pages and hands them over
+as jobs (close an hour, spill the open hour, merge closed days, delete what
+the grace period released); the flusher runs them in order by ADR 0027's
+five steps and is the only code that writes the manifest after open, so
+commits stay single-writer and in LSN order.
+
+- **Pages stay visible until committed.** A job's pages sit in a shared view
+  beside the committed manifest; the commit swaps the manifest and drops the
+  pages in one step under the view's lock, so a snapshot (which takes both
+  under the same lock) holds every row once.
+- **The bound is explicit.** An append that would queue the `flush_queue`+1st
+  job waits for the oldest to commit; `FlushStatus` reports queued jobs,
+  their rows (held in memory) and the time spent waiting.
+- **Crashes.** The manifest and `flushed_lsn` move only at a commit, so
+  queued hours replay from the WAL exactly as an hour interrupted today. A
+  failed job stops the flusher: later calls return its error and the table is
+  reopened to recover. Inline, a failed job's pages go back to the writer's
+  sealed list so the next flush retries them.
+- **Day merge** is a job on the same queue, after the hours before it, so it
+  sees their files in `live/`; `flush` and `compact` hand over and return,
+  `drain` (and `flush_all`, `Ack::Flushed`, `close`) wait.
+
