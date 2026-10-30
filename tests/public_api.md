@@ -3130,6 +3130,9 @@ pub db_core::storage::column::parquet::parquet_file::FileError::PageExceedsChunk
 pub db_core::storage::column::parquet::parquet_file::FileError::PageExceedsChunk::field: &'static str
 pub db_core::storage::column::parquet::parquet_file::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::column::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
+pub db_core::storage::column::parquet::parquet_file::FileError::RowGroupTooLarge
+pub db_core::storage::column::parquet::parquet_file::FileError::RowGroupTooLarge::max: u64
+pub db_core::storage::column::parquet::parquet_file::FileError::RowGroupTooLarge::rows: u64
 pub db_core::storage::column::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::parquet::parquet_file::FileError::TimestampOutOfRange
 pub db_core::storage::column::parquet::parquet_file::FileError::UnexpectedDictionaryPage
@@ -3216,6 +3219,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
+pub const db_core::storage::column::parquet::parquet_file::MAX_ROW_GROUP_ROWS: u64
 pub type db_core::storage::column::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub type db_core::storage::column::parquet::parquet_file::ListItems = alloc::vec::Vec<core::option::Option<alloc::rcs::arc::Arc<str>>>
 pub type db_core::storage::column::parquet::parquet_file::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
@@ -3641,6 +3645,9 @@ pub db_core::storage::column::parquet::FileError::PageExceedsChunk::declared: u6
 pub db_core::storage::column::parquet::FileError::PageExceedsChunk::field: &'static str
 pub db_core::storage::column::parquet::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::column::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
+pub db_core::storage::column::parquet::FileError::RowGroupTooLarge
+pub db_core::storage::column::parquet::FileError::RowGroupTooLarge::max: u64
+pub db_core::storage::column::parquet::FileError::RowGroupTooLarge::rows: u64
 pub db_core::storage::column::parquet::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::parquet::FileError::TimestampOutOfRange
 pub db_core::storage::column::parquet::FileError::UnexpectedDictionaryPage
@@ -3807,6 +3814,9 @@ pub db_core::storage::column::FileError::PageExceedsChunk::declared: u64
 pub db_core::storage::column::FileError::PageExceedsChunk::field: &'static str
 pub db_core::storage::column::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::column::FileError::Read(db_core::storage::parquet::reader::ReadError)
+pub db_core::storage::column::FileError::RowGroupTooLarge
+pub db_core::storage::column::FileError::RowGroupTooLarge::max: u64
+pub db_core::storage::column::FileError::RowGroupTooLarge::rows: u64
 pub db_core::storage::column::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::column::FileError::TimestampOutOfRange
 pub db_core::storage::column::FileError::UnexpectedDictionaryPage
@@ -5303,6 +5313,9 @@ pub db_core::storage::parquet::parquet_file::FileError::PageExceedsChunk::declar
 pub db_core::storage::parquet::parquet_file::FileError::PageExceedsChunk::field: &'static str
 pub db_core::storage::parquet::parquet_file::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::parquet::parquet_file::FileError::Read(db_core::storage::parquet::reader::ReadError)
+pub db_core::storage::parquet::parquet_file::FileError::RowGroupTooLarge
+pub db_core::storage::parquet::parquet_file::FileError::RowGroupTooLarge::max: u64
+pub db_core::storage::parquet::parquet_file::FileError::RowGroupTooLarge::rows: u64
 pub db_core::storage::parquet::parquet_file::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::parquet::parquet_file::FileError::TimestampOutOfRange
 pub db_core::storage::parquet::parquet_file::FileError::UnexpectedDictionaryPage
@@ -5389,6 +5402,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_str
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_string_column_dictionary_indices(&self, usize) -> db_core::storage::parquet::parquet_file::Result<core::option::Option<db_core::storage::parquet::parquet_file::DictionaryIndices<alloc::string::String>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_timestamp_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<i64>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::schema_element(&self, usize) -> core::option::Option<&db_core::storage::parquet::footer::SchemaElement>
+pub const db_core::storage::parquet::parquet_file::MAX_ROW_GROUP_ROWS: u64
 pub type db_core::storage::parquet::parquet_file::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub type db_core::storage::parquet::parquet_file::ListItems = alloc::vec::Vec<core::option::Option<alloc::rcs::arc::Arc<str>>>
 pub type db_core::storage::parquet::parquet_file::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<str>, core::option::Option<alloc::rcs::arc::Arc<str>>)>
@@ -5814,6 +5828,9 @@ pub db_core::storage::parquet::FileError::PageExceedsChunk::declared: u64
 pub db_core::storage::parquet::FileError::PageExceedsChunk::field: &'static str
 pub db_core::storage::parquet::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::parquet::FileError::Read(db_core::storage::parquet::reader::ReadError)
+pub db_core::storage::parquet::FileError::RowGroupTooLarge
+pub db_core::storage::parquet::FileError::RowGroupTooLarge::max: u64
+pub db_core::storage::parquet::FileError::RowGroupTooLarge::rows: u64
 pub db_core::storage::parquet::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::parquet::FileError::TimestampOutOfRange
 pub db_core::storage::parquet::FileError::UnexpectedDictionaryPage
@@ -8005,6 +8022,9 @@ pub db_core::storage::FileError::PageExceedsChunk::declared: u64
 pub db_core::storage::FileError::PageExceedsChunk::field: &'static str
 pub db_core::storage::FileError::PageExceedsChunk::left: u64
 pub db_core::storage::FileError::Read(db_core::storage::parquet::reader::ReadError)
+pub db_core::storage::FileError::RowGroupTooLarge
+pub db_core::storage::FileError::RowGroupTooLarge::max: u64
+pub db_core::storage::FileError::RowGroupTooLarge::rows: u64
 pub db_core::storage::FileError::RowPositionOutOfRange(u32)
 pub db_core::storage::FileError::TimestampOutOfRange
 pub db_core::storage::FileError::UnexpectedDictionaryPage
