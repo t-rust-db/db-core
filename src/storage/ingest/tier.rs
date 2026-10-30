@@ -565,9 +565,9 @@ fn widened_specs(files: &[&ParquetFile<'_>], pages: &[Page]) -> Vec<ColumnSpec> 
 /// Merges one closed day's hour files (`inputs`, contiguous, oldest first)
 /// into `dir`, which must exist and be empty: their row groups, in order,
 /// under the day's widened schema, or a record table's `schema`.
-pub(crate) fn merge_day(
+pub(crate) fn merge_day<F: VfsFile>(
     dir: &Path,
-    inputs: &[(&FileEntry, &dyn VfsFile)],
+    inputs: &[(&FileEntry, &F)],
     schema: Option<&[ColumnSpec]>,
     tier: &TierOptions,
     parquet: &WriterOptions,
@@ -651,9 +651,9 @@ struct Run {
 /// [`write_hour`]. The merge holds one row group of each run, not the
 /// hour; ties keep arrival order. Without staging runs this is
 /// [`write_hour`].
-pub(crate) fn close_hour(
+pub(crate) fn close_hour<F: VfsFile>(
     dir: &Path,
-    staging: &[(&FileEntry, &dyn VfsFile)],
+    staging: &[(&FileEntry, &F)],
     pages: &[Page],
     format: Format,
     schema: Option<&[ColumnSpec]>,

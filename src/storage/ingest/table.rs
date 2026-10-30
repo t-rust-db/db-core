@@ -57,7 +57,8 @@ use super::record::{
 use super::snapshot::Snapshot;
 use super::tier::{self, Output};
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
-use crate::storage::column::{Vfs, VfsFile};
+use crate::storage::column::posix::PosixFile;
+use crate::storage::column::Vfs;
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
 use crate::storage::stream::adapter::now_ns;
 use crate::storage::stream::detect::{DetectedParser, Format};
@@ -594,10 +595,7 @@ impl TableWriter {
             .iter()
             .map(|e| PosixVfs.open(&self.dir.join(&e.path)))
             .collect::<io::Result<Vec<_>>>()?;
-        let run_files: Vec<(&FileEntry, &dyn VfsFile)> = runs
-            .iter()
-            .zip(files.iter().map(|f| f as &dyn VfsFile))
-            .collect();
+        let run_files: Vec<(&FileEntry, &PosixFile)> = runs.iter().zip(files.iter()).collect();
 
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);
@@ -735,10 +733,7 @@ impl TableWriter {
             .iter()
             .map(|e| PosixVfs.open(&self.dir.join(&e.path)))
             .collect::<io::Result<Vec<_>>>()?;
-        let input_files: Vec<(&FileEntry, &dyn VfsFile)> = inputs
-            .iter()
-            .zip(files.iter().map(|f| f as &dyn VfsFile))
-            .collect();
+        let input_files: Vec<(&FileEntry, &PosixFile)> = inputs.iter().zip(files.iter()).collect();
 
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);

@@ -845,3 +845,45 @@ fn row_groups_are_cut_by_bytes_at_the_rows_average_size() {
         assert_eq!(all_rows(&w), sorted(lines));
     }
 }
+
+// MC/DC vectors for `seal_head`'s spill condition: `sealed > spill_rows || over_bytes`.
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_seal_head_23579351__v1_neither_limit_exceeded_keeps_pages() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = open(&t);
+    append(&mut w, 0..2);
+    w.seal_head().unwrap();
+    assert!(w.manifest().files.is_empty());
+    assert_eq!(w.sealed_pages().len(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_seal_head_23579351__v2_rows_over_spill_rows_spills() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(&t.0, spilling(2)).unwrap();
+    append(&mut w, 0..3);
+    w.seal_head().unwrap();
+    assert_eq!(w.manifest().files.len(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_seal_head_23579351__v3_bytes_over_spill_bytes_alone_spills() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(
+        &t.0,
+        options(TierOptions {
+            spill_bytes: Some(1),
+            ..tier()
+        }),
+    )
+    .unwrap();
+    append(&mut w, 0..2);
+    w.seal_head().unwrap();
+    assert_eq!(w.manifest().files.len(), 1);
+}

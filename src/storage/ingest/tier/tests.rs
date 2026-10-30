@@ -319,7 +319,7 @@ fn an_hour_without_runs_closes_like_write_hour() {
         sort_key: vec!["k".to_string()],
         ..TierOptions::default()
     };
-    let outputs = close_hour(
+    let outputs = close_hour::<MemoryFile>(
         &dir,
         &[],
         &pages,
@@ -480,4 +480,32 @@ fn key_bounds_hold_integers_and_strings_only() {
         .widen(i(0, 1));
     assert_eq!(range, KeyState::Range(KeyBound::Int(0), KeyBound::Int(2)));
     assert_eq!(range.widen(None).widen(i(5, 5)), KeyState::Unbounded);
+}
+
+// MC/DC vectors for `group_rows`' guard: `rows > 0 && bytes > 0`. The byte
+// limit (10) over 4 rows of 100 bytes gives 1 row, against 1000 by rows.
+fn group_rows_tier() -> TierOptions {
+    TierOptions {
+        row_group_max_rows: 1_000,
+        row_group_max_bytes: Some(10),
+        ..TierOptions::default()
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_tier_group_rows_c390cbb7__v1_no_rows_uses_the_row_limit() {
+    assert_eq!(group_rows(&group_rows_tier(), 100, 0), 1_000);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_tier_group_rows_c390cbb7__v2_no_bytes_uses_the_row_limit() {
+    assert_eq!(group_rows(&group_rows_tier(), 0, 4), 1_000);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_tier_group_rows_c390cbb7__v3_rows_and_bytes_use_the_byte_limit() {
+    assert_eq!(group_rows(&group_rows_tier(), 100, 4), 1);
 }
