@@ -8,8 +8,8 @@ use crate::storage::parquet::schema_tree;
 use crate::storage::parquet::thrift::{self, ThriftError, Value};
 use std::fmt;
 
-const MAGIC: &[u8; 4] = b"PAR1";
-const FOOTER_LEN: usize = 8; // 4-byte length + 4-byte magic
+pub(super) const MAGIC: &[u8; 4] = b"PAR1";
+pub(super) const FOOTER_LEN: usize = 8; // 4-byte length + 4-byte magic
 
 /// Why a Parquet footer could not be read.
 #[derive(Debug)]

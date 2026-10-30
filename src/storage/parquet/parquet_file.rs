@@ -1,6 +1,7 @@
 //! Top-level Parquet file reader: parses the footer once, then exposes a
 //! lazy iterator over row groups and their columns.
 
+use crate::storage::column::vfs::VfsFile;
 use crate::storage::parquet::compression::{self, CompressionError};
 use crate::storage::parquet::footer::{self, FileMetaData, FooterError, Repetition, RowGroup};
 use crate::storage::parquet::nested::{self, LeafData, LeafEntries, NestedError, NestedValue};
@@ -9,6 +10,7 @@ use crate::storage::parquet::reader::{self, ReadError};
 use crate::storage::parquet::schema_tree::{self, SchemaNode};
 #[cfg(feature = "engine-column")]
 use crate::vm::column::{Bitmap, Column};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -27,6 +29,8 @@ pub enum FileError {
         /// The value as read.
         value: i64,
     },
+    /// A column chunk or the footer could not be read from the file.
+    Io(std::io::Error),
     /// A page header is malformed or of an unsupported type.
     Page(PageError),
     /// A page body does not decode.
@@ -94,6 +98,7 @@ impl fmt::Display for FileError {
             FileError::InvalidMetadata { field, value } => {
                 write!(f, "invalid {field} in file metadata: {value}")
             }
+            FileError::Io(e) => write!(f, "reading the file: {e}"),
             FileError::Page(e) => write!(f, "{e}"),
             FileError::Read(e) => write!(f, "{e}"),
             FileError::Compression(e) => write!(f, "{e}"),
@@ -216,10 +221,14 @@ fn page_size(field: &'static str, value: i32) -> Result<usize> {
 }
 
 /// Decodes the page header at `pos` in `chunk_bytes` and returns it with
-/// the page's (still compressed) body and the offset just past that body,
-/// where the next page starts. A header or body running past the chunk is
-/// an error, never a panic: every offset and size here comes from the file.
-fn next_page(chunk_bytes: &[u8], pos: usize) -> Result<(page::PageHeader, &[u8], usize)> {
+/// where the page's (still compressed) body lies in the chunk and the
+/// offset just past that body, where the next page starts. A header or
+/// body running past the chunk is an error, never a panic: every offset
+/// and size here comes from the file.
+fn next_page(
+    chunk_bytes: &[u8],
+    pos: usize,
+) -> Result<(page::PageHeader, std::ops::Range<usize>, usize)> {
     let rest = chunk_bytes.get(pos..).ok_or(FileError::ChunkOutOfBounds)?;
     let (header, consumed) = page::decode_page_header(rest)?;
     let page_start = pos
@@ -231,10 +240,10 @@ fn next_page(chunk_bytes: &[u8], pos: usize) -> Result<(page::PageHeader, &[u8],
             header.compressed_page_size,
         )?)
         .ok_or(FileError::ChunkOutOfBounds)?;
-    let compressed = chunk_bytes
+    chunk_bytes
         .get(page_start..page_end)
         .ok_or(FileError::ChunkOutOfBounds)?;
-    Ok((header, compressed, page_end))
+    Ok((header, page_start..page_end, page_end))
 }
 
 /// A column chunk's pages in order (#671), each checked before it is
@@ -246,7 +255,7 @@ fn next_page(chunk_bytes: &[u8], pos: usize) -> Result<(page::PageHeader, &[u8],
 /// metadata states: an RLE run or a zero-width page fills at most the
 /// values left, a ZSTD page at most the bytes left.
 struct Pages<'a> {
-    chunk: &'a [u8],
+    chunk: Chunk<'a>,
     pos: usize,
     codec: footer::Codec,
     values_left: u64,
@@ -254,12 +263,14 @@ struct Pages<'a> {
 }
 
 impl<'a> Pages<'a> {
-    /// The next page's header and (still compressed) body.
-    fn next(&mut self) -> Result<Option<(page::PageHeader, &'a [u8])>> {
-        if self.pos >= self.chunk.len() {
+    /// The next page's header and where its (still compressed) body is,
+    /// for [`Pages::body`].
+    fn next(&mut self) -> Result<Option<(page::PageHeader, std::ops::Range<usize>)>> {
+        let chunk = self.chunk.bytes();
+        if self.pos >= chunk.len() {
             return Ok(None);
         }
-        let (header, compressed, end) = next_page(self.chunk, self.pos)?;
+        let (header, compressed, end) = next_page(chunk, self.pos)?;
         let bytes = page_size("uncompressed_page_size", header.uncompressed_page_size)?;
         self.bytes_left = spend(self.bytes_left, bytes as u64, "uncompressed_page_size")?;
         if let PageType::Data(data_page_header) = &header.page_type {
@@ -278,15 +289,66 @@ impl<'a> Pages<'a> {
     /// A page body, decompressed to its `uncompressed_page_size`.
     fn body(
         &self,
-        compressed: &'a [u8],
+        compressed: std::ops::Range<usize>,
         uncompressed_page_size: i32,
-    ) -> Result<std::borrow::Cow<'a, [u8]>> {
-        Ok(compression::decompress(
-            self.codec,
-            compressed,
-            page_size("uncompressed_page_size", uncompressed_page_size)?,
-        )?)
+    ) -> Result<Cow<'a, [u8]>> {
+        let size = page_size("uncompressed_page_size", uncompressed_page_size)?;
+        match &self.chunk {
+            Chunk::Mapped(chunk) => {
+                let compressed = chunk.get(compressed).ok_or(FileError::ChunkOutOfBounds)?;
+                Ok(compression::decompress(self.codec, compressed, size)?)
+            }
+            // The read buffer dies with the chunk, so the body can't
+            // borrow it: a compressed page decompresses into its own
+            // buffer anyway, an uncompressed one is copied.
+            Chunk::Read(chunk) => {
+                let compressed = chunk.get(compressed).ok_or(FileError::ChunkOutOfBounds)?;
+                Ok(Cow::Owned(
+                    compression::decompress(self.codec, compressed, size)?.into_owned(),
+                ))
+            }
+        }
     }
+}
+
+/// A column chunk's bytes: a slice of the mapped or in-memory file, or the
+/// buffer one [`Source::File`] read filled (#841).
+enum Chunk<'a> {
+    Mapped(&'a [u8]),
+    Read(Vec<u8>),
+}
+
+impl Chunk<'_> {
+    fn bytes(&self) -> &[u8] {
+        match self {
+            Chunk::Mapped(b) => b,
+            Chunk::Read(b) => b,
+        }
+    }
+}
+
+/// Where a [`ParquetFile`]'s column chunks come from.
+enum Source<'a> {
+    /// The whole file, mapped or held in memory: chunks are slices of it.
+    Bytes(&'a [u8]),
+    /// An open file read one column chunk at a time (#841). Nothing stays
+    /// mapped, so a scan's resident memory is the chunks being decoded,
+    /// not every page it has touched.
+    File { file: &'a dyn VfsFile, len: u64 },
+}
+
+/// Fills `buf` from `file` at `offset`; a file that ends first is
+/// [`FileError::ChunkOutOfBounds`].
+fn read_exact_at(file: &dyn VfsFile, offset: u64, buf: &mut [u8]) -> Result<()> {
+    let mut filled = 0usize;
+    while let Some(rest) = buf.get_mut(filled..).filter(|rest| !rest.is_empty()) {
+        let at = offset.saturating_add(u64::try_from(filled).unwrap_or(u64::MAX));
+        match file.read_at(at, rest).map_err(FileError::Io)? {
+            0 => return Err(FileError::ChunkOutOfBounds),
+            n => filled = filled.saturating_add(n),
+        }
+    }
+    Ok(())
 }
 
 /// `left` less a page's `declared` amount, or the page exceeds its chunk.
@@ -335,7 +397,7 @@ fn is_flat_schema(schema: &[footer::SchemaElement]) -> bool {
 /// (which derefs to `&[u8]`), or any other `&[u8]` source.
 pub struct ParquetFile<'a> {
     metadata: FileMetaData,
-    data: &'a [u8],
+    source: Source<'a>,
     schema_tree: SchemaNode,
     is_flat: bool,
     /// Leaf (column chunk) `i`'s index in `metadata.schema`. For a flat
@@ -377,6 +439,40 @@ impl<'a> ParquetFile<'a> {
     /// correct results for a flat schema (see [`Self::is_flat`]).
     pub fn open(data: &'a [u8]) -> Result<Self> {
         let metadata = footer::parse_footer(data)?;
+        Ok(Self::with_metadata(metadata, Source::Bytes(data)))
+    }
+
+    /// Opens `file` reading only its footer now and each column chunk
+    /// when it is decoded (#841), where [`ParquetFile::open`] over a
+    /// mapping keeps every page it touched resident until the mapping is
+    /// dropped. A scan of one column then peaks at the chunks in flight,
+    /// not at that column's size in the file.
+    pub fn open_file(file: &'a dyn VfsFile) -> Result<Self> {
+        let len = file.size().map_err(FileError::Io)?;
+        let mut tail = [0u8; footer::FOOTER_LEN];
+        let tail_at = len
+            .checked_sub(footer::FOOTER_LEN as u64)
+            .ok_or(FooterError::FileTooShort)?;
+        read_exact_at(file, tail_at, &mut tail)?;
+        let [l0, l1, l2, l3, magic @ ..] = tail;
+        if magic != *footer::MAGIC {
+            return Err(FooterError::BadMagic.into());
+        }
+        let footer_len = u64::from(u32::from_le_bytes([l0, l1, l2, l3]))
+            .saturating_add(footer::FOOTER_LEN as u64);
+        // The declared length is the file's own claim: checked against its
+        // size before it sizes a buffer.
+        let footer_at = len
+            .checked_sub(footer_len)
+            .ok_or(FooterError::FileTooShort)?;
+        let mut bytes =
+            vec![0u8; usize::try_from(footer_len).map_err(|_| FooterError::FileTooShort)?];
+        read_exact_at(file, footer_at, &mut bytes)?;
+        let metadata = footer::parse_footer(&bytes)?;
+        Ok(Self::with_metadata(metadata, Source::File { file, len }))
+    }
+
+    fn with_metadata(metadata: FileMetaData, source: Source<'a>) -> Self {
         let is_flat = is_flat_schema(&metadata.schema);
         let schema_tree = schema_tree::build_schema_tree(&metadata.schema);
         let leaf_elements = metadata
@@ -392,14 +488,14 @@ impl<'a> ParquetFile<'a> {
             .iter()
             .map(|l| l.max_def_level)
             .collect();
-        Ok(ParquetFile {
+        ParquetFile {
             metadata,
-            data,
+            source,
             schema_tree,
             is_flat,
             leaf_elements,
             leaf_max_def,
-        })
+        }
     }
 
     /// The schema element of leaf (column chunk) `column_index`.
@@ -606,7 +702,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// dictionary page, so it must be added to that same starting offset —
     /// adding it to `data_page_offset` instead over-extends the slice into
     /// the next column's bytes whenever a dictionary page precedes.
-    fn column_chunk_bytes(&self, column_index: usize) -> Result<&'a [u8]> {
+    fn column_chunk_bytes(&self, column_index: usize) -> Result<Chunk<'a>> {
         let meta = self.column_meta(column_index)?;
         let start_i64 = meta.dictionary_page_offset.unwrap_or(meta.data_page_offset);
         let start = usize::try_from(start_i64).map_err(|_| FileError::InvalidMetadata {
@@ -620,10 +716,23 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             }
         })?;
         let end = start.checked_add(size).ok_or(FileError::ChunkOutOfBounds)?;
-        self.file
-            .data
-            .get(start..end)
-            .ok_or(FileError::ChunkOutOfBounds)
+        match self.file.source {
+            Source::Bytes(data) => data
+                .get(start..end)
+                .map(Chunk::Mapped)
+                .ok_or(FileError::ChunkOutOfBounds),
+            Source::File { file, len } => {
+                // `total_compressed_size` is the file's own claim: bounded
+                // by the file before it sizes a buffer.
+                if u64::try_from(end).map_err(|_| FileError::ChunkOutOfBounds)? > len {
+                    return Err(FileError::ChunkOutOfBounds);
+                }
+                let mut buf = vec![0u8; size];
+                let at = u64::try_from(start).map_err(|_| FileError::ChunkOutOfBounds)?;
+                read_exact_at(file, at, &mut buf)?;
+                Ok(Chunk::Read(buf))
+            }
+        }
     }
 
     /// The pages of column chunk `column_index`, budgeted by `values`.
@@ -4075,7 +4184,7 @@ mod tests_657 {
         chunk.extend_from_slice(&[1, 2, 3, 4]);
         let (header, body, end) = next_page(&chunk, 0).unwrap();
         assert_eq!(header.compressed_page_size, 4);
-        assert_eq!(body, [1, 2, 3, 4]);
+        assert_eq!(chunk.get(body), Some(&[1, 2, 3, 4][..]));
         assert_eq!(end, chunk.len());
 
         assert!(matches!(

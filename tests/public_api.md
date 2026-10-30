@@ -3088,6 +3088,7 @@ pub db_core::storage::column::parquet::parquet_file::FileError::Footer(db_core::
 pub db_core::storage::column::parquet::parquet_file::FileError::InvalidMetadata
 pub db_core::storage::column::parquet::parquet_file::FileError::InvalidMetadata::field: &'static str
 pub db_core::storage::column::parquet::parquet_file::FileError::InvalidMetadata::value: i64
+pub db_core::storage::column::parquet::parquet_file::FileError::Io(core::io::error::Error)
 pub db_core::storage::column::parquet::parquet_file::FileError::MissingColumnMetadata
 pub db_core::storage::column::parquet::parquet_file::FileError::MissingDecimalScale
 pub db_core::storage::column::parquet::parquet_file::FileError::MissingDictionaryPage
@@ -3145,6 +3146,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self)
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open_file(&'a dyn db_core::storage::column::vfs::VfsFile) -> db_core::storage::parquet::parquet_file::Result<Self>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
@@ -3597,6 +3599,7 @@ pub db_core::storage::column::parquet::FileError::Footer(db_core::storage::parqu
 pub db_core::storage::column::parquet::FileError::InvalidMetadata
 pub db_core::storage::column::parquet::FileError::InvalidMetadata::field: &'static str
 pub db_core::storage::column::parquet::FileError::InvalidMetadata::value: i64
+pub db_core::storage::column::parquet::FileError::Io(core::io::error::Error)
 pub db_core::storage::column::parquet::FileError::MissingColumnMetadata
 pub db_core::storage::column::parquet::FileError::MissingDecimalScale
 pub db_core::storage::column::parquet::FileError::MissingDictionaryPage
@@ -3654,6 +3657,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self)
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open_file(&'a dyn db_core::storage::column::vfs::VfsFile) -> db_core::storage::parquet::parquet_file::Result<Self>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
@@ -3761,6 +3765,7 @@ pub db_core::storage::column::FileError::Footer(db_core::storage::parquet::foote
 pub db_core::storage::column::FileError::InvalidMetadata
 pub db_core::storage::column::FileError::InvalidMetadata::field: &'static str
 pub db_core::storage::column::FileError::InvalidMetadata::value: i64
+pub db_core::storage::column::FileError::Io(core::io::error::Error)
 pub db_core::storage::column::FileError::MissingColumnMetadata
 pub db_core::storage::column::FileError::MissingDecimalScale
 pub db_core::storage::column::FileError::MissingDictionaryPage
@@ -3821,6 +3826,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self)
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open_file(&'a dyn db_core::storage::column::vfs::VfsFile) -> db_core::storage::parquet::parquet_file::Result<Self>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
@@ -5213,6 +5219,7 @@ pub db_core::storage::parquet::parquet_file::FileError::Footer(db_core::storage:
 pub db_core::storage::parquet::parquet_file::FileError::InvalidMetadata
 pub db_core::storage::parquet::parquet_file::FileError::InvalidMetadata::field: &'static str
 pub db_core::storage::parquet::parquet_file::FileError::InvalidMetadata::value: i64
+pub db_core::storage::parquet::parquet_file::FileError::Io(core::io::error::Error)
 pub db_core::storage::parquet::parquet_file::FileError::MissingColumnMetadata
 pub db_core::storage::parquet::parquet_file::FileError::MissingDecimalScale
 pub db_core::storage::parquet::parquet_file::FileError::MissingDictionaryPage
@@ -5270,6 +5277,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self)
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open_file(&'a dyn db_core::storage::column::vfs::VfsFile) -> db_core::storage::parquet::parquet_file::Result<Self>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
@@ -5722,6 +5730,7 @@ pub db_core::storage::parquet::FileError::Footer(db_core::storage::parquet::foot
 pub db_core::storage::parquet::FileError::InvalidMetadata
 pub db_core::storage::parquet::FileError::InvalidMetadata::field: &'static str
 pub db_core::storage::parquet::FileError::InvalidMetadata::value: i64
+pub db_core::storage::parquet::FileError::Io(core::io::error::Error)
 pub db_core::storage::parquet::FileError::MissingColumnMetadata
 pub db_core::storage::parquet::FileError::MissingDecimalScale
 pub db_core::storage::parquet::FileError::MissingDictionaryPage
@@ -5779,6 +5788,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self)
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open_file(&'a dyn db_core::storage::column::vfs::VfsFile) -> db_core::storage::parquet::parquet_file::Result<Self>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
@@ -7870,6 +7880,7 @@ pub db_core::storage::FileError::Footer(db_core::storage::parquet::footer::Foote
 pub db_core::storage::FileError::InvalidMetadata
 pub db_core::storage::FileError::InvalidMetadata::field: &'static str
 pub db_core::storage::FileError::InvalidMetadata::value: i64
+pub db_core::storage::FileError::Io(core::io::error::Error)
 pub db_core::storage::FileError::MissingColumnMetadata
 pub db_core::storage::FileError::MissingDecimalScale
 pub db_core::storage::FileError::MissingDictionaryPage
@@ -8015,6 +8026,7 @@ pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::metadata(&self)
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_row_groups(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::num_rows(&self) -> i64
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open(&'a [u8]) -> db_core::storage::parquet::parquet_file::Result<Self>
+pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::open_file(&'a dyn db_core::storage::column::vfs::VfsFile) -> db_core::storage::parquet::parquet_file::Result<Self>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::read_nested_column(&self, usize, &str) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<db_core::storage::parquet::nested::NestedValue>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_group(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
 pub fn db_core::storage::parquet::parquet_file::ParquetFile<'a>::row_groups(&self) -> impl core::iter::traits::iterator::Iterator<Item = db_core::storage::parquet::parquet_file::RowGroupReader<'a, '_>>
