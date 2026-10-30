@@ -363,6 +363,12 @@ impl AnyVfs {
         self.0.active_wal_reader_marks(path)
     }
 
+    /// Claims a WAL reader-mark slot for `path` — see
+    /// [`Vfs::claim_wal_read_lock`].
+    pub fn claim_wal_read_lock(&self, path: &Path) -> Result<Option<FileLock>> {
+        self.0.claim_wal_read_lock(path)
+    }
+
     /// Publishes `n_backfill` for `path` — see [`Vfs::publish_wal_backfill`].
     pub fn publish_wal_backfill(&self, path: &Path, n_backfill: u32) -> Result<()> {
         self.0.publish_wal_backfill(path, n_backfill)

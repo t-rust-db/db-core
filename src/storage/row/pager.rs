@@ -55,6 +55,9 @@ use journal::{JournalError, JournalWriter};
 /// not hot — it is safe to open the main file alongside it.
 const JOURNAL_MAGIC: [u8; 8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
 
+/// `PRAGMA wal_autocheckpoint`'s default (#896), SQLite's own.
+const DEFAULT_WAL_AUTOCHECKPOINT: i32 = 1000;
+
 /// [`PageCache`]'s bound, on the order of SQLite's own `cache_size` pragma
 /// default (#320) — a deliberate, named constant rather than a silent
 /// hard-coded number, matching #269's `MAX_EPHEMERAL_ROWS` precedent.
@@ -298,6 +301,15 @@ pub struct Pager {
     /// writer reopened the slow way; reset to `None` at the same three
     /// sites `wal_shm`/`wal_resume` are, and dropped on any failed commit.
     wal_writer: Option<wal::WalWriter>,
+    /// `PRAGMA wal_autocheckpoint` (#896): after a WAL commit leaves at
+    /// least this many frames in the `-wal`, run one passive checkpoint;
+    /// `<= 0` disables it. SQLite's default is 1000.
+    wal_autocheckpoint: i32,
+    /// The frame count a checkpoint of this connection fully backfilled
+    /// (#896). The next WAL commit restarts the `-wal` from its header
+    /// when no reader is pinned and the WAL still holds exactly this many
+    /// frames; any commit consumes it.
+    wal_backfilled_frames: Option<u32>,
     source: WritablePageSource,
     /// Committed WAL overlay pages, shared as `Rc<[u8]>` so a read hit
     /// hands out a refcount bump instead of copying `page_size` bytes
@@ -459,6 +471,8 @@ impl Pager {
             wal_shm: None,
             wal_resume: None,
             wal_writer: None,
+            wal_autocheckpoint: DEFAULT_WAL_AUTOCHECKPOINT,
+            wal_backfilled_frames: None,
             source,
             wal_pages,
             dirty: HashMap::new(),
@@ -759,6 +773,12 @@ impl Pager {
                 },
             };
 
+            if let Some(backfilled) = self.wal_backfilled_frames.take() {
+                if backfilled == writer.frame_count() {
+                    writer = self.restart_wal_if_idle(writer)?;
+                }
+            }
+
             let last_index = page_nums.len().saturating_sub(1);
             for (index, &page_num) in page_nums.iter().enumerate() {
                 if let Some(bytes) = self.dirty.get(&page_num) {
@@ -804,6 +824,11 @@ impl Pager {
         // A failed commit leaves `wal_writer` as `None` (taken above): the
         // next commit reopens and re-derives its position from the file.
         self.wal_writer = Some(outcome?);
+        // `restart_wal_if_idle` released this connection's reader mark;
+        // pin the frame count the commit just published.
+        if self.wal_lock.is_none() {
+            self.wal_lock = self.vfs.claim_wal_read_lock(&self.db_path)?;
+        }
 
         for page_num in page_nums {
             if let Some(bytes) = self.dirty.remove(&page_num) {
@@ -811,6 +836,214 @@ impl Pager {
             }
         }
         self.dirty.clear();
+        self.autocheckpoint()
+    }
+
+    /// Restarts the `-wal` from its header (#896) when every frame is
+    /// backfilled and no other connection is pinned to it, as the writer
+    /// after a complete checkpoint does in SQLite: new salts, so the old
+    /// frames no longer validate, and the file stops growing. With a
+    /// reader pinned it hands `writer` back untouched and the commit
+    /// appends. This connection's own reader mark is dropped first (it
+    /// would count as a reader) and re-claimed once the commit is
+    /// published, in [`Pager::flush_wal_locked`].
+    fn restart_wal_if_idle(
+        &mut self,
+        writer: wal::WalWriter,
+    ) -> Result<wal::WalWriter, PagerError> {
+        self.wal_lock = None;
+        if !self.vfs.active_wal_reader_marks(&self.db_path)?.is_empty() {
+            return Ok(writer);
+        }
+        let wal_path = companion_path(&self.db_path, "-wal");
+        let header = writer.restarted_header(random_nonce() ^ 0x5A5A_5A5A);
+        let restarted = wal::WalWriter::create(&self.vfs, &wal_path, header).map_err(|source| {
+            PagerError::Wal {
+                path: wal_path.display().to_string(),
+                source,
+            }
+        })?;
+        self.vfs.publish_wal_backfill(&self.db_path, 0)?;
+        self.wal_resume = None;
+        Ok(restarted)
+    }
+
+    /// One passive checkpoint pass once the `-wal` holds
+    /// [`Pager::wal_autocheckpoint`] frames (#896). A pass that cannot
+    /// finish because a reader is pinned, or because another connection
+    /// holds the checkpoint lock, is not an error -- the commit it follows
+    /// already succeeded, and SQLite ignores the outcome the same way.
+    fn autocheckpoint(&mut self) -> Result<(), PagerError> {
+        let frames = self
+            .wal_writer
+            .as_ref()
+            .map_or(0, wal::WalWriter::frame_count);
+        let due = u32::try_from(self.wal_autocheckpoint).is_ok_and(|n| n > 0 && frames >= n);
+        if !due {
+            return Ok(());
+        }
+        match self.checkpoint_wal_unchecked(checkpoint::CheckpointMode::Passive) {
+            Ok(_) | Err(PagerError::Vfs(VfsError::Locked { .. })) => Ok(()),
+            Err(other) => Err(other),
+        }
+    }
+
+    /// `PRAGMA wal_autocheckpoint` (#896): the current threshold.
+    pub fn wal_autocheckpoint(&self) -> i32 {
+        self.wal_autocheckpoint
+    }
+
+    /// `PRAGMA wal_autocheckpoint = n` (#896): `n <= 0` disables automatic
+    /// checkpoints.
+    pub fn set_wal_autocheckpoint(&mut self, frames: i32) {
+        self.wal_autocheckpoint = frames;
+    }
+
+    /// `PRAGMA wal_checkpoint(mode)` (#896). Outside WAL mode there is
+    /// nothing to do and SQLite answers `(0, -1, -1)`. FULL, RESTART and
+    /// TRUNCATE hold the WAL write lock while they run and report `busy`
+    /// instead of waiting when a writer or a pinned reader stands in the
+    /// way; RESTART and TRUNCATE also arm the restart the next WAL commit
+    /// performs, and TRUNCATE empties the `-wal` file right away.
+    ///
+    /// This connection's own reader mark is released for the duration (it
+    /// would otherwise bound the checkpoint at the frame count seen at
+    /// `open`) and re-claimed afterwards.
+    pub fn checkpoint_wal(
+        &mut self,
+        mode: checkpoint::CheckpointMode,
+    ) -> Result<checkpoint::WalCheckpoint, PagerError> {
+        if self.journal_mode != JournalMode::Wal {
+            return Ok(checkpoint::WalCheckpoint {
+                busy: false,
+                log: -1,
+                checkpointed: -1,
+            });
+        }
+        if !self.dirty.is_empty()
+            || self.tx_lock_level > crate::storage::row::vfs::LockLevel::Shared
+        {
+            return Err(PagerError::PendingTransaction);
+        }
+        self.checkpoint_wal_unchecked(mode)
+    }
+
+    /// [`Pager::checkpoint_wal`] without its pending-transaction check, for
+    /// the autocheckpoint that runs inside a commit (whose `BEGIN
+    /// IMMEDIATE` lock level is only released after the flush returns).
+    fn checkpoint_wal_unchecked(
+        &mut self,
+        mode: checkpoint::CheckpointMode,
+    ) -> Result<checkpoint::WalCheckpoint, PagerError> {
+        self.wal_lock = None;
+        let outcome = self.checkpoint_wal_released(mode);
+        let reclaimed = self.vfs.claim_wal_read_lock(&self.db_path);
+        let result = outcome?;
+        self.wal_lock = reclaimed?;
+        Ok(result)
+    }
+
+    fn checkpoint_wal_released(
+        &mut self,
+        mode: checkpoint::CheckpointMode,
+    ) -> Result<checkpoint::WalCheckpoint, PagerError> {
+        use checkpoint::CheckpointMode;
+
+        let exclusive = mode != CheckpointMode::Passive;
+        let mut write_locked = false;
+        let mut fallback_guard = None;
+        if exclusive {
+            if self.wal_shm.is_none() {
+                self.wal_shm = self.vfs.open_wal_shm(&self.db_path)?;
+            }
+            let claimed = match &self.wal_shm {
+                Some(shm) => shm.claim_write_lock().map(|()| {
+                    write_locked = true;
+                }),
+                None => self
+                    .vfs
+                    .claim_wal_write_lock(&self.db_path)
+                    .map(|guard| fallback_guard = guard),
+            };
+            match claimed {
+                Ok(()) => {}
+                // A writer is mid-commit: report busy, as SQLite does.
+                Err(VfsError::Locked { .. }) => {
+                    let passive =
+                        checkpoint::checkpoint_passive(&self.vfs, &self.db_path, self.page_size)?;
+                    return Ok(checkpoint::WalCheckpoint {
+                        busy: true,
+                        log: i64::from(passive.total_frames),
+                        checkpointed: i64::from(passive.backfilled_frames),
+                    });
+                }
+                Err(other) => return Err(other.into()),
+            }
+        }
+
+        let outcome = self.finish_checkpoint(mode);
+
+        if write_locked {
+            if let Some(shm) = &self.wal_shm {
+                shm.release_write_lock().ok();
+            }
+        }
+        drop(fallback_guard);
+        outcome
+    }
+
+    fn finish_checkpoint(
+        &mut self,
+        mode: checkpoint::CheckpointMode,
+    ) -> Result<checkpoint::WalCheckpoint, PagerError> {
+        use checkpoint::CheckpointMode;
+
+        let pass = checkpoint::checkpoint_passive(&self.vfs, &self.db_path, self.page_size)?;
+        let mut busy = match mode {
+            CheckpointMode::Passive => false,
+            _ => !pass.checkpoint_complete,
+        };
+        let (mut log, mut checkpointed) = (
+            i64::from(pass.total_frames),
+            i64::from(pass.backfilled_frames),
+        );
+        // An empty WAL is trivially complete: nothing to restart or truncate.
+        if let (true, 1..) = (pass.checkpoint_complete, pass.total_frames) {
+            self.wal_backfilled_frames = Some(pass.total_frames);
+            let pinned = match mode {
+                CheckpointMode::Restart | CheckpointMode::Truncate => {
+                    !self.vfs.active_wal_reader_marks(&self.db_path)?.is_empty()
+                }
+                _ => false,
+            };
+            if pinned {
+                busy = true;
+            } else if mode == CheckpointMode::Truncate {
+                self.truncate_wal()?;
+                (log, checkpointed) = (0, 0);
+            }
+        }
+        Ok(checkpoint::WalCheckpoint {
+            busy,
+            log,
+            checkpointed,
+        })
+    }
+
+    /// TRUNCATE's last step (#896): empties the fully backfilled `-wal`
+    /// file. The next WAL commit finds an unusable (empty) header and
+    /// restarts the log, exactly as it does for a `-wal` another process
+    /// emptied.
+    fn truncate_wal(&mut self) -> Result<(), PagerError> {
+        let wal_path = companion_path(&self.db_path, "-wal");
+        self.wal_writer = None;
+        self.wal_resume = None;
+        self.wal_backfilled_frames = None;
+        let file = self.vfs.open_write(&wal_path)?;
+        file.truncate(0)?;
+        file.sync()?;
+        self.vfs.publish_wal_backfill(&self.db_path, 0)?;
+        self.vfs.publish_wal_mx_frame(&self.db_path, 0)?;
         Ok(())
     }
 
@@ -2033,6 +2266,43 @@ mod tests {
             pager.begin_immediate().unwrap();
 
             let result = pager.set_journal_mode(JournalMode::Wal);
+            assert!(matches!(result, Err(PagerError::PendingTransaction)));
+        }
+
+        // storage_row_pager_checkpoint_wal_dce82034: `!self.dirty.is_empty() || self.tx_lock_level > LockLevel::Shared`
+        fn wal_pager() -> Pager {
+            let mut vfs = MemoryVfs::new();
+            vfs.insert("/test.db", vec![0u8; 512]);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            pager.set_journal_mode(JournalMode::Wal).unwrap();
+            pager
+        }
+
+        #[test]
+        fn mcdc__storage_row_pager_checkpoint_wal_dce82034__v1_both_false_checkpoint_runs() {
+            let mut pager = wal_pager();
+
+            assert!(pager
+                .checkpoint_wal(checkpoint::CheckpointMode::Passive)
+                .is_ok());
+        }
+
+        #[test]
+        fn mcdc__storage_row_pager_checkpoint_wal_dce82034__v2_dirty_pages_pending_is_rejected() {
+            let mut pager = wal_pager();
+            pager.get_page_mut(1).unwrap();
+
+            let result = pager.checkpoint_wal(checkpoint::CheckpointMode::Passive);
+            assert!(matches!(result, Err(PagerError::PendingTransaction)));
+        }
+
+        #[test]
+        fn mcdc__storage_row_pager_checkpoint_wal_dce82034__v3_escalated_lock_with_no_dirty_pages_is_rejected(
+        ) {
+            let mut pager = wal_pager();
+            pager.begin_immediate().unwrap();
+
+            let result = pager.checkpoint_wal(checkpoint::CheckpointMode::Passive);
             assert!(matches!(result, Err(PagerError::PendingTransaction)));
         }
     }

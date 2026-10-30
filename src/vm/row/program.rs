@@ -52,12 +52,26 @@ pub const SYNCHRONOUS_FULL: i32 = 2;
 /// level to set, just report the current one).
 pub const SYNCHRONOUS_QUERY: i32 = -1;
 
+/// `Opcode::Checkpoint`'s `p1` (#896): `PRAGMA wal_checkpoint`'s mode, in
+/// SQLite's own `SQLITE_CHECKPOINT_*` numbering.
+pub const CHECKPOINT_PASSIVE: i32 = 0;
+/// `PRAGMA wal_checkpoint(FULL)`.
+pub const CHECKPOINT_FULL: i32 = 1;
+/// `PRAGMA wal_checkpoint(RESTART)`.
+pub const CHECKPOINT_RESTART: i32 = 2;
+/// `PRAGMA wal_checkpoint(TRUNCATE)`.
+pub const CHECKPOINT_TRUNCATE: i32 = 3;
+
+/// What `PRAGMA wal_autocheckpoint` reports without a pager to ask:
+/// SQLite's own default (#896).
+pub const DEFAULT_WAL_AUTOCHECKPOINT: i32 = 1000;
+
 impl Opcode {
     /// The oracle-harvested opcode inventory sqlite-rs's
     /// `tests/unit/vdbe_opcode_completeness_test.rs` checks against
     /// `tools/opcodes-v2.json` — sqlite-rs `program.rs::Opcode::ALL`,
     /// verbatim (#134). Excludes sqlite-rs's own additions (`AutoCommit`,
-    /// `SetJournalMode`, `Synchronous`, `IntegrityCheck`, the index-scan
+    /// `SetJournalMode`, `Synchronous`, `WalAutocheckpoint`, `IntegrityCheck`, the index-scan
     /// and DDL families), which the harvested set does not name.
     pub const ALL: [Opcode; 69] = [
         Opcode::Init,
@@ -167,6 +181,12 @@ pub enum Opcode {
     IntegrityCheck,
     /// `PRAGMA synchronous [= ...]`.
     Synchronous,
+    /// `PRAGMA wal_checkpoint[(mode)]` (#896), `p1` one of `CHECKPOINT_*`.
+    /// Mirrors SQLite's own `Checkpoint` opcode.
+    Checkpoint,
+    /// `PRAGMA wal_autocheckpoint [= p1]` (#896): `p2` is 1 when `p1` is
+    /// to be set, 0 for the query form.
+    WalAutocheckpoint,
     /// Jumps to `p2` if register `p1` is falsy.
     IfNot,
     /// Jumps to `p2` if register `p1` is nonzero.
@@ -808,6 +828,8 @@ impl Opcode {
             | Opcode::SetJournalMode
             | Opcode::IntegrityCheck
             | Opcode::Synchronous
+            | Opcode::Checkpoint
+            | Opcode::WalAutocheckpoint
             | Opcode::AggReset => NONE,
             Opcode::Gosub
             | Opcode::Return

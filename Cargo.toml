@@ -83,6 +83,11 @@ path = "tests/unit/wal_unusable_header_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_wal_checkpoint"
+path = "tests/unit/wal_checkpoint_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_autoindex"
 path = "tests/unit/autoindex_test.rs"
 required-features = ["engine-row"]

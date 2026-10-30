@@ -43,6 +43,22 @@ pub trait Transaction {
         Ok(())
     }
 
+    /// `PRAGMA wal_autocheckpoint`: with `Some(frames)` sets the threshold,
+    /// either way returns the value now in force. `None` reports SQLite's
+    /// default of 1000, as for a connection with no writer (#896).
+    fn wal_autocheckpoint(&mut self, frames: Option<i32>) -> Result<Option<i32>, TransactionError> {
+        let _ = frames;
+        Ok(None)
+    }
+
+    /// `PRAGMA wal_checkpoint(mode)` (`mode` one of `CHECKPOINT_*`): the
+    /// `(busy, log, checkpointed)` row. `None` reports `(0, -1, -1)`, what
+    /// SQLite answers for a database that is not in WAL mode (#896).
+    fn wal_checkpoint(&mut self, mode: i32) -> Result<Option<(i64, i64, i64)>, TransactionError> {
+        let _ = mode;
+        Ok(None)
+    }
+
     /// `PRAGMA integrity_check` / `quick_check` (`quick`): the problem
     /// lines to report, `["ok"]` for a clean file. `None` leaves the
     /// opcode `Unimplemented`, as without any hook (#134).

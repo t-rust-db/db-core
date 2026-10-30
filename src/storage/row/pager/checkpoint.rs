@@ -1,9 +1,10 @@
 //! PASSIVE WAL checkpoint (#386): copies committed WAL frames into the
 //! main database file up to the oldest active reader's mark, then
 //! publishes the new backfill boundary (`nBackfill`). Never waits for a
-//! reader to finish (that's FULL, deferred to V7 per the epic's Out of
-//! Scope table) — a reader still pinned to an older frame simply bounds
-//! how far this pass can go, rather than blocking the checkpoint.
+//! reader to finish — a reader still pinned to an older frame simply
+//! bounds how far this pass can go, rather than blocking the checkpoint.
+//! FULL/RESTART/TRUNCATE (#896) are this pass plus the write lock and a
+//! busy report, built in `Pager::checkpoint_wal`; none of them waits.
 //!
 //! Frame `1..=safe_frame` is resolved via [`wal::committed_pages`] against
 //! a byte slice truncated to exactly that many frames — `safe_frame`
@@ -21,6 +22,34 @@ use std::path::Path;
 use super::wal::{self, WalHeader};
 use super::PagerError;
 use crate::storage::row::vfs::{companion_path, AnyVfs};
+
+/// `PRAGMA wal_checkpoint`'s mode argument (#896). Only [`Self::Passive`]
+/// never reports busy; the others report `busy` instead of waiting when a
+/// reader keeps them from finishing, as SQLite does without a busy handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointMode {
+    /// Backfill what no reader needs, never wait.
+    Passive,
+    /// Backfill every frame, blocking writers while doing so.
+    Full,
+    /// [`Self::Full`], then make the next writer restart the WAL.
+    Restart,
+    /// [`Self::Restart`], then truncate the `-wal` file to zero bytes.
+    Truncate,
+}
+
+/// The `(busy, log, checkpointed)` row `PRAGMA wal_checkpoint` returns
+/// (#896). `log`/`checkpointed` are `-1` when the database is not in WAL
+/// mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WalCheckpoint {
+    /// A FULL/RESTART/TRUNCATE checkpoint could not finish.
+    pub busy: bool,
+    /// Frames in the WAL.
+    pub log: i64,
+    /// Frames backfilled into the main file.
+    pub checkpointed: i64,
+}
 
 /// What a [`checkpoint_passive`] call did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

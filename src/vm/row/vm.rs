@@ -38,7 +38,8 @@ use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, PseudoCursor, S
 use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
 use super::program::{
-    Instruction, Opcode, Program, JOURNAL_MODE_WAL, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY,
+    Instruction, Opcode, Program, DEFAULT_WAL_AUTOCHECKPOINT, JOURNAL_MODE_WAL, P4,
+    SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY,
 };
 use super::record::{decode_column_with, decode_record, encode_record, parse_header};
 use super::schema_storage::{SchemaStorage, SchemaStorageError};
@@ -141,6 +142,8 @@ pub enum ExecError {
     /// SQLite refuses with "Safety level may not be changed inside a
     /// transaction" (#563).
     SynchronousChangeDuringTransaction,
+    /// `Checkpoint` ran while a transaction was open (#896).
+    CheckpointDuringTransaction,
     /// A function would build a string or blob past
     /// [`crate::functions::MAX_LENGTH`]; sqlite3's "string or blob too
     /// big" (#659).
@@ -228,6 +231,9 @@ impl std::fmt::Display for ExecError {
             ExecError::TooBig => write!(f, "string or blob too big"),
             ExecError::SynchronousChangeDuringTransaction => {
                 write!(f, "Safety level may not be changed inside a transaction")
+            }
+            ExecError::CheckpointDuringTransaction => {
+                write!(f, "database table is locked")
             }
             ExecError::TransactionAlreadyActive => {
                 write!(f, "cannot start a transaction within a transaction")
@@ -1218,6 +1224,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         | Opcode::AutoCommit
         | Opcode::SetJournalMode
         | Opcode::Synchronous
+        | Opcode::Checkpoint
+        | Opcode::WalAutocheckpoint
         | Opcode::IntegrityCheck
         | Opcode::CreateTable
         | Opcode::CreateView

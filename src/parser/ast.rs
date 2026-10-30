@@ -996,6 +996,20 @@ pub enum PragmaSynchronous {
     Full,
 }
 
+/// The mode argument of `PRAGMA wal_checkpoint(mode)` (#896); stock
+/// SQLite's default, with no argument, is `PASSIVE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PragmaCheckpointMode {
+    /// `PASSIVE`: never waits on a reader.
+    Passive,
+    /// `FULL`.
+    Full,
+    /// `RESTART`.
+    Restart,
+    /// `TRUNCATE`.
+    Truncate,
+}
+
 /// A parsed `PRAGMA` statement: the narrow V6 `journal_mode` carve-out
 /// (#388), the V7 `integrity_check`/`quick_check` carve-out (#540,
 /// #541), and the V7 `synchronous` carve-out (#645). Every other pragma
@@ -1029,6 +1043,21 @@ pub enum Pragma {
         /// The source span covering the whole statement.
         span: Span,
     },
+    /// `PRAGMA wal_autocheckpoint [= N]` (#896). `frames = None` is the
+    /// query form; `N <= 0` disables automatic checkpoints.
+    WalAutocheckpoint {
+        /// The requested threshold, or `None` to query the current one.
+        frames: Option<i32>,
+        /// The source span covering the whole statement.
+        span: Span,
+    },
+    /// `PRAGMA wal_checkpoint [(mode)]` (#896).
+    WalCheckpoint {
+        /// The requested mode (`PASSIVE` when omitted).
+        mode: PragmaCheckpointMode,
+        /// The source span covering the whole statement.
+        span: Span,
+    },
 }
 
 impl Pragma {
@@ -1037,7 +1066,9 @@ impl Pragma {
         match self {
             Pragma::JournalMode { span, .. }
             | Pragma::IntegrityCheck { span, .. }
-            | Pragma::Synchronous { span, .. } => *span,
+            | Pragma::Synchronous { span, .. }
+            | Pragma::WalAutocheckpoint { span, .. }
+            | Pragma::WalCheckpoint { span, .. } => *span,
         }
     }
 }
