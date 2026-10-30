@@ -5403,8 +5403,8 @@ impl Vm {
             };
         }
         match self.const_value(reg)? {
-            Value::Int(v) => Some(CompareOperand::Const(int_as_f64(*v))),
-            Value::Float(v) => Some(CompareOperand::Const(*v)),
+            Value::Int(v) => Some(CompareOperand::ConstInt(*v)),
+            Value::Float(v) => Some(CompareOperand::ConstFloat(*v)),
             _ => None,
         }
     }
@@ -5412,9 +5412,9 @@ impl Vm {
     /// Fast path for [`Opcode::Map`]'s `= <> < <= > >=` (#748) when each
     /// operand is a typed `Int`/`Float` column or a numeric literal, at
     /// least one of them a column. The answer is [`compare_values`]'s for
-    /// every pair: both sides compare as `f64` (so an `Int` against an
-    /// `Int` rounds as it does there, and a NaN is unequal to everything,
-    /// even itself), and a NULL on either side is a NULL row. Yields a
+    /// every pair: an `Int` against an `Int` compares exactly as `i64`,
+    /// anything involving a `Float` as `f64` (a NaN is unequal to
+    /// everything, even itself), and a NULL on either side is a NULL row. Yields a
     /// typed `Bool` column, as [`Vm::typed_like`] does. `None` otherwise;
     /// the caller then takes the general elementwise path.
     fn typed_compare(&self, op: MapOp, a: usize, b: usize) -> Option<Column> {
@@ -5430,8 +5430,12 @@ impl Vm {
         if lhs.len().zip(rhs.len()).is_some_and(|(x, y)| x != y) {
             return None;
         }
+        if let Some(column) = compare_ints(op, len, &lhs, &rhs) {
+            return Some(column);
+        }
         Some(match lhs {
-            CompareOperand::Const(c) => compare_with(op, len, &ConstRows(c), &rhs),
+            CompareOperand::ConstFloat(c) => compare_with(op, len, &ConstRows(c), &rhs),
+            CompareOperand::ConstInt(c) => compare_with(op, len, &ConstRows(int_as_f64(c)), &rhs),
             CompareOperand::Int(column) => compare_with(op, len, &IntRows(column), &rhs),
             CompareOperand::Float(column) => compare_with(op, len, &FloatRows(column), &rhs),
         })
@@ -8013,11 +8017,12 @@ fn kleene(op: MapOp, a: Option<bool>, b: Option<bool>) -> Option<bool> {
 }
 
 /// One side of [`Vm::typed_compare`]: a typed `Int` or `Float` register,
-/// or a numeric literal already widened to `f64`.
+/// or a numeric literal, kept as written.
 enum CompareOperand {
     Int(Arc<Column>),
     Float(Arc<Column>),
-    Const(f64),
+    ConstInt(i64),
+    ConstFloat(f64),
 }
 
 impl CompareOperand {
@@ -8025,7 +8030,7 @@ impl CompareOperand {
     fn len(&self) -> Option<usize> {
         match self {
             CompareOperand::Int(column) | CompareOperand::Float(column) => Some(column.len()),
-            CompareOperand::Const(_) => None,
+            CompareOperand::ConstInt(_) | CompareOperand::ConstFloat(_) => None,
         }
     }
 }
@@ -8041,21 +8046,30 @@ fn int_as_f64(x: i64) -> f64 {
 /// Row `i` of a comparison operand as `f64`, `None` for a NULL. One
 /// implementation per operand kind, so [`compare_rows`] is monomorphized
 /// per pair and the read has no dispatch.
-trait NumericRows {
-    fn at(&self, i: usize) -> Option<f64>;
+trait NumericRows<T> {
+    fn at(&self, i: usize) -> Option<T>;
 }
 
-struct ConstRows(f64);
+struct ConstRows<T>(T);
 struct IntRows(Arc<Column>);
 struct FloatRows(Arc<Column>);
 
-impl NumericRows for ConstRows {
-    fn at(&self, _: usize) -> Option<f64> {
+impl<T: Copy> NumericRows<T> for ConstRows<T> {
+    fn at(&self, _: usize) -> Option<T> {
         Some(self.0)
     }
 }
 
-impl NumericRows for IntRows {
+impl NumericRows<i64> for IntRows {
+    fn at(&self, i: usize) -> Option<i64> {
+        match self.0.as_ref() {
+            Column::Int { data, valid } if valid.get(i) => data.get(i).copied(),
+            _ => None,
+        }
+    }
+}
+
+impl NumericRows<f64> for IntRows {
     fn at(&self, i: usize) -> Option<f64> {
         match self.0.as_ref() {
             Column::Int { data, valid } if valid.get(i) => data.get(i).map(|&x| int_as_f64(x)),
@@ -8064,7 +8078,7 @@ impl NumericRows for IntRows {
     }
 }
 
-impl NumericRows for FloatRows {
+impl NumericRows<f64> for FloatRows {
     fn at(&self, i: usize) -> Option<f64> {
         match self.0.as_ref() {
             Column::Float { data, valid } if valid.get(i) => data.get(i).copied(),
@@ -8074,22 +8088,55 @@ impl NumericRows for FloatRows {
 }
 
 /// [`compare_rows`] with `rhs`'s reader chosen by its kind.
-fn compare_with<L: NumericRows>(op: MapOp, len: usize, lhs: &L, rhs: &CompareOperand) -> Column {
+fn compare_with<L: NumericRows<f64>>(
+    op: MapOp,
+    len: usize,
+    lhs: &L,
+    rhs: &CompareOperand,
+) -> Column {
     match rhs {
-        CompareOperand::Const(c) => compare_rows(op, len, lhs, &ConstRows(*c)),
+        CompareOperand::ConstFloat(c) => compare_rows(op, len, lhs, &ConstRows(*c)),
+        CompareOperand::ConstInt(c) => compare_rows(op, len, lhs, &ConstRows(int_as_f64(*c))),
         CompareOperand::Int(column) => compare_rows(op, len, lhs, &IntRows(Arc::clone(column))),
         CompareOperand::Float(column) => compare_rows(op, len, lhs, &FloatRows(Arc::clone(column))),
     }
 }
 
+/// `op` over `len` rows of two `Int` operands as exact `i64`s (#845), `None`
+/// unless both sides are an `Int` column or literal.
+fn compare_ints(
+    op: MapOp,
+    len: usize,
+    lhs: &CompareOperand,
+    rhs: &CompareOperand,
+) -> Option<Column> {
+    Some(match (lhs, rhs) {
+        (CompareOperand::Int(a), CompareOperand::Int(b)) => {
+            compare_rows::<i64, _, _>(op, len, &IntRows(Arc::clone(a)), &IntRows(Arc::clone(b)))
+        }
+        (CompareOperand::Int(a), CompareOperand::ConstInt(c)) => {
+            compare_rows(op, len, &IntRows(Arc::clone(a)), &ConstRows(*c))
+        }
+        (CompareOperand::ConstInt(c), CompareOperand::Int(b)) => {
+            compare_rows(op, len, &ConstRows(*c), &IntRows(Arc::clone(b)))
+        }
+        _ => return None,
+    })
+}
+
 /// `op` over `len` rows of two numeric operands; a NULL on either side is
 /// a NULL row (`false` in `data`, invalid in the bitmap).
-fn compare_rows<L: NumericRows, R: NumericRows>(op: MapOp, len: usize, lhs: &L, rhs: &R) -> Column {
+fn compare_rows<T: PartialOrd, L: NumericRows<T>, R: NumericRows<T>>(
+    op: MapOp,
+    len: usize,
+    lhs: &L,
+    rhs: &R,
+) -> Column {
     let mut data = Vec::with_capacity(len);
     let mut valid = Bitmap::new(len, true);
     for i in 0..len {
         match (lhs.at(i), rhs.at(i)) {
-            (Some(x), Some(y)) => data.push(compare_f64(op, x, y)),
+            (Some(x), Some(y)) => data.push(compare_ord(op, x, y)),
             _ => {
                 data.push(false);
                 valid.set(i, false);
@@ -8105,7 +8152,7 @@ fn compare_rows<L: NumericRows, R: NumericRows>(op: MapOp, len: usize, lhs: &L, 
     clippy::float_cmp,
     reason = "IEEE comparison is `partial_cmp`'s, which `compare_values` uses"
 )]
-fn compare_f64(op: MapOp, x: f64, y: f64) -> bool {
+fn compare_ord<T: PartialOrd>(op: MapOp, x: T, y: T) -> bool {
     match op {
         MapOp::Eq => x == y,
         MapOp::Ne => x != y,
@@ -8179,6 +8226,8 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),
+        // Two integers compare exactly, not through f64 (#845).
+        (Value::Int(x), Value::Int(y)) => Some(x.cmp(y)),
         // A decimal compares exactly (#632).
         (Value::Decimal { .. }, _) | (_, Value::Decimal { .. }) => numeric_cmp(a, b),
         _ => a.as_f64()?.partial_cmp(&b.as_f64()?),

@@ -103,4 +103,10 @@ duckdb -c "COPY (SELECT
   FROM range(1, 10001) t(i) ORDER BY id)
   TO '$DIR/typed_nulls.parquet' (FORMAT PARQUET, COMPRESSION 'snappy', ROW_GROUP_SIZE 2048);"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet"
+# #845: three BIGINT ids around 2^62 (past f64's 2^53 exact range) that
+# differ by 1; big2 equals big on the even ids and exceeds it by 1 on the odd.
+duckdb -c "COPY (SELECT i AS id, 4611686018427387904 + i AS big, 4611686018427387904 + i + (i % 2) AS big2
+  FROM range(0, 4) t(i) ORDER BY id)
+  TO '$DIR/big_ints.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet, $DIR/big_ints.parquet"
