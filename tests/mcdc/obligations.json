@@ -1102,7 +1102,7 @@
   {
     "id": "codegen_batch_compile_filtered_6a3e6d19",
     "file": "src/codegen/batch.rs",
-    "line": 1988,
+    "line": 1989,
     "decision": "select.scope.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -1112,7 +1112,7 @@
   {
     "id": "codegen_batch_compile_filtered_2d99dfb7",
     "file": "src/codegen/batch.rs",
-    "line": 1994,
+    "line": 1995,
     "decision": "has_subquery_condition(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -1122,7 +1122,7 @@
   {
     "id": "codegen_batch_compile_filtered_c6aad5d2",
     "file": "src/codegen/batch.rs",
-    "line": 1999,
+    "line": 2000,
     "decision": "has_range_vector_call(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -1132,7 +1132,7 @@
   {
     "id": "codegen_batch_compile_filtered_870ff88c",
     "file": "src/codegen/batch.rs",
-    "line": 2010,
+    "line": 2011,
     "decision": "match unnest_prologue(select, &mut ctx)? {\n        Some(rest) => {\n            unnested = rest;\n            &unnested\n        }\n        None => select,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1142,7 +1142,7 @@
   {
     "id": "codegen_batch_compile_filtered_fee390fc",
     "file": "src/codegen/batch.rs",
-    "line": 2056,
+    "line": 2057,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -1150,10 +1150,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_batch_compile_filtered_6680ba2b",
+    "id": "codegen_batch_compile_filtered_d4cb8e98",
     "file": "src/codegen/batch.rs",
-    "line": 2059,
-    "decision": "let Some((column, _)) = &semi",
+    "line": 2060,
+    "decision": "let Some((column, ..)) = &semi",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -1162,7 +1162,7 @@
   {
     "id": "codegen_batch_compile_filtered_1effc218",
     "file": "src/codegen/batch.rs",
-    "line": 2069,
+    "line": 2070,
     "decision": "match item {\n            Item::Agg(_, arg, filter, distinct) => {\n                let base = arg.as_ref().map(|a| match a {\n                    // `COUNT(DISTINCT x)`'s `x` becomes a group key, which\n                    // `GroupReduce` overwrites with the groups' keys: it\n                    // gets a register of its own, not one an aggregate or\n                    // a real key also reads (#633).\n                    AggArg::Column(name) if *distinct && ctx.post_unnest => {\n                        // Columns were loaded before the unnest and cannot\n                        // be loaded again; a copy keeps the key's own register.\n                        let src = ctx.load_column(name);\n                        let reg = ctx.alloc();\n                        ctx.push_commented(\n                            Opcode::Map {\n                                dst: reg,\n                                op: MapOp::Copy,\n                                a: src,\n                                b: src,\n                            },\n                            format!(\"r{reg} = {name} (COUNT DISTINCT key)\"),\n                        );\n                        reg\n                    }\n                    AggArg::Column(name) if *distinct => {\n                        let reg = ctx.alloc();\n                        ctx.push_commented(\n                            Opcode::LoadColumn {\n                                reg,\n                                column: name.clone().into(),\n                            },\n                            format!(\"r{reg} = {name} (COUNT DISTINCT key)\"),\n                        );\n                        reg\n                    }\n                    AggArg::Column(name) => ctx.load_column(name),\n                    AggArg::Expr(expr) => compile_expr(expr, &mut ctx),\n                });\n                agg_srcs.push(vec![mask_filtered_source(&mut ctx, base, filter.as_ref())]);\n            }\n            // #496: each nested aggregate call's own argument is resolved\n            // here, pre-`Filter`, for the same reason `Item::Agg`'s is\n            // above -- `compile`'s second pass only allocates registers\n            // and `AggPart`s from these already-resolved sources, it\n            // never loads a column itself.\n            Item::AggExpr(expr) => {\n                let srcs = agg_expr_calls(expr)\n                    .into_iter()\n                    .map(|call| agg_call_source(call, &mut ctx))\n                    .collect::<Result<Vec<_>>>()?;\n                agg_srcs.push(srcs);\n            }\n            // Plain projected columns are emitted (not aggregated). A\n            // column the WHERE clause also reads must be loaded here for\n            // the same reason as the keys above: a column first loaded\n            // below the Filter keeps its full pre-filter length while the\n            // filtered registers shrink, and Emit then indexes past the end\n            // of the short ones. A projection-only column (not referenced\n            // by WHERE) is deliberately left unloaded here -- it's loaded\n            // by the second pass further down, after `Filter` is emitted\n            // (ADR-0026, late materialization). `load_column` memoizes, so\n            // either way the projection code further down reuses whichever\n            // register this loop already created instead of emitting a\n            // second LoadColumn.\n            Item::Column(name) if group_by.is_empty() => {\n                if where_columns.iter().any(|c| c == name) {\n                    ctx.load_column(name);\n                }\n                agg_srcs.push(Vec::new());\n            }\n            Item::Expr(expr) if group_by.is_empty() => {\n                let mut cols = Vec::new();\n                collect_expr_columns(expr, &mut cols);\n                for name in &cols {\n                    if where_columns.iter().any(|c| c == name) {\n                        ctx.load_column(name);\n                    }\n                }\n                agg_srcs.push(Vec::new());\n            }\n            _ => agg_srcs.push(Vec::new()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1172,7 +1172,7 @@
   {
     "id": "codegen_batch_compile_filtered_0aa91de1",
     "file": "src/codegen/batch.rs",
-    "line": 2132,
+    "line": 2133,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -1182,7 +1182,7 @@
   {
     "id": "codegen_batch_compile_filtered_0aa91de1_2",
     "file": "src/codegen/batch.rs",
-    "line": 2138,
+    "line": 2139,
     "decision": "group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -1192,7 +1192,7 @@
   {
     "id": "codegen_batch_compile_filtered_7545b447",
     "file": "src/codegen/batch.rs",
-    "line": 2071,
+    "line": 2072,
     "decision": "match a {\n                    // `COUNT(DISTINCT x)`'s `x` becomes a group key, which\n                    // `GroupReduce` overwrites with the groups' keys: it\n                    // gets a register of its own, not one an aggregate or\n                    // a real key also reads (#633).\n                    AggArg::Column(name) if *distinct && ctx.post_unnest => {\n                        // Columns were loaded before the unnest and cannot\n                        // be loaded again; a copy keeps the key's own register.\n                        let src = ctx.load_column(name);\n                        let reg = ctx.alloc();\n                        ctx.push_commented(\n                            Opcode::Map {\n                                dst: reg,\n                                op: MapOp::Copy,\n                                a: src,\n                                b: src,\n                            },\n                            format!(\"r{reg} = {name} (COUNT DISTINCT key)\"),\n                        );\n                        reg\n                    }\n                    AggArg::Column(name) if *distinct => {\n                        let reg = ctx.alloc();\n                        ctx.push_commented(\n                            Opcode::LoadColumn {\n                                reg,\n                                column: name.clone().into(),\n                            },\n                            format!(\"r{reg} = {name} (COUNT DISTINCT key)\"),\n                        );\n                        reg\n                    }\n                    AggArg::Column(name) => ctx.load_column(name),\n                    AggArg::Expr(expr) => compile_expr(expr, &mut ctx),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1202,7 +1202,7 @@
   {
     "id": "codegen_batch_compile_filtered_9c98f3ed",
     "file": "src/codegen/batch.rs",
-    "line": 2076,
+    "line": 2077,
     "decision": "*distinct && ctx.post_unnest",
     "conditions": 2,
     "vectors_required": 3,
@@ -1212,7 +1212,7 @@
   {
     "id": "codegen_batch_compile_filtered_3a6ee6e5",
     "file": "src/codegen/batch.rs",
-    "line": 2092,
+    "line": 2093,
     "decision": "*distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -1222,7 +1222,7 @@
   {
     "id": "codegen_batch_compile_filtered_16f3806c",
     "file": "src/codegen/batch.rs",
-    "line": 2133,
+    "line": 2134,
     "decision": "where_columns.iter().any(|c| c == name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -1232,7 +1232,7 @@
   {
     "id": "codegen_batch_compile_filtered_16f3806c_2",
     "file": "src/codegen/batch.rs",
-    "line": 2142,
+    "line": 2143,
     "decision": "where_columns.iter().any(|c| c == name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -1242,7 +1242,7 @@
   {
     "id": "codegen_batch_compile_filtered_6d1bd84b",
     "file": "src/codegen/batch.rs",
-    "line": 2157,
+    "line": 2158,
     "decision": "match reused {\n            Some(_) => Ok(None),\n            None => agg_call_source(call, &mut ctx),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1252,7 +1252,7 @@
   {
     "id": "codegen_batch_compile_filtered_fee390fc_2",
     "file": "src/codegen/batch.rs",
-    "line": 2163,
+    "line": 2164,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -1260,10 +1260,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_batch_compile_filtered_fb9de649",
+    "id": "codegen_batch_compile_filtered_23c0f315",
     "file": "src/codegen/batch.rs",
-    "line": 2170,
-    "decision": "let Some((column, keys)) = semi",
+    "line": 2171,
+    "decision": "let Some((column, keys, comment)) = semi",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -1832,7 +1832,7 @@
   {
     "id": "codegen_batch_compile_window_3432ca56",
     "file": "src/codegen/batch.rs",
-    "line": 3198,
+    "line": 3203,
     "decision": "!needed.iter().any(|n| n == name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -1842,7 +1842,7 @@
   {
     "id": "codegen_batch_compile_window_19553a1b",
     "file": "src/codegen/batch.rs",
-    "line": 3204,
+    "line": 3209,
     "decision": "match item {\n            Item::Column(name) => push_needed(name, &mut needed),\n            Item::Window(spec) => {\n                if let Some(arg) = &spec.arg {\n                    push_needed(arg, &mut needed);\n                }\n                for p in &spec.partition_by {\n                    push_needed(p, &mut needed);\n                }\n                for (o, _) in &spec.order_by {\n                    push_needed(o, &mut needed);\n                }\n            }\n            Item::Agg(..) | Item::Star | Item::Expr(_) | Item::AggExpr(_) => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1852,7 +1852,7 @@
   {
     "id": "codegen_batch_compile_window_191cd68b",
     "file": "src/codegen/batch.rs",
-    "line": 3207,
+    "line": 3212,
     "decision": "let Some(arg) = &spec.arg",
     "conditions": 1,
     "vectors_required": 2,
@@ -1862,7 +1862,7 @@
   {
     "id": "codegen_batch_compile_window_86b2dbc4",
     "file": "src/codegen/batch.rs",
-    "line": 3268,
+    "line": 3273,
     "decision": "match item {\n            Item::Window(spec) => {\n                let base = spec.arg.as_ref().map(|name| ctx.load_column(name));\n                mask_filtered_source(&mut ctx, base, spec.filter.as_ref())\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1872,7 +1872,7 @@
   {
     "id": "codegen_batch_compile_window_fee390fc",
     "file": "src/codegen/batch.rs",
-    "line": 3278,
+    "line": 3283,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -1882,7 +1882,7 @@
   {
     "id": "codegen_batch_compile_window_9466809a",
     "file": "src/codegen/batch.rs",
-    "line": 3291,
+    "line": 3296,
     "decision": "match item {\n            Item::Column(name) => emit_regs.push(column_reg(name)?),\n            Item::Window(spec) => {\n                let dst = next_reg;\n                next_reg = next_reg.saturating_add(1);\n                program.push(Instruction::with_comment(\n                    Opcode::Window {\n                        func: map_window_func(spec.func),\n                        // Already resolved (and `FILTER`-masked, if any)\n                        // above -- same register `column_reg(arg)` would\n                        // give when there's no filter, since `needed`\n                        // seeded `ctx`'s `column_regs`.\n                        arg: *filtered_arg,\n                        offset: spec.offset,\n                        partition_by: spec\n                            .partition_by\n                            .iter()\n                            .map(|p| column_reg(p))\n                            .collect::<Result<Vec<_>>>()?\n                            .into(),\n                        order_by: spec\n                            .order_by\n                            .iter()\n                            .map(|(o, desc)| Ok((column_reg(o)?, *desc)))\n                            .collect::<Result<Vec<_>>>()?\n                            .into(),\n                        dst,\n                    },\n                    format!(\"r{dst} = {}\", window_detail(spec)),\n                ));\n                emit_regs.push(dst);\n            }\n            Item::Agg(..) | Item::Star | Item::Expr(_) | Item::AggExpr(_) => {\n                let reg = *null_reg.get_or_insert_with(|| {\n                    let reg = next_reg;\n                    next_reg = next_reg.saturating_add(1);\n                    program.push(Instruction::new(Opcode::LoadConst {\n                        reg,\n                        value: Value::Null,\n                    }));\n                    reg\n                });\n                emit_regs.push(reg);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1892,7 +1892,7 @@
   {
     "id": "codegen_batch_compile_window_02561761",
     "file": "src/codegen/batch.rs",
-    "line": 3357,
+    "line": 3362,
     "decision": "let Some((sort, comment)) = sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -1902,7 +1902,7 @@
   {
     "id": "codegen_batch_compile_window_358b089c",
     "file": "src/codegen/batch.rs",
-    "line": 3360,
+    "line": 3365,
     "decision": "let Some(n) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -1912,7 +1912,7 @@
   {
     "id": "codegen_batch_map_window_func_b27cbf54",
     "file": "src/codegen/batch.rs",
-    "line": 3379,
+    "line": 3384,
     "decision": "match func {\n        WindowFunc::RowNumber => Vm::RowNumber,\n        WindowFunc::Rank => Vm::Rank,\n        WindowFunc::DenseRank => Vm::DenseRank,\n        WindowFunc::Lag => Vm::Lag,\n        WindowFunc::Lead => Vm::Lead,\n        WindowFunc::FirstValue => Vm::FirstValue,\n        WindowFunc::LastValue => Vm::LastValue,\n        WindowFunc::Sum => Vm::Sum,\n        WindowFunc::Avg => Vm::Avg,\n        WindowFunc::Count => Vm::Count,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1922,7 +1922,7 @@
   {
     "id": "codegen_batch_grouped_output_order_6ede5204",
     "file": "src/codegen/batch.rs",
-    "line": 3409,
+    "line": 3414,
     "decision": "num_group_keys == 0 && distinct == 0",
     "conditions": 2,
     "vectors_required": 3,
@@ -1932,7 +1932,7 @@
   {
     "id": "codegen_batch_grouped_output_order_223ee7bc",
     "file": "src/codegen/batch.rs",
-    "line": 3417,
+    "line": 3422,
     "decision": "match item {\n            Item::Column(_) | Item::Expr(_) => &mut next_key,\n            Item::Agg(_, _, _, true) => &mut distinct_slot,\n            Item::Agg(..) | Item::AggExpr(_) => &mut next_agg,\n            Item::Star | Item::Window(_) => return Vec::new(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1942,7 +1942,7 @@
   {
     "id": "codegen_batch_grouped_output_order_476ef2ae",
     "file": "src/codegen/batch.rs",
-    "line": 3427,
+    "line": 3432,
     "decision": "next_key != num_group_keys || identity",
     "conditions": 2,
     "vectors_required": 3,
@@ -1952,7 +1952,7 @@
   {
     "id": "codegen_batch_explain_6416ea7f",
     "file": "src/codegen/batch.rs",
-    "line": 3529,
+    "line": 3534,
     "decision": "has_window",
     "conditions": 1,
     "vectors_required": 2,
@@ -1962,7 +1962,7 @@
   {
     "id": "codegen_batch_explain_2bdba3ef",
     "file": "src/codegen/batch.rs",
-    "line": 3531,
+    "line": 3536,
     "decision": "is_semi_join",
     "conditions": 1,
     "vectors_required": 2,
@@ -1972,7 +1972,7 @@
   {
     "id": "codegen_batch_explain_70a4dd37",
     "file": "src/codegen/batch.rs",
-    "line": 3541,
+    "line": 3544,
     "decision": "match (&columns_to_load, joins.is_empty()) {\n        (Some(cols), false) => cols\n            .iter()\n            .filter(|n| split_qualified(n).0.is_none_or(|t| t == from_name))\n            .cloned()\n            .collect(),\n        (Some(cols), true) => cols.clone(),\n        (None, _) => referenced_columns(select)?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -1982,7 +1982,7 @@
   {
     "id": "codegen_batch_explain_6971a0b9",
     "file": "src/codegen/batch.rs",
-    "line": 3554,
+    "line": 3557,
     "decision": "let Some(AstExpr {\n        kind: ExprKind::InSubquery { expr, .. },\n        ..\n    }) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -1992,7 +1992,7 @@
   {
     "id": "codegen_batch_explain_6e91b9da",
     "file": "src/codegen/batch.rs",
-    "line": 3559,
+    "line": 3562,
     "decision": "let Some(col_name) = expr_column_name(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2002,7 +2002,7 @@
   {
     "id": "codegen_batch_explain_c35882c6",
     "file": "src/codegen/batch.rs",
-    "line": 3564,
+    "line": 3567,
     "decision": "!main_cols.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2012,7 +2012,7 @@
   {
     "id": "codegen_batch_explain_2bdba3ef_2",
     "file": "src/codegen/batch.rs",
-    "line": 3568,
+    "line": 3571,
     "decision": "is_semi_join",
     "conditions": 1,
     "vectors_required": 2,
@@ -2022,7 +2022,7 @@
   {
     "id": "codegen_batch_explain_86015fb4",
     "file": "src/codegen/batch.rs",
-    "line": 3569,
+    "line": 3572,
     "decision": "let Some(AstExpr {\n            kind: ExprKind::InSubquery { expr, subquery, .. },\n            ..\n        }) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -2032,7 +2032,7 @@
   {
     "id": "codegen_batch_explain_399389ea",
     "file": "src/codegen/batch.rs",
-    "line": 3582,
+    "line": 3585,
     "decision": "!sub_cols.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2042,7 +2042,7 @@
   {
     "id": "codegen_batch_explain_a9a53d95",
     "file": "src/codegen/batch.rs",
-    "line": 3609,
+    "line": 3612,
     "decision": "!right_cols.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2052,7 +2052,7 @@
   {
     "id": "codegen_batch_explain_1adedc77",
     "file": "src/codegen/batch.rs",
-    "line": 3615,
+    "line": 3618,
     "decision": "match join.op {\n                JoinOp::Inner => \"HASH JOIN\",\n                JoinOp::Left => \"LEFT HASH JOIN\",\n                JoinOp::Right => \"RIGHT HASH JOIN\",\n                JoinOp::Full => \"FULL HASH JOIN\",\n                JoinOp::Cross => \"CROSS JOIN\",\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2062,7 +2062,7 @@
   {
     "id": "codegen_batch_explain_44ece24c",
     "file": "src/codegen/batch.rs",
-    "line": 3626,
+    "line": 3629,
     "decision": "let Some((list, column)) = unnest_of(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2072,7 +2072,7 @@
   {
     "id": "codegen_batch_explain_6416ea7f_2",
     "file": "src/codegen/batch.rs",
-    "line": 3630,
+    "line": 3633,
     "decision": "has_window",
     "conditions": 1,
     "vectors_required": 2,
@@ -2082,7 +2082,7 @@
   {
     "id": "codegen_batch_explain_1ef4fc0d",
     "file": "src/codegen/batch.rs",
-    "line": 3632,
+    "line": 3635,
     "decision": "let Item::Window(spec) = item",
     "conditions": 1,
     "vectors_required": 2,
@@ -2092,7 +2092,7 @@
   {
     "id": "codegen_batch_explain_bf203319",
     "file": "src/codegen/batch.rs",
-    "line": 3636,
+    "line": 3639,
     "decision": "let Some(program) = &program",
     "conditions": 1,
     "vectors_required": 2,
@@ -2102,7 +2102,7 @@
   {
     "id": "codegen_batch_explain_43e7e12d",
     "file": "src/codegen/batch.rs",
-    "line": 3637,
+    "line": 3640,
     "decision": "program\n            .opcodes()\n            .any(|op| matches!(op, Opcode::Filter { .. }))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2112,7 +2112,7 @@
   {
     "id": "codegen_batch_explain_fee390fc",
     "file": "src/codegen/batch.rs",
-    "line": 3641,
+    "line": 3644,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -2122,7 +2122,7 @@
   {
     "id": "codegen_batch_explain_e132c1ae",
     "file": "src/codegen/batch.rs",
-    "line": 3650,
+    "line": 3653,
     "decision": "!group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2132,7 +2132,7 @@
   {
     "id": "codegen_batch_explain_d3c9e140",
     "file": "src/codegen/batch.rs",
-    "line": 3653,
+    "line": 3656,
     "decision": "matches!(classify_item(item), Ok(Item::Agg(..)))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2142,7 +2142,7 @@
   {
     "id": "codegen_batch_explain_d3c9e140_2",
     "file": "src/codegen/batch.rs",
-    "line": 3662,
+    "line": 3665,
     "decision": "matches!(classify_item(item), Ok(Item::Agg(..)))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2152,7 +2152,7 @@
   {
     "id": "codegen_batch_explain_4a09e420",
     "file": "src/codegen/batch.rs",
-    "line": 3670,
+    "line": 3673,
     "decision": "matches!(select.distinct, Some(Distinctness::Distinct))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2162,7 +2162,7 @@
   {
     "id": "codegen_batch_explain_05e7b4ec",
     "file": "src/codegen/batch.rs",
-    "line": 3676,
+    "line": 3679,
     "decision": "!order_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2172,7 +2172,7 @@
   {
     "id": "codegen_batch_explain_c0950ae3",
     "file": "src/codegen/batch.rs",
-    "line": 3679,
+    "line": 3682,
     "decision": "let Some(limit) = select_limit(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2182,7 +2182,7 @@
   {
     "id": "codegen_batch_render_agg_pair_d7518bb1",
     "file": "src/codegen/batch.rs",
-    "line": 3740,
+    "line": 3743,
     "decision": "match src {\n        Some(s) => format!(\"{func:?}({s})\"),\n        None => format!(\"{func:?}\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2192,7 +2192,7 @@
   {
     "id": "codegen_batch_render_operands_5af8e39c",
     "file": "src/codegen/batch.rs",
-    "line": 3750,
+    "line": 3753,
     "decision": "match op {\n        Opcode::LoadColumn { reg, column } => format!(\"reg={reg} column={column}\"),\n        Opcode::LoadConst { reg, value } => format!(\"reg={reg} value={value}\"),\n        Opcode::Map { dst, op, a, b } => format!(\"dst={dst} op={op:?} a={a} b={b}\"),\n        Opcode::Filter { predicate } => format!(\"predicate=r{predicate}\"),\n        Opcode::Reduce { func, src, dst } => {\n            format!(\"dst={dst} {}\", render_agg_pair(*func, *src))\n        }\n        Opcode::GroupReduce {\n            group_by,\n            aggs,\n            agg_dst,\n        } => {\n            let aggs: Vec<String> = aggs\n                .iter()\n                .map(|(func, src)| render_agg_pair(*func, *src))\n                .collect();\n            format!(\n                \"group_by={group_by:?} aggs=[{}] agg_dst={agg_dst:?}\",\n                aggs.join(\", \")\n            )\n        }\n        Opcode::HashBuild {\n            key_cols,\n            payload_cols,\n            table,\n        } => format!(\"key_cols={key_cols:?} payload_cols={payload_cols:?} table={table}\"),\n        Opcode::HashProbe {\n            key_cols,\n            table,\n            payload_dst,\n            kind,\n        } => format!(\"key_cols={key_cols:?} table={table} payload_dst={payload_dst:?} kind={kind:?}\"),\n        Opcode::Unnest { src, dst } => format!(\"src={src} dst={dst}\"),\n        Opcode::HashProbeGroupReduce {\n            key_cols,\n            table,\n            kind,\n            group_by,\n            aggs,\n            agg_dst,\n        } => {\n            let aggs: Vec<String> = aggs\n                .iter()\n                .map(|(func, src)| match src {\n                    Some(s) => format!(\"{func:?}({s:?})\"),\n                    None => format!(\"{func:?}\"),\n                })\n                .collect();\n            format!(\n                \"key_cols={key_cols:?} table={table} kind={kind:?} group_by={group_by:?} aggs=[{}] agg_dst={agg_dst:?}\",\n                aggs.join(\", \")\n            )\n        }\n        Opcode::Window {\n            func,\n            arg,\n            offset,\n            partition_by,\n            order_by,\n            dst,\n        } => format!(\n            \"dst={dst} func={func:?} arg={arg:?} offset={offset:?} partition_by={partition_by:?} order_by={order_by:?}\"\n        ),\n        Opcode::Scan => String::new(),\n        Opcode::ScanSource(source) => render_scan_source(source),\n        Opcode::Emit { registers } => format!(\"registers={registers:?}\"),\n        Opcode::NextSegment { loop_start } => format!(\"loop_start={loop_start}\"),\n        Opcode::Halt => String::new(),\n        Opcode::Combine {\n            agg_parts,\n            num_group_keys,\n            distinct,\n            output_order,\n            project,\n        } => {\n            let mut operands =\n                format!(\"agg_parts={agg_parts:?} num_group_keys={num_group_keys} distinct={distinct}\");\n            if !output_order.is_empty() {\n                operands = format!(\"{operands} output_order={output_order:?}\");\n            }\n            if !project.is_empty() {\n                let steps: Vec<String> = project\n                    .iter()\n                    .map(|op| format!(\"{} {}\", op.name(), render_operands(op)))\n                    .collect();\n                operands = format!(\"{operands} project=[{}]\", steps.join(\"; \"));\n            }\n            operands\n        }\n        Opcode::Sort { keys, hidden } => format!(\"keys={keys:?} hidden={hidden}\"),\n        Opcode::Limit { n, offset } => format!(\"n={n} offset={offset}\"),\n        Opcode::Call { dst, name, args } => format!(\"dst={dst} name={name} args={args:?}\"),\n        // The item count, not the items: a list of a hundred ids would\n        // drown the plan.\n        Opcode::InList {\n            dst,\n            src,\n            list,\n            negated,\n        } => format!(\"dst={dst} src={src} items={} negated={negated}\", list.len()),\n        Opcode::Select {\n            dst,\n            cond,\n            then,\n            else_,\n        } => {\n            let arm = |b: &Branch| format!(\"r{}[{} ops]\", b.out, b.ops.len());\n            format!(\"dst={dst} cond={cond} then={} else={}\", arm(then), arm(else_))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2202,7 +2202,7 @@
   {
     "id": "codegen_batch_render_operands_be0ddc22",
     "file": "src/codegen/batch.rs",
-    "line": 3794,
+    "line": 3797,
     "decision": "match src {\n                    Some(s) => format!(\"{func:?}({s:?})\"),\n                    None => format!(\"{func:?}\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2212,7 +2212,7 @@
   {
     "id": "codegen_batch_render_operands_b8899a3c",
     "file": "src/codegen/batch.rs",
-    "line": 3828,
+    "line": 3831,
     "decision": "!output_order.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2222,7 +2222,7 @@
   {
     "id": "codegen_batch_render_operands_1e899256",
     "file": "src/codegen/batch.rs",
-    "line": 3831,
+    "line": 3834,
     "decision": "!project.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2232,7 +2232,7 @@
   {
     "id": "codegen_batch_render_scan_source_aaa8bef5",
     "file": "src/codegen/batch.rs",
-    "line": 3869,
+    "line": 3872,
     "decision": "match source {\n        ScanSource::RowTable { table, columns } => {\n            format!(\"row table={table} columns={columns:?}\")\n        }\n        #[cfg(feature = \"vm-stream\")]\n        ScanSource::Stream {\n            handle,\n            columns,\n            scope,\n        } => format!(\"stream handle={handle} columns={columns:?} scope={scope:?}\"),\n        #[cfg(not(feature = \"vm-stream\"))]\n        ScanSource::Stream { handle, columns } => {\n            format!(\"stream handle={handle} columns={columns:?}\")\n        }\n        ScanSource::InMemory(batch) => format!(\"in-memory rows={}\", batch.num_rows),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2242,7 +2242,7 @@
   {
     "id": "codegen_batch_explain_opcodes_662b2e01",
     "file": "src/codegen/batch.rs",
-    "line": 3898,
+    "line": 3901,
     "decision": "matches!(\n        &select.where_clause,\n        Some(AstExpr {\n            kind: ExprKind::InSubquery { .. },\n            ..\n        })\n    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -2252,7 +2252,7 @@
   {
     "id": "codegen_batch_explain_opcodes_810fe752",
     "file": "src/codegen/batch.rs",
-    "line": 3920,
+    "line": 3925,
     "decision": "select.from.as_ref().is_some_and(|f| !f.joins.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -2262,7 +2262,7 @@
   {
     "id": "codegen_batch_explain_opcodes_6416ea7f",
     "file": "src/codegen/batch.rs",
-    "line": 3943,
+    "line": 3948,
     "decision": "has_window",
     "conditions": 1,
     "vectors_required": 2,
@@ -2272,7 +2272,7 @@
   {
     "id": "codegen_batch_scan_detail_83096e6c",
     "file": "src/codegen/batch.rs",
-    "line": 3963,
+    "line": 3968,
     "decision": "stats\n        .source\n        .as_deref()\n        .is_some_and(|src| src.starts_with(\"sqlite \"))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2282,7 +2282,7 @@
   {
     "id": "codegen_batch_window_func_name_b9e23cda",
     "file": "src/codegen/batch.rs",
-    "line": 3982,
+    "line": 3987,
     "decision": "match func {\n        WindowFunc::RowNumber => \"ROW_NUMBER\",\n        WindowFunc::Rank => \"RANK\",\n        WindowFunc::DenseRank => \"DENSE_RANK\",\n        WindowFunc::Lag => \"LAG\",\n        WindowFunc::Lead => \"LEAD\",\n        WindowFunc::FirstValue => \"FIRST_VALUE\",\n        WindowFunc::LastValue => \"LAST_VALUE\",\n        WindowFunc::Sum => \"SUM\",\n        WindowFunc::Avg => \"AVG\",\n        WindowFunc::Count => \"COUNT\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2292,7 +2292,7 @@
   {
     "id": "codegen_batch_select_item_label_c8284e64",
     "file": "src/codegen/batch.rs",
-    "line": 4000,
+    "line": 4005,
     "decision": "let ResultColumn::Expr {\n        alias: Some(alias), ..\n    } = item",
     "conditions": 1,
     "vectors_required": 2,
@@ -2302,7 +2302,7 @@
   {
     "id": "codegen_batch_select_item_label_04ad2760",
     "file": "src/codegen/batch.rs",
-    "line": 4006,
+    "line": 4011,
     "decision": "match classify_item(item) {\n        Ok(Item::Column(name)) => name,\n        Ok(Item::Star) => \"*\".to_string(),\n        Ok(Item::Agg(func, Some(AggArg::Column(col)), _, true)) => {\n            format!(\"{}(DISTINCT {col})\", agg_func_name(func))\n        }\n        Ok(Item::Agg(func, Some(AggArg::Expr(expr)), _, true)) => {\n            format!(\n                \"{}(DISTINCT {})\",\n                agg_func_name(func),\n                expr_to_string(&expr)\n            )\n        }\n        Ok(Item::Agg(func, arg, _, _)) => match arg {\n            Some(AggArg::Column(col)) => format!(\"{}({col})\", agg_func_name(func)),\n            Some(AggArg::Expr(expr)) => {\n                format!(\"{}({})\", agg_func_name(func), expr_to_string(&expr))\n            }\n            None => format!(\"{}(*)\", agg_func_name(func)),\n        },\n        Ok(Item::Window(spec)) => format!(\"{}()\", window_func_name(spec.func)),\n        Ok(Item::Expr(expr) | Item::AggExpr(expr)) => expr_to_string(&expr),\n        Err(_) => String::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2312,7 +2312,7 @@
   {
     "id": "codegen_batch_select_item_label_ed7b0ea9",
     "file": "src/codegen/batch.rs",
-    "line": 4019,
+    "line": 4024,
     "decision": "match arg {\n            Some(AggArg::Column(col)) => format!(\"{}({col})\", agg_func_name(func)),\n            Some(AggArg::Expr(expr)) => {\n                format!(\"{}({})\", agg_func_name(func), expr_to_string(&expr))\n            }\n            None => format!(\"{}(*)\", agg_func_name(func)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2322,7 +2322,7 @@
   {
     "id": "codegen_batch_window_detail_1a6041d0",
     "file": "src/codegen/batch.rs",
-    "line": 4039,
+    "line": 4044,
     "decision": "!spec.partition_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2332,7 +2332,7 @@
   {
     "id": "codegen_batch_window_detail_6522998c",
     "file": "src/codegen/batch.rs",
-    "line": 4042,
+    "line": 4047,
     "decision": "!spec.order_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2342,7 +2342,7 @@
   {
     "id": "codegen_batch_window_detail_c17aa996",
     "file": "src/codegen/batch.rs",
-    "line": 4048,
+    "line": 4053,
     "decision": "*desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -2352,7 +2352,7 @@
   {
     "id": "codegen_batch_window_detail_16a7702a",
     "file": "src/codegen/batch.rs",
-    "line": 4057,
+    "line": 4062,
     "decision": "!over.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -2362,7 +2362,7 @@
   {
     "id": "codegen_batch_literal_to_string_003fb36b",
     "file": "src/codegen/batch.rs",
-    "line": 4066,
+    "line": 4071,
     "decision": "match lit {\n        AstLiteral::Integer(v) => v.to_string(),\n        AstLiteral::Float(v) => v.to_string(),\n        AstLiteral::Str(v) => format!(\"'{v}'\"),\n        AstLiteral::Blob(_) => \"x'...'\".to_string(),\n        AstLiteral::Null => \"NULL\".to_string(),\n        AstLiteral::True => \"TRUE\".to_string(),\n        AstLiteral::False => \"FALSE\".to_string(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2372,7 +2372,7 @@
   {
     "id": "codegen_batch_bin_op_str_3750afb6",
     "file": "src/codegen/batch.rs",
-    "line": 4078,
+    "line": 4083,
     "decision": "match op {\n        AstBinOp::Add => \"+\",\n        AstBinOp::Sub => \"-\",\n        AstBinOp::Mul => \"*\",\n        AstBinOp::Div => \"/\",\n        AstBinOp::Eq => \"=\",\n        AstBinOp::Ne => \"!=\",\n        AstBinOp::Lt => \"<\",\n        AstBinOp::Le => \"<=\",\n        AstBinOp::Gt => \">\",\n        AstBinOp::Ge => \">=\",\n        AstBinOp::And => \"AND\",\n        AstBinOp::Or => \"OR\",\n        AstBinOp::Concat => \"||\",\n        AstBinOp::BitAnd => \"&\",\n        AstBinOp::BitOr => \"|\",\n        AstBinOp::Shl => \"<<\",\n        AstBinOp::Shr => \">>\",\n        AstBinOp::Mod => \"%\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2382,7 +2382,7 @@
   {
     "id": "codegen_batch_expr_to_string_b58daf04",
     "file": "src/codegen/batch.rs",
-    "line": 4103,
+    "line": 4108,
     "decision": "match &expr.kind {\n        // A `Column` always carries a name; `expr_column_name` is `None`\n        // only for non-column kinds, which this arm excludes. Plan text.\n        ExprKind::Column { .. } => expr_column_name(expr).unwrap_or_default(),\n        ExprKind::Literal(lit) => literal_to_string(lit),\n        ExprKind::Paren(inner) => expr_to_string(inner),\n        ExprKind::Binary { op, lhs, rhs } => {\n            format!(\n                \"{} {} {}\",\n                expr_to_string(lhs),\n                bin_op_str(*op),\n                expr_to_string(rhs)\n            )\n        }\n        ExprKind::InSubquery { expr, subquery, .. } => {\n            // Plan text only: the real compile reports a missing alias as\n            // `PlanError::Internal`; here it just renders as \"\".\n            let from = subquery\n                .from\n                .as_ref()\n                .and_then(|f| table_name(f).ok())\n                .unwrap_or_default();\n            format!(\"{} IN (SELECT ... FROM {from})\", expr_to_string(expr))\n        }\n        ExprKind::Exists { subquery, negated } => {\n            // Plan text only: the real compile reports a missing alias as\n            // `PlanError::Internal`; here it just renders as \"\".\n            let from = subquery\n                .from\n                .as_ref()\n                .and_then(|f| table_name(f).ok())\n                .unwrap_or_default();\n            format!(\n                \"{}EXISTS (SELECT ... FROM {from})\",\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Not,\n            expr: inner,\n        } => format!(\"NOT {}\", expr_to_string(inner)),\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Minus,\n            expr: inner,\n        } => format!(\"-{}\", expr_to_string(inner)),\n        ExprKind::Unary { expr: inner, .. } => expr_to_string(inner),\n        ExprKind::IsNull { expr, negated } => {\n            format!(\n                \"{} IS {}NULL\",\n                expr_to_string(expr),\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::Is { lhs, rhs, negated }\n            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>\n        {\n            format!(\n                \"{} IS {}NULL\",\n                expr_to_string(lhs),\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        _ => String::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2392,7 +2392,7 @@
   {
     "id": "codegen_batch_expr_to_string_50192d90",
     "file": "src/codegen/batch.rs",
-    "line": 4157,
+    "line": 4162,
     "decision": "matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2402,7 +2402,7 @@
   {
     "id": "codegen_batch_push_unique_c03a600a",
     "file": "src/codegen/batch.rs",
-    "line": 4170,
+    "line": 4175,
     "decision": "!out.contains(&name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2412,7 +2412,7 @@
   {
     "id": "codegen_batch_collect_expr_columns_0ab5c21d",
     "file": "src/codegen/batch.rs",
-    "line": 4176,
+    "line": 4181,
     "decision": "match &expr.kind {\n        ExprKind::Column { .. } => {\n            if let Some(name) = expr_column_name(expr) {\n                push_unique(out, name);\n            }\n        }\n        ExprKind::Literal(_) => {}\n        ExprKind::Paren(inner) => collect_expr_columns(inner, out),\n        ExprKind::Binary { lhs, rhs, .. } => {\n            collect_expr_columns(lhs, out);\n            collect_expr_columns(rhs, out);\n        }\n        ExprKind::InSubquery { expr, .. } => collect_expr_columns(expr, out),\n        ExprKind::Exists { .. } => {}\n        ExprKind::Unary { expr: inner, .. } => collect_expr_columns(inner, out),\n        ExprKind::IsNull { expr, .. } => collect_expr_columns(expr, out),\n        ExprKind::Is { lhs, .. } => collect_expr_columns(lhs, out),\n        ExprKind::Like { expr, pattern, .. } => {\n            collect_expr_columns(expr, out);\n            collect_expr_columns(pattern, out);\n        }\n        // A scalar call's (#307) column references are its arguments' --\n        // needed so a bare (non-`GROUP BY`) `SELECT json_extract(msg, ...)`\n        // pre-loads `msg` before `Filter`, same as any other expression.\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        } => {\n            for arg in list {\n                collect_expr_columns(arg, out);\n            }\n        }\n        _ => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2422,7 +2422,7 @@
   {
     "id": "codegen_batch_collect_expr_columns_657beef1",
     "file": "src/codegen/batch.rs",
-    "line": 4178,
+    "line": 4183,
     "decision": "let Some(name) = expr_column_name(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2432,7 +2432,7 @@
   {
     "id": "codegen_batch_referenced_columns_dd48752f",
     "file": "src/codegen/batch.rs",
-    "line": 4222,
+    "line": 4227,
     "decision": "match item {\n            Item::Column(name) => push_unique(&mut out, name.clone()),\n            Item::Star => {}\n            Item::Agg(_, arg, filter, _) => {\n                match arg {\n                    Some(AggArg::Column(name)) => push_unique(&mut out, name.clone()),\n                    Some(AggArg::Expr(expr)) => collect_expr_columns(expr, &mut out),\n                    None => {}\n                }\n                if let Some(f) = filter {\n                    let mut cols = Vec::new();\n                    collect_expr_columns(f, &mut cols);\n                    for name in cols {\n                        push_unique(&mut out, name);\n                    }\n                }\n            }\n            Item::Window(spec) => {\n                if let Some(arg) = &spec.arg {\n                    push_unique(&mut out, arg.clone());\n                }\n                for name in &spec.partition_by {\n                    push_unique(&mut out, name.clone());\n                }\n                for (name, _) in &spec.order_by {\n                    push_unique(&mut out, name.clone());\n                }\n                if let Some(f) = &spec.filter {\n                    collect_expr_columns(f, &mut out);\n                }\n            }\n            Item::Expr(expr) | Item::AggExpr(expr) => collect_expr_columns(expr, &mut out),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2442,7 +2442,7 @@
   {
     "id": "codegen_batch_referenced_columns_6a00b92a",
     "file": "src/codegen/batch.rs",
-    "line": 4226,
+    "line": 4231,
     "decision": "match arg {\n                    Some(AggArg::Column(name)) => push_unique(&mut out, name.clone()),\n                    Some(AggArg::Expr(expr)) => collect_expr_columns(expr, &mut out),\n                    None => {}\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2452,7 +2452,7 @@
   {
     "id": "codegen_batch_referenced_columns_64cb657e",
     "file": "src/codegen/batch.rs",
-    "line": 4231,
+    "line": 4236,
     "decision": "let Some(f) = filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -2462,7 +2462,7 @@
   {
     "id": "codegen_batch_referenced_columns_191cd68b",
     "file": "src/codegen/batch.rs",
-    "line": 4240,
+    "line": 4245,
     "decision": "let Some(arg) = &spec.arg",
     "conditions": 1,
     "vectors_required": 2,
@@ -2472,7 +2472,7 @@
   {
     "id": "codegen_batch_referenced_columns_782e8a25",
     "file": "src/codegen/batch.rs",
-    "line": 4249,
+    "line": 4254,
     "decision": "let Some(f) = &spec.filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -2482,7 +2482,7 @@
   {
     "id": "codegen_batch_referenced_columns_fee390fc",
     "file": "src/codegen/batch.rs",
-    "line": 4256,
+    "line": 4261,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -2492,7 +2492,7 @@
   {
     "id": "codegen_batch_referenced_columns_c16d1873",
     "file": "src/codegen/batch.rs",
-    "line": 4259,
+    "line": 4264,
     "decision": "let Some(from) = &select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -2502,7 +2502,7 @@
   {
     "id": "codegen_batch_referenced_columns_64caf832",
     "file": "src/codegen/batch.rs",
-    "line": 4276,
+    "line": 4281,
     "decision": "!is_select_item_label",
     "conditions": 1,
     "vectors_required": 2,
@@ -2512,7 +2512,7 @@
   {
     "id": "codegen_batch_in_lists_9b234f67",
     "file": "src/codegen/batch.rs",
-    "line": 4408,
+    "line": 4413,
     "decision": "match op {\n                Opcode::InList { list, negated, .. } => Some((list.to_vec(), *negated)),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2522,7 +2522,7 @@
   {
     "id": "codegen_batch_case_compiles_to_nested_selects_with_the_loads_outside_the_arms_d03f1046",
     "file": "src/codegen/batch.rs",
-    "line": 4483,
+    "line": 4488,
     "decision": "match op {\n                Opcode::LoadColumn { column, .. } => Some(column.to_string()),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2532,7 +2532,7 @@
   {
     "id": "codegen_batch_agg_parts_of_8f0cfd37",
     "file": "src/codegen/batch.rs",
-    "line": 4883,
+    "line": 4888,
     "decision": "match op {\n                Opcode::Combine { agg_parts, .. } => Some(agg_parts.to_vec()),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2542,7 +2542,7 @@
   {
     "id": "codegen_batch_projection_shows_in_explain_and_disables_streaming_85f62131",
     "file": "src/codegen/batch.rs",
-    "line": 6283,
+    "line": 6290,
     "decision": "let Opcode::Combine { project, .. } = &mut instruction.opcode",
     "conditions": 1,
     "vectors_required": 2,
@@ -2552,7 +2552,7 @@
   {
     "id": "codegen_batch_a_long_segment_runs_in_slices_with_the_same_answer_9e415b21",
     "file": "src/codegen/batch.rs",
-    "line": 6357,
+    "line": 6364,
     "decision": "i % 97 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -2562,7 +2562,7 @@
   {
     "id": "codegen_batch_first_item_df63c3b2",
     "file": "src/codegen/batch.rs",
-    "line": 6567,
+    "line": 6574,
     "decision": "let ResultColumn::Expr { expr, .. } = &mut select.columns[0]",
     "conditions": 1,
     "vectors_required": 2,
@@ -2572,7 +2572,7 @@
   {
     "id": "codegen_batch_first_item_85e883fd",
     "file": "src/codegen/batch.rs",
-    "line": 6568,
+    "line": 6575,
     "decision": "let ExprKind::FunctionCall { distinct: d, .. } = &mut expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -2582,7 +2582,7 @@
   {
     "id": "codegen_batch_call_names_a5e14629",
     "file": "src/codegen/batch.rs",
-    "line": 6695,
+    "line": 6702,
     "decision": "match &i.opcode {\n                Opcode::Call { name, .. } => Some(name.to_string()),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -54210,10 +54210,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_batch_typed_in_list_cd079f7f",
+    "id": "vm_batch_typed_in_list_762eed8e",
     "file": "src/vm/batch.rs",
     "line": 5495,
-    "decision": "let Column::Int { data, valid } = column.as_ref()",
+    "decision": "matches!(column.as_ref(), Column::Int { .. } | Column::Float { .. })",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -55850,29 +55850,99 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_batch_int_in_list_7a80f0ca",
+    "id": "vm_batch_numeric_in_list_bdf9b855",
     "file": "src/vm/batch.rs",
-    "line": 7721,
-    "decision": "match item {\n            Value::Int(n) => {\n                set.insert(*n);\n            }\n            Value::Null => has_null = true,\n            _ => return None,\n        }",
+    "line": 7725,
+    "decision": "match item {\n            Value::Int(n) if !float_rows => {\n                ints.insert(*n);\n            }\n            Value::Int(_) | Value::Float(_) => {\n                if let Some(key) = item.as_f64().and_then(float_key) {\n                    floats.insert(key);\n                }\n            }\n            Value::Null => has_null = true,\n            _ => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "vm_batch_int_in_list_bb76c592",
+    "id": "vm_batch_numeric_in_list_eca9f3c5",
     "file": "src/vm/batch.rs",
-    "line": 7734,
-    "decision": "!valid.get(i) || (!hit && has_null)",
-    "conditions": 3,
-    "vectors_required": 4,
+    "line": 7726,
+    "decision": "!float_rows",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_numeric_in_list_f8ef131a",
+    "file": "src/vm/batch.rs",
+    "line": 7730,
+    "decision": "let Some(key) = item.as_f64().and_then(float_key)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_numeric_in_list_cc59764c",
+    "file": "src/vm/batch.rs",
+    "line": 7739,
+    "decision": "match column {\n        Column::Int { data, valid } => (data.len(), valid),\n        Column::Float { data, valid } => (data.len(), valid),\n        _ => return None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_batch_numeric_in_list_7ec5e32b",
+    "file": "src/vm/batch.rs",
+    "line": 7744,
+    "decision": "match column {\n        Column::Int { data, .. } => data.get(i).is_some_and(|n| {\n            ints.contains(n)\n                || (!floats.is_empty() && Value::Int(*n).as_f64().is_some_and(float_hit))\n        }),\n        Column::Float { data, .. } => data.get(i).copied().is_some_and(float_hit),\n        _ => false,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_batch_float_key_4e677405",
+    "file": "src/vm/batch.rs",
+    "line": 7758,
+    "decision": "x.is_nan()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_float_key_531840b8",
+    "file": "src/vm/batch.rs",
+    "line": 7760,
+    "decision": "x == 0.0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_batch_in_list_answers_623f7a6b",
+    "file": "src/vm/batch.rs",
+    "line": 7780,
+    "decision": "match valid.get(i).then(|| hit(i)) {\n            Some(row_hit) if row_hit || !has_null => out.push(row_hit != negated),\n            _ => {\n                out.push(false);\n                out_valid.set(i, false);\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_batch_in_list_answers_bf777106",
+    "file": "src/vm/batch.rs",
+    "line": 7781,
+    "decision": "row_hit || !has_null",
+    "conditions": 2,
+    "vectors_required": 3,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "vm_batch_in_list_values_5f337291",
     "file": "src/vm/batch.rs",
-    "line": 7753,
+    "line": 7800,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -55882,7 +55952,7 @@
   {
     "id": "vm_batch_in_list_values_a57127ba",
     "file": "src/vm/batch.rs",
-    "line": 7764,
+    "line": 7811,
     "decision": "match acc {\n                    None => r,\n                    Some(prev) => three_valued(join, truth(&prev), truth(&r)),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -55892,7 +55962,7 @@
   {
     "id": "vm_batch_apply_map_op_6d9c07a7",
     "file": "src/vm/batch.rs",
-    "line": 7781,
+    "line": 7828,
     "decision": "matches!(op, MapOp::IsNull)",
     "conditions": 1,
     "vectors_required": 2,
@@ -55902,7 +55972,7 @@
   {
     "id": "vm_batch_apply_map_op_5e3cfcce",
     "file": "src/vm/batch.rs",
-    "line": 7784,
+    "line": 7831,
     "decision": "matches!(op, MapOp::IsNotNull)",
     "conditions": 1,
     "vectors_required": 2,
@@ -55912,7 +55982,7 @@
   {
     "id": "vm_batch_apply_map_op_33b2468b",
     "file": "src/vm/batch.rs",
-    "line": 7791,
+    "line": 7838,
     "decision": "matches!(op, MapOp::And | MapOp::Or)",
     "conditions": 1,
     "vectors_required": 2,
@@ -55922,7 +55992,7 @@
   {
     "id": "vm_batch_apply_map_op_0e991c46",
     "file": "src/vm/batch.rs",
-    "line": 7794,
+    "line": 7841,
     "decision": "matches!(a, Value::Null) || matches!(b, Value::Null)",
     "conditions": 2,
     "vectors_required": 3,
@@ -55932,7 +56002,7 @@
   {
     "id": "vm_batch_apply_map_op_0a426848",
     "file": "src/vm/batch.rs",
-    "line": 7801,
+    "line": 7848,
     "decision": "matches!(\n        op,\n        MapOp::Eq | MapOp::Ne | MapOp::Lt | MapOp::Le | MapOp::Gt | MapOp::Ge\n    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -55942,7 +56012,7 @@
   {
     "id": "vm_batch_apply_map_op_82edd754",
     "file": "src/vm/batch.rs",
-    "line": 7805,
+    "line": 7852,
     "decision": "match (a, b) {\n            (Value::Str(s), other) if converts_from_str(other) => {\n                return apply_map_op(op, &convert_str_like(s, other)?, b);\n            }\n            (other, Value::Str(s)) if converts_from_str(other) => {\n                return apply_map_op(op, a, &convert_str_like(s, other)?);\n            }\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -55952,7 +56022,7 @@
   {
     "id": "vm_batch_apply_map_op_1db352ac",
     "file": "src/vm/batch.rs",
-    "line": 7806,
+    "line": 7853,
     "decision": "converts_from_str(other)",
     "conditions": 1,
     "vectors_required": 2,
@@ -55962,7 +56032,7 @@
   {
     "id": "vm_batch_apply_map_op_1db352ac_2",
     "file": "src/vm/batch.rs",
-    "line": 7809,
+    "line": 7856,
     "decision": "converts_from_str(other)",
     "conditions": 1,
     "vectors_required": 2,
@@ -55972,7 +56042,7 @@
   {
     "id": "vm_batch_apply_map_op_e43d8ff0",
     "file": "src/vm/batch.rs",
-    "line": 7816,
+    "line": 7863,
     "decision": "match op {\n        MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {\n            let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });\n            return arithmetic(op, a, b).ok_or(if decimal {\n                VmError::DecimalOverflow { opcode: \"Map\" }\n            } else {\n                VmError::IntegerOverflow { opcode: \"Map\" }\n            });\n        }\n        MapOp::Eq => comparison(a, b, |o| o == Some(Equal)),\n        MapOp::Ne => comparison(a, b, |o| o != Some(Equal)),\n        MapOp::Lt => comparison(a, b, |o| o == Some(Less)),\n        MapOp::Le => comparison(a, b, |o| matches!(o, Some(Less | Equal))),\n        MapOp::Gt => comparison(a, b, |o| o == Some(Greater)),\n        MapOp::Ge => comparison(a, b, |o| matches!(o, Some(Greater | Equal))),\n        MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),\n        MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),\n        MapOp::Not => Value::Bool(!as_bool(a)),\n        MapOp::Concat => Value::Str(Cow::Owned(format!(\"{a}{b}\"))),\n        MapOp::Neg => match a {\n            // `-i64::MIN` has no integer representation: an error, as in\n            // DuckDB (#635), not SQLite's promotion to REAL.\n            Value::Int(v) => {\n                return v\n                    .checked_neg()\n                    .map(Value::Int)\n                    .ok_or(VmError::IntegerOverflow { opcode: \"Map\" });\n            }\n            Value::Float(v) => Value::Float(-v),\n            // In range by construction: |unscaled| < 10^38 both ways.\n            Value::Decimal { unscaled, scale } => Value::Decimal {\n                unscaled: unscaled.saturating_neg(),\n                scale: *scale,\n            },\n            _ => Value::Null,\n        },\n        // Already answered by the early returns above (they must see\n        // `Null`); the same semantics here keep this match total without\n        // an `unreachable!` the qualified subset forbids.\n        MapOp::IsNull => Value::Bool(matches!(a, Value::Null)),\n        MapOp::IsNotNull => Value::Bool(!matches!(a, Value::Null)),\n        MapOp::Copy => a.clone(),\n        MapOp::MaskIf => {\n            // MaskIf keeps `a` wherever the predicate register is true.\n            if matches!(b, Value::Bool(true)) {\n                a.clone()\n            } else {\n                Value::Null\n            }\n        }\n        MapOp::Like { negated, nocase } => {\n            let (text, pattern) = (a.to_string(), b.to_string());\n            let matched = if nocase {\n                crate::functions::like_match_exact(&text.to_lowercase(), &pattern.to_lowercase())\n            } else {\n                crate::functions::like_match_exact(&text, &pattern)\n            };\n            Value::Bool(matched != negated)\n        }\n        MapOp::Glob { negated } => {\n            let matched = crate::functions::glob_match(&a.to_string(), &b.to_string());\n            Value::Bool(matched != negated)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -55982,7 +56052,7 @@
   {
     "id": "vm_batch_apply_map_op_09567692",
     "file": "src/vm/batch.rs",
-    "line": 7819,
+    "line": 7866,
     "decision": "decimal",
     "conditions": 1,
     "vectors_required": 2,
@@ -55992,7 +56062,7 @@
   {
     "id": "vm_batch_apply_map_op_ce99a4d1",
     "file": "src/vm/batch.rs",
-    "line": 7835,
+    "line": 7882,
     "decision": "match a {\n            // `-i64::MIN` has no integer representation: an error, as in\n            // DuckDB (#635), not SQLite's promotion to REAL.\n            Value::Int(v) => {\n                return v\n                    .checked_neg()\n                    .map(Value::Int)\n                    .ok_or(VmError::IntegerOverflow { opcode: \"Map\" });\n            }\n            Value::Float(v) => Value::Float(-v),\n            // In range by construction: |unscaled| < 10^38 both ways.\n            Value::Decimal { unscaled, scale } => Value::Decimal {\n                unscaled: unscaled.saturating_neg(),\n                scale: *scale,\n            },\n            _ => Value::Null,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56002,7 +56072,7 @@
   {
     "id": "vm_batch_apply_map_op_2ce6a5d0",
     "file": "src/vm/batch.rs",
-    "line": 7860,
+    "line": 7907,
     "decision": "matches!(b, Value::Bool(true))",
     "conditions": 1,
     "vectors_required": 2,
@@ -56012,7 +56082,7 @@
   {
     "id": "vm_batch_apply_map_op_c6f43d9e",
     "file": "src/vm/batch.rs",
-    "line": 7868,
+    "line": 7915,
     "decision": "nocase",
     "conditions": 1,
     "vectors_required": 2,
@@ -56022,7 +56092,7 @@
   {
     "id": "vm_batch_arithmetic_495bc58f",
     "file": "src/vm/batch.rs",
-    "line": 7893,
+    "line": 7940,
     "decision": "op == MapOp::Div",
     "conditions": 1,
     "vectors_required": 2,
@@ -56032,7 +56102,7 @@
   {
     "id": "vm_batch_arithmetic_5f45d1c0",
     "file": "src/vm/batch.rs",
-    "line": 7896,
+    "line": 7943,
     "decision": "let (Value::Int(x), Value::Int(y)) = (a, b)",
     "conditions": 1,
     "vectors_required": 2,
@@ -56042,7 +56112,7 @@
   {
     "id": "vm_batch_arithmetic_62c86514",
     "file": "src/vm/batch.rs",
-    "line": 7899,
+    "line": 7946,
     "decision": "match (decimal_parts(a), decimal_parts(b)) {\n        (Some(l), Some(r)) => decimal_arith_op(op, l, r),\n        _ => Some(Value::Float(arith_op(op, x, y))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56052,7 +56122,7 @@
   {
     "id": "vm_batch_decimal_parts_84d63730",
     "file": "src/vm/batch.rs",
-    "line": 7908,
+    "line": 7955,
     "decision": "match v {\n        Value::Int(i) => Some((i128::from(*i), 0)),\n        Value::Decimal { unscaled, scale } => Some((*unscaled, *scale)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56062,7 +56132,7 @@
   {
     "id": "vm_batch_int_arith_op_e293d9db",
     "file": "src/vm/batch.rs",
-    "line": 7918,
+    "line": 7965,
     "decision": "match op {\n        MapOp::Add => x.checked_add(y),\n        MapOp::Sub => x.checked_sub(y),\n        MapOp::Mul => x.checked_mul(y),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56072,7 +56142,7 @@
   {
     "id": "vm_batch_decimal_arith_op_a5e0764f",
     "file": "src/vm/batch.rs",
-    "line": 7929,
+    "line": 7976,
     "decision": "match op {\n        MapOp::Mul => (u1.checked_mul(u2)?, s1.checked_add(s2)?),\n        MapOp::Add | MapOp::Sub => {\n            let scale = s1.max(s2);\n            let l = u1.checked_mul(pow10(u32::from(scale.saturating_sub(s1)))?)?;\n            let r = u2.checked_mul(pow10(u32::from(scale.saturating_sub(s2)))?)?;\n            let sum = if op == MapOp::Add {\n                l.checked_add(r)?\n            } else {\n                l.checked_sub(r)?\n            };\n            (sum, scale)\n        }\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56082,7 +56152,7 @@
   {
     "id": "vm_batch_decimal_arith_op_4de310f3",
     "file": "src/vm/batch.rs",
-    "line": 7935,
+    "line": 7982,
     "decision": "op == MapOp::Add",
     "conditions": 1,
     "vectors_required": 2,
@@ -56092,7 +56162,7 @@
   {
     "id": "vm_batch_convert_str_like_ed76f939",
     "file": "src/vm/batch.rs",
-    "line": 7974,
+    "line": 8021,
     "decision": "match like {\n        Value::Int(_) => text\n            .parse::<i64>()\n            .map(Value::Int)\n            .map_err(|_| fail(\"INTEGER\")),\n        Value::Float(_) | Value::Decimal { .. } => text\n            .parse::<f64>()\n            .ok()\n            .filter(|f| f.is_finite())\n            .map(Value::Float)\n            .ok_or_else(|| fail(\"DOUBLE\")),\n        // A boolean: the only other type `converts_from_str` admits.\n        _ => match text.to_ascii_lowercase().as_str() {\n            \"true\" | \"t\" | \"1\" => Ok(Value::Bool(true)),\n            \"false\" | \"f\" | \"0\" => Ok(Value::Bool(false)),\n            _ => Err(fail(\"BOOLEAN\")),\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56102,7 +56172,7 @@
   {
     "id": "vm_batch_convert_str_like_b52ad226",
     "file": "src/vm/batch.rs",
-    "line": 7986,
+    "line": 8033,
     "decision": "match text.to_ascii_lowercase().as_str() {\n            \"true\" | \"t\" | \"1\" => Ok(Value::Bool(true)),\n            \"false\" | \"f\" | \"0\" => Ok(Value::Bool(false)),\n            _ => Err(fail(\"BOOLEAN\")),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56112,7 +56182,7 @@
   {
     "id": "vm_batch_truth_bc042ab3",
     "file": "src/vm/batch.rs",
-    "line": 7996,
+    "line": 8043,
     "decision": "match v {\n        Value::Null => None,\n        other => Some(as_bool(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56122,7 +56192,7 @@
   {
     "id": "vm_batch_kleene_61a5761d",
     "file": "src/vm/batch.rs",
-    "line": 8012,
+    "line": 8059,
     "decision": "match (a, b) {\n        (Some(x), _) | (_, Some(x)) if x == decided => Some(decided),\n        (Some(_), Some(_)) => Some(!decided),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56132,7 +56202,7 @@
   {
     "id": "vm_batch_kleene_0fcc177a",
     "file": "src/vm/batch.rs",
-    "line": 8013,
+    "line": 8060,
     "decision": "x == decided",
     "conditions": 1,
     "vectors_required": 2,
@@ -56142,7 +56212,7 @@
   {
     "id": "vm_batch_len_94c8a785",
     "file": "src/vm/batch.rs",
-    "line": 8031,
+    "line": 8078,
     "decision": "match self {\n            CompareOperand::Int(column) | CompareOperand::Float(column) => Some(column.len()),\n            CompareOperand::ConstInt(_) | CompareOperand::ConstFloat(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56152,7 +56222,7 @@
   {
     "id": "vm_batch_at_3447690f",
     "file": "src/vm/batch.rs",
-    "line": 8065,
+    "line": 8112,
     "decision": "match self.0.as_ref() {\n            Column::Int { data, valid } if valid.get(i) => data.get(i).copied(),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56162,7 +56232,7 @@
   {
     "id": "vm_batch_at_5103f6df",
     "file": "src/vm/batch.rs",
-    "line": 8066,
+    "line": 8113,
     "decision": "valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -56172,7 +56242,7 @@
   {
     "id": "vm_batch_at_50f360d6",
     "file": "src/vm/batch.rs",
-    "line": 8074,
+    "line": 8121,
     "decision": "match self.0.as_ref() {\n            Column::Int { data, valid } if valid.get(i) => data.get(i).map(|&x| int_as_f64(x)),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56182,7 +56252,7 @@
   {
     "id": "vm_batch_at_5103f6df_2",
     "file": "src/vm/batch.rs",
-    "line": 8075,
+    "line": 8122,
     "decision": "valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -56192,7 +56262,7 @@
   {
     "id": "vm_batch_at_9c262336",
     "file": "src/vm/batch.rs",
-    "line": 8083,
+    "line": 8130,
     "decision": "match self.0.as_ref() {\n            Column::Float { data, valid } if valid.get(i) => data.get(i).copied(),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56202,7 +56272,7 @@
   {
     "id": "vm_batch_at_5103f6df_3",
     "file": "src/vm/batch.rs",
-    "line": 8084,
+    "line": 8131,
     "decision": "valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -56212,7 +56282,7 @@
   {
     "id": "vm_batch_compare_with_1dfee88c",
     "file": "src/vm/batch.rs",
-    "line": 8097,
+    "line": 8144,
     "decision": "match rhs {\n        CompareOperand::ConstFloat(c) => compare_rows(op, len, lhs, &ConstRows(*c)),\n        CompareOperand::ConstInt(c) => compare_rows(op, len, lhs, &ConstRows(int_as_f64(*c))),\n        CompareOperand::Int(column) => compare_rows(op, len, lhs, &IntRows(Arc::clone(column))),\n        CompareOperand::Float(column) => compare_rows(op, len, lhs, &FloatRows(Arc::clone(column))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56222,7 +56292,7 @@
   {
     "id": "vm_batch_compare_ints_83cac31f",
     "file": "src/vm/batch.rs",
-    "line": 8113,
+    "line": 8160,
     "decision": "match (lhs, rhs) {\n        (CompareOperand::Int(a), CompareOperand::Int(b)) => {\n            compare_rows::<i64, _, _>(op, len, &IntRows(Arc::clone(a)), &IntRows(Arc::clone(b)))\n        }\n        (CompareOperand::Int(a), CompareOperand::ConstInt(c)) => {\n            compare_rows(op, len, &IntRows(Arc::clone(a)), &ConstRows(*c))\n        }\n        (CompareOperand::ConstInt(c), CompareOperand::Int(b)) => {\n            compare_rows(op, len, &ConstRows(*c), &IntRows(Arc::clone(b)))\n        }\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56232,7 +56302,7 @@
   {
     "id": "vm_batch_compare_rows_fedc03db",
     "file": "src/vm/batch.rs",
-    "line": 8138,
+    "line": 8185,
     "decision": "match (lhs.at(i), rhs.at(i)) {\n            (Some(x), Some(y)) => data.push(compare_ord(op, x, y)),\n            _ => {\n                data.push(false);\n                valid.set(i, false);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56242,7 +56312,7 @@
   {
     "id": "vm_batch_compare_ord_b0522422",
     "file": "src/vm/batch.rs",
-    "line": 8156,
+    "line": 8203,
     "decision": "match op {\n        MapOp::Eq => x == y,\n        MapOp::Ne => x != y,\n        MapOp::Lt => x < y,\n        MapOp::Le => x <= y,\n        MapOp::Gt => x > y,\n        MapOp::Ge => x >= y,\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56252,7 +56322,7 @@
   {
     "id": "vm_batch_column_num_at_62923587",
     "file": "src/vm/batch.rs",
-    "line": 8173,
+    "line": 8220,
     "decision": "match column {\n        Column::Int { data, valid } => {\n            if !valid.get(i) {\n                return None;\n            }\n            #[allow(\n                clippy::cast_precision_loss,\n                reason = \"matches Value::as_f64's existing `*v as f64` widening for Int\"\n            )]\n            data.get(i).map(|&x| (x as f64, true))\n        }\n        Column::Float { data, valid } => {\n            if !valid.get(i) {\n                return None;\n            }\n            data.get(i).map(|&x| (x, false))\n        }\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56262,7 +56332,7 @@
   {
     "id": "vm_batch_column_num_at_fa2abd69",
     "file": "src/vm/batch.rs",
-    "line": 8175,
+    "line": 8222,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -56272,7 +56342,7 @@
   {
     "id": "vm_batch_column_num_at_fa2abd69_2",
     "file": "src/vm/batch.rs",
-    "line": 8185,
+    "line": 8232,
     "decision": "!valid.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -56282,7 +56352,7 @@
   {
     "id": "vm_batch_arith_op_a3fb3dfe",
     "file": "src/vm/batch.rs",
-    "line": 8200,
+    "line": 8247,
     "decision": "match op {\n        MapOp::Add => x + y,\n        MapOp::Sub => x - y,\n        MapOp::Mul => x * y,\n        MapOp::Div => x / y,\n        _ => 0.0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56292,7 +56362,7 @@
   {
     "id": "vm_batch_compare_values_74ce17ce",
     "file": "src/vm/batch.rs",
-    "line": 8226,
+    "line": 8273,
     "decision": "match (a, b) {\n        (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),\n        (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),\n        // Two integers compare exactly, not through f64 (#845).\n        (Value::Int(x), Value::Int(y)) => Some(x.cmp(y)),\n        // A decimal compares exactly (#632).\n        (Value::Decimal { .. }, _) | (_, Value::Decimal { .. }) => numeric_cmp(a, b),\n        _ => a.as_f64()?.partial_cmp(&b.as_f64()?),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56302,7 +56372,7 @@
   {
     "id": "vm_batch_a_string_compared_with_a_number_is_converted_3ea8fb82",
     "file": "src/vm/batch.rs",
-    "line": 8309,
+    "line": 8356,
     "decision": "match cmp(MapOp::Eq, &a, &b) {\n                Err(VmError::Conversion { to: t, .. }) => assert_eq!(t, to),\n                other => panic!(\"{a:?} = {b:?}: {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56312,7 +56382,7 @@
   {
     "id": "vm_batch_compare_over_6d87909f",
     "file": "src/vm/batch.rs",
-    "line": 9113,
+    "line": 9160,
     "decision": "match side {\n            Side::Column(column) => Opcode::LoadColumn {\n                reg,\n                column: column.into(),\n            },\n            Side::Literal(value) => Opcode::LoadConst { reg, value },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56322,7 +56392,7 @@
   {
     "id": "vm_batch_reduce_over_typed_str_and_dict_columns_matches_the_value_path_3d86648d",
     "file": "src/vm/batch.rs",
-    "line": 10863,
+    "line": 10910,
     "decision": "match r {\n                    Some(s) => {\n                        let at = dict.iter().position(|d| &**d == *s).filter(|&at| at > 1);\n                        let at = at.unwrap_or_else(|| {\n                            dict.push((*s).into());\n                            dict.len() - 1\n                        });\n                        indices.push(u32::try_from(at).unwrap());\n                    }\n                    None => indices.push(0),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56332,7 +56402,7 @@
   {
     "id": "vm_batch_distinct_codes_collect_the_same_strings_with_or_without_the_bit_table_38660114",
     "file": "src/vm/batch.rs",
-    "line": 11106,
+    "line": 11153,
     "decision": "match &acc.extremes {\n                    Extremes::Strs(values, _) => {\n                        let mut v: Vec<String> = values.iter().map(|s| s.to_string()).collect();\n                        v.sort();\n                        v\n                    }\n                    _ => Vec::new(),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56342,7 +56412,7 @@
   {
     "id": "vm_batch_exact_string_distinct_collects_strings_and_refuses_anything_else_0ac42f8a",
     "file": "src/vm/batch.rs",
-    "line": 11186,
+    "line": 11233,
     "decision": "grouped",
     "conditions": 1,
     "vectors_required": 2,
@@ -56352,7 +56422,7 @@
   {
     "id": "vm_batch_exact_string_distinct_collects_strings_and_refuses_anything_else_cd025e95",
     "file": "src/vm/batch.rs",
-    "line": 11221,
+    "line": 11268,
     "decision": "let Some((len, tail)) = rest.split_first_chunk::<4>()",
     "conditions": 1,
     "vectors_required": 2,
@@ -56362,7 +56432,7 @@
   {
     "id": "vm_batch_exact_distinct_collects_integers_and_refuses_anything_else_0ac42f8a",
     "file": "src/vm/batch.rs",
-    "line": 11282,
+    "line": 11329,
     "decision": "grouped",
     "conditions": 1,
     "vectors_required": 2,
@@ -56372,7 +56442,7 @@
   {
     "id": "vm_batch_name_to_reg_bc77aadd",
     "file": "src/vm/batch.rs",
-    "line": 11978,
+    "line": 12025,
     "decision": "match name {\n            \"part\" => 0,\n            \"ord\" => 1,\n            \"val\" => 2,\n            other => panic!(\"unexpected test column: {other}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56382,7 +56452,7 @@
   {
     "id": "vm_batch_run_parallel_scans_all_segments_in_order_1887f16c",
     "file": "src/vm/batch.rs",
-    "line": 12460,
+    "line": 12507,
     "decision": "match &r[0] {\n                Value::Int(v) => *v,\n                other => panic!(\"expected Value::Int, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56392,7 +56462,7 @@
   {
     "id": "vm_batch_load_d1418253",
     "file": "src/vm/batch.rs",
-    "line": 12516,
+    "line": 12563,
     "decision": "!self.delay.is_zero()",
     "conditions": 1,
     "vectors_required": 2,
@@ -56402,7 +56472,7 @@
   {
     "id": "vm_batch_subset_0c27f214",
     "file": "src/vm/batch.rs",
-    "line": 12588,
+    "line": 12635,
     "decision": "match positions {\n                    Some(p) => p\n                        .iter()\n                        .map(|&i| batch_cell(&self.batch, name, i as usize))\n                        .collect(),\n                    None => (0..n).map(|i| batch_cell(&self.batch, name, i)).collect(),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56412,7 +56482,7 @@
   {
     "id": "vm_batch_load_columns_6d7ce722",
     "file": "src/vm/batch.rs",
-    "line": 12608,
+    "line": 12655,
     "decision": "!self.subset_loads",
     "conditions": 1,
     "vectors_required": 2,
@@ -56422,7 +56492,7 @@
   {
     "id": "vm_batch_gather_at_7b5f6f17",
     "file": "src/vm/batch.rs",
-    "line": 12616,
+    "line": 12663,
     "decision": "!self.can_gather",
     "conditions": 1,
     "vectors_required": 2,
@@ -56432,7 +56502,7 @@
   {
     "id": "vm_batch_late_fixture_7ba6769d",
     "file": "src/vm/batch.rs",
-    "line": 12633,
+    "line": 12680,
     "decision": "i % 7 == 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -56442,7 +56512,7 @@
   {
     "id": "vm_batch_late_fixture_98a22069",
     "file": "src/vm/batch.rs",
-    "line": 12635,
+    "line": 12682,
     "decision": "i % 11 == 5",
     "conditions": 1,
     "vectors_required": 2,
@@ -56452,7 +56522,7 @@
   {
     "id": "vm_batch_late_fixture_ccd4547d",
     "file": "src/vm/batch.rs",
-    "line": 12644,
+    "line": 12691,
     "decision": "match k {\n                Value::Int(v) => Value::Int(v * 10),\n                _ => Value::Str(\"null-key\".into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56462,7 +56532,7 @@
   {
     "id": "vm_batch_late_program_f8be12f4",
     "file": "src/vm/batch.rs",
-    "line": 12662,
+    "line": 12709,
     "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -56472,7 +56542,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_7ccb2b33",
     "file": "src/vm/batch.rs",
-    "line": 13759,
+    "line": 13806,
     "decision": "num_threads < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -56482,7 +56552,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_acb70138",
     "file": "src/vm/batch.rs",
-    "line": 13773,
+    "line": 13820,
     "decision": "i == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -56492,7 +56562,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_4b7f034b",
     "file": "src/vm/batch.rs",
-    "line": 13774,
+    "line": 13821,
     "decision": "done.load(Ordering::SeqCst) < others",
     "conditions": 1,
     "vectors_required": 2,
@@ -56502,7 +56572,7 @@
   {
     "id": "vm_batch_run_morsels_rebalances_across_skewed_segment_costs_2eba4a46",
     "file": "src/vm/batch.rs",
-    "line": 13775,
+    "line": 13822,
     "decision": "Instant::now() >= deadline",
     "conditions": 1,
     "vectors_required": 2,
@@ -56512,7 +56582,7 @@
   {
     "id": "vm_batch_is_null_5f337291",
     "file": "src/vm/batch.rs",
-    "line": 13865,
+    "line": 13912,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -56522,7 +56592,7 @@
   {
     "id": "vm_batch_dict_group_program_4d6a7d04",
     "file": "src/vm/batch.rs",
-    "line": 14384,
+    "line": 14431,
     "decision": "filtered",
     "conditions": 1,
     "vectors_required": 2,
@@ -56532,7 +56602,7 @@
   {
     "id": "vm_batch_group_reduce_typed_int_key_matches_the_value_key_path_5216460c",
     "file": "src/vm/batch.rs",
-    "line": 14561,
+    "line": 14608,
     "decision": "match i % 7 {\n                0 => None,\n                1 => Some(-(i % 13)),\n                2 => Some((i % 11) << 40),\n                _ => Some(i % 17),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56542,7 +56612,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_98a22246",
     "file": "src/vm/batch.rs",
-    "line": 14723,
+    "line": 14770,
     "decision": "i % 11 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -56552,7 +56622,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_35425997",
     "file": "src/vm/batch.rs",
-    "line": 14731,
+    "line": 14778,
     "decision": "match i % 5 {\n                0 => Value::Null,\n                r => Value::Str(format!(\"s{r}\").into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56562,7 +56632,7 @@
   {
     "id": "vm_batch_group_reduce_typed_composite_keys_match_the_value_key_path_a209a191",
     "file": "src/vm/batch.rs",
-    "line": 14738,
+    "line": 14785,
     "decision": "i % 13 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -56572,7 +56642,7 @@
   {
     "id": "vm_batch_group_reduce_dict_plus_int_composite_key_matches_the_value_key_path_bde636e8",
     "file": "src/vm/batch.rs",
-    "line": 14823,
+    "line": 14870,
     "decision": "ok",
     "conditions": 1,
     "vectors_required": 2,
@@ -56582,7 +56652,7 @@
   {
     "id": "vm_batch_running_agg_typed_extremes_match_a_sequential_fold_064cfdd7",
     "file": "src/vm/batch.rs",
-    "line": 15071,
+    "line": 15118,
     "decision": "match best {\n                    Some(b) if agg_cmp(v, &b) != want => Some(b),\n                    _ => Some(v.clone()),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -56592,7 +56662,7 @@
   {
     "id": "vm_batch_running_agg_typed_extremes_match_a_sequential_fold_dbd29e5a",
     "file": "src/vm/batch.rs",
-    "line": 15072,
+    "line": 15119,
     "decision": "agg_cmp(v, &b) != want",
     "conditions": 1,
     "vectors_required": 2,
@@ -56602,7 +56672,7 @@
   {
     "id": "vm_batch_in_list_both_ways_5f337291",
     "file": "src/vm/batch.rs",
-    "line": 15678,
+    "line": 15725,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -56612,7 +56682,7 @@
   {
     "id": "vm_batch_in_list_both_ways_87175388",
     "file": "src/vm/batch.rs",
-    "line": 15697,
+    "line": 15744,
     "decision": "match acc {\n                None => eq,\n                Some(prev) => {\n                    chain.push(Opcode::Map {\n                        dst: eq + 1,\n                        op: join,\n                        a: prev,\n                        b: eq,\n                    });\n                    eq + 1\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
