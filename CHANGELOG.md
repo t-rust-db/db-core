@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.211.0] - 2026-10-30
+
+### Added
+
+- `TierOptions::row_group_max_bytes` and `TierOptions::spill_bytes` (both `None` by default): bound a row group and the open hour's sealed pages by estimated in-memory bytes, so one setting fits narrow and wide tables (#854). A byte limit applies with its row limit.
+
+### Changed
+
+- A tiered table's hour close and day merge read their inputs a chunk at a time instead of mapping them, so a merge holds one row group per input, not every page it touched (#854). On 1M wide requests the peak fell from 1.8 GB to 211 MB.
+- `TierOptions` has two new public fields: struct literals need `..Default::default()` or the new fields.
+
 ## [0.210.0] - 2026-10-30
 
 ### Added
