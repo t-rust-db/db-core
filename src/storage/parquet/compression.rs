@@ -1,6 +1,5 @@
 //! Page-level decompression for the codecs Parquet writers actually use:
-//! a hand-rolled Snappy decompressor and ZSTD via the pure-Rust `ruzstd`
-//! crate (see `zstd.rs` for why ZSTD isn't hand-rolled too).
+//! hand-rolled Snappy and ZSTD decompressors (and the ZSTD compressor, #692).
 //! `Codec::Uncompressed` is a zero-copy passthrough.
 
 #[cfg(test)]
@@ -9,6 +8,7 @@ mod snappy;
 mod zstd;
 
 pub use snappy::SnappyError;
+pub(crate) use zstd::compress as zstd_compress;
 pub use zstd::ZstdError;
 
 use crate::storage::parquet::footer::Codec;

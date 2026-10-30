@@ -37972,7 +37972,7 @@
   {
     "id": "storage_parquet_compression_zstd_fmt_416a6666",
     "file": "src/storage/parquet/compression/zstd.rs",
-    "line": 48,
+    "line": 51,
     "decision": "match self {\n            ZstdError::Frame(e) => write!(f, \"zstd frame error: {e}\"),\n            ZstdError::Read(e) => write!(f, \"zstd read error: {e}\"),\n            ZstdError::SizeMismatch { expected, actual } => {\n                write!(\n                    f,\n                    \"zstd decompressed size mismatch: expected {expected}, got {actual}\"\n                )\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37982,7 +37982,7 @@
   {
     "id": "storage_parquet_compression_zstd_decompress_ec19dc69",
     "file": "src/storage/parquet/compression/zstd.rs",
-    "line": 79,
+    "line": 82,
     "decision": "uncompressed_size > data.len().saturating_mul(MAX_EXPANSION)",
     "conditions": 1,
     "vectors_required": 2,
@@ -38114,6 +38114,696 @@
     "file": "src/storage/parquet/compression/zstd/decoder_tests.rs",
     "line": 326,
     "decision": "let Ok(out) = decompress(&mutated, size)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_put_e82170a0",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 140,
+    "decision": "self.nbits >= 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_finish_plain_2eff0e2a",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 149,
+    "decision": "self.nbits > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_compress_940e9574",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 174,
+    "decision": "last",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_frame_header_62df4c9b",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 185,
+    "decision": "size < 256",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_frame_header_681c7405",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 188,
+    "decision": "size < 65_536 + 256",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_frame_header_0c91eb3e",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 195,
+    "decision": "let Ok(size) = u32::try_from(size)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_block_c3efeece",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 220,
+    "decision": "let Some(byte) = literals::run_byte(block)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_block_3984fcef",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 228,
+    "decision": "match body {\n        Some(body) if body.len() < block.len() => {\n            block_header(out, last, 2, body.len());\n            out.extend_from_slice(&body);\n        }\n        _ => {\n            *reps = saved;\n            block_header(out, last, 0, block.len());\n            out.extend_from_slice(block);\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_block_f38cf919",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 229,
+    "decision": "body.len() < block.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_id_33f4964c",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 287,
+    "decision": "match self {\n            Mode::Predefined => 0,\n            Mode::Rle(..) => 1,\n            Mode::Custom(..) => 2,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_table_dd2e7370",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 296,
+    "decision": "match self {\n            Mode::Predefined => None,\n            Mode::Rle(_, t) | Mode::Custom(_, t) => Some(t),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_description_94a5fba8",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 303,
+    "decision": "match self {\n            Mode::Predefined => {}\n            Mode::Rle(symbol, _) => out.push(*symbol),\n            Mode::Custom(desc, _) => out.extend_from_slice(desc),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_choose_mode_2553024b",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 322,
+    "decision": "distinct == 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_choose_mode_fbd52ebc",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 349,
+    "decision": "match custom {\n        Some((bits, desc, table)) if bits < default_bits => Some(Mode::Custom(desc, table)),\n        _ => Some(Mode::Predefined),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_choose_mode_b3a0eabe",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 350,
+    "decision": "bits < default_bits",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_sequences_faaf46ac",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 369,
+    "decision": "count == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_sequences_1d4f27cb",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 373,
+    "decision": "count < 128",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_sequences_7ee66c15",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 375,
+    "decision": "count < 0x7F00",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_write_sequences_d8331536",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 422,
+    "decision": "match states {\n            None => (\n                ll_t.any_state(c.ll.0),\n                of_t.any_state(c.of.0),\n                ml_t.any_state(c.ml.0),\n            ),\n            Some((ll_y, of_y, ml_y)) => {\n                // The decoder reads these updates ll, ml, of: write of, ml, ll.\n                let of = of_t.step(c.of.0, of_y);\n                let ml = ml_t.step(c.ml.0, ml_y);\n                let ll = ll_t.step(c.ll.0, ll_y);\n                for (s, y) in [(of, of_y), (ml, ml_y), (ll, ll_y)] {\n                    bw.put(\n                        u64::try_from(y.wrapping_sub(usize::from(s.base))).ok()?,\n                        u32::from(s.bits),\n                    );\n                }\n                (\n                    usize::from(ll.state),\n                    usize::from(of.state),\n                    usize::from(ml.state),\n                )\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_find_c386ad43",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 512,
+    "decision": "ip < limit",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_find_ffec5433",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 519,
+    "decision": "let Some(c) = candidate",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_find_90acd26f",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 523,
+    "decision": "len < MIN_MATCH",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_find_e4f32194",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 544,
+    "decision": "let Some(before) = ip.checked_sub(2)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_rep_offsets_a86e6d20",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 554,
+    "decision": "lit_len > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_longer_b64405e7",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 578,
+    "decision": "!(1..=ip.min(MAX_OFFSET.wrapping_sub(1))).contains(&offset)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_longer_0f8af2b8",
+    "file": "src/storage/parquet/compression/zstd/encoder.rs",
+    "line": 582,
+    "decision": "len > best.0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_76a818f6",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 20,
+    "decision": "let Some(byte) = run_byte(literals)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_bcbebdb3",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 25,
+    "decision": "literals.len() >= MIN_HUFFMAN",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_9cdab71e",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 26,
+    "decision": "let Some(section) = huffman(literals)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_a4f30d64",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 27,
+    "decision": "section.len() < literals.len().saturating_add(3)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_size_header_c87f0a2f",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 47,
+    "decision": "size < 32",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_size_header_9e7938b5",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 49,
+    "decision": "size < 4096",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_036b20c4",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 68,
+    "decision": "match lengths.get(symbol).copied().unwrap_or(0) {\n            0 => 0,\n            len => u8::try_from(max_bits.wrapping_add(1).wrapping_sub(u32::from(len))).unwrap_or(0),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_e4f88909",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 82,
+    "decision": "u32::from(sw) == w",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_d172239c",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 101,
+    "decision": "four",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_d131f4d2",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 114,
+    "decision": "!four",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_cc4c9a28",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 116,
+    "decision": "literals.len().max(body.len()) < 1024",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_a6ffc658",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 118,
+    "decision": "literals.len().max(body.len()) < 16_384",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_9362e30b",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 123,
+    "decision": "match format {\n        0 | 1 => 3,\n        2 => 4,\n        _ => 5,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_9e4f0431",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 128,
+    "decision": "body.len().max(literals.len()) >= 1usize.checked_shl(bits)?",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_code_lengths_f2cc70af",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 147,
+    "decision": "lengths.iter().all(|&l| u32::from(l) <= MAX_BITS)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_code_lengths_f66af409",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 151,
+    "decision": "*c > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_lengths_bf321b24",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 166,
+    "decision": "leaves.len() < 2",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_lengths_3c6acf89",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 180,
+    "decision": "match (l, i) {\n            (Some(l), Some(i)) if l <= i => {\n                *leaf = leaf.wrapping_add(1);\n                Some(leaf.wrapping_sub(1))\n            }\n            (Some(_), None) => {\n                *leaf = leaf.wrapping_add(1);\n                Some(leaf.wrapping_sub(1))\n            }\n            (_, Some(_)) => {\n                *internal = internal.wrapping_add(1);\n                Some(internal.wrapping_sub(1))\n            }\n            (None, None) => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_huffman_lengths_b65ce112",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 181,
+    "decision": "l <= i",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_tree_description_05ca0d5e",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 231,
+    "decision": "match (direct, fse) {\n        (Some(d), Some(f)) => Some(if f.len() < d.len() { f } else { d }),\n        (d, f) => d.or(f),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_tree_description_238f32d3",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 232,
+    "decision": "f.len() < d.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_fse_weights_400830c3",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 244,
+    "decision": "n < 2",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_normalize_5a9efa7a",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 286,
+    "decision": "present < 2",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_normalize_2d3ccdaf",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 292,
+    "decision": "h == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_normalize_4eadaec1",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 306,
+    "decision": "sum == size",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_normalize_b89acee8",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 314,
+    "decision": "grow",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_normalize_b89acee8_2",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 326,
+    "decision": "grow",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_normalize_b89acee8_3",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 333,
+    "decision": "grow",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_counts_36eb13bc",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 351,
+    "decision": "remaining > 1",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_counts_ab454165",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 360,
+    "decision": "value >= threshold",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_counts_faaf46ac",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 368,
+    "decision": "count == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_counts_dbfd2e1e",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 371,
+    "decision": "norm.get(symbol.wrapping_add(zeros)) == Some(&0)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_counts_a6e6f7d6",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 375,
+    "decision": "zeros >= 3",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_literals_write_counts_fd3b368d",
+    "file": "src/storage/parquet/compression/zstd/encoder/literals.rs",
+    "line": 381,
+    "decision": "remaining < threshold",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_text_0731ac83",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 62,
+    "decision": "out.len() < len",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_text_1690a7c6",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 65,
+    "decision": "rng.below(20) == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_random_pages_round_trip_9ca45e12",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 99,
+    "decision": "rng.below(4) == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input_c5dedd32",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 134,
+    "decision": "match rng.below(4) {\n            0 => rng.below(64) as usize,\n            1 => rng.below(2_000) as usize,\n            2 => rng.below(40_000) as usize,\n            _ => rng.below(300_000) as usize,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input_b74c4f48",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 143,
+    "decision": "data.len() < size",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input_0a511f80",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 144,
+    "decision": "match rng.below(4) {\n                0 if data.len() > 8 => {\n                    // Copy an earlier stretch, as a match would.\n                    let from = rng.below(data.len() as u64 - 4) as usize;\n                    let len = 1 + rng.below(300) as usize;\n                    for i in 0..len {\n                        let b = data[from + i % (data.len() - from)];\n                        data.push(b);\n                    }\n                }\n                1 => {\n                    let b = rng.below(alphabet as u64) as u8;\n                    data.extend(std::iter::repeat_n(b, 1 + rng.below(500) as usize));\n                }\n                _ => {\n                    for _ in 0..1 + rng.below(40) {\n                        let v = rng.below(alphabet as u64);\n                        data.push((v >> rng.below(skew)) as u8);\n                    }\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input_04f204a3",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 145,
+    "decision": "data.len() > 8",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_any_small_page_round_trips_89187645",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 191,
+    "decision": "rng.below(2) == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_parquet_compression_zstd_encoder_tests_any_small_page_round_trips_d5c79d7c",
+    "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
+    "line": 195,
+    "decision": "d.len() < size",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -41590,10 +42280,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_parquet_writer_write_page_fd71033d",
+    "id": "storage_parquet_writer_write_page_a855fd9f",
     "file": "src/storage/parquet/writer.rs",
     "line": 631,
-    "decision": "match compression {\n        Compression::Uncompressed => None,\n        Compression::Snappy => Some(snappy::compress(body)),\n        Compression::Zstd => Some(ruzstd::encoding::compress_to_vec(\n            body,\n            ruzstd::encoding::CompressionLevel::Fastest,\n        )),\n    }",
+    "decision": "match compression {\n        Compression::Uncompressed => None,\n        Compression::Snappy => Some(snappy::compress(body)),\n        Compression::Zstd => Some(super::compression::zstd_compress(body)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -41602,7 +42292,7 @@
   {
     "id": "storage_parquet_writer_write_page_35f4f30f",
     "file": "src/storage/parquet/writer.rs",
-    "line": 645,
+    "line": 642,
     "decision": "match data_encoding {\n        Some(encoding) => meta::data_page_header(&sizes, encoding),\n        None => meta::dictionary_page_header(&sizes),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41612,7 +42302,7 @@
   {
     "id": "storage_parquet_writer_encode_values_9d78696f",
     "file": "src/storage/parquet/writer.rs",
-    "line": 666,
+    "line": 663,
     "decision": "match values {\n        ColumnValues::Boolean(v) => {\n            let present: Vec<bool> = v.iter().flatten().copied().collect();\n            let mut data = Vec::new();\n            encode::plain_bool(&mut data, &present);\n            Ok(plain(data))\n        }\n        ColumnValues::Int32(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::Int64(v)\n        | ColumnValues::TimestampMicros(v)\n        | ColumnValues::TimestampNanos(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::Float(v) => {\n            let mut data = Vec::new();\n            for x in v.iter().flatten() {\n                data.extend_from_slice(&x.to_le_bytes());\n            }\n            Ok(plain(data))\n        }\n        ColumnValues::Double(v) => {\n            let mut data = Vec::new();\n            for x in v.iter().flatten() {\n                data.extend_from_slice(&x.to_le_bytes());\n            }\n            Ok(plain(data))\n        }\n        ColumnValues::Utf8(v) => dictionary_or_plain(v, options, |out, s| {\n            encode::plain_byte_array(out, s.as_bytes()).ok_or_else(|| too_large(\"string value\"))\n        }),\n        ColumnValues::Binary(v) => dictionary_or_plain(v, options, |out, b| {\n            encode::plain_byte_array(out, b).ok_or_else(|| too_large(\"binary value\"))\n        }),\n        ColumnValues::FixedLenByteArray(v) => dictionary_or_plain(v, options, |out, b| {\n            out.extend_from_slice(b);\n            Ok(())\n        }),\n        ColumnValues::UInt8(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&u32::from(*x).to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::UInt16(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&u32::from(*x).to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::UInt32(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        ColumnValues::UInt64(v) => dictionary_or_plain(v, options, |out, x| {\n            out.extend_from_slice(&x.to_le_bytes());\n            Ok(())\n        }),\n        // A map or list is written as its leaves (see `leaf`), never as\n        // one chunk.\n        ColumnValues::Map(_) => Err(WriteError::InvalidSchema(\n            \"a MAP column is written as its key and value leaves\".to_string(),\n        )),\n        ColumnValues::List(_) => Err(WriteError::InvalidSchema(\n            \"a LIST column is written as its element leaf\".to_string(),\n        )),\n        ColumnValues::Decimal(v) => {\n            let storage = match column_type {\n                ColumnType::Decimal { precision, .. } => DecimalStorage::for_precision(precision),\n                _ => DecimalStorage::Fixed16,\n            };\n            dictionary_or_plain(v, options, |out, x| {\n                out.extend_from_slice(&decimal_bytes(*x, storage));\n                Ok(())\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41622,7 +42312,7 @@
   {
     "id": "storage_parquet_writer_encode_values_9d39f3de",
     "file": "src/storage/parquet/writer.rs",
-    "line": 732,
+    "line": 729,
     "decision": "match column_type {\n                ColumnType::Decimal { precision, .. } => DecimalStorage::for_precision(precision),\n                _ => DecimalStorage::Fixed16,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41632,7 +42322,7 @@
   {
     "id": "storage_parquet_writer_decimal_bytes_1f089c7b",
     "file": "src/storage/parquet/writer.rs",
-    "line": 748,
+    "line": 745,
     "decision": "match storage {\n        DecimalStorage::Int32 => i32::try_from(unscaled)\n            .unwrap_or_default()\n            .to_le_bytes()\n            .to_vec(),\n        DecimalStorage::Int64 => i64::try_from(unscaled)\n            .unwrap_or_default()\n            .to_le_bytes()\n            .to_vec(),\n        DecimalStorage::Fixed16 => unscaled.to_be_bytes().to_vec(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41642,7 +42332,7 @@
   {
     "id": "storage_parquet_writer_dictionary_or_plain_9962985f",
     "file": "src/storage/parquet/writer.rs",
-    "line": 775,
+    "line": 772,
     "decision": "options.dictionary",
     "conditions": 1,
     "vectors_required": 2,
@@ -41652,7 +42342,7 @@
   {
     "id": "storage_parquet_writer_dictionary_or_plain_55151dd9",
     "file": "src/storage/parquet/writer.rs",
-    "line": 776,
+    "line": 773,
     "decision": "let Some(encoded) = dictionary(&present, options.dictionary_max_bytes, &encode_plain)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -41662,7 +42352,7 @@
   {
     "id": "storage_parquet_writer_dictionary_f7bc3940",
     "file": "src/storage/parquet/writer.rs",
-    "line": 795,
+    "line": 792,
     "decision": "present.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41672,7 +42362,7 @@
   {
     "id": "storage_parquet_writer_dictionary_d8a022e6",
     "file": "src/storage/parquet/writer.rs",
-    "line": 802,
+    "line": 799,
     "decision": "match ids.get(value) {\n            Some(id) => *id,\n            None => {\n                let Ok(id) = u32::try_from(ids.len()) else {\n                    return Ok(None);\n                };\n                encode_plain(&mut dictionary, value)?;\n                if dictionary.len() > max_bytes {\n                    return Ok(None);\n                }\n                ids.insert(value, id);\n                id\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41682,7 +42372,7 @@
   {
     "id": "storage_parquet_writer_dictionary_9976cdee",
     "file": "src/storage/parquet/writer.rs",
-    "line": 809,
+    "line": 806,
     "decision": "dictionary.len() > max_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -41692,7 +42382,7 @@
   {
     "id": "storage_parquet_writer_dictionary_8a36ce7b",
     "file": "src/storage/parquet/writer.rs",
-    "line": 818,
+    "line": 815,
     "decision": "ids.len().saturating_mul(2) > present.len()",
     "conditions": 1,
     "vectors_required": 2,
