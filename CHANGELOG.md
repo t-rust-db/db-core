@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.215.1] - 2026-10-30
+
+### Fixed
+
+- A `-wal` with an unusable header (0-byte, zeroed, bad magic or checksum, bad page size) is treated as empty, as SQLite does: reads recover the database file, and the first write restarts the WAL (#895).
+
 ## [0.215.0] - 2026-10-30
 
 ### Changed
