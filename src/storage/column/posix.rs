@@ -1,9 +1,8 @@
 //! Standard-filesystem `Vfs` implementation, backed by `std::fs::File`.
 
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io;
 use std::path::Path;
-use std::sync::Mutex;
 
 use crate::storage::column::mmap;
 use crate::storage::column::vfs::{MmapRegion, Vfs, VfsFile};
@@ -17,47 +16,36 @@ impl Vfs for PosixVfs {
 
     fn open(&self, path: &Path) -> io::Result<Self::File> {
         let file = File::open(path)?;
-        Ok(PosixFile {
-            file: Mutex::new(file),
-        })
+        Ok(PosixFile { file })
     }
 }
 
 /// A file opened from the local filesystem.
 ///
-/// `read_at` needs a cursor seek before reading (std::fs::File has no
-/// portable positioned-read that works identically on Unix and Windows),
-/// so the underlying `File` is guarded by a `Mutex` to keep `&self` reads
-/// safe under concurrent callers.
+/// `read_at` is a positioned read (`pread` / `seek_read`), which moves no
+/// shared cursor, so concurrent callers need no lock and read in parallel.
 pub struct PosixFile {
-    file: Mutex<File>,
+    file: File,
 }
 
 impl VfsFile for PosixFile {
     fn size(&self) -> io::Result<u64> {
-        self.file
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .metadata()
-            .map(|m| m.len())
+        self.file.metadata().map(|m| m.len())
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        let mut file = self
-            .file
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        file.seek(SeekFrom::Start(offset))?;
-        file.read(buf)
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::FileExt::read_at(&self.file, buf, offset)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::FileExt::seek_read(&self.file, buf, offset)
+        }
     }
 
     fn mmap(&self) -> io::Result<MmapRegion> {
-        mmap::map_file(
-            &self
-                .file
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        )
+        mmap::map_file(&self.file)
     }
 }
 

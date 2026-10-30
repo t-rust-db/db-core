@@ -25,12 +25,13 @@ use crate::parser::ast::{
     BinaryOp, Expr, ExprKind, Literal, OrderingTerm, ResultColumn, Select, TableRefKind,
 };
 use crate::parser::ParseError;
+use crate::storage::column::posix::PosixFile;
 use crate::storage::column::{
     annotation, decode_column_at, decode_column_full, Annotation, Decoded,
 };
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::{Field, FileError};
-use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, VfsFile};
+use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs};
 use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
 use crate::vm::column::{Bitmap, Column};
 use crate::vm::engine;
@@ -56,16 +57,26 @@ type Leaf = (String, usize, PhysicalType);
 /// One open Parquet file, presented as a single table.
 pub struct BatchEngine {
     path: PathBuf,
-    /// The whole file, memory-mapped; a fresh [`ParquetFile`] view is
-    /// opened over it per query (footer parsing is cheap; the data pages
-    /// are only touched by the columns a program loads).
-    data: MmapRegion,
+    /// Where the file's bytes are; a fresh [`ParquetFile`] view is opened
+    /// over it per query (footer parsing is cheap; the data pages are only
+    /// read for the columns a program loads).
+    data: Data,
     table: String,
     leaves: Vec<Leaf>,
     /// The TIMESTAMP columns and their units per second (#679).
     timestamps: Vec<(String, i64)>,
     num_rows: i64,
     num_row_groups: usize,
+}
+
+/// What a [`BatchEngine`] reads its file from.
+enum Data {
+    /// Bytes held in memory ([`BatchEngine::from_bytes`]).
+    Memory(MmapRegion),
+    /// A file on disk, read one column chunk at a time (#841): nothing
+    /// stays mapped, so a scan's resident memory is the chunks being
+    /// decoded, not every page it has touched.
+    Disk(PosixFile),
 }
 
 impl std::fmt::Debug for BatchEngine {
@@ -76,6 +87,15 @@ impl std::fmt::Debug for BatchEngine {
             .field("num_rows", &self.num_rows)
             .field("num_row_groups", &self.num_row_groups)
             .finish_non_exhaustive()
+    }
+}
+
+impl Data {
+    fn open(&self) -> Result<ParquetFile<'_>, crate::storage::parquet::FileError> {
+        match self {
+            Data::Memory(region) => ParquetFile::open(region),
+            Data::Disk(file) => ParquetFile::open_file(file),
+        }
     }
 }
 
@@ -97,17 +117,18 @@ impl BatchEngine {
     /// is the name queries use in `FROM`; [`path`](Self::path) returns it
     /// as a relative path since there is no file.
     pub fn from_bytes(table: &str, bytes: impl Into<Arc<[u8]>>) -> Result<Self, EngineError> {
-        Self::from_region(
+        Self::from_data(
             PathBuf::from(table),
             table.to_string(),
-            MmapRegion::Owned(bytes.into()),
+            Data::Memory(MmapRegion::Owned(bytes.into())),
         )
     }
 
-    fn from_region(path: PathBuf, table: String, data: MmapRegion) -> Result<Self, EngineError> {
+    fn from_data(path: PathBuf, table: String, data: Data) -> Result<Self, EngineError> {
         let (leaves, timestamps, num_rows, num_row_groups) = {
-            let file =
-                ParquetFile::open(&data).map_err(|e| EngineError::new(ErrorKind::Open, e))?;
+            let file = data
+                .open()
+                .map_err(|e| EngineError::new(ErrorKind::Open, e))?;
             (
                 leaf_columns(&file),
                 timestamp_columns(&file),
@@ -127,7 +148,9 @@ impl BatchEngine {
     }
 
     fn file(&self) -> Result<ParquetFile<'_>, EngineError> {
-        ParquetFile::open(&self.data).map_err(|e| EngineError::new(ErrorKind::Open, e))
+        self.data
+            .open()
+            .map_err(|e| EngineError::new(ErrorKind::Open, e))
     }
 
     fn column_names(&self) -> Vec<String> {
@@ -1795,14 +1818,13 @@ impl Engine for BatchEngine {
     fn open(path: &Path) -> Result<Self, EngineError> {
         let data = PosixVfs
             .open(path)
-            .and_then(|f| f.mmap())
             .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())))?;
         let table = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("data")
             .to_string();
-        Self::from_region(path.to_path_buf(), table, data)
+        Self::from_data(path.to_path_buf(), table, Data::Disk(data))
     }
 
     fn mode(&self) -> Mode {
