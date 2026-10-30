@@ -362,6 +362,11 @@ pub struct Pager {
     /// [`Pager::open`], same as stock SQLite; never read from or
     /// written to the database file. See [`SynchronousMode`].
     synchronous: SynchronousMode,
+    /// `page_size` minus the header's reserved-bytes-per-page (byte 20),
+    /// read once in `open` (#904). Every b-tree page layout and the
+    /// freelist trunk capacity must stop here, not at `page_size`: stock
+    /// SQLite treats the reserved tail as extension space.
+    usable_size: u32,
 }
 
 /// Byte offsets of the three header fields ([`crate::storage::row::header::DatabaseHeader`])
@@ -369,6 +374,8 @@ pub struct Pager {
 /// freelist trunk page (32-35), freelist page count (36-39). Patched
 /// in-place on page 1's raw buffer rather than round-tripping through a
 /// full header serializer, since no such serializer exists yet (#167).
+/// Header byte 20: bytes reserved at the end of each page.
+const RESERVED_SPACE_OFFSET: usize = 20;
 const PAGE_COUNT_OFFSET: usize = 28;
 const FREELIST_TRUNK_PAGE_OFFSET: usize = 32;
 const FREELIST_PAGE_COUNT_OFFSET: usize = 36;
@@ -463,7 +470,10 @@ impl Pager {
         let wal_pages = read_wal_pages(vfs, path, page_size)?;
 
         let source = WritablePageSource::from_file(db_file, page_size);
-        let journal_mode = journal_mode_from_page1(&source.read_page(1)?);
+        let page1 = source.read_page(1)?;
+        let journal_mode = journal_mode_from_page1(&page1);
+        let reserved = page1.get(RESERVED_SPACE_OFFSET).copied().unwrap_or(0);
+        let usable_size = page_size.saturating_sub(u32::from(reserved));
         Ok(Pager {
             lock,
             tx_lock_level: crate::storage::row::vfs::LockLevel::Shared,
@@ -483,7 +493,15 @@ impl Pager {
             journal_path,
             journal_mode,
             synchronous: SynchronousMode::default(),
+            usable_size,
         })
+    }
+
+    /// Bytes per page available to b-tree and freelist content
+    /// (`page_size` minus the header's reserved bytes, #904).
+    #[must_use]
+    pub(crate) fn usable_size(&self) -> u32 {
+        self.usable_size
     }
 
     /// Returns a mutable buffer for page `page_num` (1-based), reading it
@@ -1320,7 +1338,7 @@ impl Pager {
         let freelist_trunk_page = read_be_u32(&header, FREELIST_TRUNK_PAGE_OFFSET)?;
         let freelist_page_count = read_be_u32(&header, FREELIST_PAGE_COUNT_OFFSET)?;
 
-        let max_leaves = freelist::max_leaves_per_trunk(self.page_size) as usize;
+        let max_leaves = freelist::max_leaves_per_trunk(self.usable_size) as usize;
         let new_trunk_page = if freelist_trunk_page != 0 {
             let trunk_buf = self.read_page(freelist_trunk_page)?;
             let mut trunk = TrunkPage::parse(&trunk_buf)?;

@@ -69,7 +69,7 @@ pub fn delete_row(
     }
 
     // The page held exactly this one cell and has ancestors: it empties.
-    write_leaf_page(buf, header_start, leaf_page, &[])?;
+    write_leaf_page(buf, usable_size as usize, header_start, leaf_page, &[])?;
     pager.deallocate_page(leaf_page)?;
     free_overflow_chain(pager, overflow_page)?;
     collapse_into_ancestors(pager, usable_size, root_page, &ancestors, leaf_page)
@@ -151,8 +151,16 @@ fn collapse_into_ancestors(
             .iter()
             .map(|(child, key)| build_interior_cell(*child, *key))
             .collect();
+        let usable = pager.usable_size() as usize;
         let buf = pager.get_page_mut(parent_page)?;
-        return write_interior_page(buf, header_start, parent_page, &cell_bytes, rightmost);
+        return write_interior_page(
+            buf,
+            usable,
+            header_start,
+            parent_page,
+            &cell_bytes,
+            rightmost,
+        );
     }
 
     // The parent now has zero routing entries — its only remaining child
@@ -214,8 +222,16 @@ fn splice_child(
         .iter()
         .map(|(child, key)| build_interior_cell(*child, *key))
         .collect();
+    let usable = pager.usable_size() as usize;
     let buf = pager.get_page_mut(parent_page)?;
-    write_interior_page(buf, header_start, parent_page, &cell_bytes, rightmost)
+    write_interior_page(
+        buf,
+        usable,
+        header_start,
+        parent_page,
+        &cell_bytes,
+        rightmost,
+    )
 }
 
 /// The root page number can never change, so collapsing the root's sole
@@ -238,7 +254,13 @@ fn collapse_root(
         LEAF_TABLE => {
             let cells = collect_leaf_cells(&content, child_header_start, only_child, usable_size)?;
             let dest = pager.get_page_mut(root_page)?;
-            write_leaf_page(dest, root_header_start, root_page, &cell_bytes(cells))?;
+            write_leaf_page(
+                dest,
+                usable_size as usize,
+                root_header_start,
+                root_page,
+                &cell_bytes(cells),
+            )?;
         }
         INTERIOR_TABLE => {
             let (entries, rightmost) =
@@ -248,7 +270,14 @@ fn collapse_root(
                 .map(|(child, key)| build_interior_cell(*child, *key))
                 .collect();
             let dest = pager.get_page_mut(root_page)?;
-            write_interior_page(dest, root_header_start, root_page, &cells, rightmost)?;
+            write_interior_page(
+                dest,
+                usable_size as usize,
+                root_header_start,
+                root_page,
+                &cells,
+                rightmost,
+            )?;
         }
         other => {
             return Err(BtreeError::UnexpectedPageType {
@@ -579,7 +608,7 @@ mod tests {
         let emptied = pager.allocate_page().unwrap();
         {
             let buf = pager.get_page_mut(parent).unwrap();
-            write_interior_page(buf, 0, parent, &[], emptied).unwrap();
+            write_interior_page(buf, 512, 0, parent, &[], emptied).unwrap();
         }
 
         let err =
@@ -601,6 +630,7 @@ mod tests {
             let buf = pager.get_page_mut(parent).unwrap();
             write_interior_page(
                 buf,
+                512,
                 0,
                 parent,
                 &[build_interior_cell(other_child, 5)],
@@ -625,7 +655,7 @@ mod tests {
         let child_b = pager.allocate_page().unwrap();
         {
             let buf = pager.get_page_mut(child_b).unwrap();
-            write_leaf_page(buf, 0, child_b, &[]).unwrap();
+            write_leaf_page(buf, 512, 0, child_b, &[]).unwrap();
         }
         insert_row(&mut pager, &header, child_b, 42, b"payload").unwrap();
 
@@ -634,6 +664,7 @@ mod tests {
             let buf = pager.get_page_mut(1).unwrap();
             write_interior_page(
                 buf,
+                512,
                 header_start,
                 1,
                 &[build_interior_cell(child_a, 10)],
@@ -669,6 +700,7 @@ mod tests {
             let buf = pager.get_page_mut(mid_page).unwrap();
             write_interior_page(
                 buf,
+                512,
                 0,
                 mid_page,
                 &[build_interior_cell(emptied_child, 10)],
@@ -681,6 +713,7 @@ mod tests {
             let buf = pager.get_page_mut(1).unwrap();
             write_interior_page(
                 buf,
+                512,
                 header_start,
                 1,
                 &[build_interior_cell(mid_page, 50)],
@@ -712,6 +745,7 @@ mod tests {
             let buf = pager.get_page_mut(only_child).unwrap();
             write_interior_page(
                 buf,
+                512,
                 0,
                 only_child,
                 &[build_interior_cell(grandchild_a, 5)],
@@ -770,6 +804,7 @@ mod tests {
             let buf = pager.get_page_mut(parent).unwrap();
             write_interior_page(
                 buf,
+                512,
                 0,
                 parent,
                 &[build_interior_cell(other_child, 1)],
@@ -796,6 +831,7 @@ mod tests {
             let buf = pager.get_page_mut(parent).unwrap();
             write_interior_page(
                 buf,
+                512,
                 0,
                 parent,
                 &[build_interior_cell(old_child, 7)],
@@ -826,6 +862,7 @@ mod tests {
             let buf = pager.get_page_mut(parent).unwrap();
             write_interior_page(
                 buf,
+                512,
                 0,
                 parent,
                 &[build_interior_cell(entry_child, 3)],

@@ -396,8 +396,9 @@ fn repair_emptied_page(
                         encoding,
                     )?;
                     let cells: Vec<Vec<u8>> = cells.into_iter().map(|(_, bytes)| bytes).collect();
+                    let usable = pager.usable_size() as usize;
                     let buf = pager.get_page_mut(page)?;
-                    write_index_leaf_page(buf, header_start, page, &cells)?;
+                    write_index_leaf_page(buf, usable, header_start, page, &cells)?;
                 }
                 INTERIOR_INDEX => {
                     let (entries, rightmost) = collect_index_interior_entries(
@@ -460,8 +461,9 @@ fn repair_emptied_page(
                 None => {
                     // The parent's only child: the parent is empty as well.
                     pager.deallocate_page(page)?;
+                    let usable = pager.usable_size() as usize;
                     let buf = pager.get_page_mut(parent)?;
-                    write_index_leaf_page(buf, parent_start, parent, &[])?;
+                    write_index_leaf_page(buf, usable, parent_start, parent, &[])?;
                     page = parent;
                     ancestors = upper;
                     continue;
@@ -498,8 +500,9 @@ fn write_interior(
         .iter()
         .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))
         .collect();
+    let usable = pager.usable_size() as usize;
     let buf = pager.get_page_mut(page)?;
-    write_index_interior_page(buf, header_start, page, &cells, rightmost)
+    write_index_interior_page(buf, usable, header_start, page, &cells, rightmost)
 }
 
 /// Handles a delete target found at interior level when the tree already
@@ -538,8 +541,16 @@ fn delete_via_predecessor_swap(
                 .iter()
                 .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))
                 .collect();
+            let usable = pager.usable_size() as usize;
             let buf = pager.get_page_mut(interior_page)?;
-            write_index_interior_page(buf, header_start, interior_page, &cell_bytes, rightmost)?;
+            write_index_interior_page(
+                buf,
+                usable,
+                header_start,
+                interior_page,
+                &cell_bytes,
+                rightmost,
+            )?;
         }
         None => {
             // `entry_child`'s entire subtree is drained (nothing left to
@@ -640,8 +651,9 @@ fn extract_max_entry(
         .iter()
         .map(|(c, _, value_bytes)| build_index_interior_cell(*c, value_bytes))
         .collect();
+    let usable = pager.usable_size() as usize;
     let buf = pager.get_page_mut(page_num)?;
-    write_index_interior_page(buf, header_start, page_num, &cell_bytes, child)?;
+    write_index_interior_page(buf, usable, header_start, page_num, &cell_bytes, child)?;
     Ok(Some(max_bytes))
 }
 
@@ -673,8 +685,9 @@ fn remove_entry_by_child(
         .iter()
         .map(|(c, _, value_bytes)| build_index_interior_cell(*c, value_bytes))
         .collect();
+    let usable = pager.usable_size() as usize;
     let buf = pager.get_page_mut(page_num)?;
-    write_index_interior_page(buf, header_start, page_num, &cell_bytes, rightmost)?;
+    write_index_interior_page(buf, usable, header_start, page_num, &cell_bytes, rightmost)?;
     free_overflow_chain(pager, overflow_page)
 }
 
@@ -695,7 +708,7 @@ mod tests {
         page1[19] = 1;
         page1[28..32].copy_from_slice(&1u32.to_be_bytes());
         page1[56..60].copy_from_slice(&1u32.to_be_bytes());
-        write_index_leaf_page(&mut page1, 100, 1, &[]).unwrap();
+        write_index_leaf_page(&mut page1, 512, 100, 1, &[]).unwrap();
 
         let mut header_bytes = [0u8; 100];
         header_bytes.copy_from_slice(&page1[..100]);
@@ -958,7 +971,7 @@ mod tests {
     /// Empties page `page` (a leaf) in place, as an older release left it.
     fn empty_leaf(pager: &mut Pager, page: u32) {
         let buf = pager.get_page_mut(page).unwrap();
-        write_index_leaf_page(buf, page1_header_start(page), page, &[]).unwrap();
+        write_index_leaf_page(buf, 512, page1_header_start(page), page, &[]).unwrap();
     }
 
     /// The root's last separator entry: its key and the child to its left.

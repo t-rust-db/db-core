@@ -48,7 +48,7 @@ pub fn insert_row(
     let usable_size = header.usable_page_size();
     let cell = encode_leaf_cell(pager, usable_size, rowid, payload)?;
     let (ancestors, leaf_page) = find_leaf_page(pager, root_page, rowid)?;
-    let page_len = pager.get_page_mut(leaf_page)?.len();
+    let page_len = usable_size as usize;
     insert_into_leaf(
         pager,
         usable_size,
@@ -219,7 +219,13 @@ pub(super) fn insert_into_leaf(
         if !splice_insert_cell(buf, header_start, leaf_page, insert_pos, &cell)? {
             let mut cells = collect_leaf_cells(buf, header_start, leaf_page, usable_size)?;
             cells.insert(insert_pos, (rowid, cell));
-            write_leaf_page(buf, header_start, leaf_page, &cell_bytes(cells))?;
+            write_leaf_page(
+                buf,
+                usable_size as usize,
+                header_start,
+                leaf_page,
+                &cell_bytes(cells),
+            )?;
         }
         return Ok(());
     }
@@ -258,7 +264,7 @@ pub(super) fn insert_into_leaf(
             (pager.allocate_page()?, 0)
         };
         let buf = pager.get_page_mut(page)?;
-        write_leaf_page(buf, hs, page, &cell_bytes(group))?;
+        write_leaf_page(buf, usable_size as usize, hs, page, &cell_bytes(group))?;
         pages.push((page, divider));
     }
 
@@ -353,7 +359,14 @@ fn insert_into_parent(
         .saturating_add(total_bytes);
     if needed <= page_len {
         let buf = pager.get_page_mut(parent_page)?;
-        write_interior_page(buf, header_start, parent_page, &cell_bytes, rightmost)?;
+        write_interior_page(
+            buf,
+            usable_size as usize,
+            header_start,
+            parent_page,
+            &cell_bytes,
+            rightmost,
+        )?;
         return Ok(());
     }
 
@@ -381,7 +394,14 @@ fn insert_into_parent(
             .map(|(child, key)| build_interior_cell(*child, *key))
             .collect();
         let buf = pager.get_page_mut(parent_page)?;
-        write_interior_page(buf, header_start, parent_page, &cells, promoted_child)?;
+        write_interior_page(
+            buf,
+            usable_size as usize,
+            header_start,
+            parent_page,
+            &cells,
+            promoted_child,
+        )?;
     }
     {
         let cells: Vec<Vec<u8>> = right_entries
@@ -389,7 +409,14 @@ fn insert_into_parent(
             .map(|(child, key)| build_interior_cell(*child, *key))
             .collect();
         let buf = pager.get_page_mut(right_page_num)?;
-        write_interior_page(buf, 0, right_page_num, &cells, rightmost)?;
+        write_interior_page(
+            buf,
+            usable_size as usize,
+            0,
+            right_page_num,
+            &cells,
+            rightmost,
+        )?;
     }
 
     insert_into_parent(
@@ -425,7 +452,7 @@ fn root_split(
         LEAF_TABLE => {
             let cells = collect_leaf_cells(&content, header_start_root, root_page, usable_size)?;
             let dest = pager.get_page_mut(relocated)?;
-            write_leaf_page(dest, 0, relocated, &cell_bytes(cells))?;
+            write_leaf_page(dest, usable_size as usize, 0, relocated, &cell_bytes(cells))?;
         }
         INTERIOR_TABLE => {
             let (entries, rightmost) =
@@ -435,7 +462,7 @@ fn root_split(
                 .map(|(child, key)| build_interior_cell(*child, *key))
                 .collect();
             let dest = pager.get_page_mut(relocated)?;
-            write_interior_page(dest, 0, relocated, &cells, rightmost)?;
+            write_interior_page(dest, usable_size as usize, 0, relocated, &cells, rightmost)?;
         }
         other => {
             return Err(BtreeError::UnexpectedPageType {
@@ -447,7 +474,14 @@ fn root_split(
 
     let cell = build_interior_cell(relocated, divider);
     let buf = pager.get_page_mut(root_page)?;
-    write_interior_page(buf, header_start_root, root_page, &[cell], new_right)?;
+    write_interior_page(
+        buf,
+        usable_size as usize,
+        header_start_root,
+        root_page,
+        &[cell],
+        new_right,
+    )?;
     Ok(())
 }
 
@@ -689,12 +723,12 @@ mod tests {
     fn write_leaf_page_refuses_overfull_cells() {
         let mut buf = vec![0u8; 512];
         let cells: Vec<Vec<u8>> = (0..4).map(|_| vec![7u8; 150]).collect();
-        let err = write_leaf_page(&mut buf, 0, 2, &cells).unwrap_err();
+        let err = write_leaf_page(&mut buf, 512, 0, 2, &cells).unwrap_err();
         assert!(matches!(err, BtreeError::Internal(_)), "{err}");
         // Untouched: header byte still zero, not a stale/garbage type.
         assert_eq!(buf[0], 0);
         let fits: Vec<Vec<u8>> = (0..3).map(|_| vec![7u8; 150]).collect();
-        write_leaf_page(&mut buf, 0, 2, &fits).unwrap();
+        write_leaf_page(&mut buf, 512, 0, 2, &fits).unwrap();
         assert_eq!(buf[0], LEAF_TABLE);
     }
 
@@ -739,7 +773,7 @@ mod tests {
         {
             let cells = vec![build_interior_cell(5, 10)];
             let buf = pager.get_page_mut(parent_page).unwrap();
-            write_interior_page(buf, 0, parent_page, &cells, 6).unwrap();
+            write_interior_page(buf, 512, 0, parent_page, &cells, 6).unwrap();
         }
 
         let err = insert_into_parent(

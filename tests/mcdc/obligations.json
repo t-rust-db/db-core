@@ -44810,10 +44810,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_write_page_common_8ec7e8b9",
+    "id": "storage_row_btree_write_page_common_9f97d939",
     "file": "src/storage/row/btree.rs",
-    "line": 1400,
-    "decision": "needed > buf.len()",
+    "line": 1411,
+    "decision": "needed > usable",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -44822,7 +44822,7 @@
   {
     "id": "storage_row_btree_write_page_common_3b40d643",
     "file": "src/storage/row/btree.rs",
-    "line": 1429,
+    "line": 1440,
     "decision": "*off >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -44832,7 +44832,7 @@
   {
     "id": "storage_row_btree_write_page_common_0794c5c8",
     "file": "src/storage/row/btree.rs",
-    "line": 1448,
+    "line": 1459,
     "decision": "content_end >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -44842,7 +44842,7 @@
   {
     "id": "storage_row_btree_read_content_start_a5b1bbc4",
     "file": "src/storage/row/btree.rs",
-    "line": 1505,
+    "line": 1516,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -44852,7 +44852,7 @@
   {
     "id": "storage_row_btree_write_content_start_4730eeed",
     "file": "src/storage/row/btree.rs",
-    "line": 1514,
+    "line": 1525,
     "decision": "value >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -44862,7 +44862,7 @@
   {
     "id": "storage_row_btree_walk_freeblocks_1108b805",
     "file": "src/storage/row/btree.rs",
-    "line": 1561,
+    "line": 1572,
     "decision": "off != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -44872,7 +44872,7 @@
   {
     "id": "storage_row_btree_walk_freeblocks_907647a7",
     "file": "src/storage/row/btree.rs",
-    "line": 1563,
+    "line": 1574,
     "decision": "n > MAX_FREEBLOCKS",
     "conditions": 1,
     "vectors_required": 2,
@@ -44882,7 +44882,7 @@
   {
     "id": "storage_row_btree_add_freeblock_d839bf34",
     "file": "src/storage/row/btree.rs",
-    "line": 1607,
+    "line": 1618,
     "decision": "insert_pos > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -44892,7 +44892,7 @@
   {
     "id": "storage_row_btree_add_freeblock_7486b092",
     "file": "src/storage/row/btree.rs",
-    "line": 1608,
+    "line": 1619,
     "decision": "let Some(&(prev_off, prev_size)) = blocks.get(insert_pos.saturating_sub(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -44902,7 +44902,7 @@
   {
     "id": "storage_row_btree_add_freeblock_fb958b9e",
     "file": "src/storage/row/btree.rs",
-    "line": 1609,
+    "line": 1620,
     "decision": "prev_off.saturating_add(prev_size) == new_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -44912,7 +44912,7 @@
   {
     "id": "storage_row_btree_add_freeblock_dec9e257",
     "file": "src/storage/row/btree.rs",
-    "line": 1617,
+    "line": 1628,
     "decision": "let Some(&(next_off, next_size)) = blocks.get(insert_pos)",
     "conditions": 1,
     "vectors_required": 2,
@@ -44922,7 +44922,7 @@
   {
     "id": "storage_row_btree_add_freeblock_fa929836",
     "file": "src/storage/row/btree.rs",
-    "line": 1618,
+    "line": 1629,
     "decision": "new_start.saturating_add(new_size) == next_off",
     "conditions": 1,
     "vectors_required": 2,
@@ -44932,7 +44932,7 @@
   {
     "id": "storage_row_btree_splice_insert_cell_76dceda3",
     "file": "src/storage/row/btree.rs",
-    "line": 1649,
+    "line": 1660,
     "decision": "content_start < ptr_end || content_start.saturating_sub(ptr_end) < needed",
     "conditions": 2,
     "vectors_required": 3,
@@ -44942,7 +44942,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_2567997a",
     "file": "src/storage/row/btree.rs",
-    "line": 1693,
+    "line": 1704,
     "decision": "index >= num_cells",
     "conditions": 1,
     "vectors_required": 2,
@@ -44952,7 +44952,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_93677d86",
     "file": "src/storage/row/btree.rs",
-    "line": 1701,
+    "line": 1712,
     "decision": "has_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -44962,7 +44962,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1711,
+    "line": 1722,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -44972,7 +44972,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_5498646f",
     "file": "src/storage/row/btree.rs",
-    "line": 1723,
+    "line": 1734,
     "decision": "let Some(slice) = buf.get_mut(cell_start..cell_end)",
     "conditions": 1,
     "vectors_required": 2,
@@ -44982,7 +44982,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_b992bc34",
     "file": "src/storage/row/btree.rs",
-    "line": 1728,
+    "line": 1739,
     "decision": "cell_start == content_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -44992,7 +44992,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_a3c31294",
     "file": "src/storage/row/btree.rs",
-    "line": 1731,
+    "line": 1742,
     "decision": "let Some(pos) = blocks.iter().position(|&(o, _)| o == new_content_start)",
     "conditions": 1,
     "vectors_required": 2,
@@ -45002,7 +45002,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_7975dbd9",
     "file": "src/storage/row/btree.rs",
-    "line": 1737,
+    "line": 1748,
     "decision": "cell_len < MIN_FREEBLOCK_SIZE",
     "conditions": 1,
     "vectors_required": 2,
@@ -45012,7 +45012,7 @@
   {
     "id": "storage_row_btree_page1_header_start_dec9c314",
     "file": "src/storage/row/btree.rs",
-    "line": 1754,
+    "line": 1765,
     "decision": "page_num == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -45022,7 +45022,7 @@
   {
     "id": "storage_row_btree_require_interior_header_2fd27b70",
     "file": "src/storage/row/btree.rs",
-    "line": 1792,
+    "line": 1803,
     "decision": "page.len() < header_start.saturating_add(12)",
     "conditions": 1,
     "vectors_required": 2,
@@ -45032,7 +45032,7 @@
   {
     "id": "storage_row_btree_text_cf9777d8",
     "file": "src/storage/row/btree.rs",
-    "line": 1938,
+    "line": 1949,
     "decision": "match v {\n            Value::Text(s) => s,\n            other => panic!(\"expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45042,7 +45042,7 @@
   {
     "id": "storage_row_btree_int_50ac411a",
     "file": "src/storage/row/btree.rs",
-    "line": 1945,
+    "line": 1956,
     "decision": "match v {\n            Value::Integer(i) => *i,\n            other => panic!(\"expected integer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45052,7 +45052,7 @@
   {
     "id": "storage_row_btree_blob_0fd307c4",
     "file": "src/storage/row/btree.rs",
-    "line": 1952,
+    "line": 1963,
     "decision": "match v {\n            Value::Blob(b) => b,\n            other => panic!(\"expected blob, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45062,7 +45062,7 @@
   {
     "id": "storage_row_btree_table_multipage_full_scan_matches_oracle_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 1992,
+    "line": 2003,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45072,7 +45072,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_and_prev_walk_descending_rowid_order_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2038,
+    "line": 2049,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45082,7 +45082,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_matches_full_scans_final_row_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2067,
+    "line": 2078,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45092,7 +45092,7 @@
   {
     "id": "storage_row_btree_table_single_page_seek_binary_search_on_small_leaf_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2151,
+    "line": 2162,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45102,7 +45102,7 @@
   {
     "id": "storage_row_btree_sha256_of_8adec907",
     "file": "src/storage/row/btree.rs",
-    "line": 2399,
+    "line": 2410,
     "decision": "msg.len() % 64 != 56",
     "conditions": 1,
     "vectors_required": 2,
@@ -45112,7 +45112,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_885fe06a",
     "file": "src/storage/row/btree.rs",
-    "line": 2606,
+    "line": 2617,
     "decision": "value < 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -45122,7 +45122,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_c6634d1d",
     "file": "src/storage/row/btree.rs",
-    "line": 2614,
+    "line": 2625,
     "decision": "value == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -45132,7 +45132,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_832a894a",
     "file": "src/storage/row/btree.rs",
-    "line": 2620,
+    "line": 2631,
     "decision": "i + 1 == chunks.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -45142,7 +45142,7 @@
   {
     "id": "storage_row_btree_local_payload_borrows_from_the_page_instead_of_copying_a3f083e9",
     "file": "src/storage/row/btree.rs",
-    "line": 2712,
+    "line": 2723,
     "decision": "match &row.payload {\n            Payload::Local { page, .. } => {\n                assert!(\n                    Rc::strong_count(page) >= 2,\n                    \"expected the row to share the page's Rc, not hold the only reference\"\n                );\n            }\n            Payload::Owned(_) => panic!(\"expected a borrowed Local payload, got an Owned copy\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45510,9 +45510,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_btree_index_split_median_by_bytes_57e58d39",
+    "file": "src/storage/row/btree/index.rs",
+    "line": 839,
+    "decision": "worst <= best.0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_btree_index_text_cf9777d8",
     "file": "src/storage/row/btree/index.rs",
-    "line": 882,
+    "line": 929,
     "decision": "match v {\n            Value::Text(s) => s,\n            other => panic!(\"expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45522,7 +45532,7 @@
   {
     "id": "storage_row_btree_index_int_50ac411a",
     "file": "src/storage/row/btree/index.rs",
-    "line": 889,
+    "line": 936,
     "decision": "match v {\n            Value::Integer(i) => *i,\n            other => panic!(\"expected integer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45532,7 +45542,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_walk_matches_oracle_binary_order_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 904,
+    "line": 951,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45542,7 +45552,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_last_prev_matches_reversed_forward_walk_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 939,
+    "line": 986,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45552,7 +45562,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_last_prev_matches_reversed_forward_walk_c6c2d2df_2",
     "file": "src/storage/row/btree/index.rs",
-    "line": 947,
+    "line": 994,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45562,7 +45572,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_seek_between_keys_matches_full_scan_and_next_continues_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 979,
+    "line": 1026,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45572,7 +45582,7 @@
   {
     "id": "storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1082,
+    "line": 1129,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45582,7 +45592,7 @@
   {
     "id": "storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_559109f7",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1098,
+    "line": 1145,
     "decision": "idx < expect_order.len() && text(&key[0]) == expect_order[idx]",
     "conditions": 2,
     "vectors_required": 3,
@@ -45592,7 +45602,7 @@
   {
     "id": "storage_row_btree_index_index_local_payload_borrows_from_the_page_instead_of_copying_a3f083e9",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1119,
+    "line": 1166,
     "decision": "match &row.payload {\n            Payload::Local { page, .. } => {\n                assert!(\n                    Rc::strong_count(page) >= 2,\n                    \"expected the row to share the page's Rc, not hold the only reference\"\n                );\n            }\n            Payload::Owned(_) => panic!(\"expected a borrowed Local payload, got an Owned copy\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45720,10 +45730,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_index_index_delete_repair_emptied_page_66436700",
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_e1466a5a",
     "file": "src/storage/row/btree/index/index_delete.rs",
     "line": 388,
-    "decision": "match read_page_type(&child_buf, child_start, child)? {\n                LEAF_INDEX => {\n                    let cells = collect_index_leaf_cells(\n                        pager,\n                        &child_buf,\n                        child_start,\n                        child,\n                        usable_size,\n                        encoding,\n                    )?;\n                    let cells: Vec<Vec<u8>> = cells.into_iter().map(|(_, bytes)| bytes).collect();\n                    let buf = pager.get_page_mut(page)?;\n                    write_index_leaf_page(buf, header_start, page, &cells)?;\n                }\n                INTERIOR_INDEX => {\n                    let (entries, rightmost) = collect_index_interior_entries(\n                        pager,\n                        &child_buf,\n                        child_start,\n                        child,\n                        usable_size,\n                        encoding,\n                    )?;\n                    write_interior(pager, page, header_start, &entries, rightmost)?;\n                }\n                page_type => {\n                    return Err(BtreeError::UnexpectedPageType {\n                        page_num: child,\n                        page_type,\n                    })\n                }\n            }",
+    "decision": "match read_page_type(&child_buf, child_start, child)? {\n                LEAF_INDEX => {\n                    let cells = collect_index_leaf_cells(\n                        pager,\n                        &child_buf,\n                        child_start,\n                        child,\n                        usable_size,\n                        encoding,\n                    )?;\n                    let cells: Vec<Vec<u8>> = cells.into_iter().map(|(_, bytes)| bytes).collect();\n                    let usable = pager.usable_size() as usize;\n                    let buf = pager.get_page_mut(page)?;\n                    write_index_leaf_page(buf, usable, header_start, page, &cells)?;\n                }\n                INTERIOR_INDEX => {\n                    let (entries, rightmost) = collect_index_interior_entries(\n                        pager,\n                        &child_buf,\n                        child_start,\n                        child,\n                        usable_size,\n                        encoding,\n                    )?;\n                    write_interior(pager, page, header_start, &entries, rightmost)?;\n                }\n                page_type => {\n                    return Err(BtreeError::UnexpectedPageType {\n                        page_num: child,\n                        page_type,\n                    })\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -45732,7 +45742,7 @@
   {
     "id": "storage_row_btree_index_index_delete_repair_emptied_page_185ed498",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 434,
+    "line": 435,
     "decision": "let Some(child) = rightmost_of_page",
     "conditions": 1,
     "vectors_required": 2,
@@ -45742,7 +45752,7 @@
   {
     "id": "storage_row_btree_index_index_delete_repair_emptied_page_4852112d",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 436,
+    "line": 437,
     "decision": "let Some(entry) = entries.iter_mut().find(|(c, _, _)| *c == page)",
     "conditions": 1,
     "vectors_required": 2,
@@ -45752,7 +45762,7 @@
   {
     "id": "storage_row_btree_index_index_delete_repair_emptied_page_5d774099",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 438,
+    "line": 439,
     "decision": "parent_rightmost == page",
     "conditions": 1,
     "vectors_required": 2,
@@ -45762,7 +45772,7 @@
   {
     "id": "storage_row_btree_index_index_delete_repair_emptied_page_2a8268b9",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 451,
+    "line": 452,
     "decision": "let Some(position) = entries.iter().position(|(c, _, _)| *c == page)",
     "conditions": 1,
     "vectors_required": 2,
@@ -45772,7 +45782,7 @@
   {
     "id": "storage_row_btree_index_index_delete_repair_emptied_page_5d774099_2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 454,
+    "line": 455,
     "decision": "parent_rightmost == page",
     "conditions": 1,
     "vectors_required": 2,
@@ -45780,20 +45790,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_index_index_delete_repair_emptied_page_18da445f",
+    "id": "storage_row_btree_index_index_delete_repair_emptied_page_81e341a6",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 455,
-    "decision": "match entries.pop() {\n                Some((child, key, bytes)) => {\n                    parent_rightmost = child;\n                    displaced.push((key, bytes));\n                }\n                None => {\n                    // The parent's only child: the parent is empty as well.\n                    pager.deallocate_page(page)?;\n                    let buf = pager.get_page_mut(parent)?;\n                    write_index_leaf_page(buf, parent_start, parent, &[])?;\n                    page = parent;\n                    ancestors = upper;\n                    continue;\n                }\n            }",
+    "line": 456,
+    "decision": "match entries.pop() {\n                Some((child, key, bytes)) => {\n                    parent_rightmost = child;\n                    displaced.push((key, bytes));\n                }\n                None => {\n                    // The parent's only child: the parent is empty as well.\n                    pager.deallocate_page(page)?;\n                    let usable = pager.usable_size() as usize;\n                    let buf = pager.get_page_mut(parent)?;\n                    write_index_leaf_page(buf, usable, parent_start, parent, &[])?;\n                    page = parent;\n                    ancestors = upper;\n                    continue;\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_index_index_delete_delete_via_predecessor_swap_be63fc5b",
+    "id": "storage_row_btree_index_index_delete_delete_via_predecessor_swap_20a8da99",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 518,
-    "decision": "match extract_max_entry(pager, usable_size, entry_child, encoding, 0)? {\n        Some(predecessor_bytes) => {\n            let header_start = page1_header_start(interior_page);\n            let buf = pager.get_page_mut(interior_page)?.clone();\n            let (mut entries, rightmost) = collect_index_interior_entries(\n                pager,\n                &buf,\n                header_start,\n                interior_page,\n                usable_size,\n                encoding,\n            )?;\n            let entry = entries\n                .iter_mut()\n                .find(|(child, _, _)| *child == entry_child)\n                .ok_or(BtreeError::Internal(\n                    \"entry_child's routing entry must still exist in interior_page\",\n                ))?;\n            entry.2 = predecessor_bytes;\n            let cell_bytes: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))\n                .collect();\n            let buf = pager.get_page_mut(interior_page)?;\n            write_index_interior_page(buf, header_start, interior_page, &cell_bytes, rightmost)?;\n        }\n        None => {\n            // `entry_child`'s entire subtree is drained (nothing left to\n            // swap in) — the matched entry is deleted outright, since\n            // there is nothing left to preserve.\n            pager.deallocate_page(entry_child)?;\n            remove_entry_by_child(pager, usable_size, interior_page, entry_child, encoding)?;\n        }\n    }",
+    "line": 521,
+    "decision": "match extract_max_entry(pager, usable_size, entry_child, encoding, 0)? {\n        Some(predecessor_bytes) => {\n            let header_start = page1_header_start(interior_page);\n            let buf = pager.get_page_mut(interior_page)?.clone();\n            let (mut entries, rightmost) = collect_index_interior_entries(\n                pager,\n                &buf,\n                header_start,\n                interior_page,\n                usable_size,\n                encoding,\n            )?;\n            let entry = entries\n                .iter_mut()\n                .find(|(child, _, _)| *child == entry_child)\n                .ok_or(BtreeError::Internal(\n                    \"entry_child's routing entry must still exist in interior_page\",\n                ))?;\n            entry.2 = predecessor_bytes;\n            let cell_bytes: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))\n                .collect();\n            let usable = pager.usable_size() as usize;\n            let buf = pager.get_page_mut(interior_page)?;\n            write_index_interior_page(\n                buf,\n                usable,\n                header_start,\n                interior_page,\n                &cell_bytes,\n                rightmost,\n            )?;\n        }\n        None => {\n            // `entry_child`'s entire subtree is drained (nothing left to\n            // swap in) — the matched entry is deleted outright, since\n            // there is nothing left to preserve.\n            pager.deallocate_page(entry_child)?;\n            remove_entry_by_child(pager, usable_size, interior_page, entry_child, encoding)?;\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -45802,7 +45812,7 @@
   {
     "id": "storage_row_btree_index_index_delete_extract_max_entry_db09da46",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 580,
+    "line": 591,
     "decision": "depth > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -45812,7 +45822,7 @@
   {
     "id": "storage_row_btree_index_index_delete_extract_max_entry_3e2a0607",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 589,
+    "line": 600,
     "decision": "page_type == LEAF_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -45822,7 +45832,7 @@
   {
     "id": "storage_row_btree_index_index_delete_extract_max_entry_594ac9a2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 600,
+    "line": 611,
     "decision": "page_type != INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -45832,7 +45842,7 @@
   {
     "id": "storage_row_btree_index_index_delete_extract_max_entry_412391a2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 610,
+    "line": 621,
     "decision": "let Some(max_bytes) = extract_max_entry(\n        pager,\n        usable_size,\n        rightmost,\n        encoding,\n        depth.saturating_add(1),\n    )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -45842,7 +45852,7 @@
   {
     "id": "storage_row_btree_index_index_delete_walk_f1135128",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 804,
+    "line": 817,
     "decision": "match read_page_type(&buf, header_start, page).unwrap() {\n            LEAF_INDEX => {\n                let cells = collect_index_leaf_cells(\n                    pager,\n                    &buf,\n                    header_start,\n                    page,\n                    usable,\n                    TextEncoding::Utf8,\n                )\n                .unwrap();\n                assert!(is_root || !cells.is_empty(), \"leaf {page} is empty\");\n                out.extend(cells.into_iter().map(|(key, _)| key));\n            }\n            INTERIOR_INDEX => {\n                let (entries, rightmost) = collect_index_interior_entries(\n                    pager,\n                    &buf,\n                    header_start,\n                    page,\n                    usable,\n                    TextEncoding::Utf8,\n                )\n                .unwrap();\n                assert!(!entries.is_empty(), \"interior page {page} has no entries\");\n                for (child, key, _) in entries {\n                    walk(pager, header, child, false, out);\n                    out.push(key);\n                }\n                walk(pager, header, rightmost, false, out);\n            }\n            other => panic!(\"page {page} has type {other:#x}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45852,7 +45862,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_every_entry_in_ascending_order_leaves_a_valid_tree_throughout_2b65e5c5",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 887,
+    "line": 900,
     "decision": "n % 7 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -45862,7 +45872,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_every_entry_in_descending_order_leaves_a_valid_tree_throughout_2b65e5c5",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 902,
+    "line": 915,
     "decision": "n % 7 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -45872,7 +45882,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_from_the_middle_outwards_leaves_a_valid_tree_throughout_a3d20f7f",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 917,
+    "line": 930,
     "decision": "!remaining.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -45882,7 +45892,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_from_the_middle_outwards_leaves_a_valid_tree_throughout_d707b591",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 922,
+    "line": 935,
     "decision": "step % 11 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -45892,7 +45902,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_a_separator_over_an_interior_subtree_with_an_emptied_leaf_944e49c1",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1019,
+    "line": 1032,
     "decision": "read_page_type(&buf, page1_header_start(page), page).unwrap() == LEAF_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -45902,7 +45912,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_131bc340",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1058,
+    "line": 1071,
     "decision": "big",
     "conditions": 1,
     "vectors_required": 2,
@@ -45912,7 +45922,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_5b29cd39",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1071,
+    "line": 1084,
     "decision": "step < 1200",
     "conditions": 1,
     "vectors_required": 2,
@@ -45922,7 +45932,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_453b75ea",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1072,
+    "line": 1085,
     "decision": "rng.next() % 100 < insert_bias",
     "conditions": 1,
     "vectors_required": 2,
@@ -45932,7 +45942,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_2b85f343",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1073,
+    "line": 1086,
     "decision": "let std::collections::btree_map::Entry::Vacant(slot) = model.entry(text)",
     "conditions": 1,
     "vectors_required": 2,
@@ -45942,7 +45952,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_c8b82283",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1078,
+    "line": 1091,
     "decision": "model.remove(&text).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -45952,7 +45962,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_f3a7aabf",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1085,
+    "line": 1098,
     "decision": "step % 20 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -45962,7 +45972,7 @@
   {
     "id": "storage_row_btree_index_index_delete_split_then_delete_all_including_promoted_interior_entries_734b4601",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1178,
+    "line": 1191,
     "decision": "let Err(e) = r",
     "conditions": 1,
     "vectors_required": 2,
@@ -45972,7 +45982,7 @@
   {
     "id": "storage_row_btree_index_index_delete_split_then_delete_descending_hits_the_interior_predecessor_swap_with_a_nonempty_subtree_734b4601",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1217,
+    "line": 1230,
     "decision": "let Err(e) = r",
     "conditions": 1,
     "vectors_required": 2,
@@ -45982,7 +45992,7 @@
   {
     "id": "storage_row_btree_index_index_delete_reachable_pages_594ac9a2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1235,
+    "line": 1248,
     "decision": "page_type != INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -45992,7 +46002,7 @@
   {
     "id": "storage_row_btree_index_index_delete_freelist_pages_ccf8b9e2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1259,
+    "line": 1272,
     "decision": "trunk != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -46062,7 +46072,7 @@
   {
     "id": "storage_row_btree_index_index_insert_insert_into_index_parent_b6dc23cd",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 297,
+    "line": 309,
     "decision": "match entries.iter().position(|(child, _, _)| *child == old_page) {\n        Some(idx) => {\n            entries.insert(idx, (old_page, promoted_key.to_vec(), promoted_bytes));\n            let successor = entries\n                .get_mut(idx.saturating_add(1))\n                .ok_or(BtreeError::Internal(\n                    \"split successor entry must exist right after insertion\",\n                ))?;\n            successor.0 = new_page;\n        }\n        None if rightmost == old_page => {\n            entries.push((old_page, promoted_key.to_vec(), promoted_bytes));\n            rightmost = new_page;\n        }\n        None => {\n            return Err(BtreeError::MissingChildRoute {\n                page_num: parent_page,\n                child: old_page,\n            });\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46072,7 +46082,7 @@
   {
     "id": "storage_row_btree_index_index_insert_insert_into_index_parent_0e6ec6f6",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 307,
+    "line": 319,
     "decision": "rightmost == old_page",
     "conditions": 1,
     "vectors_required": 2,
@@ -46082,7 +46092,7 @@
   {
     "id": "storage_row_btree_index_index_insert_write_interior_splitting_438f6407",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 362,
+    "line": 374,
     "decision": "needed <= page_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -46090,10 +46100,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_index_index_insert_root_split_d85f5a00",
+    "id": "storage_row_btree_index_index_insert_root_split_b631c30c",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 434,
-    "decision": "match page_type {\n        LEAF_INDEX => {\n            let cells = collect_index_leaf_cells(\n                pager,\n                &content,\n                header_start_root,\n                root_page,\n                usable_size,\n                encoding,\n            )?;\n            let dest = pager.get_page_mut(relocated)?;\n            write_index_leaf_page(dest, 0, relocated, &cell_bytes(cells))?;\n        }\n        INTERIOR_INDEX => {\n            let (entries, rightmost) = collect_index_interior_entries(\n                pager,\n                &content,\n                header_start_root,\n                root_page,\n                usable_size,\n                encoding,\n            )?;\n            let cells: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))\n                .collect();\n            let dest = pager.get_page_mut(relocated)?;\n            write_index_interior_page(dest, 0, relocated, &cells, rightmost)?;\n        }\n        other => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num: root_page,\n                page_type: other,\n            })\n        }\n    }",
+    "line": 467,
+    "decision": "match page_type {\n        LEAF_INDEX => {\n            let cells = collect_index_leaf_cells(\n                pager,\n                &content,\n                header_start_root,\n                root_page,\n                usable_size,\n                encoding,\n            )?;\n            let dest = pager.get_page_mut(relocated)?;\n            write_index_leaf_page(dest, usable_size as usize, 0, relocated, &cell_bytes(cells))?;\n        }\n        INTERIOR_INDEX => {\n            let (entries, rightmost) = collect_index_interior_entries(\n                pager,\n                &content,\n                header_start_root,\n                root_page,\n                usable_size,\n                encoding,\n            )?;\n            let cells: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))\n                .collect();\n            let dest = pager.get_page_mut(relocated)?;\n            write_index_interior_page(dest, usable_size as usize, 0, relocated, &cells, rightmost)?;\n        }\n        other => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num: root_page,\n                page_type: other,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -46102,7 +46112,7 @@
   {
     "id": "storage_row_btree_index_index_insert_entries_stay_in_ascending_key_order_813e3486",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 589,
+    "line": 629,
     "decision": "match &k[0] {\n                Value::Text(s) => s.as_ref(),\n                _ => panic!(\"expected text\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46162,7 +46172,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 228,
+    "line": 229,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46172,7 +46182,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_f65f29ce",
     "file": "src/storage/row/btree/master.rs",
-    "line": 230,
+    "line": 231,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(rp))) = (values.get(1), values.get(3))",
     "conditions": 1,
     "vectors_required": 2,
@@ -46182,7 +46192,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_eb9a2e58",
     "file": "src/storage/row/btree/master.rs",
-    "line": 231,
+    "line": 232,
     "decision": "n.as_ref() == name",
     "conditions": 1,
     "vectors_required": 2,
@@ -46192,7 +46202,7 @@
   {
     "id": "storage_row_btree_master_find_master_rootpage_93641e24",
     "file": "src/storage/row/btree/master.rs",
-    "line": 234,
+    "line": 235,
     "decision": "rootpage == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -46202,7 +46212,7 @@
   {
     "id": "storage_row_btree_master_table_sql_by_root_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 257,
+    "line": 258,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46212,7 +46222,7 @@
   {
     "id": "storage_row_btree_master_table_sql_by_root_0fa45016",
     "file": "src/storage/row/btree/master.rs",
-    "line": 259,
+    "line": 260,
     "decision": "let (Some(Value::Text(kind)), Some(Value::Integer(rootpage)), Some(Value::Text(sql))) =\n            (values.first(), values.get(3), values.get(4))",
     "conditions": 1,
     "vectors_required": 2,
@@ -46222,7 +46232,7 @@
   {
     "id": "storage_row_btree_master_table_sql_by_root_04accee7",
     "file": "src/storage/row/btree/master.rs",
-    "line": 262,
+    "line": 263,
     "decision": "let (\"table\", true) = (kind.as_ref(), *rootpage == i64::from(root))",
     "conditions": 1,
     "vectors_required": 2,
@@ -46232,7 +46242,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 289,
+    "line": 290,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46242,7 +46252,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_15a637f2",
     "file": "src/storage/row/btree/master.rs",
-    "line": 291,
+    "line": 292,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) = (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -46252,7 +46262,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_22c6e73d",
     "file": "src/storage/row/btree/master.rs",
-    "line": 292,
+    "line": 293,
     "decision": "n.as_ref() == table_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -46262,7 +46272,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_9298f737",
     "file": "src/storage/row/btree/master.rs",
-    "line": 300,
+    "line": 301,
     "decision": "match existing {\n        None => {\n            let next_rowid = max_rowid(pager, header, seq_root)?\n                .unwrap_or(0)\n                .saturating_add(1);\n            let values = [Value::Text(table_name.into()), Value::Integer(rowid)];\n            let payload = encode_record(&values, header.text_encoding);\n            super::insert_row(pager, header, seq_root, next_rowid, &payload)?;\n        }\n        Some((row_rowid, current_seq)) if rowid > current_seq => {\n            super::delete_row(pager, header, seq_root, row_rowid)?;\n            let values = [Value::Text(table_name.into()), Value::Integer(rowid)];\n            let payload = encode_record(&values, header.text_encoding);\n            super::insert_row(pager, header, seq_root, row_rowid, &payload)?;\n        }\n        Some(_) => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46272,7 +46282,7 @@
   {
     "id": "storage_row_btree_master_update_sequence_6a26faef",
     "file": "src/storage/row/btree/master.rs",
-    "line": 309,
+    "line": 310,
     "decision": "rowid > current_seq",
     "conditions": 1,
     "vectors_required": 2,
@@ -46282,7 +46292,7 @@
   {
     "id": "storage_row_btree_master_ensure_sqlite_stat1_table_0357ec9d",
     "file": "src/storage/row/btree/master.rs",
-    "line": 335,
+    "line": 336,
     "decision": "let Some(existing) = find_master_rootpage(pager, header, \"sqlite_stat1\")?",
     "conditions": 1,
     "vectors_required": 2,
@@ -46292,7 +46302,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_c6c2d2df",
     "file": "src/storage/row/btree/master.rs",
-    "line": 373,
+    "line": 375,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46302,7 +46312,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_1c9da291",
     "file": "src/storage/row/btree/master.rs",
-    "line": 375,
+    "line": 377,
     "decision": "let Some(Value::Text(tbl)) = values.first()",
     "conditions": 1,
     "vectors_required": 2,
@@ -46312,7 +46322,7 @@
   {
     "id": "storage_row_btree_master_delete_stat1_rows_for_table_148523ba",
     "file": "src/storage/row/btree/master.rs",
-    "line": 376,
+    "line": 378,
     "decision": "tbl.as_ref() == table_name",
     "conditions": 1,
     "vectors_required": 2,
@@ -46322,7 +46332,7 @@
   {
     "id": "storage_row_btree_master_insert_stat1_row_a968717c",
     "file": "src/storage/row/btree/master.rs",
-    "line": 401,
+    "line": 403,
     "decision": "match idx {\n        Some(name) => Value::Text(name.into()),\n        None => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46332,7 +46342,7 @@
   {
     "id": "storage_row_btree_schema_populate_index_from_table_c6c2d2df",
     "file": "src/storage/row/btree/schema.rs",
-    "line": 61,
+    "line": 63,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46342,7 +46352,7 @@
   {
     "id": "storage_row_btree_schema_populate_index_from_table_covers_existing_rows_c6c2d2df",
     "file": "src/storage/row/btree/schema.rs",
-    "line": 149,
+    "line": 151,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46412,7 +46422,7 @@
   {
     "id": "storage_row_btree_table_table_delete_collapse_into_ancestors_eda7fa93",
     "file": "src/storage/row/btree/table/table_delete.rs",
-    "line": 170,
+    "line": 178,
     "decision": "parent_page == root_page",
     "conditions": 1,
     "vectors_required": 2,
@@ -46422,7 +46432,7 @@
   {
     "id": "storage_row_btree_table_table_delete_splice_child_88645b49",
     "file": "src/storage/row/btree/table/table_delete.rs",
-    "line": 202,
+    "line": 210,
     "decision": "match entries.iter_mut().find(|(child, _)| *child == old_child) {\n        Some(entry) => entry.0 = new_child,\n        None if rightmost == old_child => rightmost = new_child,\n        None => {\n            return Err(BtreeError::MissingChildRoute {\n                page_num: parent_page,\n                child: old_child,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46432,7 +46442,7 @@
   {
     "id": "storage_row_btree_table_table_delete_splice_child_baf6a38c",
     "file": "src/storage/row/btree/table/table_delete.rs",
-    "line": 204,
+    "line": 212,
     "decision": "rightmost == old_child",
     "conditions": 1,
     "vectors_required": 2,
@@ -46440,10 +46450,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_table_table_delete_collapse_root_64eebb81",
+    "id": "storage_row_btree_table_table_delete_collapse_root_0d6e46af",
     "file": "src/storage/row/btree/table/table_delete.rs",
-    "line": 237,
-    "decision": "match page_type {\n        LEAF_TABLE => {\n            let cells = collect_leaf_cells(&content, child_header_start, only_child, usable_size)?;\n            let dest = pager.get_page_mut(root_page)?;\n            write_leaf_page(dest, root_header_start, root_page, &cell_bytes(cells))?;\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) =\n                collect_interior_entries(&content, child_header_start, only_child)?;\n            let cells: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, key)| build_interior_cell(*child, *key))\n                .collect();\n            let dest = pager.get_page_mut(root_page)?;\n            write_interior_page(dest, root_header_start, root_page, &cells, rightmost)?;\n        }\n        other => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num: only_child,\n                page_type: other,\n            })\n        }\n    }",
+    "line": 253,
+    "decision": "match page_type {\n        LEAF_TABLE => {\n            let cells = collect_leaf_cells(&content, child_header_start, only_child, usable_size)?;\n            let dest = pager.get_page_mut(root_page)?;\n            write_leaf_page(\n                dest,\n                usable_size as usize,\n                root_header_start,\n                root_page,\n                &cell_bytes(cells),\n            )?;\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) =\n                collect_interior_entries(&content, child_header_start, only_child)?;\n            let cells: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, key)| build_interior_cell(*child, *key))\n                .collect();\n            let dest = pager.get_page_mut(root_page)?;\n            write_interior_page(\n                dest,\n                usable_size as usize,\n                root_header_start,\n                root_page,\n                &cells,\n                rightmost,\n            )?;\n        }\n        other => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num: only_child,\n                page_type: other,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -46452,7 +46462,7 @@
   {
     "id": "storage_row_btree_table_table_delete_deleting_one_subtree_never_orphans_a_sibling_rightmost_subtree_e5c2f557",
     "file": "src/storage/row/btree/table/table_delete.rs",
-    "line": 517,
+    "line": 546,
     "decision": "let Some(page_num) = stack.pop()",
     "conditions": 1,
     "vectors_required": 2,
@@ -46462,7 +46472,7 @@
   {
     "id": "storage_row_btree_table_table_delete_deleting_one_subtree_never_orphans_a_sibling_rightmost_subtree_f4615865",
     "file": "src/storage/row/btree/table/table_delete.rs",
-    "line": 521,
+    "line": 550,
     "decision": "page_type == LEAF_TABLE",
     "conditions": 1,
     "vectors_required": 2,
@@ -46562,7 +46572,7 @@
   {
     "id": "storage_row_btree_table_table_insert_insert_into_leaf_acb70138",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 255,
+    "line": 261,
     "decision": "i == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -46572,7 +46582,7 @@
   {
     "id": "storage_row_btree_table_table_insert_insert_into_leaf_bc5806c9",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 271,
+    "line": 277,
     "decision": "*old_page != leaf_page",
     "conditions": 1,
     "vectors_required": 2,
@@ -46582,7 +46592,7 @@
   {
     "id": "storage_row_btree_table_table_insert_insert_into_leaf_31635c8a",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 273,
+    "line": 279,
     "decision": "found != *old_page",
     "conditions": 1,
     "vectors_required": 2,
@@ -46592,7 +46602,7 @@
   {
     "id": "storage_row_btree_table_table_insert_insert_into_parent_4e9b0ad2",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 322,
+    "line": 328,
     "decision": "match entries.iter().position(|(child, _)| *child == old_page) {\n        Some(idx) => {\n            entries.insert(idx, (old_page, divider));\n            let successor = entries\n                .get_mut(idx.saturating_add(1))\n                .ok_or(BtreeError::Internal(\n                    \"split successor entry must exist right after insertion\",\n                ))?;\n            successor.0 = new_page;\n        }\n        None if rightmost == old_page => {\n            entries.push((old_page, divider));\n            rightmost = new_page;\n        }\n        None => {\n            return Err(BtreeError::MissingChildRoute {\n                page_num: parent_page,\n                child: old_page,\n            });\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46602,7 +46612,7 @@
   {
     "id": "storage_row_btree_table_table_insert_insert_into_parent_0e6ec6f6",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 332,
+    "line": 338,
     "decision": "rightmost == old_page",
     "conditions": 1,
     "vectors_required": 2,
@@ -46612,7 +46622,7 @@
   {
     "id": "storage_row_btree_table_table_insert_insert_into_parent_438f6407",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 354,
+    "line": 360,
     "decision": "needed <= page_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -46620,10 +46630,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_table_table_insert_root_split_a75bc070",
+    "id": "storage_row_btree_table_table_insert_root_split_1fd9895f",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 424,
-    "decision": "match page_type {\n        LEAF_TABLE => {\n            let cells = collect_leaf_cells(&content, header_start_root, root_page, usable_size)?;\n            let dest = pager.get_page_mut(relocated)?;\n            write_leaf_page(dest, 0, relocated, &cell_bytes(cells))?;\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) =\n                collect_interior_entries(&content, header_start_root, root_page)?;\n            let cells: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, key)| build_interior_cell(*child, *key))\n                .collect();\n            let dest = pager.get_page_mut(relocated)?;\n            write_interior_page(dest, 0, relocated, &cells, rightmost)?;\n        }\n        other => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num: root_page,\n                page_type: other,\n            })\n        }\n    }",
+    "line": 451,
+    "decision": "match page_type {\n        LEAF_TABLE => {\n            let cells = collect_leaf_cells(&content, header_start_root, root_page, usable_size)?;\n            let dest = pager.get_page_mut(relocated)?;\n            write_leaf_page(dest, usable_size as usize, 0, relocated, &cell_bytes(cells))?;\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) =\n                collect_interior_entries(&content, header_start_root, root_page)?;\n            let cells: Vec<Vec<u8>> = entries\n                .iter()\n                .map(|(child, key)| build_interior_cell(*child, *key))\n                .collect();\n            let dest = pager.get_page_mut(relocated)?;\n            write_interior_page(dest, usable_size as usize, 0, relocated, &cells, rightmost)?;\n        }\n        other => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num: root_page,\n                page_type: other,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -46632,7 +46642,7 @@
   {
     "id": "storage_row_btree_table_table_insert_collect_all_rowids_f4615865",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 484,
+    "line": 518,
     "decision": "page_type == LEAF_TABLE",
     "conditions": 1,
     "vectors_required": 2,
@@ -46642,7 +46652,7 @@
   {
     "id": "storage_row_btree_table_table_insert_random_mixed_sizes_never_overfill_a_page_1d9d1ff2",
     "file": "src/storage/row/btree/table/table_insert.rs",
-    "line": 609,
+    "line": 643,
     "decision": "!expected.insert(rowid)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47382,7 +47392,7 @@
   {
     "id": "storage_row_pager_open_458e4e96",
     "file": "src/storage/row/pager.rs",
-    "line": 436,
+    "line": 443,
     "decision": "vfs.exists(&journal_path)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -47392,7 +47402,7 @@
   {
     "id": "storage_row_pager_open_ffb49bc4",
     "file": "src/storage/row/pager.rs",
-    "line": 446,
+    "line": 453,
     "decision": "journal_is_hot",
     "conditions": 1,
     "vectors_required": 2,
@@ -47402,7 +47412,7 @@
   {
     "id": "storage_row_pager_open_0573153b",
     "file": "src/storage/row/pager.rs",
-    "line": 447,
+    "line": 454,
     "decision": "lock.check_reserved()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -47412,7 +47422,7 @@
   {
     "id": "storage_row_pager_get_page_mut_640053fb",
     "file": "src/storage/row/pager.rs",
-    "line": 499,
+    "line": 517,
     "decision": "match self.dirty.entry(page_num) {\n            std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),\n            std::collections::hash_map::Entry::Vacant(entry) => {\n                let page = read_page(&self.wal_pages, &self.source, page_num)?;\n                Ok(entry.insert(page))\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47422,7 +47432,7 @@
   {
     "id": "storage_row_pager_flush_f0987f36",
     "file": "src/storage/row/pager.rs",
-    "line": 519,
+    "line": 537,
     "decision": "self.dirty.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47432,7 +47442,7 @@
   {
     "id": "storage_row_pager_flush_e3fdc69e",
     "file": "src/storage/row/pager.rs",
-    "line": 538,
+    "line": 556,
     "decision": "self.journal_mode == JournalMode::Wal",
     "conditions": 1,
     "vectors_required": 2,
@@ -47442,7 +47452,7 @@
   {
     "id": "storage_row_pager_release_tx_lock_cfec7bfb",
     "file": "src/storage/row/pager.rs",
-    "line": 608,
+    "line": 626,
     "decision": "self.tx_lock_level > crate::storage::row::vfs::LockLevel::Shared",
     "conditions": 1,
     "vectors_required": 2,
@@ -47452,7 +47462,7 @@
   {
     "id": "storage_row_pager_flush_locked_be79614b",
     "file": "src/storage/row/pager.rs",
-    "line": 627,
+    "line": 645,
     "decision": "!to_journal.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47462,7 +47472,7 @@
   {
     "id": "storage_row_pager_flush_locked_98a3bf74",
     "file": "src/storage/row/pager.rs",
-    "line": 653,
+    "line": 671,
     "decision": "self.synchronous != SynchronousMode::Off",
     "conditions": 1,
     "vectors_required": 2,
@@ -47472,7 +47482,7 @@
   {
     "id": "storage_row_pager_flush_locked_ab92dec6",
     "file": "src/storage/row/pager.rs",
-    "line": 659,
+    "line": 677,
     "decision": "let Some(bytes) = self.dirty.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47482,7 +47492,7 @@
   {
     "id": "storage_row_pager_flush_locked_dbde2f78",
     "file": "src/storage/row/pager.rs",
-    "line": 666,
+    "line": 684,
     "decision": "self.synchronous == SynchronousMode::Full",
     "conditions": 1,
     "vectors_required": 2,
@@ -47492,7 +47502,7 @@
   {
     "id": "storage_row_pager_flush_locked_be79614b_2",
     "file": "src/storage/row/pager.rs",
-    "line": 670,
+    "line": 688,
     "decision": "!to_journal.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47502,7 +47512,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_42a6fa02",
     "file": "src/storage/row/pager.rs",
-    "line": 717,
+    "line": 735,
     "decision": "self.wal_shm.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47512,7 +47522,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_42a6fa02_2",
     "file": "src/storage/row/pager.rs",
-    "line": 720,
+    "line": 738,
     "decision": "self.wal_shm.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47522,7 +47532,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_6ff3d20c",
     "file": "src/storage/row/pager.rs",
-    "line": 725,
+    "line": 743,
     "decision": "let Some(shm) = &self.wal_shm",
     "conditions": 1,
     "vectors_required": 2,
@@ -47532,7 +47542,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_773ce129",
     "file": "src/storage/row/pager.rs",
-    "line": 750,
+    "line": 768,
     "decision": "match cached {\n                Some(writer) => writer,\n                None => match wal::WalWriter::open_existing(\n                    &self.vfs,\n                    &wal_path,\n                    self.page_size,\n                    self.wal_resume.as_ref(),\n                ) {\n                    Ok(writer) => writer,\n                    // The `-wal` this `Pager` believed was live has vanished —\n                    // e.g. a concurrent `sqlite3` connection auto-checkpointed\n                    // and deleted `-wal`/`-shm` on close (#422). `journal_mode`\n                    // still says `Wal` (this closure only ever runs from that\n                    // branch), so recover exactly as `switch_journal_to_wal`\n                    // creates one from scratch, rather than failing the commit.\n                    Err(wal::WalError::Vfs(VfsError::NotFound { .. })) => {\n                        self.recreate_wal_locked()?\n                    }\n                    // An unusable header (0-byte, zeroed, bad checksum) means\n                    // SQLite would recover no frames; its next write restarts\n                    // the WAL with a fresh header, so do the same.\n                    Err(source) if source.is_unusable_header() => self.recreate_wal_locked()?,\n                    Err(source) => return Err(to_pager_error(source)),\n                },\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47542,7 +47552,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_3655a7f9",
     "file": "src/storage/row/pager.rs",
-    "line": 752,
+    "line": 770,
     "decision": "match wal::WalWriter::open_existing(\n                    &self.vfs,\n                    &wal_path,\n                    self.page_size,\n                    self.wal_resume.as_ref(),\n                ) {\n                    Ok(writer) => writer,\n                    // The `-wal` this `Pager` believed was live has vanished —\n                    // e.g. a concurrent `sqlite3` connection auto-checkpointed\n                    // and deleted `-wal`/`-shm` on close (#422). `journal_mode`\n                    // still says `Wal` (this closure only ever runs from that\n                    // branch), so recover exactly as `switch_journal_to_wal`\n                    // creates one from scratch, rather than failing the commit.\n                    Err(wal::WalError::Vfs(VfsError::NotFound { .. })) => {\n                        self.recreate_wal_locked()?\n                    }\n                    // An unusable header (0-byte, zeroed, bad checksum) means\n                    // SQLite would recover no frames; its next write restarts\n                    // the WAL with a fresh header, so do the same.\n                    Err(source) if source.is_unusable_header() => self.recreate_wal_locked()?,\n                    Err(source) => return Err(to_pager_error(source)),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47552,7 +47562,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_aef700eb",
     "file": "src/storage/row/pager.rs",
-    "line": 771,
+    "line": 789,
     "decision": "source.is_unusable_header()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47562,7 +47572,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_9030a3d4",
     "file": "src/storage/row/pager.rs",
-    "line": 776,
+    "line": 794,
     "decision": "let Some(backfilled) = self.wal_backfilled_frames.take()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47572,7 +47582,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_977981b9",
     "file": "src/storage/row/pager.rs",
-    "line": 777,
+    "line": 795,
     "decision": "backfilled == writer.frame_count()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47582,7 +47592,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_ab92dec6",
     "file": "src/storage/row/pager.rs",
-    "line": 784,
+    "line": 802,
     "decision": "let Some(bytes) = self.dirty.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47592,7 +47602,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_827ff16e",
     "file": "src/storage/row/pager.rs",
-    "line": 785,
+    "line": 803,
     "decision": "index == last_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -47602,7 +47612,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_dbde2f78",
     "file": "src/storage/row/pager.rs",
-    "line": 803,
+    "line": 821,
     "decision": "self.synchronous == SynchronousMode::Full",
     "conditions": 1,
     "vectors_required": 2,
@@ -47612,7 +47622,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_99d42410",
     "file": "src/storage/row/pager.rs",
-    "line": 809,
+    "line": 827,
     "decision": "match &self.wal_shm {\n                Some(shm) => shm.publish_mx_frame(new_mx_frame)?,\n                None => self.vfs.publish_wal_mx_frame(&self.db_path, new_mx_frame)?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47622,7 +47632,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_6ff3d20c_2",
     "file": "src/storage/row/pager.rs",
-    "line": 820,
+    "line": 838,
     "decision": "let Some(shm) = &self.wal_shm",
     "conditions": 1,
     "vectors_required": 2,
@@ -47632,7 +47642,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_926da7b7",
     "file": "src/storage/row/pager.rs",
-    "line": 829,
+    "line": 847,
     "decision": "self.wal_lock.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47642,7 +47652,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_304d2645",
     "file": "src/storage/row/pager.rs",
-    "line": 834,
+    "line": 852,
     "decision": "let Some(bytes) = self.dirty.remove(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47652,7 +47662,7 @@
   {
     "id": "storage_row_pager_restart_wal_if_idle_fc3ebfde",
     "file": "src/storage/row/pager.rs",
-    "line": 855,
+    "line": 873,
     "decision": "!self.vfs.active_wal_reader_marks(&self.db_path)?.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47662,7 +47672,7 @@
   {
     "id": "storage_row_pager_autocheckpoint_bb982bdd",
     "file": "src/storage/row/pager.rs",
-    "line": 882,
+    "line": 900,
     "decision": "!due",
     "conditions": 1,
     "vectors_required": 2,
@@ -47672,7 +47682,7 @@
   {
     "id": "storage_row_pager_autocheckpoint_645fd4d0",
     "file": "src/storage/row/pager.rs",
-    "line": 885,
+    "line": 903,
     "decision": "match self.checkpoint_wal_unchecked(checkpoint::CheckpointMode::Passive) {\n            Ok(_) | Err(PagerError::Vfs(VfsError::Locked { .. })) => Ok(()),\n            Err(other) => Err(other),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47682,7 +47692,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_6ff014ec",
     "file": "src/storage/row/pager.rs",
-    "line": 916,
+    "line": 934,
     "decision": "self.journal_mode != JournalMode::Wal",
     "conditions": 1,
     "vectors_required": 2,
@@ -47692,7 +47702,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_dce82034",
     "file": "src/storage/row/pager.rs",
-    "line": 923,
+    "line": 941,
     "decision": "!self.dirty.is_empty()\n            || self.tx_lock_level > crate::storage::row::vfs::LockLevel::Shared",
     "conditions": 2,
     "vectors_required": 3,
@@ -47702,7 +47712,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_e00e9d2c",
     "file": "src/storage/row/pager.rs",
-    "line": 955,
+    "line": 973,
     "decision": "exclusive",
     "conditions": 1,
     "vectors_required": 2,
@@ -47712,7 +47722,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_42a6fa02",
     "file": "src/storage/row/pager.rs",
-    "line": 956,
+    "line": 974,
     "decision": "self.wal_shm.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47722,7 +47732,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_f16c386e",
     "file": "src/storage/row/pager.rs",
-    "line": 959,
+    "line": 977,
     "decision": "match &self.wal_shm {\n                Some(shm) => shm.claim_write_lock().map(|()| {\n                    write_locked = true;\n                }),\n                None => self\n                    .vfs\n                    .claim_wal_write_lock(&self.db_path)\n                    .map(|guard| fallback_guard = guard),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47732,7 +47742,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_2d58ab84",
     "file": "src/storage/row/pager.rs",
-    "line": 968,
+    "line": 986,
     "decision": "match claimed {\n                Ok(()) => {}\n                // A writer is mid-commit: report busy, as SQLite does.\n                Err(VfsError::Locked { .. }) => {\n                    let passive =\n                        checkpoint::checkpoint_passive(&self.vfs, &self.db_path, self.page_size)?;\n                    return Ok(checkpoint::WalCheckpoint {\n                        busy: true,\n                        log: i64::from(passive.total_frames),\n                        checkpointed: i64::from(passive.backfilled_frames),\n                    });\n                }\n                Err(other) => return Err(other.into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47742,7 +47752,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_eeef87ff",
     "file": "src/storage/row/pager.rs",
-    "line": 986,
+    "line": 1004,
     "decision": "write_locked",
     "conditions": 1,
     "vectors_required": 2,
@@ -47752,7 +47762,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_6ff3d20c",
     "file": "src/storage/row/pager.rs",
-    "line": 987,
+    "line": 1005,
     "decision": "let Some(shm) = &self.wal_shm",
     "conditions": 1,
     "vectors_required": 2,
@@ -47762,7 +47772,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_b68958ae",
     "file": "src/storage/row/pager.rs",
-    "line": 1002,
+    "line": 1020,
     "decision": "match mode {\n            CheckpointMode::Passive => false,\n            _ => !pass.checkpoint_complete,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47772,7 +47782,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_1a495fb7",
     "file": "src/storage/row/pager.rs",
-    "line": 1011,
+    "line": 1029,
     "decision": "let (true, 1..) = (pass.checkpoint_complete, pass.total_frames)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47782,7 +47792,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_0245b48d",
     "file": "src/storage/row/pager.rs",
-    "line": 1013,
+    "line": 1031,
     "decision": "match mode {\n                CheckpointMode::Restart | CheckpointMode::Truncate => {\n                    !self.vfs.active_wal_reader_marks(&self.db_path)?.is_empty()\n                }\n                _ => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47792,7 +47802,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_582f2578",
     "file": "src/storage/row/pager.rs",
-    "line": 1019,
+    "line": 1037,
     "decision": "pinned",
     "conditions": 1,
     "vectors_required": 2,
@@ -47802,7 +47812,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_b22e3eb6",
     "file": "src/storage/row/pager.rs",
-    "line": 1021,
+    "line": 1039,
     "decision": "mode == CheckpointMode::Truncate",
     "conditions": 1,
     "vectors_required": 2,
@@ -47812,7 +47822,7 @@
   {
     "id": "storage_row_pager_set_journal_mode_dce82034",
     "file": "src/storage/row/pager.rs",
-    "line": 1077,
+    "line": 1095,
     "decision": "!self.dirty.is_empty()\n            || self.tx_lock_level > crate::storage::row::vfs::LockLevel::Shared",
     "conditions": 2,
     "vectors_required": 3,
@@ -47822,7 +47832,7 @@
   {
     "id": "storage_row_pager_set_journal_mode_e478a4b8",
     "file": "src/storage/row/pager.rs",
-    "line": 1083,
+    "line": 1101,
     "decision": "self.journal_mode == mode",
     "conditions": 1,
     "vectors_required": 2,
@@ -47832,7 +47842,7 @@
   {
     "id": "storage_row_pager_set_journal_mode_eba44c06",
     "file": "src/storage/row/pager.rs",
-    "line": 1087,
+    "line": 1105,
     "decision": "match mode {\n            JournalMode::Wal => self.switch_journal_to_wal()?,\n            JournalMode::Legacy => self.switch_wal_to_journal()?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47842,7 +47852,7 @@
   {
     "id": "storage_row_pager_set_journal_mode_da64b366",
     "file": "src/storage/row/pager.rs",
-    "line": 1101,
+    "line": 1119,
     "decision": "mode == JournalMode::Wal",
     "conditions": 1,
     "vectors_required": 2,
@@ -47852,7 +47862,7 @@
   {
     "id": "storage_row_pager_switch_wal_to_journal_30e44e13",
     "file": "src/storage/row/pager.rs",
-    "line": 1245,
+    "line": 1263,
     "decision": "result.checkpoint_complete",
     "conditions": 1,
     "vectors_required": 2,
@@ -47862,7 +47872,7 @@
   {
     "id": "storage_row_pager_switch_wal_to_journal_fd7f30ab",
     "file": "src/storage/row/pager.rs",
-    "line": 1250,
+    "line": 1268,
     "decision": "!complete",
     "conditions": 1,
     "vectors_required": 2,
@@ -47872,7 +47882,7 @@
   {
     "id": "storage_row_pager_allocate_page_83dc3b77",
     "file": "src/storage/row/pager.rs",
-    "line": 1284,
+    "line": 1302,
     "decision": "freelist_trunk_page == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -47882,7 +47892,7 @@
   {
     "id": "storage_row_pager_allocate_page_73febef4",
     "file": "src/storage/row/pager.rs",
-    "line": 1296,
+    "line": 1314,
     "decision": "let Some(leaf) = trunk.leaves.pop()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47892,7 +47902,7 @@
   {
     "id": "storage_row_pager_deallocate_page_710edeb7",
     "file": "src/storage/row/pager.rs",
-    "line": 1324,
+    "line": 1342,
     "decision": "freelist_trunk_page != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -47902,7 +47912,7 @@
   {
     "id": "storage_row_pager_deallocate_page_385c8b82",
     "file": "src/storage/row/pager.rs",
-    "line": 1327,
+    "line": 1345,
     "decision": "trunk.leaves.len() < max_leaves",
     "conditions": 1,
     "vectors_required": 2,
@@ -47912,7 +47922,7 @@
   {
     "id": "storage_row_pager_journal_mode_from_page1_a519b359",
     "file": "src/storage/row/pager.rs",
-    "line": 1370,
+    "line": 1388,
     "decision": "page1.get(18..20) == Some(&[2u8, 2u8][..])",
     "conditions": 1,
     "vectors_required": 2,
@@ -47922,7 +47932,7 @@
   {
     "id": "storage_row_pager_journal_to_pager_error_c62c1a86",
     "file": "src/storage/row/pager.rs",
-    "line": 1398,
+    "line": 1416,
     "decision": "match err {\n        JournalError::Vfs(source) => PagerError::Vfs(source),\n        other => PagerError::Journal(other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47932,7 +47942,7 @@
   {
     "id": "storage_row_pager_read_page_56a766cb",
     "file": "src/storage/row/pager.rs",
-    "line": 1455,
+    "line": 1473,
     "decision": "let Some(page) = wal_pages.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47942,7 +47952,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_9109a25d",
     "file": "src/storage/row/pager.rs",
-    "line": 1472,
+    "line": 1490,
     "decision": "!vfs.exists(&wal_path)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -47952,7 +47962,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_1aec0f46",
     "file": "src/storage/row/pager.rs",
-    "line": 1478,
+    "line": 1496,
     "decision": "size < wal::HEADER_LEN as u64",
     "conditions": 1,
     "vectors_required": 2,
@@ -47962,7 +47972,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_f18f30e8",
     "file": "src/storage/row/pager.rs",
-    "line": 1485,
+    "line": 1503,
     "decision": "bytes.len() < wal::HEADER_LEN",
     "conditions": 1,
     "vectors_required": 2,
@@ -47972,7 +47982,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_eb643e28",
     "file": "src/storage/row/pager.rs",
-    "line": 1496,
+    "line": 1514,
     "decision": "match wal::WalHeader::parse(&bytes) {\n        Ok(header) => header,\n        Err(source) if source.is_unusable_header() => return Ok(HashMap::new()),\n        Err(source) => return Err(to_pager_error(source)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47982,7 +47992,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_aef700eb",
     "file": "src/storage/row/pager.rs",
-    "line": 1498,
+    "line": 1516,
     "decision": "source.is_unusable_header()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47992,7 +48002,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_ac0a9810",
     "file": "src/storage/row/pager.rs",
-    "line": 1501,
+    "line": 1519,
     "decision": "header.page_size != page_size",
     "conditions": 1,
     "vectors_required": 2,
@@ -48002,7 +48012,7 @@
   {
     "id": "storage_row_pager_read_page_b203daed",
     "file": "src/storage/row/pager.rs",
-    "line": 1516,
+    "line": 1534,
     "decision": "let Some(page) = self.dirty.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48012,7 +48022,7 @@
   {
     "id": "storage_row_pager_read_page_d1cd7f35",
     "file": "src/storage/row/pager.rs",
-    "line": 1519,
+    "line": 1537,
     "decision": "let Some(page) = self.wal_pages.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48022,7 +48032,7 @@
   {
     "id": "storage_row_pager_read_page_dfb3161d",
     "file": "src/storage/row/pager.rs",
-    "line": 1522,
+    "line": 1540,
     "decision": "let Some(cached) = self.page_cache.borrow_mut().get(page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48032,7 +48042,7 @@
   {
     "id": "storage_row_pager_read_page_b3860812",
     "file": "src/storage/row/pager.rs",
-    "line": 1533,
+    "line": 1551,
     "decision": "match victim {\n            Some(mut recycled) => match Rc::get_mut(&mut recycled) {\n                Some(buf) => {\n                    self.source.read_page_into(page_num, buf)?;\n                    recycled\n                }\n                None => self.source.read_page(page_num)?,\n            },\n            None => self.source.read_page(page_num)?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48042,7 +48052,7 @@
   {
     "id": "storage_row_pager_read_page_6c6dd3f8",
     "file": "src/storage/row/pager.rs",
-    "line": 1534,
+    "line": 1552,
     "decision": "match Rc::get_mut(&mut recycled) {\n                Some(buf) => {\n                    self.source.read_page_into(page_num, buf)?;\n                    recycled\n                }\n                None => self.source.read_page(page_num)?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48052,7 +48062,7 @@
   {
     "id": "storage_row_pager_db_with_journal_22a86bc9",
     "file": "src/storage/row/pager.rs",
-    "line": 1583,
+    "line": 1601,
     "decision": "let Some(bytes) = journal_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -48062,7 +48072,7 @@
   {
     "id": "storage_row_pager_hot_journal_open_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1714,
+    "line": 1732,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48072,7 +48082,7 @@
   {
     "id": "storage_row_pager_flush_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1761,
+    "line": 1779,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

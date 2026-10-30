@@ -22,9 +22,9 @@
 
 use crate::storage::row::btree::index::{
     build_index_interior_cell, collect_index_interior_entries, collect_index_leaf_cells,
-    descend_index_tree, search_index_leaf, value_cell_len, write_index_interior_page,
-    write_index_leaf_page, IndexDescent, IndexInteriorEntry, LeafSearch, INTERIOR_INDEX,
-    LEAF_INDEX,
+    descend_index_tree, search_index_leaf, split_median_by_bytes, value_cell_len,
+    write_index_interior_page, write_index_leaf_page, IndexDescent, IndexInteriorEntry, LeafSearch,
+    INTERIOR_INDEX, LEAF_INDEX,
 };
 use crate::storage::row::btree::{
     cell_bytes, cell_ptr_offset, local_payload_size, page1_header_start, put, read_cell_pointer,
@@ -62,7 +62,7 @@ pub fn insert_entry(
     // would leak an overflow chain on every rejected duplicate insert
     // whose key doesn't fit locally.
     let payload = encode_record(key, encoding);
-    let page_len = pager.get_page_mut(leaf_page)?.len();
+    let page_len = usable_size as usize;
     insert_into_index_leaf(
         pager,
         usable_size,
@@ -207,7 +207,13 @@ fn insert_into_index_leaf(
             )?;
             cells.insert(insert_pos, (key.to_vec(), cell.clone()));
             let page_buf = pager.get_page_mut(leaf_page)?;
-            write_index_leaf_page(page_buf, header_start, leaf_page, &cell_bytes(cells))?;
+            write_index_leaf_page(
+                page_buf,
+                usable_size as usize,
+                header_start,
+                leaf_page,
+                &cell_bytes(cells),
+            )?;
         }
         return Ok(());
     }
@@ -222,8 +228,8 @@ fn insert_into_index_leaf(
     // Split: the median entry is promoted into the parent (removed from
     // both halves); left keeps entries less than it, right (a freshly
     // allocated page) keeps entries greater.
-    let n = cells.len();
-    let mid = n / 2;
+
+    let mid = split_median_by_bytes(&cells.iter().map(|(_, c)| c.len()).collect::<Vec<_>>());
     let (promoted_key, promoted_bytes) = cells.get(mid).cloned().ok_or(BtreeError::Internal(
         "median entry index out of bounds during index leaf split",
     ))?;
@@ -234,11 +240,17 @@ fn insert_into_index_leaf(
 
     {
         let buf = pager.get_page_mut(leaf_page)?;
-        write_index_leaf_page(buf, header_start, leaf_page, &cell_bytes(left))?;
+        write_index_leaf_page(
+            buf,
+            usable_size as usize,
+            header_start,
+            leaf_page,
+            &cell_bytes(left),
+        )?;
     }
     {
         let buf = pager.get_page_mut(right_page)?;
-        write_index_leaf_page(buf, 0, right_page, &cell_bytes(right))?;
+        write_index_leaf_page(buf, usable_size as usize, 0, right_page, &cell_bytes(right))?;
     }
 
     insert_into_index_parent(
@@ -361,13 +373,20 @@ pub(super) fn write_interior_splitting(
         .saturating_add(total_bytes);
     if needed <= page_len {
         let buf = pager.get_page_mut(parent_page)?;
-        write_index_interior_page(buf, header_start, parent_page, &cell_bytes, rightmost)?;
+        write_index_interior_page(
+            buf,
+            usable_size as usize,
+            header_start,
+            parent_page,
+            &cell_bytes,
+            rightmost,
+        )?;
         return Ok(());
     }
 
     // Interior split: same promote-and-remove shape as the leaf split.
-    let n = entries.len();
-    let mid = n / 2;
+
+    let mid = split_median_by_bytes(&cell_bytes.iter().map(Vec::len).collect::<Vec<_>>());
     let (promoted_child, promoted_key, promoted_bytes) = entries.get(mid).cloned().ok_or(
         BtreeError::Internal("median entry index out of bounds during index interior split"),
     )?;
@@ -387,7 +406,14 @@ pub(super) fn write_interior_splitting(
             .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))
             .collect();
         let buf = pager.get_page_mut(parent_page)?;
-        write_index_interior_page(buf, header_start, parent_page, &cells, promoted_child)?;
+        write_index_interior_page(
+            buf,
+            usable_size as usize,
+            header_start,
+            parent_page,
+            &cells,
+            promoted_child,
+        )?;
     }
     {
         let cells: Vec<Vec<u8>> = right_entries
@@ -395,7 +421,14 @@ pub(super) fn write_interior_splitting(
             .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))
             .collect();
         let buf = pager.get_page_mut(right_page_num)?;
-        write_index_interior_page(buf, 0, right_page_num, &cells, rightmost)?;
+        write_index_interior_page(
+            buf,
+            usable_size as usize,
+            0,
+            right_page_num,
+            &cells,
+            rightmost,
+        )?;
     }
 
     insert_into_index_parent(
@@ -442,7 +475,7 @@ fn root_split(
                 encoding,
             )?;
             let dest = pager.get_page_mut(relocated)?;
-            write_index_leaf_page(dest, 0, relocated, &cell_bytes(cells))?;
+            write_index_leaf_page(dest, usable_size as usize, 0, relocated, &cell_bytes(cells))?;
         }
         INTERIOR_INDEX => {
             let (entries, rightmost) = collect_index_interior_entries(
@@ -458,7 +491,7 @@ fn root_split(
                 .map(|(child, _, value_bytes)| build_index_interior_cell(*child, value_bytes))
                 .collect();
             let dest = pager.get_page_mut(relocated)?;
-            write_index_interior_page(dest, 0, relocated, &cells, rightmost)?;
+            write_index_interior_page(dest, usable_size as usize, 0, relocated, &cells, rightmost)?;
         }
         other => {
             return Err(BtreeError::UnexpectedPageType {
@@ -470,7 +503,14 @@ fn root_split(
 
     let cell = build_index_interior_cell(relocated, &promoted_bytes);
     let buf = pager.get_page_mut(root_page)?;
-    write_index_interior_page(buf, header_start_root, root_page, &[cell], new_right)?;
+    write_index_interior_page(
+        buf,
+        usable_size as usize,
+        header_start_root,
+        root_page,
+        &[cell],
+        new_right,
+    )?;
     Ok(())
 }
 
@@ -491,7 +531,7 @@ mod tests {
         page1[19] = 1;
         page1[28..32].copy_from_slice(&1u32.to_be_bytes());
         page1[56..60].copy_from_slice(&1u32.to_be_bytes());
-        write_index_leaf_page(&mut page1, 100, 1, &[]).unwrap();
+        write_index_leaf_page(&mut page1, 512, 100, 1, &[]).unwrap();
 
         let mut header_bytes = [0u8; 100];
         header_bytes.copy_from_slice(&page1[..100]);
@@ -616,7 +656,7 @@ mod tests {
             .collect();
         {
             let buf = pager.get_page_mut(1).unwrap();
-            write_index_leaf_page(buf, page1_header_start(1), 1, &cells).unwrap();
+            write_index_leaf_page(buf, 512, page1_header_start(1), 1, &cells).unwrap();
         }
 
         // Inserting k0005 (sorts last) makes n = 5; a tiny page_len forces
@@ -728,8 +768,15 @@ mod tests {
         ];
         {
             let buf = pager.get_page_mut(parent).unwrap();
-            write_index_interior_page(buf, page1_header_start(parent), parent, &cells, old_page)
-                .unwrap();
+            write_index_interior_page(
+                buf,
+                512,
+                page1_header_start(parent),
+                parent,
+                &cells,
+                old_page,
+            )
+            .unwrap();
         }
 
         insert_into_index_parent(
@@ -792,8 +839,15 @@ mod tests {
         {
             let cells = vec![build_index_interior_cell(other, &bytes_other)];
             let buf = pager.get_page_mut(parent).unwrap();
-            write_index_interior_page(buf, page1_header_start(parent), parent, &cells, rightmost)
-                .unwrap();
+            write_index_interior_page(
+                buf,
+                512,
+                page1_header_start(parent),
+                parent,
+                &cells,
+                rightmost,
+            )
+            .unwrap();
         }
 
         let err = insert_into_index_parent(
