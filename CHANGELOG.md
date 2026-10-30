@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.217.1] - 2026-10-30
+
+### Fixed
+
+- A long literal `IN` list (about 1,000 items or more) no longer overflows a 2 MiB stack and aborts the process in the column engine; the list is now lowered to a balanced tree, so 10,000 literals work for integer, text and blob columns (#901).
+
 ## [0.217.0] - 2026-10-30
 
 ### Added

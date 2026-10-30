@@ -627,6 +627,13 @@ fn lower_between(span: Span, subject: AstExpr, lo: AstExpr, hi: AstExpr, negated
 /// `subject IN (list)` as `subject = a OR subject = b ...`, or, `negated`,
 /// `subject <> a AND subject <> b ...` (De Morgan, which holds in
 /// three-valued logic).
+///
+/// The joins form a balanced tree, not a left-deep chain: a chain is as deep
+/// as the list is long, and every recursive pass over it (validation, clone,
+/// drop, the batch planner) overflowed a 2 MiB stack at about 1,000 items
+/// (#901). `OR` and `AND` are associative in three-valued logic and the
+/// leaves keep their left-to-right order, so the result and the order in
+/// which items convert are unchanged.
 fn lower_in_list(
     span: Span,
     subject: AstExpr,
@@ -638,30 +645,41 @@ fn lower_in_list(
     } else {
         (AstBinOp::Eq, AstBinOp::Or)
     };
-    let mut items = list.into_iter();
-    let Some(first) = items.next() else {
+    if list.is_empty() {
         return Err(unsupported(span, "IN with an empty list".into()));
-    };
-    let compare = |item: AstExpr| AstExpr {
-        span: item.span,
-        kind: ExprKind::Binary {
-            op: cmp,
-            lhs: Box::new(subject.clone()),
-            rhs: Box::new(item),
-        },
-    };
-    let mut acc = compare(first);
-    for item in items {
-        acc = AstExpr {
-            span,
-            kind: ExprKind::Binary {
-                op: join,
-                lhs: Box::new(acc),
-                rhs: Box::new(compare(item)),
-            },
-        };
     }
-    Ok(acc)
+    let mut level: Vec<AstExpr> = list
+        .into_iter()
+        .map(|item| AstExpr {
+            span: item.span,
+            kind: ExprKind::Binary {
+                op: cmp,
+                lhs: Box::new(subject.clone()),
+                rhs: Box::new(item),
+            },
+        })
+        .collect();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut pairs = level.into_iter();
+        while let Some(lhs) = pairs.next() {
+            next.push(match pairs.next() {
+                Some(rhs) => AstExpr {
+                    span,
+                    kind: ExprKind::Binary {
+                        op: join,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                },
+                None => lhs,
+            });
+        }
+        level = next;
+    }
+    level
+        .pop()
+        .ok_or_else(|| unsupported(span, "IN with an empty list".into()))
 }
 
 /// Extract `(left_col, right_col)` from a `JOIN ... ON <expr>` condition.
@@ -1737,6 +1755,66 @@ mod tests {
         assert!(text.contains("NOT ilike(b, 'y')"), "{text}");
         assert!(parse("SELECT a FROM t WHERE a ILIKE 'x' ESCAPE '!'").is_err());
     }
+    // parser_column_lower_in_list_6b7539d1: `list.is_empty()`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_list_6b7539d1__v1_an_empty_list_is_refused() {
+        let err = parse("SELECT a FROM t WHERE a IN ()").unwrap_err();
+        assert!(format!("{err}").contains("empty list"), "{err}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_list_6b7539d1__v2_a_non_empty_list_is_lowered() {
+        assert!(parse("SELECT a FROM t WHERE a IN (1)").is_ok());
+    }
+
+    // parser_column_lower_in_list_1e9ef1e6: `level.len() > 1`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_list_1e9ef1e6__v1_two_items_are_joined() {
+        let where_clause = parse("SELECT a FROM t WHERE a IN (1, 2)")
+            .unwrap()
+            .where_clause
+            .unwrap();
+        assert_eq!(format!("{where_clause}"), "a = 1 OR a = 2");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_list_1e9ef1e6__v2_one_item_is_not_joined() {
+        let where_clause = parse("SELECT a FROM t WHERE a IN (1)")
+            .unwrap()
+            .where_clause
+            .unwrap();
+        assert_eq!(format!("{where_clause}"), "a = 1");
+    }
+
+    // parser_column_lower_in_list_10248898: `let Some(lhs) = pairs.next()`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_list_10248898__v1_a_pair_is_joined() {
+        let where_clause = parse("SELECT a FROM t WHERE a NOT IN (1, 2)")
+            .unwrap()
+            .where_clause
+            .unwrap();
+        assert_eq!(format!("{where_clause}"), "a != 1 AND a != 2");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_lower_in_list_10248898__v2_an_odd_item_is_carried_up() {
+        // The last of five is alone at the first two levels; order is kept.
+        let where_clause = parse("SELECT a FROM t WHERE a IN (1, 2, 3, 4, 5)")
+            .unwrap()
+            .where_clause
+            .unwrap();
+        assert_eq!(
+            format!("{where_clause}"),
+            "a = 1 OR a = 2 OR a = 3 OR a = 4 OR a = 5"
+        );
+    }
+
     /// #716: `x IN (a, b, c)` is an `OR` chain of equalities and
     /// `x NOT IN (...)` an `AND` chain of inequalities, wherever an
     /// expression sits: WHERE, HAVING, the select list, an aggregate's
