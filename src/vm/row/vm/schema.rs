@@ -79,6 +79,36 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
             }
             Ok(Step::Next)
         }
+        Opcode::Checkpoint => {
+            if !vm.autocommit {
+                return Err(ExecError::CheckpointDuringTransaction);
+            }
+            let (busy, log, checkpointed) = match vm.transaction_hook.as_mut() {
+                Some(hook) => hook
+                    .wal_checkpoint(instr.p1)
+                    .map_err(ExecError::TransactionFailed)?,
+                None => None,
+            }
+            .unwrap_or((0, -1, -1));
+            vm.emit_row(vec![
+                Value::Integer(busy),
+                Value::Integer(log),
+                Value::Integer(checkpointed),
+            ]);
+            Ok(Step::Next)
+        }
+        Opcode::WalAutocheckpoint => {
+            let requested = (instr.p2 != 0).then_some(instr.p1);
+            let current = match vm.transaction_hook.as_mut() {
+                Some(hook) => hook
+                    .wal_autocheckpoint(requested)
+                    .map_err(ExecError::TransactionFailed)?,
+                None => None,
+            }
+            .unwrap_or(DEFAULT_WAL_AUTOCHECKPOINT);
+            vm.emit_row(vec![Value::Integer(i64::from(current))]);
+            Ok(Step::Next)
+        }
         Opcode::IntegrityCheck => {
             // `p1 != 0` is quick_check. One TEXT row per problem line
             // (sqlite-rs `pragma::integrity_check`); without a hook that

@@ -1196,3 +1196,117 @@ fn fused_join_over_typed_probe_columns_matches_value_columns_across_windows() {
         assert_eq!(run_on(typed), expected, "spread {spread}");
     }
 }
+
+/// #894: a worker folds a fused join's groups across its segments, indexed
+/// by the build side's payload group, when every aggregate reads a typed
+/// column. Enough segments that `run` pre-aggregates per worker; the typed
+/// facts must give what the same rows as `Value` columns (which never fold)
+/// give, for a dictionary-coded payload key and an integer one, with
+/// duplicate build keys, NULL payloads and inputs, and keys matching nothing.
+#[test]
+fn fused_join_dense_fold_matches_value_columns_across_many_segments() {
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let segments = threads * 4 + 4;
+    let rows = 5_000usize;
+    let dim_n = 60i64;
+    let customers = Batch::new(dim_n as usize)
+        .with_column(
+            "bench_customers.customer_id",
+            (0..dim_n).map(|r| Value::Int(r % 50)).collect(),
+        )
+        .with_column(
+            "bench_customers.tier",
+            (0..dim_n)
+                .map(|r| match r % 5 {
+                    4 => Value::Null,
+                    t => Value::Str(format!("tier-{t}").into()),
+                })
+                .collect(),
+        )
+        .with_column(
+            "bench_customers.rank",
+            (0..dim_n).map(|r| Value::Int((r * 7) % 11)).collect(),
+        );
+    let mut typed = Vec::new();
+    let mut values = Vec::new();
+    for s in 0..segments as i64 {
+        // Keys 50..70 match nothing.
+        let keys: Vec<i64> = (0..rows as i64).map(|r| (r * 13 + s) % 70).collect();
+        let amounts: Vec<f64> = (0..rows as i64)
+            .map(|r| ((r * 31 + s) % 40) as f64 / 2.0)
+            .collect();
+        let qtys: Vec<i64> = (0..rows as i64).map(|r| (r * 3 + s) % 1000 - 400).collect();
+        let amount_valid: Vec<bool> = (0..rows).map(|r| r % 13 != 0).collect();
+        let qty_valid: Vec<bool> = (0..rows).map(|r| r % 11 != 5).collect();
+        typed.push(
+            Batch::new(rows)
+                .with_typed_column(
+                    "bench.customer_id",
+                    Column::Int {
+                        data: keys.clone(),
+                        valid: Bitmap::new(rows, true),
+                    },
+                )
+                .with_typed_column(
+                    "bench.amount",
+                    Column::Float {
+                        data: amounts.clone(),
+                        valid: Bitmap::from_bools(amount_valid.iter().copied()),
+                    },
+                )
+                .with_typed_column(
+                    "bench.qty",
+                    Column::Int {
+                        data: qtys.clone(),
+                        valid: Bitmap::from_bools(qty_valid.iter().copied()),
+                    },
+                ),
+        );
+        values.push(
+            Batch::new(rows)
+                .with_column(
+                    "bench.customer_id",
+                    keys.into_iter().map(Value::Int).collect(),
+                )
+                .with_column(
+                    "bench.amount",
+                    amounts
+                        .into_iter()
+                        .zip(amount_valid)
+                        .map(|(a, v)| if v { Value::Float(a) } else { Value::Null })
+                        .collect(),
+                )
+                .with_column(
+                    "bench.qty",
+                    qtys.into_iter()
+                        .zip(qty_valid)
+                        .map(|(q, v)| if v { Value::Int(q) } else { Value::Null })
+                        .collect(),
+                ),
+        );
+    }
+    for group in ["tier", "rank"] {
+        let sql = format!(
+            "SELECT bench_customers.{group}, SUM(bench.amount), COUNT(*), COUNT(bench.amount), \
+             MIN(bench.qty), MAX(bench.amount), SUM(bench.qty), AVG(bench.amount), MIN(bench.amount) \
+             FROM bench JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+             GROUP BY bench_customers.{group}"
+        );
+        let plan = compile_join(&parse(&sql).unwrap(), BuildSourceKind::InMemory).unwrap();
+        assert!(plan.fused_group_by.is_some(), "fusion should engage");
+        let run_on = |facts: &[Batch]| {
+            sorted(
+                run_join_segments(
+                    facts.iter().cloned().map(InMemorySegment).collect(),
+                    ScanSource::InMemory(customers.clone()),
+                    &plan,
+                    &NoResolver,
+                )
+                .unwrap(),
+            )
+        };
+        let expected = run_on(&values);
+        assert!(expected.len() >= 4, "{group}");
+        assert_eq!(run_on(&typed), expected, "{group}");
+    }
+}

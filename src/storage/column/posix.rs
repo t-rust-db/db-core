@@ -42,9 +42,6 @@ impl VfsFile for PosixFile {
         {
             std::os::windows::fs::FileExt::seek_read(&self.file, buf, offset)
         }
-        // No positioned read elsewhere (#898). On wasm32-unknown-unknown
-        // `File::open` already fails, so this is never reached; the browser
-        // reads from memory (`BatchEngine::from_bytes`).
         #[cfg(not(any(unix, windows)))]
         {
             let _ = (offset, buf);

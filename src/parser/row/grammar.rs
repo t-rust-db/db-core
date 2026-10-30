@@ -1121,6 +1121,12 @@ impl Parser {
                 span: join_span(start, end),
             });
         }
+        if name.eq_ignore_ascii_case("wal_autocheckpoint") {
+            return self.parse_wal_autocheckpoint(start, name_span);
+        }
+        if name.eq_ignore_ascii_case("wal_checkpoint") {
+            return self.parse_wal_checkpoint(start, name_span);
+        }
         if !name.eq_ignore_ascii_case("journal_mode") {
             return self.unsupported(format!("pragma {name:?} not yet supported"));
         }
@@ -1134,6 +1140,74 @@ impl Parser {
         let (journal_mode, end) = self.pragma_journal_mode_value()?;
         Ok(Pragma::JournalMode {
             journal_mode,
+            span: join_span(start, end),
+        })
+    }
+
+    /// `wal_autocheckpoint`, bare or with `= N` / `(N)` (#896); `N` may be
+    /// negative (disables automatic checkpoints, like `0`).
+    fn parse_wal_autocheckpoint(&mut self, start: Span, name_span: Span) -> PResult<Pragma> {
+        let paren = self.eat_punct(&TokenKind::LParen);
+        if !paren {
+            // No argument at all: the query / default form.
+            if !self.eat_punct(&TokenKind::Eq) {
+                return Ok(Pragma::WalAutocheckpoint {
+                    frames: None,
+                    span: join_span(start, name_span),
+                });
+            }
+        }
+        let negative = self.eat_punct(&TokenKind::Minus);
+        let TokenKind::Integer(n) = self.peek().kind.clone() else {
+            return self.unsupported("wal_autocheckpoint takes an integer");
+        };
+        let mut end = self.advance_span();
+        if paren {
+            end = self.expect_punct(TokenKind::RParen, "')'")?;
+        }
+        let n = if negative { n.saturating_neg() } else { n };
+        let frames = i32::try_from(n).unwrap_or(if negative { i32::MIN } else { i32::MAX });
+        Ok(Pragma::WalAutocheckpoint {
+            frames: Some(frames),
+            span: join_span(start, end),
+        })
+    }
+
+    /// `wal_checkpoint`, bare or with `(mode)` / `= mode` (#896).
+    fn parse_wal_checkpoint(&mut self, start: Span, name_span: Span) -> PResult<Pragma> {
+        let paren = self.eat_punct(&TokenKind::LParen);
+        if !paren {
+            // No argument at all: the query / default form.
+            if !self.eat_punct(&TokenKind::Eq) {
+                return Ok(Pragma::WalCheckpoint {
+                    mode: PragmaCheckpointMode::Passive,
+                    span: join_span(start, name_span),
+                });
+            }
+        }
+        let mode = match self.peek().kind.clone() {
+            TokenKind::Identifier(text) if text.eq_ignore_ascii_case("passive") => {
+                PragmaCheckpointMode::Passive
+            }
+            TokenKind::Identifier(text) if text.eq_ignore_ascii_case("restart") => {
+                PragmaCheckpointMode::Restart
+            }
+            TokenKind::Identifier(text) if text.eq_ignore_ascii_case("truncate") => {
+                PragmaCheckpointMode::Truncate
+            }
+            // `FULL` is a reserved keyword, see `pragma_synchronous_value`.
+            TokenKind::Keyword(Keyword::FULL) => PragmaCheckpointMode::Full,
+            _ => {
+                return self
+                    .unsupported("wal_checkpoint mode must be PASSIVE, FULL, RESTART or TRUNCATE")
+            }
+        };
+        let mut end = self.advance_span();
+        if paren {
+            end = self.expect_punct(TokenKind::RParen, "')'")?;
+        }
+        Ok(Pragma::WalCheckpoint {
+            mode,
             span: join_span(start, end),
         })
     }

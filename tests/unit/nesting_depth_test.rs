@@ -182,3 +182,49 @@ fn row_codegen_survives_the_deepest_json_subtype_nesting_the_parser_accepts() {
         }
     });
 }
+
+/// `SELECT a FROM t WHERE a [NOT] IN (<lit>, ...)` with `n` literals.
+fn in_list(n: usize, negated: bool, lit: impl Fn(usize) -> String) -> String {
+    let items: Vec<String> = (0..n).map(lit).collect();
+    let not = if negated { "NOT " } else { "" };
+    format!("SELECT a FROM t WHERE a {not}IN ({})", items.join(", "))
+}
+
+/// A long literal `IN` list is one flat `InList` (#901): the column parser
+/// used to lower it to an `OR` chain as deep as the list is long, and the
+/// passes over that tree overflowed a 2 MiB stack at about 1,000 items.
+#[test]
+fn batch_codegen_survives_a_long_literal_in_list_on_a_2mib_stack() {
+    on_2mib_stack(|| {
+        for n in [1_000, 10_000] {
+            for negated in [false, true] {
+                let lits: [&dyn Fn(usize) -> String; 3] =
+                    [&|i| i.to_string(), &|i| format!("'v{i}'"), &|i| {
+                        format!("x'{i:08x}'")
+                    }];
+                for lit in lits {
+                    let sql = in_list(n, negated, lit);
+                    let select = column::parse(&sql).unwrap();
+                    batch::compile(&select).unwrap();
+                }
+            }
+        }
+    });
+}
+
+/// The row engine keeps `IN` as one flat node, so a long list costs no
+/// stack there (#901): parse and compile 10,000 literals on a 2 MiB thread.
+#[test]
+fn row_codegen_survives_a_long_literal_in_list_on_a_2mib_stack() {
+    on_2mib_stack(|| {
+        for negated in [false, true] {
+            let sql = in_list(10_000, negated, |i| i.to_string());
+            assert!(
+                matches!(parse_select(&sql), ParseOutcome::Accepted(_)),
+                "the row parser must accept a long IN list"
+            );
+            let program = compile_statement(&sql, &[schema()], &[]).unwrap();
+            assert!(!program.instructions.is_empty());
+        }
+    });
+}

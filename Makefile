@@ -450,9 +450,10 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 # feature that does not build alone). Not the tests or coverage (about 2.5
 # minutes in CI), nor the seconds-long deny and charter profile gates, which
 # CI still runs; `make ci` runs them all.
-pre-push: ## The fast CI gates (lint, features, MC/DC and public API snapshots, mvl-limit) -- run before pushing
+pre-push: ## The fast CI gates (lint, features, wasm32, MC/DC and public API snapshots, mvl-limit) -- run before pushing
 	$(MAKE) lint
 	$(MAKE) check-features
+	$(MAKE) check-wasm
 	$(MAKE) check-mcdc-fresh
 	$(MAKE) check-mvl-limit
 	$(MAKE) check-public-api-fresh
