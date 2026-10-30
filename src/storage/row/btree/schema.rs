@@ -18,8 +18,9 @@ use crate::storage::row::record::{decode_record, Value};
 pub fn create_empty_table_root(pager: &mut Pager) -> Result<u32, BtreeError> {
     let root_page = pager.allocate_page()?;
     let header_start = page1_header_start(root_page);
+    let usable = pager.usable_size() as usize;
     let buf = pager.get_page_mut(root_page)?;
-    write_leaf_page(buf, header_start, root_page, &[])?;
+    write_leaf_page(buf, usable, header_start, root_page, &[])?;
     Ok(root_page)
 }
 
@@ -29,8 +30,9 @@ pub fn create_empty_table_root(pager: &mut Pager) -> Result<u32, BtreeError> {
 pub fn create_empty_index_root(pager: &mut Pager) -> Result<u32, BtreeError> {
     let root_page = pager.allocate_page()?;
     let header_start = page1_header_start(root_page);
+    let usable = pager.usable_size() as usize;
     let buf = pager.get_page_mut(root_page)?;
-    write_index_leaf_page(buf, header_start, root_page, &[])?;
+    write_index_leaf_page(buf, usable, header_start, root_page, &[])?;
     Ok(root_page)
 }
 

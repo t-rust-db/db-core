@@ -821,29 +821,62 @@ pub(super) fn descend_index_tree(
     }
 }
 
+/// Index of the entry to promote when a page splits: the one that leaves
+/// the two remaining sides closest in *bytes* (each cell weighs its length
+/// plus its 2-byte pointer). Splitting at the count median overfills a side
+/// as soon as cell sizes are mixed — a run of near-`maxLocal` entries on
+/// one half — which is the by-bytes balance `split_groups_by_bytes` already
+/// does for table pages. Ties go to the later index, which is the count
+/// median for uniform sizes.
+pub(super) fn split_median_by_bytes(cell_lens: &[usize]) -> usize {
+    let total: usize = cell_lens.iter().map(|l| l.saturating_add(2)).sum();
+    let mut best = (usize::MAX, 0usize);
+    let mut before = 0usize;
+    for (i, len) in cell_lens.iter().enumerate() {
+        let weight = len.saturating_add(2);
+        let right = total.saturating_sub(before).saturating_sub(weight);
+        let worst = before.max(right);
+        if worst <= best.0 {
+            best = (worst, i);
+        }
+        before = before.saturating_add(weight);
+    }
+    best.1
+}
+
 /// Rebuilds `buf` in place as an index leaf page holding exactly `cells`,
 /// in order. Shared by the index insert/delete write paths — see
 /// `insert.rs`'s module doc for the "every page mutation fully rebuilds
 /// the page" simplification this shares with the table write path.
 pub(super) fn write_index_leaf_page(
     buf: &mut [u8],
+    usable: usize,
     header_start: usize,
     page_num: u32,
     cells: &[Vec<u8>],
 ) -> Result<(), BtreeError> {
-    write_page_common(buf, header_start, page_num, LEAF_INDEX, 8, cells)
+    write_page_common(buf, usable, header_start, page_num, LEAF_INDEX, 8, cells)
 }
 
 /// As [`write_index_leaf_page`], but for an interior page — writes the
 /// rightmost-child pointer (header bytes 8-11) after the common layout.
 pub(super) fn write_index_interior_page(
     buf: &mut [u8],
+    usable: usize,
     header_start: usize,
     page_num: u32,
     cells: &[Vec<u8>],
     rightmost: u32,
 ) -> Result<(), BtreeError> {
-    write_page_common(buf, header_start, page_num, INTERIOR_INDEX, 12, cells)?;
+    write_page_common(
+        buf,
+        usable,
+        header_start,
+        page_num,
+        INTERIOR_INDEX,
+        12,
+        cells,
+    )?;
     super::put(
         buf,
         header_start.saturating_add(8),
@@ -862,6 +895,20 @@ pub(super) fn write_index_interior_page(
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_median_by_bytes_balances_by_size() {
+        // Uniform sizes: the count median, ties to the later index.
+        assert_eq!(split_median_by_bytes(&[10; 5]), 2);
+        assert_eq!(split_median_by_bytes(&[10; 4]), 2);
+        // A run of big cells at the tail pulls the median towards it.
+        assert_eq!(
+            split_median_by_bytes(&[5, 5, 5, 5, 5, 5, 5, 5, 400, 400]),
+            8
+        );
+        // A single cell has nowhere else to go.
+        assert_eq!(split_median_by_bytes(&[7]), 0);
+    }
     use crate::storage::row::header::DatabaseHeader;
     use crate::storage::row::vfs::{PageError, UnixVfs, Vfs, VfsPageSource};
     use std::collections::HashMap;

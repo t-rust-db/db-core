@@ -55,7 +55,7 @@ pub fn update_row(
     free_overflow_chain(pager, overflow_page)?;
 
     let cell = encode_leaf_cell(pager, usable_size, rowid, new_payload)?;
-    let page_len = pager.get_page_mut(leaf_page)?.len();
+    let page_len = usable_size as usize;
     insert_into_leaf(
         pager,
         usable_size,

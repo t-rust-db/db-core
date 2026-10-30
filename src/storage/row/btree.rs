@@ -1352,11 +1352,12 @@ pub(super) fn cell_bytes<K>(cells: Vec<(K, Vec<u8>)>) -> Vec<Vec<u8>> {
 
 pub(super) fn write_leaf_page(
     buf: &mut [u8],
+    usable: usize,
     header_start: usize,
     page_num: u32,
     cells: &[Vec<u8>],
 ) -> Result<(), BtreeError> {
-    write_page_common(buf, header_start, page_num, LEAF_TABLE, 8, cells)
+    write_page_common(buf, usable, header_start, page_num, LEAF_TABLE, 8, cells)
 }
 
 /// As [`write_leaf_page`], but for an interior page — writes the
@@ -1364,12 +1365,21 @@ pub(super) fn write_leaf_page(
 /// Shared by the insert and delete write paths.
 pub(super) fn write_interior_page(
     buf: &mut [u8],
+    usable: usize,
     header_start: usize,
     page_num: u32,
     cells: &[Vec<u8>],
     rightmost: u32,
 ) -> Result<(), BtreeError> {
-    write_page_common(buf, header_start, page_num, INTERIOR_TABLE, 12, cells)?;
+    write_page_common(
+        buf,
+        usable,
+        header_start,
+        page_num,
+        INTERIOR_TABLE,
+        12,
+        cells,
+    )?;
     put(
         buf,
         header_start.saturating_add(8),
@@ -1380,6 +1390,7 @@ pub(super) fn write_interior_page(
 
 pub(super) fn write_page_common(
     buf: &mut [u8],
+    usable: usize,
     header_start: usize,
     page_num: u32,
     page_type: u8,
@@ -1397,7 +1408,7 @@ pub(super) fn write_page_common(
         .iter()
         .map(|c| c.len().saturating_add(2))
         .fold(ptr_base, usize::saturating_add);
-    if needed > buf.len() {
+    if needed > usable {
         return Err(BtreeError::Internal("cells do not fit in page"));
     }
 
@@ -1411,7 +1422,7 @@ pub(super) fn write_page_common(
     put_u8(buf, header_start, page_type, page_num)?;
     // bytes header_start+1..+3 (first freeblock) stay 0 — see module doc.
 
-    let mut content_end = buf.len();
+    let mut content_end = usable;
     let mut ptr_offsets = Vec::with_capacity(num_cells);
     for cell in cells.iter().rev() {
         content_end = content_end.saturating_sub(cell.len());
@@ -1896,7 +1907,7 @@ pub fn test_minimal_db(
     page1[19] = 1;
     page1[28..32].copy_from_slice(&1u32.to_be_bytes());
     page1[56..60].copy_from_slice(&1u32.to_be_bytes());
-    write_leaf_page(&mut page1, 100, 1, &[]).unwrap();
+    write_leaf_page(&mut page1, page_size as usize, 100, 1, &[]).unwrap();
 
     let mut header_bytes = [0u8; 100];
     header_bytes.copy_from_slice(&page1[..100]);
@@ -2741,7 +2752,7 @@ mod tests {
 
     fn leaf_page_with_cells(page_size: usize, cells: &[Vec<u8>]) -> Vec<u8> {
         let mut buf = vec![0u8; page_size];
-        write_leaf_page(&mut buf, 0, 1, cells).unwrap();
+        write_leaf_page(&mut buf, page_size, 0, 1, cells).unwrap();
         buf
     }
 

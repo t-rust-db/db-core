@@ -196,8 +196,9 @@ pub fn ensure_sqlite_sequence_table(
 
     let root_page = pager.allocate_page()?;
     let header_start = page1_header_start(root_page);
+    let usable = pager.usable_size() as usize;
     let buf = pager.get_page_mut(root_page)?;
-    write_leaf_page(buf, header_start, root_page, &[])?;
+    write_leaf_page(buf, usable, header_start, root_page, &[])?;
 
     insert_master_row(
         pager,
@@ -338,8 +339,9 @@ pub fn ensure_sqlite_stat1_table(
 
     let root_page = pager.allocate_page()?;
     let header_start = page1_header_start(root_page);
+    let usable = pager.usable_size() as usize;
     let buf = pager.get_page_mut(root_page)?;
-    write_leaf_page(buf, header_start, root_page, &[])?;
+    write_leaf_page(buf, usable, header_start, root_page, &[])?;
 
     insert_master_row(
         pager,
