@@ -966,8 +966,21 @@ impl Parser {
         };
 
         self.expect_kw(Keyword::AS)?;
+        let body_start = self.pos;
         let query = self.parse_select_stmt()?;
         let end = query.span;
+        // A view has no bind step, so sqlite3 refuses a parameter in its
+        // body (#650).
+        let has_param = self
+            .tokens
+            .get(body_start..self.pos)
+            .is_some_and(|body| body.iter().any(|t| matches!(t.kind, TokenKind::Param(_))));
+        if has_param {
+            return Err(ParseFail::Invalid {
+                message: "parameters are not allowed in views".into(),
+                span: end,
+            });
+        }
 
         Ok(CreateView {
             if_not_exists,
@@ -3241,6 +3254,33 @@ mod tests {
 
     fn parser(sql: &str) -> Parser {
         Parser::new(Tokenizer::tokenize(sql))
+    }
+
+    // parser_row_grammar_parse_create_view_stmt_97d82d58 (`has_param`) (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_parse_create_view_stmt_97d82d58__v1_parameter_in_view_body_is_refused(
+    ) {
+        for sql in [
+            "CREATE VIEW v AS SELECT ?",
+            "CREATE VIEW v AS SELECT 1 WHERE 1 = ?2",
+            "CREATE VIEW v AS SELECT :a",
+        ] {
+            let err = parser(sql).parse_create_view_stmt().unwrap_err();
+            assert!(
+                matches!(err, ParseFail::Invalid { ref message, .. }
+                    if message == "parameters are not allowed in views"),
+                "{sql}"
+            );
+        }
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_parse_create_view_stmt_97d82d58__v2_view_without_parameter_parses()
+    {
+        parser("CREATE VIEW v AS SELECT 1 WHERE 'a?' = 'b'")
+            .parse_create_view_stmt()
+            .unwrap();
     }
 
     // parser_row_grammar_table_ref_930705dc (`table_ref`):

@@ -1143,6 +1143,12 @@ mod already_exists_tests {
     fn unknown_functions_are_refused_at_compile_time() {
         for (sql, message) in [
             ("UPDATE t SET a = b()", "no such function: b"),
+            // #650: overridden by the later assignment, never compiled.
+            ("UPDATE t SET a = b(), a = 1", "no such function: b"),
+            (
+                "INSERT INTO t(a) SELECT a FROM t GROUP BY nosuch(1)",
+                "no such function: nosuch",
+            ),
             ("CREATE INDEX t ON missing(a)", "no such table: missing"),
             ("DELETE FROM t WHERE i()", "no such function: i"),
             (
@@ -1160,6 +1166,25 @@ mod already_exists_tests {
         assert!(compile_statement("SELECT upper(a) FROM t", &schemas(), &views()).is_ok());
         // An sqlite3 built-in not implemented yet is left to run time.
         assert!(compile_statement("SELECT random() FROM t WHERE 0", &schemas(), &views()).is_ok());
+    }
+
+    /// #650: a view has no bind step, so every parameter form is refused.
+    #[test]
+    fn create_view_refuses_parameters() {
+        for sql in [
+            "CREATE VIEW v AS SELECT ?",
+            "CREATE VIEW v AS SELECT 1 FROM t WHERE a = ?1",
+            "CREATE VIEW v AS SELECT 1 LIMIT :n",
+            "CREATE VIEW v AS SELECT $x",
+        ] {
+            let err = compile_statement(sql, &schemas(), &views()).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("parameters are not allowed in views"),
+                "{sql}: {err}"
+            );
+        }
+        assert!(compile_statement("CREATE VIEW fresh AS SELECT 1", &schemas(), &views()).is_ok());
     }
 
     /// #562: the CREATE TABLE definitions sqlite3 refuses, with its

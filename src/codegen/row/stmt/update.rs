@@ -40,6 +40,7 @@
 //! text is only tokenized/parsed once across however many
 //! INSERT/UPDATE compiles reuse the same schema.
 
+use crate::codegen::row::ddl::any_node;
 use crate::codegen::row::expr::{column_index, compile_cond, compile_value, emit_column_read};
 use crate::codegen::row::first_reg;
 use crate::codegen::row::index_maintenance::{
@@ -56,7 +57,9 @@ use crate::codegen::row::stmt::insert::{
 };
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, Label, NullTarget, RegAlloc, Scope, Target};
-use crate::parser::ast::{ConflictAction, Expr, ExprKind, Literal, ParamKind, Update};
+use crate::parser::ast::{
+    ConflictAction, Expr, ExprKind, FunctionArgs, Literal, ParamKind, Update,
+};
 use crate::vm::row::{affinity_of, Instruction, Opcode, Program, OPFLAG_NCHANGE, P4};
 
 const TABLE_CURSOR: i32 = 0;
@@ -103,6 +106,7 @@ pub fn compile_update_with_catalog(
         ..schema.clone()
     };
 
+    refuse_unknown_functions(update)?;
     let mut assigned: Vec<Option<&Expr>> = vec![None; schema.columns.len()];
     for assignment in &update.assignments {
         for name in &assignment.columns {
@@ -470,6 +474,7 @@ fn compile_update_without_rowid(
         rowid_alias: None,
         ..schema.clone()
     };
+    refuse_unknown_functions(update)?;
     let mut assigned: Vec<Option<&Expr>> = vec![None; schema.columns.len()];
     for assignment in &update.assignments {
         for name in &assignment.columns {
@@ -524,6 +529,30 @@ fn compile_update_without_rowid(
     )?;
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
     Ok(em.finish())
+}
+
+/// sqlite3 prepares every `SET` expression, so an unknown function is an
+/// error even in an assignment a later one to the same column overrides --
+/// which codegen never compiles (#650).
+fn refuse_unknown_functions(update: &Update) -> Result<(), CodegenError> {
+    for assignment in &update.assignments {
+        let mut problem = None;
+        any_node(&assignment.value, &mut |e| {
+            let ExprKind::FunctionCall { name, args, .. } = &e.kind else {
+                return false;
+            };
+            let arity = match args {
+                FunctionArgs::Star => 0,
+                FunctionArgs::List(list) => list.len(),
+            };
+            problem = crate::functions::prepare_error(name, arity);
+            problem.is_some()
+        });
+        if let Some(message) = problem {
+            return Err(CodegenError::Rejected(message));
+        }
+    }
+    Ok(())
 }
 
 /// For each of `schema.indexes`, whether a `SET` that assigns the columns
@@ -1137,5 +1166,50 @@ mod index_skip_tests {
         assert_eq!(count(&p, Opcode::Update), 0, "{p:?}");
         assert_eq!(count(&p, Opcode::Delete), 1, "{p:?}");
         assert_eq!(count(&p, Opcode::Insert), 1, "{p:?}");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod unknown_function_tests {
+    //! #650: an unknown function in an overridden `SET` is still refused.
+
+    use super::compile_update_with_catalog;
+    use crate::codegen::row::TableSchema;
+    use crate::parser::row::{parse_update, ParseOutcome};
+
+    fn compile(sql: &str) -> Result<(), String> {
+        let schema = TableSchema {
+            name: "t".to_string(),
+            root_page: 2,
+            columns: vec!["a".to_string()],
+            column_types: vec!["INTEGER".to_string()],
+            sql: "CREATE TABLE t (a)".to_string(),
+            ..Default::default()
+        };
+        let update = match parse_update(sql) {
+            ParseOutcome::Accepted(update) => *update,
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        };
+        compile_update_with_catalog(&update, &schema, std::slice::from_ref(&schema))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    // codegen_row_stmt_update_refuse_unknown_functions_7b72c790: `problem`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_stmt_update_refuse_unknown_functions_7b72c790__v1_overridden_unknown_function_is_refused(
+    ) {
+        assert_eq!(
+            compile("UPDATE t SET a = nosuch(1), a = 2").unwrap_err(),
+            "no such function: nosuch"
+        );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_stmt_update_refuse_unknown_functions_7b72c790__v2_known_functions_compile()
+    {
+        compile("UPDATE t SET a = abs(1), a = upper(2)").unwrap();
     }
 }
