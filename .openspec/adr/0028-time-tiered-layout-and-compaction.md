@@ -346,13 +346,23 @@ instead of mapping them, so a merge holds one row group per input, not
 every page it touched.
 
 Measured (`make bench-events`, the `wide` workload: 1M requests of 24
-columns, four MAPs and two BINARYs, ~0.8 KB a row, over 6 hours, zstd):
-with the row-count defaults the process peaks at 1.8 GB (open hour 1.6 GB,
-day merge 1.7 GB); with `spill_bytes` 16 MB and `row_group_max_bytes`
-4 MB it peaks at 211 MB, about 195 MB in each of the open hour, the hour
-flush and the day merge, at 1.8x the ingest time (the spills). The bound
-for such a table is about a dozen times `spill_bytes`'s estimate, set by
-the decoded size of the maps (an `Arc<str>` per entry).
+columns, four MAPs and two BINARYs, ~0.8 KB a row, over 6 hours, zstd,
+`row_group_max_bytes` 4 MB, one run each):
+
+| `spill_bytes` | ingest | of which append | hour flushes | day merge | peak RSS |
+|---:|---:|---:|---:|---:|---:|
+| 16 MB | 40.2 s | 26.7 s | 13.4 s | 15.6 s | 206 MB |
+| 64 MB | 30.5 s | 19.4 s | 11.1 s | 15.2 s | 324 MB |
+| 128 MB | 28.2 s | 17.2 s | 11.1 s | 15.5 s | 556 MB |
+| unset | 19.2 s | 8.1 s | 11.1 s | 15.9 s | 1 248 MB |
+
+With the row-count defaults and no byte limits the peak is 1.8 GB. A
+spill sorts and writes a run on the appending thread, so a small
+`spill_bytes` buys memory with append time; `row_group_max_bytes` costs no
+time. Recommended: set `row_group_max_bytes`, and `spill_bytes` (64 MB for
+a ~1 KB row) only where a memory bound matters more than append speed. The
+per-phase peaks in the report are not independent: the allocator keeps
+freed memory resident, so later phases start from the earlier peak.
 
 **The manifest lists runs.** A staging entry has area `staging`; a
 tiered manifest is `archive/`, then `live/`, then `staging/` (only the
