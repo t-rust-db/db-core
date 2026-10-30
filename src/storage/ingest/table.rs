@@ -58,7 +58,7 @@ use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
 use crate::storage::stream::adapter::now_ns;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
-use flusher::{failure, Flusher, Job, Runner, Shared, Work};
+use flusher::{failure, Drain, Flusher, Job, Runner, Shared, Work};
 
 /// Live Parquet files, relative to the table directory.
 pub const DATA_DIR: &str = "data";
@@ -515,24 +515,19 @@ impl TableWriter {
     /// to it; returns the files it committed since the last call. Nothing
     /// to wait for with an inline flusher.
     pub fn drain(&mut self) -> Result<Vec<FileEntry>, IngestError> {
-        let mut view = self.shared.lock();
-        loop {
-            if view.failed.is_some() {
-                break;
-            }
-            if view.queued == 0 {
-                break;
-            }
-            view = self
-                .shared
-                .changed
-                .wait(view)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-        if let Some(why) = &view.failed {
-            return Err(failure(why));
-        }
-        Ok(std::mem::take(&mut view.done))
+        self.shared.drain()
+    }
+
+    /// Makes the flusher look busy with `n` jobs until the next commit.
+    #[cfg(test)]
+    pub(crate) fn hold_queue(&self, n: usize) {
+        self.shared.lock().queued = n;
+        self.shared.changed.notify_all();
+    }
+
+    /// Waits for the queued jobs without borrowing the writer.
+    pub(crate) fn drain_handle(&self) -> Drain {
+        Drain::new(&self.shared)
     }
 
     /// How far the background flusher is behind: see [`FlushStatus`].
@@ -575,10 +570,16 @@ impl TableWriter {
     /// table, the closed hours of a tiered one. Waits for the background
     /// flusher, if any, to commit it.
     pub fn flush_all(&mut self) -> Result<Vec<FileEntry>, IngestError> {
-        self.seal_head()?;
-        let mut added = self.flush()?;
+        let mut added = self.flush_submit()?;
         added.extend(self.drain()?);
         Ok(added)
+    }
+
+    /// [`flush_all`](Self::flush_all) without the wait: seals the head and
+    /// hands everything to the flusher.
+    pub(crate) fn flush_submit(&mut self) -> Result<Vec<FileEntry>, IngestError> {
+        self.seal_head()?;
+        self.flush()
     }
 
     /// The tiered flush: every closed hour, one commit each.
