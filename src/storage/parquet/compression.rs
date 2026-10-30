@@ -8,6 +8,7 @@ mod snappy;
 mod zstd;
 
 pub use snappy::SnappyError;
+#[cfg(feature = "storage-column-write")]
 pub(crate) use zstd::compress as zstd_compress;
 pub use zstd::ZstdError;
 

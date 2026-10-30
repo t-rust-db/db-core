@@ -37762,7 +37762,7 @@
   {
     "id": "storage_parquet_compression_fmt_6f8b144c",
     "file": "src/storage/parquet/compression.rs",
-    "line": 31,
+    "line": 32,
     "decision": "match self {\n            CompressionError::UnsupportedCodec(c) => {\n                write!(f, \"unsupported compression codec: {c}\")\n            }\n            CompressionError::Snappy(e) => write!(f, \"{e}\"),\n            CompressionError::Zstd(e) => write!(f, \"{e}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37772,7 +37772,7 @@
   {
     "id": "storage_parquet_compression_decompress_63baa9d9",
     "file": "src/storage/parquet/compression.rs",
-    "line": 66,
+    "line": 67,
     "decision": "match codec {\n        Codec::Uncompressed => Ok(Cow::Borrowed(compressed)),\n        Codec::Snappy => Ok(Cow::Owned(snappy::decompress(compressed)?)),\n        Codec::Zstd => Ok(Cow::Owned(zstd::decompress(compressed, uncompressed_size)?)),\n        Codec::Other(c) => Err(CompressionError::UnsupportedCodec(c)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38062,7 +38062,7 @@
   {
     "id": "storage_parquet_compression_zstd_fmt_416a6666",
     "file": "src/storage/parquet/compression/zstd.rs",
-    "line": 51,
+    "line": 53,
     "decision": "match self {\n            ZstdError::Frame(e) => write!(f, \"zstd frame error: {e}\"),\n            ZstdError::Read(e) => write!(f, \"zstd read error: {e}\"),\n            ZstdError::SizeMismatch { expected, actual } => {\n                write!(\n                    f,\n                    \"zstd decompressed size mismatch: expected {expected}, got {actual}\"\n                )\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38072,7 +38072,7 @@
   {
     "id": "storage_parquet_compression_zstd_decompress_ec19dc69",
     "file": "src/storage/parquet/compression/zstd.rs",
-    "line": 82,
+    "line": 84,
     "decision": "uncompressed_size > data.len().saturating_mul(MAX_EXPANSION)",
     "conditions": 1,
     "vectors_required": 2,
