@@ -185,6 +185,7 @@ impl From<crate::vm::batch::Value> for Cell {
             crate::vm::batch::Value::Float(x) => Cell::Real(x),
             crate::vm::batch::Value::Bool(b) => Cell::Bool(b),
             crate::vm::batch::Value::Str(s) => Cell::Text(s.into_owned()),
+            crate::vm::batch::Value::Blob(b) => Cell::Blob(b.to_vec()),
             // As DuckDB prints a map: `{a=1, b=NULL}`; a list as a JSON
             // array: `["a",null]`.
             m @ (crate::vm::batch::Value::Map(_)
@@ -199,15 +200,12 @@ impl From<crate::vm::batch::Value> for Cell {
 
 /// The reverse of the conversion above: a materialized [`Cell`] going back
 /// into the batch VM to be evaluated (`engine::predicate`, #369).
-/// `Cell::Blob` has no `vm::batch::Value` counterpart -- it becomes `Null`,
-/// same as `vm::batch::Value` losing precision it never had; a predicate
-/// referencing a blob column degrades to comparing against `NULL` rather
-/// than panicking.
 #[cfg(feature = "vm-batch")]
 impl From<Cell> for crate::vm::batch::Value {
     fn from(c: Cell) -> Self {
         match c {
-            Cell::Null | Cell::Blob(_) => crate::vm::batch::Value::Null,
+            Cell::Null => crate::vm::batch::Value::Null,
+            Cell::Blob(b) => crate::vm::batch::Value::Blob(b.into()),
             Cell::Int(n) => crate::vm::batch::Value::Int(n),
             Cell::Real(x) => crate::vm::batch::Value::Float(x),
             Cell::Bool(b) => crate::vm::batch::Value::Bool(b),

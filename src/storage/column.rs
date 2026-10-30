@@ -10,10 +10,6 @@ pub mod mmap;
 pub mod posix;
 pub mod vfs;
 
-// Only record tables (ingest) render bytes outside the decoder, when the
-// column engine reads them.
-#[cfg(all(feature = "ingest-read", feature = "engine-column"))]
-pub(crate) use decode::hex;
 #[cfg(feature = "vm-batch")]
 pub use decode::{
     annotation, decode_column_at, decode_column_full, decode_column_full_bit_pattern, Annotation,

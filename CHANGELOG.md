@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.214.2] - 2026-10-30
+
+### Fixed
+
+- Blob values in the column engine (#868): `Binary` columns read as `Cell::Blob` instead of hex text; `x'..'` literals compare by bytes (`=`, `<>`, `<`, `>`, `BETWEEN`, `IN`); a blob never equals text; `hex()` (upper case) and `unhex()` work in the column dialect; `ORDER BY`, `MIN`/`MAX`, `GROUP BY` and `COUNT(DISTINCT)` order blobs by bytes. Cross-mode joins load SQLite BLOB columns. New `Value::Blob` / `Column::Blob` variants: code that read blobs as hex text must render hex itself.
+- A column named only in `ORDER BY`, selected with a `WHERE`, no longer fails with `Emit: register length mismatch`.
+
 ## [0.214.1] - 2026-10-30
 
 ### Fixed

@@ -247,6 +247,10 @@ pub enum Value {
     /// and `Combine`, which merges the sketches and finalizes them to the
     /// estimate -- never a column a query can read.
     Bytes(Arc<[u8]>),
+    /// A binary blob (#868): raw bytes, compared bytewise, never equal to
+    /// text. Read from a Parquet BYTE_ARRAY / FIXED_LEN_BYTE_ARRAY column or
+    /// a record table's `Binary` column; written as `x'..'`.
+    Blob(Arc<[u8]>),
     /// An exact `DECIMAL` (#632): `unscaled / 10^scale`, as a Parquet
     /// DECIMAL or a record table's column stores it. Equal to another
     /// decimal of the same value whatever their scales (`1.50 == 1.5`).
@@ -280,6 +284,7 @@ impl PartialEq for Value {
             (Value::Map(a), Value::Map(b)) => a == b,
             (Value::List(a), Value::List(b)) => a == b,
             (Value::Bytes(a), Value::Bytes(b)) => a == b,
+            (Value::Blob(a), Value::Blob(b)) => a == b,
             (
                 Value::Decimal {
                     unscaled: a,
@@ -395,6 +400,13 @@ impl fmt::Display for Value {
             Value::Null => write!(f, "NULL"),
             // A sketch partial is never shown; its size is all there is to say.
             Value::Bytes(bytes) => write!(f, "<sketch {} bytes>", bytes.len()),
+            Value::Blob(bytes) => {
+                write!(f, "x'")?;
+                for b in bytes.iter() {
+                    write!(f, "{b:02X}")?;
+                }
+                write!(f, "'")
+            }
             Value::Decimal { unscaled, scale } => {
                 f.write_str(&crate::value::format_decimal(*unscaled, *scale))
             }
@@ -1272,6 +1284,7 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
         Value::Map(_) | Value::List(_) => crate::value::Value::Text(v.to_string().into()),
         // A sketch partial never reaches a row function.
         Value::Bytes(_) => crate::value::Value::Null,
+        Value::Blob(b) => crate::value::Value::Blob(b.to_vec().into()),
         // SQLite reads a DECIMAL as REAL (its affinity), so the row
         // functions see the nearest float.
         Value::Decimal { unscaled, scale } => {
@@ -1281,11 +1294,11 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
 }
 
 /// [`crate::value::Value`] -> [`Value`], the reverse of
-/// [`to_scalar_value`]. `Blob` has no `Value` equivalent here (batch has
-/// never needed one) and becomes `Null` rather than erroring.
+/// [`to_scalar_value`].
 fn from_scalar_value(v: crate::value::Value) -> Value {
     match v {
-        crate::value::Value::Null | crate::value::Value::Blob(_) => Value::Null,
+        crate::value::Value::Null => Value::Null,
+        crate::value::Value::Blob(b) => Value::Blob(b.to_vec().into()),
         crate::value::Value::Integer(i) => Value::Int(i),
         crate::value::Value::Real(f) => Value::Float(f),
         crate::value::Value::Text(s) => Value::Str(s.to_string().into()),
@@ -3237,6 +3250,10 @@ fn hash_group_value<H: Hasher>(value: &Value, state: &mut H) {
             7u8.hash(state);
             bytes.hash(state);
         }
+        Value::Blob(bytes) => {
+            9u8.hash(state);
+            bytes.hash(state);
+        }
         // One hash per value, whatever the scale (#632): `PartialEq` says
         // `1.50 == 1.5`.
         Value::Decimal { unscaled, scale } => {
@@ -3259,6 +3276,7 @@ const TAG_NULL: u64 = 0x2545_F491_4F6C_DD1D;
 const TAG_MAP: u64 = 0x4CF5_AD43_2745_937F;
 const TAG_DECIMAL: u64 = 0x7FB5_D329_728E_A185;
 const TAG_LIST: u64 = 0xD6E8_FEB8_6659_FD93;
+const TAG_BLOB: u64 = 0xA24B_AED4_963E_E407;
 /// Dictionary codes are hashed within one segment only (the code -> string
 /// map is per column chunk), so their tag just has to stay clear of the
 /// scalar tags above.
@@ -3283,6 +3301,7 @@ pub(crate) fn hash_one_value(value: &Value) -> u64 {
         Value::Map(_) => murmur_finalize(hash_str_bytes(value.to_string().as_bytes()) ^ TAG_MAP),
         Value::List(_) => murmur_finalize(hash_str_bytes(value.to_string().as_bytes()) ^ TAG_LIST),
         Value::Bytes(bytes) => murmur_finalize(hash_str_bytes(bytes) ^ TAG_MAP),
+        Value::Blob(bytes) => murmur_finalize(hash_str_bytes(bytes) ^ TAG_BLOB),
         // The canonical form, so `1.50` and `1.5` (equal) hash alike.
         Value::Decimal { unscaled, scale } => {
             let (u, s) = decimal_canonical(*unscaled, *scale);
@@ -3495,6 +3514,7 @@ impl KeyView {
                 Column::Dict { indices, valid, .. } => {
                     valid.get(p) == valid.get(q) && (!valid.get(p) || indices[p] == indices[q])
                 }
+                blob @ Column::Blob { .. } => blob.get(p) == blob.get(q),
                 // Never a typed key in practice (a list column is read
                 // through `Unnest`); compared by value to stay exact.
                 list @ Column::List { .. } => list.get(p) == list.get(q),
@@ -4605,6 +4625,7 @@ pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
             Value::Map(_) => 4,
             Value::List(_) => 6,
             Value::Bytes(_) => 5,
+            Value::Blob(_) => 7,
         }
     }
     if let Some(order) = numeric_cmp(a, b) {
@@ -4616,6 +4637,7 @@ pub(crate) fn agg_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Map(x), Value::Map(y)) => x.cmp(y),
         (Value::List(x), Value::List(y)) => x.cmp(y),
         (Value::Bytes(x), Value::Bytes(y)) => x.cmp(y),
+        (Value::Blob(x), Value::Blob(y)) => x.cmp(y),
         _ => rank(a).cmp(&rank(b)),
     }
 }
@@ -7717,6 +7739,7 @@ enum BranchKind {
     Bool,
     Str,
     Bytes,
+    Blob,
     Map,
     List,
 }
@@ -7732,6 +7755,7 @@ impl BranchKind {
             Value::Bool(_) => Some(BranchKind::Bool),
             Value::Str(_) => Some(BranchKind::Str),
             Value::Bytes(_) => Some(BranchKind::Bytes),
+            Value::Blob(_) => Some(BranchKind::Blob),
             Value::Map(_) => Some(BranchKind::Map),
             Value::List(_) => Some(BranchKind::List),
         }
@@ -7745,6 +7769,7 @@ impl BranchKind {
             BranchKind::Bool => "a boolean",
             BranchKind::Str => "text",
             BranchKind::Bytes => "bytes",
+            BranchKind::Blob => "a blob",
             BranchKind::Map => "a map",
             BranchKind::List => "a list",
         }
@@ -8392,6 +8417,10 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
     match (a, b) {
         (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),
         (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(y)),
+        // Blobs compare bytewise (#868); a blob and anything else are
+        // incomparable: never equal, as in SQLite.
+        (Value::Blob(x), Value::Blob(y)) => Some(x.cmp(y)),
+        (Value::Blob(_), _) | (_, Value::Blob(_)) => None,
         // Two integers compare exactly, not through f64 (#845).
         (Value::Int(x), Value::Int(y)) => Some(x.cmp(y)),
         // A decimal compares exactly (#632).

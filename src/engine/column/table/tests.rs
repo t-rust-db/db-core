@@ -300,6 +300,104 @@ fn a_timestamp_column_compares_with_a_quoted_timestamp() {
     assert!(answer(&w, "SELECT id FROM logs WHERE ts < 'soon'").is_err());
 }
 
+/// #868: a `Binary` column reads as blobs: `x'..'` literals match by
+/// bytes, a blob never equals text, `hex`/`unhex` convert, and the answers
+/// are the same from pages and after a flush.
+#[test]
+fn a_binary_column_compares_and_reads_as_blobs() {
+    let t = TempTable::new();
+    let mut w = t.writer_with(TableOptions {
+        schema: Some(vec![
+            ColumnSpec::new("id", ColumnType::Int64, false),
+            ColumnSpec::new("b", ColumnType::Binary, true),
+            ColumnSpec::new("n", ColumnType::Int64, true),
+        ]),
+        ..TableOptions::default()
+    });
+    for (id, b) in [
+        (1, Some(vec![0xab; 4])),
+        (2, Some(vec![0xab; 4])),
+        (3, Some(vec![0x01; 4])),
+        (4, Some(vec![0x00; 4])),
+        (5, None),
+    ] {
+        let b = b.map_or(RecordValue::Null, RecordValue::Bytes);
+        let n = if id == 5 {
+            RecordValue::Null
+        } else {
+            RecordValue::Int(-id)
+        };
+        w.append_row(vec![RecordValue::Int(id), b, n], Ack::Memory)
+            .unwrap();
+    }
+    let count = |w: &TableWriter, sql: &str| rows(w, sql);
+    let check = |w: &TableWriter| {
+        for (sql, expected) in [
+            ("b = x'abababab'", 2),
+            ("b = X'ABABABAB'", 2),
+            ("b <> x'abababab'", 2),
+            ("b IN (x'01010101', x'00000000')", 2),
+            ("b NOT IN (x'01010101')", 3),
+            ("b > x'01010101'", 2),
+            ("b < x'abababab'", 2),
+            ("b BETWEEN x'00000001' AND x'ffffffff'", 3),
+            ("b = x'ababab'", 0),
+            ("b = 'abababab'", 0),
+            ("b = 'ABABABAB'", 0),
+            ("b = '61626364'", 0),
+            ("b = unhex('abababab')", 2),
+            ("hex(b) = 'ABABABAB'", 2),
+            ("b IS NOT NULL", 4),
+        ] {
+            let got = count(w, &format!("SELECT COUNT(*) FROM logs WHERE {sql}"));
+            assert_eq!(got, vec![vec![Cell::Int(expected)]], "{sql}");
+        }
+        // A hidden sort column is as long as the filtered rows (it was
+        // loaded after the selection resolved, and the emit refused it).
+        assert_eq!(
+            rows(
+                w,
+                "SELECT hex(b) FROM logs WHERE b IS NOT NULL ORDER BY id DESC LIMIT 1"
+            ),
+            vec![vec![text("00000000")]]
+        );
+        assert_eq!(
+            rows(
+                w,
+                "SELECT abs(n) FROM logs WHERE n IS NOT NULL ORDER BY id LIMIT 2"
+            ),
+            vec![vec![Cell::Int(1)], vec![Cell::Int(2)]]
+        );
+        assert_eq!(
+            rows(w, "SELECT b FROM logs ORDER BY id LIMIT 1"),
+            vec![vec![Cell::Blob(vec![0xab; 4])]]
+        );
+        assert_eq!(
+            rows(
+                w,
+                "SELECT hex(b) FROM logs WHERE b IS NOT NULL ORDER BY b, id"
+            ),
+            vec![
+                vec![text("00000000")],
+                vec![text("01010101")],
+                vec![text("ABABABAB")],
+                vec![text("ABABABAB")],
+            ]
+        );
+        assert_eq!(
+            rows(w, "SELECT MIN(b), MAX(b), COUNT(DISTINCT b) FROM logs"),
+            vec![vec![
+                Cell::Blob(vec![0; 4]),
+                Cell::Blob(vec![0xab; 4]),
+                Cell::Int(3)
+            ]]
+        );
+    };
+    check(&w);
+    w.flush().unwrap();
+    check(&w);
+}
+
 /// A record table's (#594) schema for the flush-timing test: unsigned,
 /// decimal, binary and timestamp columns, which a flush writes as their
 /// Parquet types and the engine reads back from both pages and files.
@@ -388,7 +486,7 @@ fn random_map(rng: &mut Rng) -> RecordValue {
     RecordValue::Map(entries)
 }
 
-const RECORD_INVARIANCE_QUERIES: [&str; 27] = [
+const RECORD_INVARIANCE_QUERIES: [&str; 35] = [
     "SELECT COUNT(*), COUNT(n), SUM(n), MIN(amount), MAX(amount), SUM(u), COUNT(blob), SUM(f) \
      FROM logs",
     "SELECT id, kind, n, amount, u, blob, ts, f FROM logs ORDER BY id",
@@ -397,6 +495,15 @@ const RECORD_INVARIANCE_QUERIES: [&str; 27] = [
     "SELECT id, amount FROM logs WHERE amount >= 5 ORDER BY id DESC LIMIT 7",
     "SELECT blob, COUNT(*) FROM logs GROUP BY blob ORDER BY blob",
     "SELECT u FROM logs WHERE u IS NOT NULL ORDER BY u DESC LIMIT 3",
+    // #868: blob literals compare by bytes, a blob never equals text.
+    "SELECT id FROM logs WHERE blob = x'81ff' ORDER BY id",
+    "SELECT id FROM logs WHERE blob <> x'81ff' ORDER BY id",
+    "SELECT id FROM logs WHERE blob IN (x'80ff', X'83FF') ORDER BY id",
+    "SELECT id FROM logs WHERE blob > x'81ff' AND blob < x'83ff' ORDER BY id",
+    "SELECT id FROM logs WHERE blob BETWEEN x'8000' AND x'82ff' ORDER BY id",
+    "SELECT COUNT(*) FROM logs WHERE blob = '81ff'",
+    "SELECT id, hex(blob) FROM logs ORDER BY id",
+    "SELECT MIN(blob), MAX(blob), COUNT(DISTINCT blob) FROM logs",
     "SELECT id, h, h['a'], map_get_ci(h, 'HOST'), cardinality(h), map_keys(h) FROM logs \
      ORDER BY id",
     "SELECT h['a'] AS a, count(*) FROM logs GROUP BY a ORDER BY a",

@@ -1168,7 +1168,7 @@ fn query(engine: &mut db_core::engine::column::BatchEngine, sql: &str) -> Vec<St
 
 #[cfg(feature = "engine-column")]
 #[test]
-fn the_column_engine_reads_bytes_as_hex_decimals_exactly_and_unsigned_values_unsigned() {
+fn the_column_engine_reads_bytes_as_blobs_decimals_exactly_and_unsigned_values_unsigned() {
     let schema = vec![
         ColumnSpec::new("blob", ColumnType::Binary, true),
         ColumnSpec::new("ip", ColumnType::FixedLenByteArray(4), true),
@@ -1193,17 +1193,43 @@ fn the_column_engine_reads_bytes_as_hex_decimals_exactly_and_unsigned_values_uns
         ),
         [
             // A DECIMAL prints at its scale, as DuckDB prints it (#632).
-            format!("80ff|c0a80107|12.34|-1.500|4294967295|{}", i64::MAX),
+            format!("X'80FF'|X'C0A80107'|12.34|-1.500|4294967295|{}", i64::MAX),
             "||-0.05||1|0".to_string(),
         ]
     );
-    assert_eq!(
-        query(
-            &mut engine,
-            "SELECT count(*) FROM typed WHERE blob = '80ff'"
+    // #868: a blob literal compares by bytes; a blob never equals text,
+    // including its own hex form.
+    for (sql, expected) in [
+        ("SELECT count(*) FROM typed WHERE blob = x'80ff'", "1"),
+        ("SELECT count(*) FROM typed WHERE blob = X'80FF'", "1"),
+        ("SELECT count(*) FROM typed WHERE blob <> x'80ff'", "0"),
+        (
+            "SELECT count(*) FROM typed WHERE blob IN (x'00', x'80ff')",
+            "1",
         ),
-        ["1"]
-    );
+        ("SELECT count(*) FROM typed WHERE blob > x'80fe'", "1"),
+        ("SELECT count(*) FROM typed WHERE blob < x'80ff'", "0"),
+        (
+            "SELECT count(*) FROM typed WHERE blob BETWEEN x'80' AND x'81'",
+            "1",
+        ),
+        ("SELECT count(*) FROM typed WHERE ip = x'c0a80107'", "1"),
+        ("SELECT count(*) FROM typed WHERE blob = '80ff'", "0"),
+        ("SELECT count(*) FROM typed WHERE blob = '80FF'", "0"),
+        ("SELECT hex(blob) FROM typed WHERE blob IS NOT NULL", "80FF"),
+        ("SELECT hex(unhex('80ff')) FROM typed LIMIT 1", "80FF"),
+        ("SELECT count(*) FROM typed WHERE blob = unhex('80ff')", "1"),
+        ("SELECT hex('ab') FROM typed LIMIT 1", "6162"),
+        ("SELECT unhex('abc') IS NULL FROM typed LIMIT 1", "1"),
+        ("SELECT unhex('zz') IS NULL FROM typed LIMIT 1", "1"),
+        ("SELECT hex(unhex('')) FROM typed LIMIT 1", ""),
+        (
+            "SELECT hex(min(blob)), hex(max(blob)) FROM typed",
+            "80FF|80FF",
+        ),
+    ] {
+        assert_eq!(query(&mut engine, sql), [expected], "{sql}");
+    }
     std::fs::remove_dir_all(dir).ok();
 }
 

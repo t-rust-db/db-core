@@ -1595,7 +1595,15 @@ fn lookup(name: &str, arity: usize) -> Option<ScalarFn> {
 /// included (`ROUND(SUM(x) / 100.0, 2)`). The parser's and the planner's
 /// allow-lists both read this one table.
 #[cfg(feature = "parser-column")]
-pub(crate) const NUMERIC_SCALARS: [(&str, usize); 3] = [("round", 1), ("round", 2), ("abs", 1)];
+pub(crate) const NUMERIC_SCALARS: [(&str, usize); 5] = [
+    ("round", 1),
+    ("round", 2),
+    ("abs", 1),
+    // Blob <-> text (#868): not numeric, but the same shape, any one
+    // argument, an aggregate included (`hex(max(blob))`).
+    ("hex", 1),
+    ("unhex", 1),
+];
 
 /// Whether `name`/`arity` is one of [`NUMERIC_SCALARS`].
 #[cfg(feature = "parser-column")]

@@ -1146,9 +1146,8 @@ fn literal_value(lit: &AstLiteral) -> Value {
         AstLiteral::Str(v) => Value::Str(v.clone().into()),
         AstLiteral::True => Value::Bool(true),
         AstLiteral::False => Value::Bool(false),
-        // A blob isn't part of the batch planner's literal subset -- fall
-        // back to NULL rather than panicking.
-        AstLiteral::Blob(_) | AstLiteral::Null => Value::Null,
+        AstLiteral::Blob(b) => Value::Blob(b.as_slice().into()),
+        AstLiteral::Null => Value::Null,
     }
 }
 
@@ -2161,6 +2160,28 @@ fn compile_filtered(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // A column only `ORDER BY` names is emitted hidden after the list
+    // (`order_sort`): load it here, with the other columns, so it is as
+    // long as they are when `WHERE`'s selection or a `Call` compacts them.
+    let aggregates = items
+        .iter()
+        .any(|i| matches!(i, Item::Agg(..) | Item::AggExpr(_)));
+    select
+        .order_by
+        .iter()
+        .zip(select_order_by(select))
+        .filter(|_| group_by.is_empty())
+        .filter(|_| !aggregates)
+        .filter(|(term, _)| matches!(term.expr.kind, ExprKind::Column { .. }))
+        .filter(|(_, (label, _))| {
+            !select
+                .columns
+                .iter()
+                .any(|c| select_item_label(c) == *label)
+        })
+        .for_each(|(_, (label, _))| {
+            ctx.load_column(&label);
+        });
     if let Some(where_clause) = &select.where_clause {
         let predicate = compile_expr(where_clause, &mut ctx);
         ctx.push_commented(
@@ -6738,6 +6759,8 @@ mod tests {
     #[test]
     fn the_parser_and_planner_scalar_function_lists_agree() {
         let mut names: Vec<&str> = vec![
+            "hex",
+            "unhex",
             "json_extract",
             "logfmt_extract",
             "regexp_extract",
