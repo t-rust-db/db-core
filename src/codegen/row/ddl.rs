@@ -14,6 +14,7 @@ mod drop_table;
 mod drop_view;
 
 pub use create_index::compile_create_index;
+pub(crate) use create_table::any_node;
 pub use create_table::compile_create_table;
 pub use create_view::compile_create_view;
 pub use drop_index::compile_drop_index;
