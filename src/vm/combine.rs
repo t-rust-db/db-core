@@ -797,6 +797,17 @@ impl Combiner {
         merge_columns(&self.ops, chunk, &mut self.acc, &self.row_group)
     }
 
+    /// How many groups it holds so far.
+    pub(crate) fn groups(&self) -> usize {
+        self.first_seen.len()
+    }
+
+    /// Merges `partial` in ([`run_parallel_preaggregate`]'s spill of a
+    /// worker's groups into the shared combiner, #643).
+    pub(crate) fn merge_partial(&mut self, partial: &Partial) -> Result<()> {
+        self.push_partial(partial)
+    }
+
     /// Sizes the accumulators for `groups` groups up front, for a merge
     /// that knows its bound (`combine_partials`).
     fn expect_groups(&mut self, groups: usize) {
