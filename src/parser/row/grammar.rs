@@ -39,6 +39,8 @@ pub struct Parser {
     /// An expression grew past [`MAX_EXPR_HEIGHT`]; reported by
     /// [`Self::expect_end`], which every statement parse ends with.
     too_tall: bool,
+    /// Column dialect (#839): `->` / `->>` parse as JSON calls.
+    column: bool,
 }
 
 /// Recursion-depth cap for `expr`/`not_expr`/`unary_expr`, so pathological
@@ -94,7 +96,15 @@ impl Parser {
             pos: 0,
             depth: 0,
             too_tall: false,
+            column: false,
         }
+    }
+
+    /// A parser for the column dialect, where `->` / `->>` are JSON
+    /// extraction (#839) rather than `Unsupported`.
+    pub(crate) fn column_dialect(mut self) -> Self {
+        self.column = true;
+        self
     }
 
     /// Guards a recursive-descent entry point: increments the depth
@@ -2494,13 +2504,58 @@ impl Parser {
         })
     }
 
-    /// `->` / `->>` (JSON extract operators, V11) are recognized here so
-    /// they're reported `Unsupported` rather than falling through to a
-    /// generic "unexpected trailing token" `Invalid`.
+    /// `->` / `->>` (JSON extract operators, V11). The row dialect reports
+    /// them `Unsupported`. The column dialect (#839) parses `a -> p` as
+    /// DuckDB's JSON-text extract (`json_extract;subtype`, a string comes
+    /// back quoted) and `a ->> p` as `json_extract(a, p)`, the SQL value.
+    /// A literal `p` that is a bare key or an index is the path `$.key` /
+    /// `$[n]`, as in sqlite3.
     fn arrow_expr(&mut self) -> PResult<Expr> {
         let lhs = self.collate_expr()?;
         if matches!(self.peek().kind, TokenKind::Arrow | TokenKind::ArrowArrow) {
-            return self.unsupported("-> / ->> operators not yet supported");
+            if !self.column {
+                return self.unsupported("-> / ->> operators not yet supported");
+            }
+            return self.arrow_chain(lhs);
+        }
+        Ok(lhs)
+    }
+
+    /// The `->` / `->>` chain after `lhs` (column dialect), kept out of
+    /// [`Self::arrow_expr`] so that frame stays small on the recursive
+    /// path the depth guard measures.
+    #[inline(never)]
+    fn arrow_chain(&mut self, mut lhs: Expr) -> PResult<Expr> {
+        let mut height = 0;
+        while let TokenKind::Arrow | TokenKind::ArrowArrow = self.peek().kind {
+            let as_text = self.peek().kind == TokenKind::ArrowArrow;
+            self.advance_span();
+            let mut path = self.collate_expr()?;
+            match &path.kind {
+                ExprKind::Literal(Literal::Integer(n)) => {
+                    path.kind = ExprKind::Literal(Literal::Str(format!("$[{n}]")));
+                }
+                ExprKind::Literal(Literal::Str(k)) if !k.starts_with('$') => {
+                    path.kind = ExprKind::Literal(Literal::Str(format!("$.{k}")));
+                }
+                _ => {}
+            }
+            let span = join_span(lhs.span, path.span);
+            let name = if as_text {
+                "json_extract"
+            } else {
+                crate::functions::JSON_EXTRACT_SUBTYPED
+            };
+            lhs = Expr {
+                kind: ExprKind::FunctionCall {
+                    name: name.to_string(),
+                    distinct: false,
+                    args: FunctionArgs::List(vec![lhs, path]),
+                    tail: None,
+                },
+                span,
+            };
+            self.cap_chain(&mut lhs, &mut height);
         }
         Ok(lhs)
     }

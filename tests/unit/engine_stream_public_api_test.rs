@@ -555,3 +555,38 @@ fn group_by_with_the_count_first_keeps_select_list_order() {
         .collect();
     assert_eq!(got, want);
 }
+
+/// #839: the column dialect's JSON functions over a literal document --
+/// array paths, `->` (JSON text), `->>` / `json_extract_string` (SQL
+/// value), `json_array_length`, `json_type`, `json_valid`.
+#[test]
+fn json_array_paths_operators_and_inspection_functions() {
+    let mut e = open_json();
+    let doc = r#"'{"name":"a","tags":["x","y"],"items":[{"v":1},{"v":2}]}'"#;
+    let sql = format!(
+        "SELECT json_extract({doc}, '$.tags[0]'), json_extract({doc}, '$.items[1].v'), \
+         json_extract({doc}, '$.tags[#-1]'), {doc} -> 'name', {doc} ->> 'name', \
+         {doc} -> '$.tags', {doc} ->> '$.items[0].v', json_extract_string({doc}, '$.name'), \
+         json_array_length({doc}, '$.tags'), json_type({doc}, '$.tags'), json_valid({doc}), \
+         json_valid('{{oops') FROM log LIMIT 1"
+    );
+    let row = rows(&mut e, &sql).remove(0);
+    let text = |s: &str| Cell::Text(s.to_string());
+    assert_eq!(
+        row,
+        vec![
+            text("x"),
+            Cell::Int(2),
+            text("y"),
+            text("\"a\""),
+            text("a"),
+            text(r#"["x","y"]"#),
+            Cell::Int(1),
+            text("a"),
+            Cell::Int(2),
+            text("array"),
+            Cell::Int(1),
+            Cell::Int(0),
+        ]
+    );
+}
