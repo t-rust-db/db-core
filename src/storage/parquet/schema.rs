@@ -234,6 +234,7 @@ impl ColumnValues {
         self.len() == 0
     }
 
+    #[cfg(feature = "ingest-read")]
     /// Estimated bytes these values hold in memory: the inline value and
     /// its `Option` tag per entry, plus the heap bytes of strings, binaries,
     /// map entries and list items (#854). An estimate, not an allocator's

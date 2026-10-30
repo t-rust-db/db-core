@@ -126,6 +126,7 @@ pub fn split_rep_def_levels<'a>(
     Ok((rep_levels, def_levels, buf))
 }
 
+#[cfg(feature = "engine-column")]
 /// A nested/repeated data page's repetition and definition levels as lazy
 /// readers, and the bytes after them (#856): what
 /// [`split_rep_def_levels`] returns without decoding either level vector.
@@ -136,6 +137,7 @@ pub(crate) struct PageLevels<'a> {
     pub(crate) value_bytes: &'a [u8],
 }
 
+#[cfg(feature = "engine-column")]
 /// [`split_rep_def_levels`] that leaves the levels encoded: each is read a
 /// value at a time through its [`encoding::HybridRleReader`].
 pub(crate) fn open_rep_def_levels<'a>(
@@ -168,6 +170,7 @@ pub(crate) fn open_rep_def_levels<'a>(
     })
 }
 
+#[cfg(feature = "engine-column")]
 /// [`read_dictionary_indices`] as a lazy reader over a page's index stream
 /// (#856), bounded by the page's `num_values`.
 pub(crate) fn open_dictionary_indices(

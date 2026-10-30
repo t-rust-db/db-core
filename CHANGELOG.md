@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.214.0] - 2026-10-30
+
+### Performance
+
+- A join feeding a GROUP BY no longer copies each row group's key and aggregate columns into values before probing; it decodes them a window at a time. Parity join peak memory: 176 → 85 MB (DuckDB 88 MB), about 10% faster (#862).
+
+### Fixed
+
+- The standalone `storage-column` feature builds without dead-code warnings again (#862).
+
 ## [0.213.0] - 2026-10-30
 
 ### Added
