@@ -56,6 +56,23 @@ const MAX_PAYLOAD_LEN: u64 = 2_147_483_647;
 /// unbounded loop.
 const MAX_PAGES_VISITED: usize = 1_000_000;
 
+/// Deepest a b-tree may be, root = depth 0: sqlite3's `BTCURSOR_MAX_DEPTH`,
+/// which it treats as corruption past this. Bounds the recursive whole-tree
+/// walks (#872): a cyclic child pointer otherwise recurses until the stack
+/// overflows, long before [`MAX_PAGES_VISITED`] is reached.
+pub(crate) const MAX_BTREE_DEPTH: usize = 20;
+
+/// [`BtreeError::TreeTooDeep`] if `page_num` sits at `depth` > [`MAX_BTREE_DEPTH`].
+pub(crate) fn check_depth(page_num: u32, depth: usize) -> Result<(), BtreeError> {
+    if depth > MAX_BTREE_DEPTH {
+        return Err(BtreeError::TreeTooDeep {
+            page_num,
+            max: MAX_BTREE_DEPTH,
+        });
+    }
+    Ok(())
+}
+
 /// A table row's raw record payload: a zero-copy slice into the page it
 /// was read from when the payload fits entirely in the cell (no overflow
 /// pages — the common case), or an owned buffer when overflow-chain
@@ -1007,7 +1024,7 @@ pub fn free_btree_pages(
     let usable_size = header.usable_page_size();
     let encoding = header.text_encoding;
     let mut visited = 0usize;
-    free_btree_pages_inner(pager, root_page, usable_size, encoding, &mut visited)
+    free_btree_pages_inner(pager, root_page, usable_size, encoding, &mut visited, 0)
 }
 
 fn free_btree_pages_inner(
@@ -1016,7 +1033,10 @@ fn free_btree_pages_inner(
     usable_size: u32,
     encoding: crate::storage::row::record::TextEncoding,
     visited: &mut usize,
+    depth: usize,
 ) -> Result<(), BtreeError> {
+    check_depth(page_num, depth)?;
+    let child_depth = depth.saturating_add(1);
     *visited = visited.saturating_add(1);
     if *visited > MAX_PAGES_VISITED {
         return Err(BtreeError::TraversalTooLong {
@@ -1051,9 +1071,16 @@ fn free_btree_pages_inner(
         INTERIOR_TABLE => {
             let (entries, rightmost) = collect_interior_entries(&buf, header_start, page_num)?;
             for (child, _) in &entries {
-                free_btree_pages_inner(pager, *child, usable_size, encoding, visited)?;
+                free_btree_pages_inner(pager, *child, usable_size, encoding, visited, child_depth)?;
             }
-            free_btree_pages_inner(pager, rightmost, usable_size, encoding, visited)?;
+            free_btree_pages_inner(
+                pager,
+                rightmost,
+                usable_size,
+                encoding,
+                visited,
+                child_depth,
+            )?;
         }
         t if t == index::LEAF_INDEX => {
             let num_cells = read_num_cells(&buf, header_start, page_num)?;
@@ -1094,9 +1121,16 @@ fn free_btree_pages_inner(
                 encoding,
             )?;
             for (child, _, _) in &entries {
-                free_btree_pages_inner(pager, *child, usable_size, encoding, visited)?;
+                free_btree_pages_inner(pager, *child, usable_size, encoding, visited, child_depth)?;
             }
-            free_btree_pages_inner(pager, rightmost, usable_size, encoding, visited)?;
+            free_btree_pages_inner(
+                pager,
+                rightmost,
+                usable_size,
+                encoding,
+                visited,
+                child_depth,
+            )?;
         }
         _ => {
             return Err(BtreeError::UnexpectedPageType {
@@ -1121,7 +1155,7 @@ fn free_btree_pages_inner(
 pub fn count_table_rows<P: PageSource>(source: &P, root_page: u32) -> Result<i64, BtreeError> {
     let mut visited = 0usize;
     let mut total = 0i64;
-    count_table_rows_inner(source, root_page, &mut visited, &mut total)?;
+    count_table_rows_inner(source, root_page, &mut visited, &mut total, 0)?;
     Ok(total)
 }
 
@@ -1130,7 +1164,9 @@ fn count_table_rows_inner<P: PageSource>(
     page_num: u32,
     visited: &mut usize,
     total: &mut i64,
+    depth: usize,
 ) -> Result<(), BtreeError> {
+    check_depth(page_num, depth)?;
     *visited = visited.saturating_add(1);
     if *visited > MAX_PAGES_VISITED {
         return Err(BtreeError::TraversalTooLong {
@@ -1155,9 +1191,9 @@ fn count_table_rows_inner<P: PageSource>(
         INTERIOR_TABLE => {
             let (entries, rightmost) = collect_interior_entries(&buf, header_start, page_num)?;
             for (child, _) in &entries {
-                count_table_rows_inner(source, *child, visited, total)?;
+                count_table_rows_inner(source, *child, visited, total, depth.saturating_add(1))?;
             }
-            count_table_rows_inner(source, rightmost, visited, total)?;
+            count_table_rows_inner(source, rightmost, visited, total, depth.saturating_add(1))?;
         }
         _ => {
             return Err(BtreeError::UnexpectedPageType {
@@ -2309,6 +2345,40 @@ mod tests {
         assert_eq!(cursor.seek_ge(-1).unwrap(), Some(-1));
         assert_eq!(cursor.next().unwrap(), Some(i64::MAX - 299));
         assert_eq!(cursor.seek_ge(i64::MIN).unwrap(), Some(i64::MIN));
+    }
+
+    #[test]
+    fn a_page_that_is_its_own_child_is_too_deep_not_a_stack_overflow() {
+        // #872: an interior table page whose rightmost child is itself
+        // recursed until the stack overflowed (aborting the process) in
+        // `count(*)`, DROP and ANALYZE. A 2 MiB thread, as an embedding
+        // application's worker would have.
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(|| {
+                let page_size = 512u32;
+                let (vfs, header) = test_minimal_db(page_size);
+                let mut pager =
+                    crate::storage::row::pager::Pager::open(&vfs, Path::new("/test.db"), page_size)
+                        .unwrap();
+                let root = schema::create_empty_table_root(&mut pager).unwrap();
+                let page = pager.get_page_mut(root).unwrap();
+                page.fill(0);
+                page[0] = INTERIOR_TABLE;
+                page[5..7].copy_from_slice(&(page_size as u16).to_be_bytes());
+                page[8..12].copy_from_slice(&root.to_be_bytes());
+
+                let too_deep = |e: BtreeError| {
+                    matches!(e, BtreeError::TreeTooDeep { max: MAX_BTREE_DEPTH, page_num } if page_num == root)
+                };
+                assert!(too_deep(count_table_rows(&pager, root).unwrap_err()));
+                assert!(too_deep(
+                    free_btree_pages(&mut pager, &header, root).unwrap_err()
+                ));
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

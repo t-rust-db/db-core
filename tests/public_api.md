@@ -5943,6 +5943,9 @@ pub db_core::storage::row::btree::BtreeError::RowidNotFound
 pub db_core::storage::row::btree::BtreeError::RowidNotFound::rowid: i64
 pub db_core::storage::row::btree::BtreeError::TraversalTooLong
 pub db_core::storage::row::btree::BtreeError::TraversalTooLong::max: usize
+pub db_core::storage::row::btree::BtreeError::TreeTooDeep
+pub db_core::storage::row::btree::BtreeError::TreeTooDeep::max: usize
+pub db_core::storage::row::btree::BtreeError::TreeTooDeep::page_num: u32
 pub db_core::storage::row::btree::BtreeError::UnexpectedPageType
 pub db_core::storage::row::btree::BtreeError::UnexpectedPageType::page_num: u32
 pub db_core::storage::row::btree::BtreeError::UnexpectedPageType::page_type: u8
