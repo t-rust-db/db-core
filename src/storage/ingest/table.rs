@@ -39,7 +39,7 @@
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 pub use super::error::IngestError;
@@ -425,7 +425,11 @@ impl TableWriter {
                     break;
                 }
                 stalled = true;
-                view = self.shared.wait(view);
+                view = self
+                    .shared
+                    .changed
+                    .wait(view)
+                    .unwrap_or_else(PoisonError::into_inner);
             }
             if stalled {
                 let ns = u64::try_from(waited.elapsed().as_nanos()).unwrap_or(u64::MAX);
@@ -519,7 +523,11 @@ impl TableWriter {
             if view.queued == 0 {
                 break;
             }
-            view = self.shared.wait(view);
+            view = self
+                .shared
+                .changed
+                .wait(view)
+                .unwrap_or_else(PoisonError::into_inner);
         }
         if let Some(why) = &view.failed {
             return Err(failure(why));

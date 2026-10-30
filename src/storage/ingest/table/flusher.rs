@@ -64,7 +64,7 @@ pub(super) struct Job {
 #[derive(Debug)]
 pub(super) struct Shared {
     view: Mutex<View>,
-    changed: Condvar,
+    pub changed: Condvar,
 }
 
 /// The committed manifest and the pages not yet in it.
@@ -109,13 +109,6 @@ impl Shared {
     /// poisoned lock is still good.
     pub fn lock(&self) -> MutexGuard<'_, View> {
         self.view.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Waits for the view to change.
-    pub fn wait<'a>(&self, view: MutexGuard<'a, View>) -> MutexGuard<'a, View> {
-        self.changed
-            .wait(view)
-            .unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -188,13 +181,13 @@ pub(super) struct Flusher {
 
 /// Marks the flusher stopped if its thread exits by a panic, so a writer
 /// waiting on the queue wakes with an error instead of for ever.
-struct StopGuard<'a> {
-    shared: &'a Shared,
+struct StopGuard {
+    shared: Arc<Shared>,
     /// Set once the thread left its loop on its own.
     done: bool,
 }
 
-impl Drop for StopGuard<'_> {
+impl Drop for StopGuard {
     fn drop(&mut self) {
         if self.done {
             return;
@@ -244,7 +237,7 @@ impl Flusher {
     fn run_all(mut self, jobs: &Receiver<Job>) {
         let shared = Arc::clone(&self.shared);
         let mut guard = StopGuard {
-            shared: &shared,
+            shared: Arc::clone(&shared),
             done: false,
         };
         for job in jobs {
