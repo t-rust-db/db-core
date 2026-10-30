@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.217.2] - 2026-10-30
+
+### Changed
+
+- CI checks the wasm32 build in its own job (`make check-wasm`, also in `make pre-push`); the check moved out of `make check-features` (#898).
+
 ## [0.217.1] - 2026-10-30
 
 ### Fixed

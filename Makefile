@@ -205,9 +205,14 @@ check-features: ## Each Cargo feature builds standalone, without warnings (cargo
 			&& ! echo "$$out" | grep -qE '^warning'; then echo ok; \
 		else echo FAIL; echo "$$out" | grep -E -A3 '^(error|warning)' | head -20; exit 1; fi; \
 	done
-	@# #898: the browser build (FRANK's frank-wasm) has no unix/windows file API
-	@for f in engine-column engine-column,storage-column-write; do \
-		printf '  wasm32 %-30s ' "$$f"; \
+
+# #898: the column engine in the browser (FRANK's frank-wasm). A
+# std::os::{unix,windows}-only fn broke it once (#841) without CI noticing.
+WASM_FEATURE_SETS := engine-column engine-column,storage-column-write
+
+check-wasm: ## The column engine builds for wasm32-unknown-unknown, without warnings
+	@for f in $(WASM_FEATURE_SETS); do \
+		printf '  %-36s ' "$$f"; \
 		if out=$$(cargo check -q --target wasm32-unknown-unknown --no-default-features --features $$f 2>&1) \
 			&& ! echo "$$out" | grep -qE '^warning'; then echo ok; \
 		else echo FAIL; echo "$$out" | grep -E -A3 '^(error|warning)' | head -20; exit 1; fi; \
@@ -429,6 +434,7 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) lint
 	$(MAKE) check-deny
 	$(MAKE) check-features
+	$(MAKE) check-wasm
 	$(MAKE) check-sqlite-profile
 	$(MAKE) check-stream-profile
 	$(MAKE) check-column-profile
@@ -444,9 +450,10 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 # feature that does not build alone). Not the tests or coverage (about 2.5
 # minutes in CI), nor the seconds-long deny and charter profile gates, which
 # CI still runs; `make ci` runs them all.
-pre-push: ## The fast CI gates (lint, features, MC/DC and public API snapshots, mvl-limit) -- run before pushing
+pre-push: ## The fast CI gates (lint, features, wasm32, MC/DC and public API snapshots, mvl-limit) -- run before pushing
 	$(MAKE) lint
 	$(MAKE) check-features
+	$(MAKE) check-wasm
 	$(MAKE) check-mcdc-fresh
 	$(MAKE) check-mvl-limit
 	$(MAKE) check-public-api-fresh

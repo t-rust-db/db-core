@@ -136,12 +136,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: features
       - run: make check-features
+
+  wasm:
+    name: wasm32 build (#898)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: wasm
+      - run: make check-wasm
 
   # Charter gate (ADR 0000, #324): the SQLite profile -- the exact feature
   # set sqlite-rs builds -- resolves to first-party crates only, carries
