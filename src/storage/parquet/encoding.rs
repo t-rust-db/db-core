@@ -244,6 +244,179 @@ pub fn decode_hybrid_rle_bitpacked(
     Ok(out)
 }
 
+/// The run a [`HybridRleReader`] is part-way through.
+enum Run<'a> {
+    /// No run is open: the next read opens one from its header.
+    Idle,
+    /// `left` more copies of `value`.
+    Repeated { value: u32, left: usize },
+    /// `left` more values to unpack from `bytes`, the run's packed bytes
+    /// not yet unpacked: `bit_width` bytes per group of 8 values.
+    Packed { bytes: &'a [u8], left: usize },
+}
+
+/// A lazy reader over an RLE/Bit-Packed Hybrid stream (#856): the same
+/// values [`decode_hybrid_rle_bitpacked`] returns, filled into a caller's
+/// slice a window at a time instead of returned as a vector of the whole
+/// stream. A page walked in windows holds none of its levels or dictionary
+/// codes at once, where a decoded `Vec<u32>` per stream was about half of an
+/// `UNNEST`'s heap at peak across the parallel row groups.
+pub(crate) struct HybridRleReader<'a> {
+    rest: &'a [u8],
+    bit_width: u32,
+    /// Values the caller may still read: the stream's declared count less
+    /// those already read.
+    remaining: usize,
+    run: Run<'a>,
+    /// The rest of a bit-packed group a read ended inside: `pending[at..]`.
+    pending: [u32; 8],
+    at: usize,
+}
+
+impl<'a> HybridRleReader<'a> {
+    /// A reader over `data` for `num_values` values of `bit_width` bits
+    /// (at most 32).
+    pub(crate) fn new(data: &'a [u8], bit_width: u32, num_values: usize) -> Result<Self> {
+        if bit_width > 32 {
+            return Err(EncodingError::InvalidBitWidth(bit_width));
+        }
+        // A zero-width stream carries no bytes: every value is 0.
+        let run = if bit_width == 0 {
+            Run::Repeated {
+                value: 0,
+                left: num_values,
+            }
+        } else {
+            Run::Idle
+        };
+        Ok(HybridRleReader {
+            rest: data,
+            bit_width,
+            remaining: num_values,
+            run,
+            pending: [0; 8],
+            at: 8,
+        })
+    }
+
+    /// Fills `out` with the next `out.len()` values. Asking for more than
+    /// the declared count, or running off the stream's bytes, is an error,
+    /// as in the batch decoder.
+    pub(crate) fn read_into(&mut self, out: &mut [u32]) -> Result<()> {
+        if out.len() > self.remaining {
+            return Err(EncodingError::UnexpectedEof);
+        }
+        self.remaining = self.remaining.saturating_sub(out.len());
+        let mut filled = 0usize;
+        // What a previous read left of a group it ended inside.
+        while filled < out.len() {
+            let Some(&value) = self.pending.get(self.at) else {
+                break;
+            };
+            self.at = self.at.saturating_add(1);
+            if let Some(slot) = out.get_mut(filled) {
+                *slot = value;
+            }
+            filled = filled.saturating_add(1);
+        }
+        while filled < out.len() {
+            let room = out.len().saturating_sub(filled);
+            match &mut self.run {
+                Run::Repeated { value, left } if *left > 0 => {
+                    let n = (*left).min(room);
+                    out.get_mut(filled..filled.saturating_add(n))
+                        .ok_or(EncodingError::UnexpectedEof)?
+                        .fill(*value);
+                    *left = left.saturating_sub(n);
+                    filled = filled.saturating_add(n);
+                }
+                Run::Packed { bytes, left } if *left > 0 => {
+                    let width = self.bit_width as usize;
+                    while *left > 0 && filled < out.len() {
+                        let (group, tail) = bytes
+                            .split_at_checked(width)
+                            .ok_or(EncodingError::UnexpectedEof)?;
+                        *bytes = tail;
+                        let values = unpack_group(group, self.bit_width);
+                        *left = left.saturating_sub(8);
+                        let n = 8usize.min(out.len().saturating_sub(filled));
+                        out.get_mut(filled..filled.saturating_add(n))
+                            .ok_or(EncodingError::UnexpectedEof)?
+                            .copy_from_slice(values.get(..n).ok_or(EncodingError::UnexpectedEof)?);
+                        filled = filled.saturating_add(n);
+                        if n < 8 {
+                            // The read ends inside this group: keep the rest.
+                            self.pending = values;
+                            self.at = n;
+                        }
+                    }
+                }
+                _ => self.open_run()?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the next run header and opens its run.
+    fn open_run(&mut self) -> Result<()> {
+        let header = read_unsigned_varint(&mut self.rest)?;
+        let run_len = length(header >> 1)?;
+        self.run = if header & 1 == 1 {
+            // `run_len` groups of 8 values packed into `bit_width` bytes
+            // each; the whole run must be present.
+            let byte_count = run_len
+                .checked_mul(self.bit_width as usize)
+                .ok_or(EncodingError::InvalidLength(header >> 1))?;
+            let (bytes, tail) = self
+                .rest
+                .split_at_checked(byte_count)
+                .ok_or(EncodingError::UnexpectedEof)?;
+            self.rest = tail;
+            Run::Packed {
+                bytes,
+                left: run_len.saturating_mul(8),
+            }
+        } else {
+            // One value, ceil(bit_width / 8) bytes little-endian, repeated.
+            let (bytes, tail) = self
+                .rest
+                .split_at_checked(self.bit_width.div_ceil(8) as usize)
+                .ok_or(EncodingError::UnexpectedEof)?;
+            self.rest = tail;
+            let value = bytes
+                .iter()
+                .rev()
+                .fold(0u32, |acc, &b| (acc << 8) | u32::from(b));
+            Run::Repeated {
+                value,
+                left: run_len,
+            }
+        };
+        Ok(())
+    }
+}
+
+/// The 8 values of one bit-packed group: `group` is its `bit_width` bytes.
+fn unpack_group(group: &[u8], bit_width: u32) -> [u32; 8] {
+    if bit_width <= 8 {
+        // Whole group fits a u64: one load, as the batch decoder does.
+        let g = group
+            .iter()
+            .rev()
+            .fold(0u64, |acc, &b| (acc << 8) | u64::from(b));
+        return group_values(g, bit_width);
+    }
+    let mut values = [0u32; 8];
+    let mut at = 0usize;
+    unpack_bits(group, bit_width, |v| {
+        if let Some(slot) = values.get_mut(at) {
+            *slot = u32::try_from(v).unwrap_or(u32::MAX);
+        }
+        at = at.saturating_add(1);
+    });
+    values
+}
+
 fn read_zigzag_varint(rest: &mut &[u8]) -> Result<i64> {
     let raw = read_unsigned_varint(rest)?;
     Ok(zigzag_decode(raw))
@@ -705,5 +878,195 @@ mod malformed_input {
             decode_delta_binary_packed(&data, usize::MAX).unwrap(),
             vec![0, -1, -2]
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::cast_possible_truncation,
+    reason = "test code: values are generated below the bit width"
+)]
+mod hybrid_rle_reader {
+    //! #856: the lazy reader yields exactly what the batch decoder returns,
+    //! and fails where it fails.
+
+    use super::*;
+
+    fn varint(out: &mut Vec<u8>, mut v: u64) {
+        while v >= 0x80 {
+            out.push((v & 0x7f) as u8 | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+    }
+
+    /// `n` values of `bit_width` bits and their hybrid encoding: RLE runs of
+    /// `rle_len` equal values alternating with bit-packed runs of
+    /// `packed_len` mixed ones (a multiple of 8: only a stream's last group
+    /// may be padded), so one stream holds both kinds of run and an odd
+    /// `rle_len` puts bit-packed groups across every block boundary.
+    fn stream(bit_width: u32, n: usize, rle_len: usize, packed_len: usize) -> (Vec<u32>, Vec<u8>) {
+        let max = if bit_width >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << bit_width) - 1
+        };
+        let (mut values, mut out) = (Vec::new(), Vec::new());
+        while values.len() < n {
+            let len = rle_len.min(n - values.len());
+            varint(&mut out, (len as u64) << 1);
+            let bytes = bit_width.div_ceil(8) as usize;
+            out.extend_from_slice(&max.to_le_bytes()[..bytes]);
+            values.extend(std::iter::repeat_n(max, len));
+            if values.len() >= n {
+                break;
+            }
+            let len = packed_len.min(n - values.len());
+            let groups = len.div_ceil(8);
+            varint(&mut out, ((groups as u64) << 1) | 1);
+            let (mut acc, mut bits) = (0u128, 0u32);
+            for i in 0..groups * 8 {
+                let v = if i < len {
+                    ((values.len() + i) as u32).wrapping_mul(2_654_435_761) & max
+                } else {
+                    0
+                };
+                acc |= u128::from(v) << bits;
+                bits += bit_width;
+                while bits >= 8 {
+                    out.push(acc as u8);
+                    acc >>= 8;
+                    bits -= 8;
+                }
+            }
+            let base = values.len();
+            values.extend((0..len).map(|i| ((base + i) as u32).wrapping_mul(2_654_435_761) & max));
+        }
+        (values, out)
+    }
+
+    /// All `n` values, read `window` at a time.
+    fn read_windows(data: &[u8], bit_width: u32, n: usize, window: usize) -> Result<Vec<u32>> {
+        let mut reader = HybridRleReader::new(data, bit_width, n)?;
+        let mut all = Vec::new();
+        while all.len() < n {
+            let mut out = vec![0; window.min(n - all.len())];
+            reader.read_into(&mut out)?;
+            all.extend(out);
+        }
+        Ok(all)
+    }
+
+    fn read_all(data: &[u8], bit_width: u32, n: usize) -> Result<Vec<u32>> {
+        read_windows(data, bit_width, n, 512)
+    }
+
+    #[test]
+    fn matches_the_batch_decoder_at_every_width_and_length() {
+        for bit_width in [1, 2, 3, 5, 8, 9, 17, 31, 32] {
+            for (rle_len, packed_len) in [(40, 40), (13, 24), (37, 8), (250, 256), (1, 8)] {
+                for n in [1, 7, 8, 9, 63, 64, 600, 3001] {
+                    let (values, data) = stream(bit_width, n, rle_len, packed_len);
+                    assert_eq!(
+                        decode_hybrid_rle_bitpacked(&data, bit_width, n).unwrap(),
+                        values,
+                        "width {bit_width}, {n} values, runs {rle_len}/{packed_len}"
+                    );
+                    // Windows that cut bit-packed groups at every offset.
+                    for window in [1, 3, 8, 13, 512] {
+                        assert_eq!(
+                            read_windows(&data, bit_width, n, window).unwrap(),
+                            values,
+                            "width {bit_width}, {n} values, runs {rle_len}/{packed_len}, window {window}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A width-1 bit-packed run of two groups (16 values): the bytes
+    /// `0b1011_0010` and `0b0000_1111`, LSB first.
+    const TWO_GROUPS: [u8; 3] = [(2 << 1) | 1, 0b1011_0010, 0b0000_1111];
+    const FIRST_GROUP: [u32; 8] = [0, 1, 0, 0, 1, 1, 0, 1];
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_encoding_read_into_ce2efa74__v1_a_read_ends_inside_a_group() {
+        // `left > 0` and room remains: the group is unpacked, and the three
+        // values it was asked for are taken from it.
+        let mut reader = HybridRleReader::new(&TWO_GROUPS, 1, 16).unwrap();
+        let mut out = [9; 3];
+        reader.read_into(&mut out).unwrap();
+        assert_eq!(out, [0, 1, 0]);
+        // The rest of that group is what the next read starts with.
+        let mut out = [9; 5];
+        reader.read_into(&mut out).unwrap();
+        assert_eq!(out, [0, 1, 1, 0, 1]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_encoding_read_into_ce2efa74__v2_a_read_ends_on_a_group_boundary() {
+        // `left > 0` (a second group remains) but no room: the loop stops
+        // with that group untouched for the next read.
+        let mut reader = HybridRleReader::new(&TWO_GROUPS, 1, 16).unwrap();
+        let mut out = [9; 8];
+        reader.read_into(&mut out).unwrap();
+        assert_eq!(out, FIRST_GROUP);
+        let mut out = [9; 8];
+        reader.read_into(&mut out).unwrap();
+        assert_eq!(out, [1, 1, 1, 1, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_parquet_encoding_read_into_ce2efa74__v3_a_read_outlasts_the_packed_run() {
+        // One group, then an RLE run of four 1s: the packed run is used up
+        // (`left == 0`) with room remaining, so the read goes on to the RLE
+        // run.
+        let data = [(1 << 1) | 1, 0b1011_0010, 4 << 1, 1];
+        let mut reader = HybridRleReader::new(&data, 1, 12).unwrap();
+        let mut out = [9; 12];
+        reader.read_into(&mut out).unwrap();
+        assert_eq!(out, [0, 1, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn a_zero_width_stream_reads_zeros_from_no_bytes() {
+        assert_eq!(read_all(&[], 0, 5).unwrap(), vec![0; 5]);
+    }
+
+    #[test]
+    fn reading_past_the_declared_count_is_an_error() {
+        let (_, data) = stream(1, 3, 3, 8);
+        let mut reader = HybridRleReader::new(&data, 1, 3).unwrap();
+        reader.read_into(&mut [0; 3]).unwrap();
+        assert!(matches!(
+            reader.read_into(&mut [0; 1]),
+            Err(EncodingError::UnexpectedEof)
+        ));
+    }
+
+    #[test]
+    fn a_stream_shorter_than_its_count_is_an_error() {
+        let (_, data) = stream(3, 16, 4, 16);
+        assert!(matches!(
+            read_all(&data, 3, 400),
+            Err(EncodingError::UnexpectedEof)
+        ));
+        // A bit-packed run cut short of its whole bytes, as the batch
+        // decoder rejects it.
+        let truncated = data.get(..data.len() - 1).unwrap();
+        assert!(read_all(truncated, 3, 16).is_err());
+    }
+
+    #[test]
+    fn a_bit_width_past_32_is_invalid() {
+        assert!(matches!(
+            HybridRleReader::new(&[], 33, 1),
+            Err(EncodingError::InvalidBitWidth(33))
+        ));
     }
 }
