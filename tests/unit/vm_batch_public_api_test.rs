@@ -22,8 +22,8 @@
 use db_core::codegen::batch::{compile, compile_join, BuildSourceKind};
 use db_core::parser::column::parse;
 use db_core::vm::batch::{
-    compare_for_order, AggFunc, Batch, Instruction, JoinKind, MapOp, Opcode, Program, ScanSource,
-    Segment, Source, TopN, Value, Vm, VmError, WindowFunc,
+    compare_for_order, AggFunc, Batch, Bitmap, Column, Instruction, JoinKind, MapOp, Opcode,
+    Program, ScanSource, Segment, Source, TopN, Value, Vm, VmError, WindowFunc,
 };
 use db_core::vm::engine::{
     run, run_join, run_join_segments, InMemorySegment, JoinProgram, NoResolver,
@@ -1107,4 +1107,92 @@ fn fused_inner_join_group_by_payload_matches_a_nested_loop_oracle() {
     let expected = sorted(oracle);
     assert_eq!(expected.len(), 5, "4 tiers plus the NULL-tier group");
     assert_eq!(sorted(fused), expected);
+}
+
+/// #862: the fused probe reads typed probe columns one window at a time
+/// instead of copying a segment's worth into `Value`s. Segments of several
+/// windows (plus a partial last one) must fold exactly as the same rows
+/// held as `Value` columns do -- through a dense key's direct index and a
+/// sparse key's hash index alike, with NULL amounts and keys that match
+/// nothing.
+#[test]
+fn fused_join_over_typed_probe_columns_matches_value_columns_across_windows() {
+    let rows = 10_000usize;
+    for spread in [1i64, 1_000] {
+        let dim_n = 100i64;
+        let customers = Batch::new(dim_n as usize)
+            .with_column(
+                "bench_customers.customer_id",
+                (0..dim_n).map(|r| Value::Int(r * spread)).collect(),
+            )
+            .with_column(
+                "bench_customers.tier",
+                (0..dim_n)
+                    .map(|r| Value::Str(format!("tier-{}", r % 3).into()))
+                    .collect(),
+            );
+        let mut typed = Vec::new();
+        let mut values = Vec::new();
+        for s in 0..2i64 {
+            // Keys 100..120 (times `spread`) match nothing.
+            let keys: Vec<i64> = (0..rows as i64)
+                .map(|r| ((r * 7 + s) % 120) * spread)
+                .collect();
+            let amounts: Vec<f64> = (0..rows as i64)
+                .map(|r| ((r * 31 + s) % 97) as f64)
+                .collect();
+            let valid: Vec<bool> = (0..rows).map(|r| r % 13 != 0).collect();
+            typed.push(
+                Batch::new(rows)
+                    .with_typed_column(
+                        "bench.customer_id",
+                        Column::Int {
+                            data: keys.clone(),
+                            valid: Bitmap::new(rows, true),
+                        },
+                    )
+                    .with_typed_column(
+                        "bench.amount",
+                        Column::Float {
+                            data: amounts.clone(),
+                            valid: Bitmap::from_bools(valid.iter().copied()),
+                        },
+                    ),
+            );
+            values.push(
+                Batch::new(rows)
+                    .with_column(
+                        "bench.customer_id",
+                        keys.into_iter().map(Value::Int).collect(),
+                    )
+                    .with_column(
+                        "bench.amount",
+                        amounts
+                            .into_iter()
+                            .zip(valid)
+                            .map(|(a, v)| if v { Value::Float(a) } else { Value::Null })
+                            .collect(),
+                    ),
+            );
+        }
+        let sql = "SELECT bench_customers.tier, SUM(bench.amount), COUNT(*), COUNT(bench.amount) \
+                   FROM bench JOIN bench_customers ON bench.customer_id = bench_customers.customer_id \
+                   GROUP BY bench_customers.tier";
+        let plan = compile_join(&parse(sql).unwrap(), BuildSourceKind::InMemory).unwrap();
+        assert!(plan.fused_group_by.is_some(), "fusion should engage");
+        let run_on = |facts: Vec<Batch>| {
+            sorted(
+                run_join_segments(
+                    facts.into_iter().map(InMemorySegment).collect(),
+                    ScanSource::InMemory(customers.clone()),
+                    &plan,
+                    &NoResolver,
+                )
+                .unwrap(),
+            )
+        };
+        let expected = run_on(values);
+        assert_eq!(expected.len(), 3, "spread {spread}");
+        assert_eq!(run_on(typed), expected, "spread {spread}");
+    }
 }

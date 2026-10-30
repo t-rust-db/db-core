@@ -2210,6 +2210,11 @@ fn run_morsels_ordered<I: Sync, T: Send>(
 /// is that times its threads.
 pub(crate) const SLICE_ROWS: usize = 16_384;
 
+/// Rows [`Opcode::HashProbeGroupReduce`] decodes from a typed probe
+/// register at a time (#862): a few hundred KB of `Value`s, not a
+/// segment's worth per worker.
+const PROBE_WINDOW: usize = 4_096;
+
 /// Whether running `program` over a segment slice by slice gives the
 /// same rows as over the whole segment, and is worth it: row-wise
 /// opcodes and partial aggregates only (`Reduce`/`GroupReduce`, whose
@@ -3383,6 +3388,25 @@ impl KeyView {
         match self {
             KeyView::Typed(column) => column.len(),
             KeyView::Values(values) => values.len(),
+        }
+    }
+
+    /// Rows `start..end` of a `Values` view, borrowed; `None` for a typed
+    /// one, whose rows [`KeyView::fill_window`] decodes into a buffer
+    /// instead (#862).
+    fn window(&self, start: usize, end: usize) -> Option<&[Value]> {
+        match self {
+            KeyView::Typed(_) => None,
+            KeyView::Values(values) => Some(values.get(start..end).unwrap_or(&[])),
+        }
+    }
+
+    /// Decodes a typed view's rows `start..end` into `buf`, replacing its
+    /// contents; a `Values` view is read in place by [`KeyView::window`].
+    fn fill_window(&self, start: usize, end: usize, buf: &mut Vec<Value>) {
+        if let KeyView::Typed(column) = self {
+            buf.clear();
+            buf.extend((start..end).map(|i| column.get(i)));
         }
     }
 
@@ -4932,6 +4956,16 @@ impl Vm {
                 opcode,
                 register: reg,
             })
+    }
+
+    /// Register `reg` as [`Opcode::HashProbeGroupReduce`] reads it (#862):
+    /// its typed column when it has one, never copied whole into a
+    /// `Vec<Value>`; else its values, a constant's built first.
+    fn probe_view(&mut self, reg: usize, opcode: &'static str) -> Result<KeyView> {
+        if !self.typed_registers.contains_key(&reg) {
+            self.ensure_materialized(reg);
+        }
+        self.key_view(reg, opcode)
     }
 
     fn ensure_materialized(&mut self, reg: usize) {
@@ -6957,20 +6991,18 @@ impl Vm {
                 _ => None,
             }))
             .collect();
-        for r in key_cols.iter() {
-            self.ensure_materialized(*r);
-        }
-        for &reg in &probe_regs {
-            self.ensure_materialized(reg);
-        }
-        let key_columns: Vec<&[Value]> = key_cols
+        // #862: a typed probe register is read as a view and decoded into
+        // `Value`s one window at a time below, not copied whole -- a
+        // segment's `Vec<Value>` copy of every key and aggregate column,
+        // per worker, was most of a join's peak memory.
+        let key_views: Vec<KeyView> = key_cols
             .iter()
-            .map(|r| self.reg(*r, opcode))
+            .map(|r| self.probe_view(*r, opcode))
             .collect::<Result<_>>()?;
         let num_rows =
-            key_columns
+            key_views
                 .first()
-                .map(|c| c.len())
+                .map(KeyView::len)
                 .ok_or_else(|| VmError::MalformedProgram {
                     opcode,
                     reason: "hash probe has no key columns".to_string(),
@@ -6985,10 +7017,10 @@ impl Vm {
                 })?,
         );
 
-        let mut probe_columns: Vec<(usize, &[Value])> = Vec::new();
+        let mut probe_views: Vec<(usize, KeyView)> = Vec::new();
         for reg in probe_regs {
-            if !probe_columns.iter().any(|(r, _)| *r == reg) {
-                probe_columns.push((reg, self.reg(reg, opcode)?));
+            if !probe_views.iter().any(|(r, _)| *r == reg) {
+                probe_views.push((reg, self.probe_view(reg, opcode)?));
             }
         }
 
@@ -6999,11 +7031,6 @@ impl Vm {
         // all (this is the whole point of #441): a join feeding
         // only an aggregate never allocates one register set per
         // matched row, only one `RunningAgg` per *group*.
-        let hashes = if bt.needs_hashes() {
-            hash_columns_by_row(&key_columns, num_rows, |row| row)
-        } else {
-            Vec::new()
-        };
         let mut group_index: HashMap<u64, Vec<usize>> = HashMap::new();
         let mut group_keys: Vec<Vec<Value>> = Vec::new();
         let mut accumulators: Vec<Vec<RunningAgg>> = vec![Vec::new(); aggs.len()];
@@ -7024,91 +7051,136 @@ impl Vm {
             (JoinKind::Inner, Some(cols)) if !cols.is_empty() => bt.payload_groups(&cols),
             _ => None,
         };
-        if let Some(groups) = fast {
-            let agg_sources: Vec<Option<AggSource>> = aggs
-                .iter()
-                .map(|(_, src)| match src {
-                    None => None,
-                    Some(ValueSource::Payload(i)) => Some(AggSource::Payload(*i)),
-                    Some(ValueSource::Probe(reg)) => Some(AggSource::Probe(
-                        probe_columns
-                            .iter()
-                            .position(|(r, _)| r == reg)
-                            .unwrap_or(usize::MAX),
-                    )),
-                })
-                .collect();
-            // Output groups in first-seen probe order, exactly as
-            // the general fold numbers them.
-            let mut seen: Vec<u32> = vec![u32::MAX; groups.keys.len()];
-            for row in 0..num_rows {
-                bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
-                    let Some(&bg) = groups.group_of.get(build_row) else {
-                        return;
-                    };
-                    let Some(slot_seen) = seen.get_mut(usize::try_from(bg).unwrap_or(usize::MAX))
-                    else {
-                        return;
-                    };
-                    if *slot_seen == u32::MAX {
-                        *slot_seen = u32::try_from(group_keys.len()).unwrap_or(u32::MAX);
-                        group_keys.push(
-                            groups
-                                .keys
-                                .get(usize::try_from(bg).unwrap_or(usize::MAX))
-                                .cloned()
-                                .unwrap_or_default(),
-                        );
-                        for accs in accumulators.iter_mut() {
-                            accs.push(RunningAgg::default());
-                        }
-                    }
-                    let g = usize::try_from(*slot_seen).unwrap_or(usize::MAX);
-                    for (i, src) in agg_sources.iter().enumerate() {
-                        let Some(acc) = accumulators.get_mut(i).and_then(|a| a.get_mut(g)) else {
-                            continue;
-                        };
-                        match src {
-                            None => acc.push(None),
-                            Some(AggSource::Probe(c)) => acc.push(Some(
-                                probe_columns
-                                    .get(*c)
-                                    .and_then(|(_, col)| col.get(row))
-                                    .unwrap_or(&Value::Null),
-                            )),
-                            Some(AggSource::Payload(i)) => acc.push(Some(
-                                &bt.payload
-                                    .get(*i)
-                                    .and_then(|c| c.get(build_row))
-                                    .unwrap_or(Value::Null),
-                            )),
-                        }
-                    }
-                });
+        let agg_sources: Vec<Option<AggSource>> = aggs
+            .iter()
+            .map(|(_, src)| match src {
+                None => None,
+                Some(ValueSource::Payload(i)) => Some(AggSource::Payload(*i)),
+                Some(ValueSource::Probe(reg)) => Some(AggSource::Probe(
+                    probe_views
+                        .iter()
+                        .position(|(r, _)| r == reg)
+                        .unwrap_or(usize::MAX),
+                )),
+            })
+            .collect();
+        // Output groups in first-seen probe order, exactly as the
+        // general fold numbers them.
+        let mut seen: Vec<u32> = vec![u32::MAX; fast.map_or(0, |groups| groups.keys.len())];
+        let mut key_bufs: Vec<Vec<Value>> = vec![Vec::new(); key_views.len()];
+        let mut probe_bufs: Vec<Vec<Value>> = vec![Vec::new(); probe_views.len()];
+        let mut start = 0;
+        while start < num_rows {
+            let end = num_rows.min(start + PROBE_WINDOW);
+            for (view, buf) in key_views.iter().zip(key_bufs.iter_mut()) {
+                view.fill_window(start, end, buf);
             }
-        } else {
-            for row in 0..num_rows {
-                let mut matched = false;
-                let emit_payload =
-                    !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
-                bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
-                    matched = true;
-                    if emit_payload {
-                        fold_group_row(
-                            group_by,
-                            aggs,
-                            &probe_columns,
-                            &bt,
-                            row,
-                            Some(build_row),
-                            &mut group_index,
-                            &mut group_keys,
-                            &mut accumulators,
-                        );
-                    }
-                });
-                if !matched {
-                    if should_emit(*kind, false, false) {
+            for ((_, view), buf) in probe_views.iter().zip(probe_bufs.iter_mut()) {
+                view.fill_window(start, end, buf);
+            }
+            let key_columns: Vec<&[Value]> = key_views
+                .iter()
+                .zip(&key_bufs)
+                .map(|(view, buf)| view.window(start, end).unwrap_or(buf.as_slice()))
+                .collect();
+            let probe_columns: Vec<(usize, &[Value])> = probe_views
+                .iter()
+                .zip(&probe_bufs)
+                .map(|((reg, view), buf)| (*reg, view.window(start, end).unwrap_or(buf.as_slice())))
+                .collect();
+            let hashes = if bt.needs_hashes() {
+                hash_columns_by_row(&key_columns, end - start, |row| row)
+            } else {
+                Vec::new()
+            };
+            if let Some(groups) = fast {
+                for row in 0..end - start {
+                    bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
+                        let Some(&bg) = groups.group_of.get(build_row) else {
+                            return;
+                        };
+                        let Some(slot_seen) =
+                            seen.get_mut(usize::try_from(bg).unwrap_or(usize::MAX))
+                        else {
+                            return;
+                        };
+                        if *slot_seen == u32::MAX {
+                            *slot_seen = u32::try_from(group_keys.len()).unwrap_or(u32::MAX);
+                            group_keys.push(
+                                groups
+                                    .keys
+                                    .get(usize::try_from(bg).unwrap_or(usize::MAX))
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            );
+                            for accs in accumulators.iter_mut() {
+                                accs.push(RunningAgg::default());
+                            }
+                        }
+                        let g = usize::try_from(*slot_seen).unwrap_or(usize::MAX);
+                        for (i, src) in agg_sources.iter().enumerate() {
+                            let Some(acc) = accumulators.get_mut(i).and_then(|a| a.get_mut(g))
+                            else {
+                                continue;
+                            };
+                            match src {
+                                None => acc.push(None),
+                                Some(AggSource::Probe(c)) => acc.push(Some(
+                                    probe_columns
+                                        .get(*c)
+                                        .and_then(|(_, col)| col.get(row))
+                                        .unwrap_or(&Value::Null),
+                                )),
+                                Some(AggSource::Payload(i)) => acc.push(Some(
+                                    &bt.payload
+                                        .get(*i)
+                                        .and_then(|c| c.get(build_row))
+                                        .unwrap_or(Value::Null),
+                                )),
+                            }
+                        }
+                    });
+                }
+            } else {
+                for row in 0..end - start {
+                    let mut matched = false;
+                    let emit_payload =
+                        !matches!(kind, JoinKind::Semi) && should_emit(*kind, true, true);
+                    bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
+                        matched = true;
+                        if emit_payload {
+                            fold_group_row(
+                                group_by,
+                                aggs,
+                                &probe_columns,
+                                &bt,
+                                row,
+                                Some(build_row),
+                                &mut group_index,
+                                &mut group_keys,
+                                &mut accumulators,
+                            );
+                        }
+                    });
+                    if !matched {
+                        if should_emit(*kind, false, false) {
+                            fold_group_row(
+                                group_by,
+                                aggs,
+                                &probe_columns,
+                                &bt,
+                                row,
+                                None,
+                                &mut group_index,
+                                &mut group_keys,
+                                &mut accumulators,
+                            );
+                        }
+                    } else if matches!(kind, JoinKind::Semi) {
+                        // Mirrors `Opcode::HashProbe`'s own `Semi` handling:
+                        // at most one contribution per probe row, with every
+                        // `Payload` source NULL (semi-joins never surface
+                        // the build side's columns).
                         fold_group_row(
                             group_by,
                             aggs,
@@ -7121,24 +7193,9 @@ impl Vm {
                             &mut accumulators,
                         );
                     }
-                } else if matches!(kind, JoinKind::Semi) {
-                    // Mirrors `Opcode::HashProbe`'s own `Semi` handling:
-                    // at most one contribution per probe row, with every
-                    // `Payload` source NULL (semi-joins never surface
-                    // the build side's columns).
-                    fold_group_row(
-                        group_by,
-                        aggs,
-                        &probe_columns,
-                        &bt,
-                        row,
-                        None,
-                        &mut group_index,
-                        &mut group_keys,
-                        &mut accumulators,
-                    );
                 }
             }
+            start = end;
         }
 
         for (i, (_src, dst)) in group_by.iter().enumerate() {
