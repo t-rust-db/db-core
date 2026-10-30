@@ -1975,6 +1975,25 @@ pub trait Segment: Send + Sync {
         let _ = (columns, positions);
         None
     }
+
+    /// [`Self::load`] for a worker that folds the groups of a fused join
+    /// `GROUP BY` across its segments (#894): `None` when `fold` took this
+    /// segment's groups -- nothing is left to load -- and the batch
+    /// otherwise, which is all the default does.
+    #[doc(hidden)]
+    fn load_folding(&self, fold: &mut JoinGroupFold, segment: usize) -> Result<Option<Arc<Batch>>> {
+        let _ = (fold, segment);
+        self.load().map(Some)
+    }
+
+    /// The groups `fold` holds, as the batch [`Self::load`] would have
+    /// returned for them and each group's first-seen key; `None` for a
+    /// segment that never folds.
+    #[doc(hidden)]
+    fn finish_folding(&self, fold: JoinGroupFold) -> Result<Option<(Batch, Vec<u64>)>> {
+        let _ = fold;
+        Ok(None)
+    }
 }
 
 /// Dynamically hands out segment indices to a fixed pool of worker threads:
@@ -4124,6 +4143,209 @@ impl SlimAcc {
     }
 }
 
+/// Build groups a [`JoinGroupFold`] indexes directly: its accumulators are
+/// one slot per group per worker, so a build side with more distinct
+/// groups than this takes the per-segment path instead.
+const JOIN_FOLD_MAX_GROUPS: usize = 1 << 18;
+
+/// #894: a worker's groups of a fused join `GROUP BY` keyed by the build
+/// side's payload columns (the `fast` path of
+/// [`Opcode::HashProbeGroupReduce`]), kept across every segment it probes.
+/// A matched row's group is its build row's group in the table's
+/// [`PayloadGroups`] -- the same for every segment -- so the accumulators
+/// are indexed by that id: no hashing, no per-segment partial rows, and
+/// no key copies until the worker's groups are handed on.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct JoinGroupFold {
+    table: Option<Arc<BuildTable>>,
+    /// The payload columns the groups are keyed by.
+    group_cols: Vec<usize>,
+    /// Per aggregate: its function and whether it is `COUNT(*)`.
+    funcs: Vec<(AggFunc, bool)>,
+    slim: Vec<SlimAcc>,
+    /// Each group's first matched row's order key; `u64::MAX` for a group
+    /// no row has matched.
+    first_seen: Vec<u64>,
+    /// The segment being probed, for the order keys.
+    segment: usize,
+    /// Whether the last probe folded into this one -- and so wrote no
+    /// registers.
+    folded: bool,
+}
+
+impl JoinGroupFold {
+    /// Whether the last probe folded into this one.
+    pub(crate) fn folded(&self) -> bool {
+        self.folded
+    }
+
+    /// Whether any group has been folded in.
+    pub(crate) fn has_groups(&self) -> bool {
+        self.first_seen.iter().any(|&seen| seen != u64::MAX)
+    }
+
+    /// Readies it for probing `segment`.
+    pub(crate) fn start_segment(&mut self, segment: usize) {
+        self.segment = segment;
+        self.folded = false;
+    }
+
+    /// Whether this fold can take a probe over `bt` of `num_rows` rows
+    /// grouped by `group_cols` into `num_groups` groups, with `aggs`'s
+    /// inputs: a table, grouping and input types the same as the ones it
+    /// already holds.
+    fn accepts(
+        &self,
+        bt: &Arc<BuildTable>,
+        group_cols: &[usize],
+        num_groups: usize,
+        aggs: &[(AggFunc, Option<Arc<Column>>)],
+        num_rows: usize,
+    ) -> bool {
+        let same_shape = match &self.table {
+            None => true,
+            Some(table) => {
+                Arc::ptr_eq(table, bt)
+                    && self.group_cols == group_cols
+                    && self.slim.len() == aggs.len()
+                    && self.slim.iter().zip(aggs).all(|(acc, (_, column))| {
+                        acc.float == matches!(column.as_deref(), Some(Column::Float { .. }))
+                    })
+            }
+        };
+        same_shape
+            && num_groups <= JOIN_FOLD_MAX_GROUPS
+            && aggs
+                .iter()
+                .all(|(_, column)| column.as_ref().is_none_or(|c| c.len() == num_rows))
+    }
+
+    /// Folds one window's matches -- `groups[k]` is the group of the match
+    /// at probe row `rows[k]` -- into the accumulators.
+    fn record(
+        &mut self,
+        bt: &Arc<BuildTable>,
+        group_cols: &[usize],
+        num_groups: usize,
+        aggs: &[(AggFunc, Option<Arc<Column>>)],
+        groups: &[usize],
+        rows: &[usize],
+    ) -> Result<()> {
+        if self.table.is_none() {
+            self.table = Some(Arc::clone(bt));
+            self.group_cols = group_cols.to_vec();
+            self.first_seen = vec![u64::MAX; num_groups];
+            self.funcs = aggs
+                .iter()
+                .map(|(func, column)| (*func, column.is_none()))
+                .collect();
+            self.slim = aggs
+                .iter()
+                .map(|(func, column)| {
+                    let mut acc =
+                        SlimAcc::new(matches!(column.as_deref(), Some(Column::Float { .. })));
+                    acc.resize(*func, num_groups);
+                    acc
+                })
+                .collect();
+        }
+        for (&group, &row) in groups.iter().zip(rows) {
+            if let Some(seen) = self.first_seen.get_mut(group) {
+                *seen = (*seen).min(super::combine::order_key(self.segment, row));
+            }
+        }
+        let physical = |k: usize| rows.get(k).copied().unwrap_or(0);
+        for ((acc, (func, column)), _) in self.slim.iter_mut().zip(aggs).zip(&self.funcs) {
+            acc.push_rows(*func, column.as_deref(), groups, &physical)?;
+        }
+        Ok(())
+    }
+
+    /// The groups any row matched, as the batch a fused join's
+    /// [`Segment::load`] returns for them (`names`: the group columns'
+    /// then the aggregates'), with each group's first-seen key.
+    pub(crate) fn finish(self, names: &[String]) -> Result<(Batch, Vec<u64>)> {
+        let malformed = |reason: &str| VmError::MalformedProgram {
+            opcode: "HashProbeGroupReduce",
+            reason: reason.to_string(),
+        };
+        let table = self
+            .table
+            .as_ref()
+            .ok_or_else(|| malformed("a join fold finished with no groups"))?;
+        let groups = table
+            .payload_groups(&self.group_cols)
+            .ok_or_else(|| malformed("a join fold's build groups are gone"))?;
+        let seen: Vec<usize> = self
+            .first_seen
+            .iter()
+            .enumerate()
+            .filter(|(_, &key)| key != u64::MAX)
+            .map(|(group, _)| group)
+            .collect();
+        let mut batch = Batch::new(seen.len());
+        let (group_names, agg_names) = names.split_at(self.group_cols.len().min(names.len()));
+        for (i, name) in group_names.iter().enumerate() {
+            let column: Vec<Value> = seen
+                .iter()
+                .map(|&g| {
+                    groups
+                        .keys
+                        .get(g)
+                        .and_then(|key| key.get(i))
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                })
+                .collect();
+            batch.columns.insert(name.clone(), Arc::new(column));
+        }
+        for ((name, acc), (func, count_star)) in agg_names.iter().zip(&self.slim).zip(&self.funcs) {
+            let column: Vec<Value> = seen
+                .iter()
+                .map(|&g| acc.finalize(g, *func, *count_star, "HashProbeGroupReduce"))
+                .collect::<Result<_>>()?;
+            batch.columns.insert(name.clone(), Arc::new(column));
+        }
+        let first_seen = seen
+            .iter()
+            .filter_map(|&g| self.first_seen.get(g).copied())
+            .collect();
+        Ok((batch, first_seen))
+    }
+}
+
+/// Whether every aggregate of a fused join reads a typed `Int`/`Float` probe
+/// column (or is `COUNT(*)`) and is one a [`SlimAcc`] holds: the columns,
+/// in `aggs` order.
+fn join_fold_columns(
+    aggs: &[(AggFunc, Option<ValueSource>)],
+    probe_views: &[(usize, KeyView)],
+) -> Option<Vec<(AggFunc, Option<Arc<Column>>)>> {
+    aggs.iter()
+        .map(|(func, src)| match (func, src) {
+            (AggFunc::Count, None) => Some((*func, None)),
+            (
+                AggFunc::Count
+                | AggFunc::Sum
+                | AggFunc::Avg
+                | AggFunc::AvgSum
+                | AggFunc::Min
+                | AggFunc::Max,
+                Some(ValueSource::Probe(reg)),
+            ) => {
+                let (_, view) = probe_views.iter().find(|(r, _)| r == reg)?;
+                let KeyView::Typed(column) = view else {
+                    return None;
+                };
+                matches!(column.as_ref(), Column::Int { .. } | Column::Float { .. })
+                    .then(|| (*func, Some(Arc::clone(column))))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// Whether `program` over `batch` can fold into an [`IntGroupFold`]: a
 /// single-key `GROUP BY` aggregate body (see [`folds_dict_groups`]) whose
 /// key is a typed `Int` column loaded straight from the batch and whose
@@ -5289,6 +5511,8 @@ pub struct Vm {
     group_fold: Option<DictGroupFold>,
     /// #894: set by [`execute_in_slices_folding`]; see [`IntGroupFold`].
     int_fold: Option<IntGroupFold>,
+    /// #894: set by a fused join's segment; see [`JoinGroupFold`].
+    dense_fold: Option<JoinGroupFold>,
     /// Instructions executed so far, checked against [`MAX_STEPS`] by
     /// [`Vm::execute`]/[`Vm::run`].
     steps: usize,
@@ -5323,6 +5547,16 @@ impl Vm {
             join_tables: tables,
             ..Vm::default()
         }
+    }
+
+    /// Hands the VM a worker's join fold for the probe it is about to run.
+    pub(crate) fn set_join_fold(&mut self, fold: JoinGroupFold) {
+        self.dense_fold = Some(fold);
+    }
+
+    /// Takes the join fold back after the probe.
+    pub(crate) fn take_join_fold(&mut self) -> JoinGroupFold {
+        self.dense_fold.take().unwrap_or_default()
     }
 
     /// The join tables built so far, as a shareable handle; the VM keeps
@@ -7556,6 +7790,20 @@ impl Vm {
                 )),
             })
             .collect();
+        // #894: a worker's join fold takes this probe's matches when the
+        // groups are the build side's and every aggregate input is a typed
+        // column it holds compactly.
+        let mut join_fold = self.dense_fold.take();
+        let dense_aggs = match (fast, join_fold.as_ref()) {
+            (Some(groups), Some(f)) => join_fold_columns(aggs, &probe_views).filter(|columns| {
+                f.accepts(&bt, &groups.columns, groups.keys.len(), columns, num_rows)
+            }),
+            _ => None,
+        };
+        if let Some(f) = join_fold.as_mut() {
+            f.folded = dense_aggs.is_some();
+        }
+        let mut dense_matches: (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
         // Output groups in first-seen probe order, exactly as the
         // general fold numbers them.
         let mut seen: Vec<u32> = vec![u32::MAX; fast.map_or(0, |groups| groups.keys.len())];
@@ -7567,7 +7815,11 @@ impl Vm {
             for (view, buf) in key_views.iter().zip(key_bufs.iter_mut()) {
                 view.fill_window(start, end, buf);
             }
-            for ((_, view), buf) in probe_views.iter().zip(probe_bufs.iter_mut()) {
+            for ((_, view), buf) in probe_views
+                .iter()
+                .zip(probe_bufs.iter_mut())
+                .filter(|_| dense_aggs.is_none())
+            {
                 view.fill_window(start, end, buf);
             }
             let key_columns: Vec<&[Value]> = key_views
@@ -7585,7 +7837,29 @@ impl Vm {
             } else {
                 Vec::new()
             };
-            if let Some(groups) = fast {
+            if let (Some(groups), Some(columns), Some(f)) =
+                (fast, dense_aggs.as_ref(), join_fold.as_mut())
+            {
+                let (matched_groups, matched_rows) = &mut dense_matches;
+                matched_groups.clear();
+                matched_rows.clear();
+                for row in 0..end - start {
+                    bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
+                        if let Some(&group) = groups.group_of.get(build_row) {
+                            matched_groups.push(usize::try_from(group).unwrap_or(usize::MAX));
+                            matched_rows.push(start.saturating_add(row));
+                        }
+                    });
+                }
+                f.record(
+                    &bt,
+                    &groups.columns,
+                    groups.keys.len(),
+                    columns,
+                    matched_groups,
+                    matched_rows,
+                )?;
+            } else if let Some(groups) = fast {
                 for row in 0..end - start {
                     bt.for_each_match(&key_columns, row, hashes.get(row), |build_row| {
                         let Some(&bg) = groups.group_of.get(build_row) else {
@@ -7688,6 +7962,10 @@ impl Vm {
                 }
             }
             start = end;
+        }
+        self.dense_fold = join_fold;
+        if dense_aggs.is_some() {
+            return Ok(());
         }
 
         for (i, (_src, dst)) in group_by.iter().enumerate() {

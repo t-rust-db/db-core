@@ -26,8 +26,8 @@ use super::batch::{
     chunk_len, compare_rows_for_order, execute_in_slices, execute_in_slices_folding,
     hash_group_key, int_fold_applies, run_morsels, run_morsels_fold, run_parallel,
     run_parallel_streaming, run_parallel_top_n, sliceable, AggPart, Batch, Chunk, GroupKey,
-    IntGroupFold, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource, Segment, TopN,
-    Value, Vm, VmError, SLICE_ROWS,
+    IntGroupFold, JoinGroupFold, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource,
+    Segment, TopN, Value, Vm, VmError, SLICE_ROWS,
 };
 use super::combine::{
     combine_chunks, combine_partials, eval_agg_expr, finish_avg, finish_int_set, finish_sketch,
@@ -330,10 +330,17 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
         || Worker {
             combiner: Combiner::new(agg_parts, num_group_keys),
             fold: None,
+            join_fold: JoinGroupFold::default(),
         },
         |worker, (segment_index, segment)| {
-            let batch = segment.load()?;
-            let Worker { combiner, fold } = worker;
+            let Worker {
+                combiner,
+                fold,
+                join_fold,
+            } = worker;
+            let Some(batch) = segment.load_folding(join_fold, *segment_index)? else {
+                return Ok(());
+            };
             if int_fold_applies(body, &batch) {
                 // A single `Int` key: this worker's groups fold across its
                 // segments, one hash per row (#894). Checked after every
@@ -383,9 +390,35 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
         // of the groups (#863).
         |worker| {
             let Worker {
-                mut combiner, fold, ..
+                mut combiner,
+                fold,
+                join_fold,
             } = worker;
             flush_fold(fold, &mut combiner, body)?;
+            if join_fold.has_groups() {
+                if let Some((batch, first_seen)) = segments
+                    .first()
+                    .map(|segment| segment.finish_folding(join_fold))
+                    .transpose()?
+                    .flatten()
+                {
+                    let mut pushed = 0usize;
+                    execute_in_slices(&batch, body, |offset, output| {
+                        for chunk in output.into_chunks() {
+                            let rows = chunk_len(&chunk);
+                            let base = offset.saturating_add(pushed);
+                            combiner.push_chunk(&chunk, |row| {
+                                first_seen
+                                    .get(base.saturating_add(row))
+                                    .copied()
+                                    .unwrap_or(u64::MAX)
+                            })?;
+                            pushed = pushed.saturating_add(rows);
+                        }
+                        Ok(())
+                    })?;
+                }
+            }
             if combiner.groups() > HANDOFF_GROUPS {
                 spill(&shared, combiner, num_group_keys)?;
                 return Ok(Partial::default());
@@ -408,6 +441,8 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
 struct Worker {
     combiner: Combiner,
     fold: Option<IntGroupFold>,
+    /// A fused join's groups, folded across the worker's segments (#894).
+    join_fold: JoinGroupFold,
 }
 
 /// Hands `fold`'s groups, finalized as the segments' own partial rows
@@ -969,12 +1004,9 @@ struct JoinedSegment<S: Segment> {
     shape: Arc<JoinShape>,
 }
 
-impl<S: Segment> Segment for JoinedSegment<S> {
-    fn load(&self) -> Result<Arc<Batch>> {
-        let batch = self.left.load()?;
-        let mut vm = Vm::with_join_tables(self.tables.clone());
-        vm.execute(&batch, &self.shape.probe)?;
-
+impl<S: Segment> JoinedSegment<S> {
+    /// The joined batch for the body, from the VM that ran the probe.
+    fn assemble(&self, mut vm: Vm) -> Result<Arc<Batch>> {
         // #441: a fused join has no per-row joined output to reshape --
         // `self.shape.probe` already ends in `Opcode::HashProbeGroupReduce`,
         // whose `group_by`/`agg_dst` registers (one value per *group*, not
@@ -1006,6 +1038,40 @@ impl<S: Segment> Segment for JoinedSegment<S> {
                 .insert(name.clone(), Arc::new(vm.take_register(reg)?));
         }
         Ok(Arc::new(joined))
+    }
+}
+
+impl<S: Segment> Segment for JoinedSegment<S> {
+    fn load(&self) -> Result<Arc<Batch>> {
+        let batch = self.left.load()?;
+        let mut vm = Vm::with_join_tables(self.tables.clone());
+        vm.execute(&batch, &self.shape.probe)?;
+        self.assemble(vm)
+    }
+
+    fn load_folding(&self, fold: &mut JoinGroupFold, segment: usize) -> Result<Option<Arc<Batch>>> {
+        if self.shape.fused_group_by.is_none() {
+            return self.load().map(Some);
+        }
+        let batch = self.left.load()?;
+        let mut vm = Vm::with_join_tables(self.tables.clone());
+        fold.start_segment(segment);
+        vm.set_join_fold(std::mem::take(fold));
+        let ran = vm.execute(&batch, &self.shape.probe);
+        *fold = vm.take_join_fold();
+        ran?;
+        if fold.folded() {
+            return Ok(None);
+        }
+        self.assemble(vm).map(Some)
+    }
+
+    fn finish_folding(&self, fold: JoinGroupFold) -> Result<Option<(Batch, Vec<u64>)>> {
+        let Some(fused) = &self.shape.fused_group_by else {
+            return Ok(None);
+        };
+        let names: Vec<String> = fused.iter().map(|(_, name)| name.clone()).collect();
+        fold.finish(&names).map(Some)
     }
 }
 
