@@ -453,6 +453,16 @@ impl RowPage {
         self.observed.is_empty()
     }
 
+    /// Estimated bytes the page holds in memory (#854).
+    pub(crate) fn byte_size(&self) -> usize {
+        self.columns.iter().fold(
+            self.observed
+                .len()
+                .saturating_mul(std::mem::size_of::<i64>()),
+            |sum, c| sum.saturating_add(c.byte_size()),
+        )
+    }
+
     /// Each row's arrival time (ns).
     pub fn observed_ts_ns(&self) -> &[i64] {
         &self.observed

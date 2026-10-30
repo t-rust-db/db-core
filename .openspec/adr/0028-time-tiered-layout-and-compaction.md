@@ -333,6 +333,37 @@ flush (write under `tmp/`, rename, commit, release the WAL and the
 pages), so its rows leave memory and the WAL. The head, at most one page,
 stays.
 
+**Byte budgets (#854).** Rows are the wrong unit for a wide table: a
+~1 KB request row (MAPs, bodies) makes a 1M-row budget hundreds of MB.
+`TierOptions.spill_bytes` and `row_group_max_bytes` (both `None` by
+default) bound the sealed pages and a row group by `Page::byte_size`, an
+estimate of the in-memory bytes (inline values plus heap bytes of strings,
+binaries, map entries and list items). A byte limit applies together with
+its row limit; the row group's row count is the byte limit over the rows'
+average size, capped by `row_group_max_rows`. The hour close and the day
+merge read their inputs a chunk at a time (`ParquetFile::open_file`)
+instead of mapping them, so a merge holds one row group per input, not
+every page it touched.
+
+Measured (`make bench-events`, the `wide` workload: 1M requests of 24
+columns, four MAPs and two BINARYs, ~0.8 KB a row, over 6 hours, zstd,
+`row_group_max_bytes` 4 MB, one run each):
+
+| `spill_bytes` | ingest | of which append | hour flushes | day merge | peak RSS |
+|---:|---:|---:|---:|---:|---:|
+| 16 MB | 40.2 s | 26.7 s | 13.4 s | 15.6 s | 206 MB |
+| 64 MB | 30.5 s | 19.4 s | 11.1 s | 15.2 s | 324 MB |
+| 128 MB | 28.2 s | 17.2 s | 11.1 s | 15.5 s | 556 MB |
+| unset | 19.2 s | 8.1 s | 11.1 s | 15.9 s | 1 248 MB |
+
+With the row-count defaults and no byte limits the peak is 1.8 GB. A
+spill sorts and writes a run on the appending thread, so a small
+`spill_bytes` buys memory with append time; `row_group_max_bytes` costs no
+time. Recommended: set `row_group_max_bytes`, and `spill_bytes` (64 MB for
+a ~1 KB row) only where a memory bound matters more than append speed. The
+per-phase peaks in the report are not independent: the allocator keeps
+freed memory resident, so later phases start from the earlier peak.
+
 **The manifest lists runs.** A staging entry has area `staging`; a
 tiered manifest is `archive/`, then `live/`, then `staging/` (only the
 open hour spills). A reader that predates part b refuses the area. Runs

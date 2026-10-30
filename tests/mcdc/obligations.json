@@ -17112,7 +17112,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_89187645",
     "file": "src/engine/column/table/tests.rs",
-    "line": 504,
+    "line": 506,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -17122,7 +17122,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_89187645_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 507,
+    "line": 509,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -17132,7 +17132,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d2cddf82",
     "file": "src/engine/column/table/tests.rs",
-    "line": 530,
+    "line": 532,
     "decision": "rng.below(8) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -17142,7 +17142,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_bc08b02e",
     "file": "src/engine/column/table/tests.rs",
-    "line": 535,
+    "line": 537,
     "decision": "rng.below(seal_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -17152,7 +17152,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d4525ddd",
     "file": "src/engine/column/table/tests.rs",
-    "line": 538,
+    "line": 540,
     "decision": "rng.below(flush_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -17162,7 +17162,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_d4525ddd_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 541,
+    "line": 543,
     "decision": "rng.below(flush_odds) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -17172,7 +17172,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_a58ed6fd",
     "file": "src/engine/column/table/tests.rs",
-    "line": 545,
+    "line": 547,
     "decision": "[rng.below(40) == 0, last].contains(&true)",
     "conditions": 1,
     "vectors_required": 2,
@@ -17182,7 +17182,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_62fa6506_2",
     "file": "src/engine/column/table/tests.rs",
-    "line": 557,
+    "line": 559,
     "decision": "tiered",
     "conditions": 1,
     "vectors_required": 2,
@@ -17192,7 +17192,7 @@
   {
     "id": "engine_column_table_tests_flush_timing_invariance_62fa6506_3",
     "file": "src/engine/column/table/tests.rs",
-    "line": 562,
+    "line": 564,
     "decision": "tiered",
     "conditions": 1,
     "vectors_required": 2,
@@ -17202,7 +17202,7 @@
   {
     "id": "engine_column_table_tests_read_snapshot_gives_list_columns_from_files_and_pages_acb700ef",
     "file": "src/engine/column/table/tests.rs",
-    "line": 928,
+    "line": 930,
     "decision": "i == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -17212,7 +17212,7 @@
   {
     "id": "engine_column_table_tests_sessions_by_hour_311273f4",
     "file": "src/engine/column/table/tests.rs",
-    "line": 1332,
+    "line": 1334,
     "decision": "hour < 4",
     "conditions": 1,
     "vectors_required": 2,
@@ -17222,7 +17222,7 @@
   {
     "id": "engine_column_table_tests_stats_by_hour_fb8efcac",
     "file": "src/engine/column/table/tests.rs",
-    "line": 1439,
+    "line": 1441,
     "decision": "hour == 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -17232,7 +17232,7 @@
   {
     "id": "engine_column_table_tests_stats_by_hour_311273f4",
     "file": "src/engine/column/table/tests.rs",
-    "line": 1449,
+    "line": 1451,
     "decision": "hour < 4",
     "conditions": 1,
     "vectors_required": 2,
@@ -17242,7 +17242,7 @@
   {
     "id": "engine_column_table_tests_distinct_counts_of_integer_columns_agree_with_a_model_in_every_state_40026262",
     "file": "src/engine/column/table/tests.rs",
-    "line": 1932,
+    "line": 1938,
     "decision": "match rng.below(10) {\n                0 | 1 => None,\n                2 => Some(extremes[rng.below(4) as usize]),\n                _ => Some(rng.below(60) as i64 - 20),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17252,7 +17252,7 @@
   {
     "id": "engine_column_table_tests_distinct_counts_of_string_columns_agree_with_a_model_in_every_state_a987659f",
     "file": "src/engine/column/table/tests.rs",
-    "line": 2112,
+    "line": 2120,
     "decision": "match rng.below(10) {\n                0 | 1 => None,\n                2 | 3 => Some(odd[rng.below(8) as usize].to_string()),\n                _ => Some(format!(\"v{}\", rng.below(60))),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34932,7 +34932,7 @@
   {
     "id": "storage_ingest_layout_kind_545d8da4",
     "file": "src/storage/ingest/layout.rs",
-    "line": 117,
+    "line": 128,
     "decision": "match self {\n            Layout::Flat => LayoutKind::Flat,\n            Layout::Tiered(_) => LayoutKind::Tiered,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34942,7 +34942,7 @@
   {
     "id": "storage_ingest_layout_as_str_e8fee942",
     "file": "src/storage/ingest/layout.rs",
-    "line": 136,
+    "line": 147,
     "decision": "match self {\n            LayoutKind::Flat => \"flat\",\n            LayoutKind::Tiered => \"tiered\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34952,7 +34952,7 @@
   {
     "id": "storage_ingest_layout_as_str_0e051416",
     "file": "src/storage/ingest/layout.rs",
-    "line": 166,
+    "line": 177,
     "decision": "match self {\n            Area::Data => \"data\",\n            Area::Live => \"live\",\n            Area::Archive => \"archive\",\n            Area::Staging => \"staging\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34962,7 +34962,7 @@
   {
     "id": "storage_ingest_layout_date_string_1f89292c",
     "file": "src/storage/ingest/layout.rs",
-    "line": 215,
+    "line": 226,
     "decision": "mp < 10",
     "conditions": 1,
     "vectors_required": 2,
@@ -34972,7 +34972,7 @@
   {
     "id": "storage_ingest_layout_rank_9a13d893",
     "file": "src/storage/ingest/layout.rs",
-    "line": 256,
+    "line": 267,
     "decision": "match v {\n            Value::Null => 0,\n            Value::Int(_) | Value::Float(_) | Value::Decimal { .. } => 1,\n            Value::Bool(_) => 2,\n            Value::Str(_) => 3,\n            Value::Map(_) => 4,\n            Value::List(_) => 6,\n            Value::Bytes(_) => 5,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -34982,7 +34982,7 @@
   {
     "id": "storage_ingest_layout_compare_918c034a",
     "file": "src/storage/ingest/layout.rs",
-    "line": 266,
+    "line": 277,
     "decision": "let Some(order) = numeric_cmp(a, b)",
     "conditions": 1,
     "vectors_required": 2,
@@ -34992,7 +34992,7 @@
   {
     "id": "storage_ingest_layout_compare_b3c8adc2",
     "file": "src/storage/ingest/layout.rs",
-    "line": 269,
+    "line": 280,
     "decision": "match (a, b) {\n        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),\n        (Value::Str(x), Value::Str(y)) => x.cmp(y),\n        (Value::Map(x), Value::Map(y)) => x.cmp(y),\n        (Value::List(x), Value::List(y)) => x.cmp(y),\n        (Value::Bytes(x), Value::Bytes(y)) => x.cmp(y),\n        _ => rank(a).cmp(&rank(b)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35510,9 +35510,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_page_byte_size_b052fc7d",
+    "file": "src/storage/ingest/page.rs",
+    "line": 59,
+    "decision": "match &self.body {\n            PageBody::Lines(segment) => segment.byte_len(),\n            PageBody::Rows(rows) => rows.byte_size(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_ingest_page_lines_14754fd9",
     "file": "src/storage/ingest/page.rs",
-    "line": 58,
+    "line": 67,
     "decision": "match &self.body {\n            PageBody::Lines(segment) => Some(segment),\n            PageBody::Rows(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35522,7 +35532,7 @@
   {
     "id": "storage_ingest_page_observed_ts_ns_bde1de79",
     "file": "src/storage/ingest/page.rs",
-    "line": 66,
+    "line": 75,
     "decision": "match &self.body {\n            PageBody::Lines(segment) => segment.observed_ts_ns().to_vec(),\n            PageBody::Rows(rows) => rows.observed_ts_ns().iter().copied().map(Some).collect(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35532,7 +35542,7 @@
   {
     "id": "storage_ingest_page_first_observed_6ba8713d",
     "file": "src/storage/ingest/page.rs",
-    "line": 74,
+    "line": 83,
     "decision": "match &self.body {\n            PageBody::Lines(segment) => segment.observed_ts_ns().first().copied().flatten(),\n            PageBody::Rows(rows) => rows.observed_ts_ns().first().copied(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35542,7 +35552,7 @@
   {
     "id": "storage_ingest_page_invalid_line_16a8a58a",
     "file": "src/storage/ingest/page.rs",
-    "line": 100,
+    "line": 109,
     "decision": "line.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35552,7 +35562,7 @@
   {
     "id": "storage_ingest_page_invalid_line_9bc10475",
     "file": "src/storage/ingest/page.rs",
-    "line": 103,
+    "line": 112,
     "decision": "line.contains(&b'\\n')",
     "conditions": 1,
     "vectors_required": 2,
@@ -35562,7 +35572,7 @@
   {
     "id": "storage_ingest_page_push_row_0a952609",
     "file": "src/storage/ingest/page.rs",
-    "line": 131,
+    "line": 140,
     "decision": "self.observed.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35572,7 +35582,7 @@
   {
     "id": "storage_ingest_page_push_row_fbfb776c",
     "file": "src/storage/ingest/page.rs",
-    "line": 135,
+    "line": 144,
     "decision": "let Some(rows) = &mut self.rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -35582,7 +35592,7 @@
   {
     "id": "storage_ingest_page_push_0a952609",
     "file": "src/storage/ingest/page.rs",
-    "line": 157,
+    "line": 166,
     "decision": "self.observed.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35592,7 +35602,7 @@
   {
     "id": "storage_ingest_page_snapshot_560c36ee",
     "file": "src/storage/ingest/page.rs",
-    "line": 170,
+    "line": 179,
     "decision": "let Some(rows) = &self.rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -35602,7 +35612,7 @@
   {
     "id": "storage_ingest_page_drop_front_01b7c5b2",
     "file": "src/storage/ingest/page.rs",
-    "line": 199,
+    "line": 208,
     "decision": "n == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -35612,7 +35622,7 @@
   {
     "id": "storage_ingest_page_drop_front_579d9cd8",
     "file": "src/storage/ingest/page.rs",
-    "line": 202,
+    "line": 211,
     "decision": "n == self.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -35622,7 +35632,7 @@
   {
     "id": "storage_ingest_page_drop_front_fbfb776c",
     "file": "src/storage/ingest/page.rs",
-    "line": 218,
+    "line": 227,
     "decision": "let Some(rows) = &mut self.rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -35632,7 +35642,7 @@
   {
     "id": "storage_ingest_page_clear_fbfb776c",
     "file": "src/storage/ingest/page.rs",
-    "line": 227,
+    "line": 236,
     "decision": "let Some(rows) = &mut self.rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -35822,7 +35832,7 @@
   {
     "id": "storage_ingest_record_join_repeated_keys_a98dbba4",
     "file": "src/storage/ingest/record.rs",
-    "line": 493,
+    "line": 503,
     "decision": "match value {\n            RecordValue::Map(entries) => RecordValue::Map(join_entries(entries)),\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35832,7 +35842,7 @@
   {
     "id": "storage_ingest_record_join_entries_9904ef09",
     "file": "src/storage/ingest/record.rs",
-    "line": 508,
+    "line": 518,
     "decision": "key.eq_ignore_ascii_case(\"set-cookie\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -35842,7 +35852,7 @@
   {
     "id": "storage_ingest_record_join_entries_9f7715f7",
     "file": "src/storage/ingest/record.rs",
-    "line": 513,
+    "line": 523,
     "decision": "match (joined.as_mut(), value) {\n            (Some(acc), Some(v)) => {\n                acc.push_str(separator);\n                acc.push_str(&v);\n            }\n            (None, Some(v)) => *joined = Some(v),\n            (_, None) => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35852,7 +35862,7 @@
   {
     "id": "storage_ingest_record_push_value_8c46ddb9",
     "file": "src/storage/ingest/record.rs",
-    "line": 529,
+    "line": 539,
     "decision": "match column {\n        ColumnValues::Boolean(c) => c.push(match value {\n            V::Bool(b) => Some(b),\n            _ => None,\n        }),\n        ColumnValues::Int32(c) => c.push(match value {\n            V::Int(i) => i32::try_from(i).ok(),\n            _ => None,\n        }),\n        ColumnValues::Int64(c)\n        | ColumnValues::TimestampMicros(c)\n        | ColumnValues::TimestampNanos(c) => c.push(match value {\n            V::Int(i) => Some(i),\n            _ => None,\n        }),\n        ColumnValues::Float(c) => c.push(match value {\n            #[allow(clippy::cast_possible_truncation, reason = \"a FLOAT column narrows\")]\n            V::Float(f) => Some(f as f32),\n            _ => None,\n        }),\n        ColumnValues::Double(c) => c.push(match value {\n            V::Float(f) => Some(f),\n            _ => None,\n        }),\n        ColumnValues::Utf8(c) => c.push(match value {\n            V::Str(s) => Some(s),\n            _ => None,\n        }),\n        ColumnValues::Binary(c) | ColumnValues::FixedLenByteArray(c) => c.push(match value {\n            V::Bytes(b) => Some(b),\n            _ => None,\n        }),\n        ColumnValues::UInt8(c) => c.push(unsigned(&value).and_then(|u| u8::try_from(u).ok())),\n        ColumnValues::UInt16(c) => c.push(unsigned(&value).and_then(|u| u16::try_from(u).ok())),\n        ColumnValues::UInt32(c) => c.push(unsigned(&value).and_then(|u| u32::try_from(u).ok())),\n        ColumnValues::UInt64(c) => c.push(unsigned(&value)),\n        ColumnValues::Decimal(c) => c.push(match value {\n            V::Decimal(d) => Some(d),\n            _ => None,\n        }),\n        ColumnValues::Map(c) => c.push(match value {\n            V::Map(entries) => Some(\n                entries\n                    .into_iter()\n                    .map(|(k, v)| (k.into(), v.map(Into::into)))\n                    .collect(),\n            ),\n            _ => None,\n        }),\n        ColumnValues::List(c) => c.push(match value {\n            V::List(items) => Some(items.into_iter().map(|v| v.map(Into::into)).collect()),\n            _ => None,\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35862,7 +35872,7 @@
   {
     "id": "storage_ingest_record_push_value_7a558b85",
     "file": "src/storage/ingest/record.rs",
-    "line": 530,
+    "line": 540,
     "decision": "match value {\n            V::Bool(b) => Some(b),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35872,7 +35882,7 @@
   {
     "id": "storage_ingest_record_push_value_024c72b4",
     "file": "src/storage/ingest/record.rs",
-    "line": 534,
+    "line": 544,
     "decision": "match value {\n            V::Int(i) => i32::try_from(i).ok(),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35882,7 +35892,7 @@
   {
     "id": "storage_ingest_record_push_value_b8ab6c29",
     "file": "src/storage/ingest/record.rs",
-    "line": 540,
+    "line": 550,
     "decision": "match value {\n            V::Int(i) => Some(i),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35892,7 +35902,7 @@
   {
     "id": "storage_ingest_record_push_value_7b63b5ab",
     "file": "src/storage/ingest/record.rs",
-    "line": 544,
+    "line": 554,
     "decision": "match value {\n            #[allow(clippy::cast_possible_truncation, reason = \"a FLOAT column narrows\")]\n            V::Float(f) => Some(f as f32),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35902,7 +35912,7 @@
   {
     "id": "storage_ingest_record_push_value_66bb0b12",
     "file": "src/storage/ingest/record.rs",
-    "line": 549,
+    "line": 559,
     "decision": "match value {\n            V::Float(f) => Some(f),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35912,7 +35922,7 @@
   {
     "id": "storage_ingest_record_push_value_ce14926c",
     "file": "src/storage/ingest/record.rs",
-    "line": 553,
+    "line": 563,
     "decision": "match value {\n            V::Str(s) => Some(s),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35922,7 +35932,7 @@
   {
     "id": "storage_ingest_record_push_value_ceac3e7b",
     "file": "src/storage/ingest/record.rs",
-    "line": 557,
+    "line": 567,
     "decision": "match value {\n            V::Bytes(b) => Some(b),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35932,7 +35942,7 @@
   {
     "id": "storage_ingest_record_push_value_35c5e625",
     "file": "src/storage/ingest/record.rs",
-    "line": 565,
+    "line": 575,
     "decision": "match value {\n            V::Decimal(d) => Some(d),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35942,7 +35952,7 @@
   {
     "id": "storage_ingest_record_push_value_f556ffbf",
     "file": "src/storage/ingest/record.rs",
-    "line": 569,
+    "line": 579,
     "decision": "match value {\n            V::Map(entries) => Some(\n                entries\n                    .into_iter()\n                    .map(|(k, v)| (k.into(), v.map(Into::into)))\n                    .collect(),\n            ),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35952,7 +35962,7 @@
   {
     "id": "storage_ingest_record_push_value_6592230d",
     "file": "src/storage/ingest/record.rs",
-    "line": 578,
+    "line": 588,
     "decision": "match value {\n            V::List(items) => Some(items.into_iter().map(|v| v.map(Into::into)).collect()),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35962,7 +35972,7 @@
   {
     "id": "storage_ingest_record_engine_values_6249b0ec",
     "file": "src/storage/ingest/record.rs",
-    "line": 602,
+    "line": 612,
     "decision": "match values {\n        ColumnValues::Boolean(v) => map(v, |b| Value::Bool(*b)),\n        ColumnValues::Int32(v) => map(v, |i| Value::Int(i64::from(*i))),\n        ColumnValues::Int64(v)\n        | ColumnValues::TimestampMicros(v)\n        | ColumnValues::TimestampNanos(v) => map(v, |i| Value::Int(*i)),\n        ColumnValues::Float(v) => map(v, |f| Value::Float(f64::from(*f))),\n        ColumnValues::Double(v) => map(v, |f| Value::Float(*f)),\n        ColumnValues::Utf8(v) => map(v, |s| Value::Str(s.clone().into())),\n        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {\n            map(v, |b| Value::Str(hex(b).into()))\n        }\n        ColumnValues::UInt8(v) => map(v, |u| Value::Int(i64::from(*u))),\n        ColumnValues::UInt16(v) => map(v, |u| Value::Int(i64::from(*u))),\n        ColumnValues::UInt32(v) => map(v, |u| Value::Int(i64::from(*u))),\n        ColumnValues::UInt64(v) => v\n            .iter()\n            .map(|x| match x {\n                None => Ok(Value::Null),\n                Some(u) if bit_pattern => Ok(Value::Int(u.cast_signed())),\n                Some(u) => i64::try_from(*u)\n                    .map(Value::Int)\n                    .map_err(|_| FileError::UnsignedOutOfRange(*u).to_string()),\n            })\n            .collect::<Result<_, _>>()?,\n        ColumnValues::Map(v) => map(v, |entries| Value::Map(Arc::new(entries.clone()))),\n        ColumnValues::List(v) => map(v, |items| Value::List(Arc::new(items.clone()))),\n        // Exact, as a flushed file's DECIMAL reads (#632).\n        ColumnValues::Decimal(v) => {\n            let scale = match column_type {\n                ColumnType::Decimal { scale, .. } => scale,\n                _ => 0,\n            };\n            map(v, |unscaled| Value::Decimal {\n                unscaled: *unscaled,\n                scale,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35972,7 +35982,7 @@
   {
     "id": "storage_ingest_record_engine_values_1b61bff5",
     "file": "src/storage/ingest/record.rs",
-    "line": 619,
+    "line": 629,
     "decision": "match x {\n                None => Ok(Value::Null),\n                Some(u) if bit_pattern => Ok(Value::Int(u.cast_signed())),\n                Some(u) => i64::try_from(*u)\n                    .map(Value::Int)\n                    .map_err(|_| FileError::UnsignedOutOfRange(*u).to_string()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -35982,7 +35992,7 @@
   {
     "id": "storage_ingest_record_engine_values_abcdd1ce",
     "file": "src/storage/ingest/record.rs",
-    "line": 621,
+    "line": 631,
     "decision": "bit_pattern",
     "conditions": 1,
     "vectors_required": 2,
@@ -35992,7 +36002,7 @@
   {
     "id": "storage_ingest_record_engine_values_2c147097",
     "file": "src/storage/ingest/record.rs",
-    "line": 631,
+    "line": 641,
     "decision": "match column_type {\n                ColumnType::Decimal { scale, .. } => scale,\n                _ => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36002,7 +36012,7 @@
   {
     "id": "storage_ingest_record_gather_f1841a08",
     "file": "src/storage/ingest/record.rs",
-    "line": 648,
+    "line": 658,
     "decision": "match values {\n        ColumnValues::Boolean(v) => ColumnValues::Boolean(pick(v, order)),\n        ColumnValues::Int32(v) => ColumnValues::Int32(pick(v, order)),\n        ColumnValues::Int64(v) => ColumnValues::Int64(pick(v, order)),\n        ColumnValues::TimestampMicros(v) => ColumnValues::TimestampMicros(pick(v, order)),\n        ColumnValues::TimestampNanos(v) => ColumnValues::TimestampNanos(pick(v, order)),\n        ColumnValues::Float(v) => ColumnValues::Float(pick(v, order)),\n        ColumnValues::Double(v) => ColumnValues::Double(pick(v, order)),\n        ColumnValues::Utf8(v) => ColumnValues::Utf8(pick(v, order)),\n        ColumnValues::Binary(v) => ColumnValues::Binary(pick(v, order)),\n        ColumnValues::FixedLenByteArray(v) => ColumnValues::FixedLenByteArray(pick(v, order)),\n        ColumnValues::UInt8(v) => ColumnValues::UInt8(pick(v, order)),\n        ColumnValues::UInt16(v) => ColumnValues::UInt16(pick(v, order)),\n        ColumnValues::UInt32(v) => ColumnValues::UInt32(pick(v, order)),\n        ColumnValues::UInt64(v) => ColumnValues::UInt64(pick(v, order)),\n        ColumnValues::Decimal(v) => ColumnValues::Decimal(pick(v, order)),\n        ColumnValues::Map(v) => ColumnValues::Map(pick(v, order)),\n        ColumnValues::List(v) => ColumnValues::List(pick(v, order)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36012,7 +36022,7 @@
   {
     "id": "storage_ingest_record_by_a6002666",
     "file": "src/storage/ingest/record.rs",
-    "line": 699,
+    "line": 709,
     "decision": "match (\n            v.get(a).and_then(Option::as_ref),\n            w.get(b).and_then(Option::as_ref),\n        ) {\n            (Some(p), Some(q)) => cmp(p, q),\n            (p, q) => p.is_some().cmp(&q.is_some()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36022,7 +36032,7 @@
   {
     "id": "storage_ingest_record_compare_across_30d36739",
     "file": "src/storage/ingest/record.rs",
-    "line": 708,
+    "line": 718,
     "decision": "match (x, y) {\n        (C::Boolean(v), C::Boolean(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Int32(v), C::Int32(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Int64(v), C::Int64(w))\n        | (C::TimestampMicros(v), C::TimestampMicros(w))\n        | (C::TimestampNanos(v), C::TimestampNanos(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Float(v), C::Float(w)) => by(v, a, w, b, f32::total_cmp),\n        (C::Double(v), C::Double(w)) => by(v, a, w, b, f64::total_cmp),\n        (C::Utf8(v), C::Utf8(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Binary(v), C::Binary(w)) | (C::FixedLenByteArray(v), C::FixedLenByteArray(w)) => {\n            by(v, a, w, b, Ord::cmp)\n        }\n        (C::UInt8(v), C::UInt8(w)) => by(v, a, w, b, Ord::cmp),\n        (C::UInt16(v), C::UInt16(w)) => by(v, a, w, b, Ord::cmp),\n        (C::UInt32(v), C::UInt32(w)) => by(v, a, w, b, Ord::cmp),\n        (C::UInt64(v), C::UInt64(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Decimal(v), C::Decimal(w)) => by(v, a, w, b, Ord::cmp),\n        (C::Map(v), C::Map(w)) => by(v, a, w, b, Ord::cmp),\n        (C::List(v), C::List(w)) => by(v, a, w, b, Ord::cmp),\n        _ => Ordering::Equal,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36032,7 +36042,7 @@
   {
     "id": "storage_ingest_record_read_column_4b99079f",
     "file": "src/storage/ingest/record.rs",
-    "line": 745,
+    "line": 755,
     "decision": "match column_type {\n        ColumnType::Boolean => ColumnValues::Boolean(rg.read_boolean_column(index)?),\n        ColumnType::Int32 => ColumnValues::Int32(rg.read_int32_column(index)?),\n        ColumnType::Int64 => ColumnValues::Int64(rg.read_int64_column(index)?),\n        ColumnType::TimestampMicros => ColumnValues::TimestampMicros(rg.read_int64_column(index)?),\n        ColumnType::TimestampNanos => ColumnValues::TimestampNanos(rg.read_int64_column(index)?),\n        ColumnType::Float => ColumnValues::Float(rg.read_float_column(index)?),\n        ColumnType::Double => ColumnValues::Double(rg.read_double_column(index)?),\n        ColumnType::Utf8 => ColumnValues::Utf8(rg.read_string_column(index)?),\n        ColumnType::Binary => ColumnValues::Binary(rg.read_binary_column(index)?),\n        ColumnType::FixedLenByteArray(_) => {\n            ColumnValues::FixedLenByteArray(rg.read_fixed_len_byte_array_column(index)?)\n        }\n        ColumnType::UInt8 => ColumnValues::UInt8(bits32(rg.read_int32_column(index)?)),\n        ColumnType::UInt16 => ColumnValues::UInt16(bits32(rg.read_int32_column(index)?)),\n        ColumnType::UInt32 => ColumnValues::UInt32(bits32(rg.read_int32_column(index)?)),\n        ColumnType::UInt64 => ColumnValues::UInt64(\n            rg.read_int64_column(index)?\n                .into_iter()\n                .map(|x| x.map(i64::cast_unsigned))\n                .collect(),\n        ),\n        ColumnType::MapUtf8 => ColumnValues::Map(rg.read_map_utf8_column(field)?),\n        ColumnType::ListUtf8 => ColumnValues::List(rg.read_list_utf8_column(field)?),\n        ColumnType::Decimal { .. } => ColumnValues::Decimal(\n            rg.read_decimal_column(index)?\n                .into_iter()\n                .map(|d| d.map(|d| d.unscaled))\n                .collect(),\n        ),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36702,7 +36712,7 @@
   {
     "id": "storage_ingest_table_open_bf604652",
     "file": "src/storage/ingest/table.rs",
-    "line": 135,
+    "line": 136,
     "decision": "match e {\n            LockError::Held => IngestError::Wal(WalError::Locked),\n            LockError::Io(e) => IngestError::Io(e),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36712,7 +36722,7 @@
   {
     "id": "storage_ingest_table_open_bb33e65a",
     "file": "src/storage/ingest/table.rs",
-    "line": 139,
+    "line": 140,
     "decision": "let Some(schema) = &options.schema",
     "conditions": 1,
     "vectors_required": 2,
@@ -36722,7 +36732,7 @@
   {
     "id": "storage_ingest_table_open_84b22fe0",
     "file": "src/storage/ingest/table.rs",
-    "line": 140,
+    "line": 141,
     "decision": "let Some(why) = invalid_schema(schema)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36732,7 +36742,7 @@
   {
     "id": "storage_ingest_table_open_c6e6a7ca",
     "file": "src/storage/ingest/table.rs",
-    "line": 143,
+    "line": 144,
     "decision": "let Layout::Tiered(tier) = &options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -36742,7 +36752,7 @@
   {
     "id": "storage_ingest_table_open_ded237a9",
     "file": "src/storage/ingest/table.rs",
-    "line": 150,
+    "line": 151,
     "decision": "let Some(key) = tier.sort_key.iter().find(|k| !sortable(k))",
     "conditions": 1,
     "vectors_required": 2,
@@ -36752,7 +36762,7 @@
   {
     "id": "storage_ingest_table_open_444a8375",
     "file": "src/storage/ingest/table.rs",
-    "line": 155,
+    "line": 156,
     "decision": "let Some(key) = &tier.session_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -36762,7 +36772,7 @@
   {
     "id": "storage_ingest_table_open_f1954601",
     "file": "src/storage/ingest/table.rs",
-    "line": 160,
+    "line": 161,
     "decision": "!integer",
     "conditions": 1,
     "vectors_required": 2,
@@ -36772,7 +36782,7 @@
   {
     "id": "storage_ingest_table_open_7bfc05c8",
     "file": "src/storage/ingest/table.rs",
-    "line": 169,
+    "line": 170,
     "decision": "match Manifest::read(table)? {\n            Some(m) => m,\n            None => {\n                let mut m = Manifest::new(options.format, options.layout.kind());\n                m.schema.clone_from(&options.schema);\n                m.write(table)?;\n                m\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36782,7 +36792,7 @@
   {
     "id": "storage_ingest_table_open_f11309de",
     "file": "src/storage/ingest/table.rs",
-    "line": 178,
+    "line": 179,
     "decision": "manifest.schema != options.schema",
     "conditions": 1,
     "vectors_required": 2,
@@ -36792,7 +36802,7 @@
   {
     "id": "storage_ingest_table_open_01e4a6bc",
     "file": "src/storage/ingest/table.rs",
-    "line": 185,
+    "line": 186,
     "decision": "!extends_schema(stored, requested)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36802,7 +36812,7 @@
   {
     "id": "storage_ingest_table_open_a1f994f2",
     "file": "src/storage/ingest/table.rs",
-    "line": 195,
+    "line": 196,
     "decision": "match &options.layout {\n            Layout::Tiered(tier) => tier.session_key.clone(),\n            Layout::Flat => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36812,7 +36822,7 @@
   {
     "id": "storage_ingest_table_open_a136b6da",
     "file": "src/storage/ingest/table.rs",
-    "line": 199,
+    "line": 200,
     "decision": "manifest.session_key != session_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -36822,7 +36832,7 @@
   {
     "id": "storage_ingest_table_open_e26f89e4",
     "file": "src/storage/ingest/table.rs",
-    "line": 203,
+    "line": 204,
     "decision": "manifest.schema.is_none() && manifest.format != options.format",
     "conditions": 2,
     "vectors_required": 3,
@@ -36832,7 +36842,7 @@
   {
     "id": "storage_ingest_table_open_f8609734",
     "file": "src/storage/ingest/table.rs",
-    "line": 209,
+    "line": 210,
     "decision": "manifest.layout != options.layout.kind()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36842,7 +36852,7 @@
   {
     "id": "storage_ingest_table_open_8b58671f",
     "file": "src/storage/ingest/table.rs",
-    "line": 218,
+    "line": 219,
     "decision": "match &manifest.schema {\n            Some(schema) => HeadPage::for_records(Arc::from(schema.as_slice())),\n            None => HeadPage::default(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36852,7 +36862,7 @@
   {
     "id": "storage_ingest_table_open_e0b92d04",
     "file": "src/storage/ingest/table.rs",
-    "line": 240,
+    "line": 241,
     "decision": "match writer.manifest.schema.as_deref() {\n                Some(schema) => {\n                    let row = decode_row(body)\n                        .map(|row| pad_row(schema, row))\n                        .filter(|row| check_row(schema, row).is_none())\n                        .ok_or_else(corrupt)?;\n                    writer.push(observed, |head| head.push_row(lsn, observed, row))?;\n                }\n                None => writer.push(observed, |head| head.push(lsn, observed, body))?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36862,7 +36872,7 @@
   {
     "id": "storage_ingest_table_push_bc95699f",
     "file": "src/storage/ingest/table.rs",
-    "line": 262,
+    "line": 263,
     "decision": "other_hour && self.options.layout.kind() == LayoutKind::Tiered",
     "conditions": 2,
     "vectors_required": 3,
@@ -36872,7 +36882,7 @@
   {
     "id": "storage_ingest_table_push_bb94a090",
     "file": "src/storage/ingest/table.rs",
-    "line": 266,
+    "line": 267,
     "decision": "self.head.is_full()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36882,7 +36892,7 @@
   {
     "id": "storage_ingest_table_append_1a8220c4",
     "file": "src/storage/ingest/table.rs",
-    "line": 282,
+    "line": 283,
     "decision": "self.manifest.schema.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -36892,7 +36902,7 @@
   {
     "id": "storage_ingest_table_append_7c5bb3a4",
     "file": "src/storage/ingest/table.rs",
-    "line": 287,
+    "line": 288,
     "decision": "let Some(why) = invalid_line(line)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36902,7 +36912,7 @@
   {
     "id": "storage_ingest_table_append_row_dd5b95aa",
     "file": "src/storage/ingest/table.rs",
-    "line": 305,
+    "line": 306,
     "decision": "let Some(why) = check_row(schema, &row)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36912,7 +36922,7 @@
   {
     "id": "storage_ingest_table_append_record_934749ae",
     "file": "src/storage/ingest/table.rs",
-    "line": 327,
+    "line": 328,
     "decision": "match ack {\n            Ack::Flushed => Ack::Durable,\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36922,7 +36932,7 @@
   {
     "id": "storage_ingest_table_append_record_3da5fd41",
     "file": "src/storage/ingest/table.rs",
-    "line": 334,
+    "line": 335,
     "decision": "ack == Ack::Flushed",
     "conditions": 1,
     "vectors_required": 2,
@@ -36932,7 +36942,7 @@
   {
     "id": "storage_ingest_table_seal_head_a79440f4",
     "file": "src/storage/ingest/table.rs",
-    "line": 348,
+    "line": 349,
     "decision": "let Layout::Tiered(tier) = &self.options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -36940,19 +36950,19 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_table_seal_head_9b37d8ce",
+    "id": "storage_ingest_table_seal_head_23579351",
     "file": "src/storage/ingest/table.rs",
-    "line": 350,
-    "decision": "sealed > tier.spill_rows",
-    "conditions": 1,
-    "vectors_required": 2,
+    "line": 354,
+    "decision": "sealed > tier.spill_rows || over_bytes",
+    "conditions": 2,
+    "vectors_required": 3,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "storage_ingest_table_seal_1bfebd78",
     "file": "src/storage/ingest/table.rs",
-    "line": 360,
+    "line": 364,
     "decision": "self.head.len() == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -36962,7 +36972,7 @@
   {
     "id": "storage_ingest_table_flush_726fcc45",
     "file": "src/storage/ingest/table.rs",
-    "line": 379,
+    "line": 383,
     "decision": "match self.options.layout.kind() {\n            LayoutKind::Flat => Ok(self.flush_flat()?.into_iter().collect()),\n            LayoutKind::Tiered => self.flush_hours(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -36972,7 +36982,7 @@
   {
     "id": "storage_ingest_table_flush_hours_60dc24c4",
     "file": "src/storage/ingest/table.rs",
-    "line": 450,
+    "line": 454,
     "decision": "self\n            .head\n            .first_observed()\n            .is_some_and(|t| hour_of(t) < open_hour)",
     "conditions": 1,
     "vectors_required": 2,
@@ -36982,7 +36992,7 @@
   {
     "id": "storage_ingest_table_flush_hours_096d2cfa",
     "file": "src/storage/ingest/table.rs",
-    "line": 459,
+    "line": 463,
     "decision": "let Some(hour) = self\n            .staging_hour()\n            .or_else(|| self.sealed.first().and_then(page_hour))",
     "conditions": 1,
     "vectors_required": 2,
@@ -36992,7 +37002,7 @@
   {
     "id": "storage_ingest_table_flush_hours_6698cede",
     "file": "src/storage/ingest/table.rs",
-    "line": 463,
+    "line": 467,
     "decision": "hour >= open_hour",
     "conditions": 1,
     "vectors_required": 2,
@@ -37002,7 +37012,7 @@
   {
     "id": "storage_ingest_table_flush_hour_328fb315",
     "file": "src/storage/ingest/table.rs",
-    "line": 623,
+    "line": 628,
     "decision": "count > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -37012,7 +37022,7 @@
   {
     "id": "storage_ingest_table_retain_faaf46ac",
     "file": "src/storage/ingest/table.rs",
-    "line": 689,
+    "line": 694,
     "decision": "count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -37022,7 +37032,7 @@
   {
     "id": "storage_ingest_table_delete_expired_a1e9aa27",
     "file": "src/storage/ingest/table.rs",
-    "line": 772,
+    "line": 778,
     "decision": "match fs::remove_file(&path) {\n                Ok(()) => {}\n                Err(e) if e.kind() == io::ErrorKind::NotFound => {}\n                Err(e) => return Err(e.into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37032,7 +37042,7 @@
   {
     "id": "storage_ingest_table_delete_expired_20fc5e15",
     "file": "src/storage/ingest/table.rs",
-    "line": 774,
+    "line": 780,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -37042,7 +37052,7 @@
   {
     "id": "storage_ingest_table_crash_point_791d8530",
     "file": "src/storage/ingest/table.rs",
-    "line": 839,
+    "line": 845,
     "decision": "self.crash_after == Some(step)",
     "conditions": 1,
     "vectors_required": 2,
@@ -37052,7 +37062,7 @@
   {
     "id": "storage_ingest_table_remove_empty_parents_b71c29ab",
     "file": "src/storage/ingest/table.rs",
-    "line": 899,
+    "line": 905,
     "decision": "let Some(d) = dir",
     "conditions": 1,
     "vectors_required": 2,
@@ -37062,7 +37072,7 @@
   {
     "id": "storage_ingest_table_remove_empty_parents_58e0bb1d",
     "file": "src/storage/ingest/table.rs",
-    "line": 900,
+    "line": 906,
     "decision": "d == table || d.parent() == Some(table) || fs::remove_dir(d).is_err()",
     "conditions": 3,
     "vectors_required": 4,
@@ -37072,7 +37082,7 @@
   {
     "id": "storage_ingest_table_clean_up_322d979c",
     "file": "src/storage/ingest/table.rs",
-    "line": 914,
+    "line": 920,
     "decision": "tmp.exists()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37082,7 +37092,7 @@
   {
     "id": "storage_ingest_table_clean_dir_6f777079",
     "file": "src/storage/ingest/table.rs",
-    "line": 934,
+    "line": 940,
     "decision": "entry.file_type()?.is_dir()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37092,7 +37102,7 @@
   {
     "id": "storage_ingest_table_clean_dir_b4151af7",
     "file": "src/storage/ingest/table.rs",
-    "line": 935,
+    "line": 941,
     "decision": "clean_dir(&entry.path(), &path, manifest)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -37102,7 +37112,7 @@
   {
     "id": "storage_ingest_table_clean_dir_b0d759e3",
     "file": "src/storage/ingest/table.rs",
-    "line": 940,
+    "line": 946,
     "decision": "manifest.files.iter().any(|f| f.path == path)",
     "conditions": 1,
     "vectors_required": 2,
@@ -37112,7 +37122,7 @@
   {
     "id": "storage_ingest_table_record_tests_value_at_e937fc6e",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 152,
+    "line": 154,
     "decision": "match values {\n        ColumnValues::UInt64(v) => at(v, i).map(RecordValue::UInt),\n        ColumnValues::TimestampNanos(v) => at(v, i).map(RecordValue::Int),\n        ColumnValues::UInt16(v) => at(v, i).map(|x| RecordValue::Int(i64::from(x))),\n        ColumnValues::Utf8(v) => at(v, i).map(RecordValue::Str),\n        ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {\n            at(v, i).map(RecordValue::Bytes)\n        }\n        ColumnValues::Decimal(v) => at(v, i).map(RecordValue::Decimal),\n        ColumnValues::Map(v) => at(v, i).map(|m| {\n            RecordValue::Map(\n                m.into_iter()\n                    .map(|(k, v)| (k.to_string(), v.map(|v| v.to_string())))\n                    .collect(),\n            )\n        }),\n        ColumnValues::List(v) => at(v, i)\n            .map(|l| RecordValue::List(l.into_iter().map(|v| v.map(|v| v.to_string())).collect())),\n        other => panic!(\"not in the test schema: {other:?}\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37122,7 +37132,7 @@
   {
     "id": "storage_ingest_table_record_tests_a_crash_at_every_flush_and_compaction_step_of_a_tiered_table_recovers_every_row_once_b0b5282f",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 325,
+    "line": 327,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -37132,7 +37142,7 @@
   {
     "id": "storage_ingest_table_record_tests_a_crash_at_every_flush_and_compaction_step_of_a_tiered_table_recovers_every_row_once_b0b5282f_2",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 331,
+    "line": 333,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -37142,7 +37152,7 @@
   {
     "id": "storage_ingest_table_record_tests_invalid_schemas_and_sort_keys_are_refused_740f3227",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 513,
+    "line": 515,
     "decision": "let Layout::Tiered(tier) = &mut options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -37152,7 +37162,7 @@
   {
     "id": "storage_ingest_table_record_tests_a_session_key_is_validated_and_recorded_in_the_manifest_740f3227",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 527,
+    "line": 529,
     "decision": "let Layout::Tiered(tier) = &mut options.layout",
     "conditions": 1,
     "vectors_required": 2,
@@ -37162,7 +37172,7 @@
   {
     "id": "storage_ingest_table_record_tests_notes_c954ecb2",
     "file": "src/storage/ingest/table/record_tests.rs",
-    "line": 641,
+    "line": 643,
     "decision": "match field {\n                Some(f) => add(&mut out, &read_column(&rg, f, ColumnType::Utf8).unwrap()),\n                None => out.extend((0..rg.num_rows()).map(|_| None)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37172,7 +37182,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_walk_03cfa916",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 117,
+    "line": 119,
     "decision": "e.file_type().unwrap().is_dir()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37182,7 +37192,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_flush_and_compaction_step_recovers_every_record_once_b0b5282f",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 321,
+    "line": 323,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -37192,7 +37202,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_flush_and_compaction_step_recovers_every_record_once_b0b5282f_2",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 327,
+    "line": 329,
     "decision": "step >= 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -37202,7 +37212,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_spill_and_close_step_recovers_every_record_once_ab360a62",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 599,
+    "line": 601,
     "decision": "closing",
     "conditions": 1,
     "vectors_required": 2,
@@ -37212,7 +37222,7 @@
   {
     "id": "storage_ingest_table_tiered_tests_a_crash_at_every_spill_and_close_step_recovers_every_record_once_ab360a62_2",
     "file": "src/storage/ingest/table/tiered_tests.rs",
-    "line": 606,
+    "line": 608,
     "decision": "closing",
     "conditions": 1,
     "vectors_required": 2,
@@ -37222,7 +37232,7 @@
   {
     "id": "storage_ingest_tier_widen_a5283402",
     "file": "src/storage/ingest/tier.rs",
-    "line": 69,
+    "line": 70,
     "decision": "match (self, bounds) {\n            (KeyState::Unbounded, _) | (_, None) => KeyState::Unbounded,\n            (state, Some(None)) => state,\n            (KeyState::Empty, Some(Some((lo, hi)))) => KeyState::Range(lo, hi),\n            (KeyState::Range(a, b), Some(Some((lo, hi)))) => KeyState::Range(a.min(lo), b.max(hi)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37232,7 +37242,7 @@
   {
     "id": "storage_ingest_tier_row_group_9d7be1a7",
     "file": "src/storage/ingest/tier.rs",
-    "line": 123,
+    "line": 124,
     "decision": "match self.open.take() {\n            Some(open) => open,\n            None => {\n                let path = self.dir.join(format!(\"part-{}.parquet\", self.done.len()));\n                OpenFile {\n                    writer: ParquetWriter::new(\n                        BufWriter::new(File::create(&path)?),\n                        self.specs.clone(),\n                        self.options.clone(),\n                    )?,\n                    path,\n                    lsn_lo,\n                    lsn_hi,\n                    keys: vec![KeyState::Empty; self.keys.len()],\n                }\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37242,7 +37252,7 @@
   {
     "id": "storage_ingest_tier_maybe_cut_ebe977be",
     "file": "src/storage/ingest/tier.rs",
-    "line": 154,
+    "line": 155,
     "decision": "self\n            .open\n            .as_ref()\n            .is_some_and(|o| o.writer.bytes_written() >= self.max_file_size)",
     "conditions": 1,
     "vectors_required": 2,
@@ -37252,7 +37262,7 @@
   {
     "id": "storage_ingest_tier_cut_523cf254",
     "file": "src/storage/ingest/tier.rs",
-    "line": 193,
+    "line": 194,
     "decision": "match state {\n                        KeyState::Range(min, max) => Some(KeyRange {\n                            column: column.clone(),\n                            min,\n                            max,\n                        }),\n                        KeyState::Empty | KeyState::Unbounded => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37262,7 +37272,7 @@
   {
     "id": "storage_ingest_tier_widen_bounds_34b7e77c",
     "file": "src/storage/ingest/tier.rs",
-    "line": 220,
+    "line": 221,
     "decision": "match (a, b) {\n        (Some((alo, ahi)), Some((blo, bhi))) => Some((alo.min(blo), ahi.max(bhi))),\n        (a, None) => a,\n        (None, b) => b,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37272,7 +37282,7 @@
   {
     "id": "storage_ingest_tier_sort_pages_4bca5e34",
     "file": "src/storage/ingest/tier.rs",
-    "line": 284,
+    "line": 285,
     "decision": "match &p.body {\n            PageBody::Rows(rows) => Some(rows),\n            PageBody::Lines(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37282,7 +37292,7 @@
   {
     "id": "storage_ingest_tier_sort_pages_df68e20f",
     "file": "src/storage/ingest/tier.rs",
-    "line": 289,
+    "line": 290,
     "decision": "row_pages.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37292,7 +37302,7 @@
   {
     "id": "storage_ingest_tier_sort_pages_f9e6cfd1",
     "file": "src/storage/ingest/tier.rs",
-    "line": 298,
+    "line": 299,
     "decision": "match v {\n                        Value::Int(i) => Some(*i),\n                        _ => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37302,7 +37312,7 @@
   {
     "id": "storage_ingest_tier_stat_positions_396bc160",
     "file": "src/storage/ingest/tier.rs",
-    "line": 368,
+    "line": 369,
     "decision": "let Some(i) = specs.iter().position(|s| s.name == *name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -37312,7 +37322,7 @@
   {
     "id": "storage_ingest_tier_stat_positions_b606ed09",
     "file": "src/storage/ingest/tier.rs",
-    "line": 369,
+    "line": 370,
     "decision": "!positions.contains(&i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -37320,9 +37330,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_tier_group_rows_e8739094",
+    "file": "src/storage/ingest/tier.rs",
+    "line": 383,
+    "decision": "match tier.row_group_max_bytes {\n        Some(limit) if rows > 0 && bytes > 0 => {\n            let by_bytes = limit\n                .saturating_mul(rows)\n                .checked_div(bytes)\n                .unwrap_or(usize::MAX);\n            by_rows.min(by_bytes.max(1))\n        }\n        _ => by_rows,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_tier_group_rows_c390cbb7",
+    "file": "src/storage/ingest/tier.rs",
+    "line": 384,
+    "decision": "rows > 0 && bytes > 0",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_ingest_tier_write_sorted_42e2c3e8",
     "file": "src/storage/ingest/tier.rs",
-    "line": 389,
+    "line": 408,
     "decision": "sorted.rows <= chunk",
     "conditions": 1,
     "vectors_required": 2,
@@ -37332,7 +37362,7 @@
   {
     "id": "storage_ingest_tier_write_sorted_cc828b3c",
     "file": "src/storage/ingest/tier.rs",
-    "line": 393,
+    "line": 412,
     "decision": "lo < sorted.rows",
     "conditions": 1,
     "vectors_required": 2,
@@ -37342,7 +37372,7 @@
   {
     "id": "storage_ingest_tier_read_values_6ade5342",
     "file": "src/storage/ingest/tier.rs",
-    "line": 452,
+    "line": 471,
     "decision": "match pt {\n        PhysicalType::Int32 => map(rg.read_int32_column(index).map_err(e)?, |v| {\n            Value::Int(i64::from(v))\n        }),\n        PhysicalType::Int64 => map(rg.read_int64_column(index).map_err(e)?, Value::Int),\n        PhysicalType::Double => map(rg.read_double_column(index).map_err(e)?, Value::Float),\n        PhysicalType::Float => map(rg.read_float_column(index).map_err(e)?, |v| {\n            Value::Float(f64::from(v))\n        }),\n        PhysicalType::Boolean => map(rg.read_boolean_column(index).map_err(e)?, Value::Bool),\n        PhysicalType::ByteArray => map(rg.read_string_column(index).map_err(e)?, |s| {\n            Value::Str(s.into())\n        }),\n        PhysicalType::Int96 | PhysicalType::FixedLenByteArray | PhysicalType::Unknown(_) => {\n            return Err(format!(\"unsupported physical type {pt:?}\"))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37352,7 +37382,7 @@
   {
     "id": "storage_ingest_tier_row_group_11ad2ae4",
     "file": "src/storage/ingest/tier.rs",
-    "line": 491,
+    "line": 510,
     "decision": "typed",
     "conditions": 1,
     "vectors_required": 2,
@@ -37362,7 +37392,7 @@
   {
     "id": "storage_ingest_tier_row_group_a8bcc2ee",
     "file": "src/storage/ingest/tier.rs",
-    "line": 496,
+    "line": 515,
     "decision": "!spec.nullable",
     "conditions": 1,
     "vectors_required": 2,
@@ -37372,7 +37402,7 @@
   {
     "id": "storage_ingest_tier_row_group_e62bf21e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 512,
+    "line": 531,
     "decision": "match leaf {\n            Some((index, pt)) => read_values(&rg, index, pt)\n                .map_err(|why| corrupt(path, why))?\n                .into_iter()\n                .map(|v| cast(v, spec.column_type))\n                .collect(),\n            None => vec![Value::Null; usize::try_from(rows).unwrap_or(0)],\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37382,7 +37412,7 @@
   {
     "id": "storage_ingest_tier_widened_specs_2cf7ecaf",
     "file": "src/storage/ingest/tier.rs",
-    "line": 535,
+    "line": 554,
     "decision": "let Some(t) = element.physical_type.and_then(column_type)",
     "conditions": 1,
     "vectors_required": 2,
@@ -37392,7 +37422,7 @@
   {
     "id": "storage_ingest_tier_merge_day_59ef71ba",
     "file": "src/storage/ingest/tier.rs",
-    "line": 564,
+    "line": 584,
     "decision": "match schema {\n        Some(schema) => schema.to_vec(),\n        None => widened_specs(&opened.iter().map(|o| &o.1).collect::<Vec<_>>(), &[]),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37402,7 +37432,7 @@
   {
     "id": "storage_ingest_tier_merge_day_a81bcb5f",
     "file": "src/storage/ingest/tier.rs",
-    "line": 574,
+    "line": 594,
     "decision": "let Some((columns, rows)) =\n            row_group(file, fields, &entry.path, index, &specs, schema.is_some())?",
     "conditions": 1,
     "vectors_required": 2,
@@ -37412,7 +37442,7 @@
   {
     "id": "storage_ingest_tier_merge_day_93d8e9a9",
     "file": "src/storage/ingest/tier.rs",
-    "line": 582,
+    "line": 602,
     "decision": "next.saturating_sub(1) != entry.lsn_hi",
     "conditions": 1,
     "vectors_required": 2,
@@ -37422,7 +37452,7 @@
   {
     "id": "storage_ingest_tier_merge_day_7c39fb9d",
     "file": "src/storage/ingest/tier.rs",
-    "line": 598,
+    "line": 618,
     "decision": "files.done.len() > before",
     "conditions": 1,
     "vectors_required": 2,
@@ -37432,7 +37462,7 @@
   {
     "id": "storage_ingest_tier_merge_day_b511161e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 602,
+    "line": 622,
     "decision": "files.open.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37442,7 +37472,7 @@
   {
     "id": "storage_ingest_tier_close_hour_1102f3d0",
     "file": "src/storage/ingest/tier.rs",
-    "line": 656,
+    "line": 677,
     "decision": "match schema {\n        Some(schema) => schema.to_vec(),\n        None => widened_specs(&inputs.iter().map(|o| &o.1).collect::<Vec<_>>(), pages),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37452,7 +37482,7 @@
   {
     "id": "storage_ingest_tier_close_hour_aebd16f3",
     "file": "src/storage/ingest/tier.rs",
-    "line": 679,
+    "line": 700,
     "decision": "!pages.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37462,7 +37492,7 @@
   {
     "id": "storage_ingest_tier_close_hour_f59055c0",
     "file": "src/storage/ingest/tier.rs",
-    "line": 693,
+    "line": 714,
     "decision": "run.pos == run.len",
     "conditions": 1,
     "vectors_required": 2,
@@ -37472,7 +37502,7 @@
   {
     "id": "storage_ingest_tier_close_hour_f59055c0_2",
     "file": "src/storage/ingest/tier.rs",
-    "line": 707,
+    "line": 738,
     "decision": "run.pos == run.len",
     "conditions": 1,
     "vectors_required": 2,
@@ -37482,7 +37512,7 @@
   {
     "id": "storage_ingest_tier_close_hour_3a79fa78",
     "file": "src/storage/ingest/tier.rs",
-    "line": 712,
+    "line": 743,
     "decision": "match (run.chunk.get(k), b.chunk.get(k)) {\n                        (Some(x), Some(y)) => compare_across(x, run.pos, y, b.pos),\n                        _ => std::cmp::Ordering::Equal,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -37492,7 +37522,7 @@
   {
     "id": "storage_ingest_tier_close_hour_c6836d5c",
     "file": "src/storage/ingest/tier.rs",
-    "line": 719,
+    "line": 750,
     "decision": "better",
     "conditions": 1,
     "vectors_required": 2,
@@ -37502,7 +37532,7 @@
   {
     "id": "storage_ingest_tier_close_hour_3856a22b",
     "file": "src/storage/ingest/tier.rs",
-    "line": 728,
+    "line": 759,
     "decision": "run.pos == run.len && load(run, &inputs, &specs, typed)?",
     "conditions": 2,
     "vectors_required": 3,
@@ -37512,7 +37542,7 @@
   {
     "id": "storage_ingest_tier_close_hour_6b6b652e",
     "file": "src/storage/ingest/tier.rs",
-    "line": 732,
+    "line": 763,
     "decision": "picks.len() >= chunk",
     "conditions": 1,
     "vectors_required": 2,
@@ -37522,7 +37552,7 @@
   {
     "id": "storage_ingest_tier_close_hour_7494f37f",
     "file": "src/storage/ingest/tier.rs",
-    "line": 742,
+    "line": 773,
     "decision": "!picks.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -37532,7 +37562,7 @@
   {
     "id": "storage_ingest_tier_load_d0b2a4ad",
     "file": "src/storage/ingest/tier.rs",
-    "line": 764,
+    "line": 795,
     "decision": "let Some((columns, rows)) =\n        row_group(file, fields, &entry.path, run.next_row_group, specs, typed)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -37542,7 +37572,7 @@
   {
     "id": "storage_ingest_tier_load_90d4b664",
     "file": "src/storage/ingest/tier.rs",
-    "line": 768,
+    "line": 799,
     "decision": "rows > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42030,9 +42060,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_schema_byte_size_bf49d43d",
+    "file": "src/storage/parquet/schema.rs",
+    "line": 252,
+    "decision": "match self {\n            ColumnValues::Boolean(v) => fixed(v),\n            ColumnValues::Int32(v) => fixed(v),\n            ColumnValues::Int64(v)\n            | ColumnValues::TimestampMicros(v)\n            | ColumnValues::TimestampNanos(v) => fixed(v),\n            ColumnValues::Float(v) => fixed(v),\n            ColumnValues::Double(v) => fixed(v),\n            ColumnValues::Utf8(v) => {\n                fixed(v).saturating_add(v.iter().flatten().map(String::len).sum::<usize>())\n            }\n            ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => bytes(v),\n            ColumnValues::UInt8(v) => fixed(v),\n            ColumnValues::UInt16(v) => fixed(v),\n            ColumnValues::UInt32(v) => fixed(v),\n            ColumnValues::UInt64(v) => fixed(v),\n            ColumnValues::Decimal(v) => fixed(v),\n            ColumnValues::Map(v) => fixed(v).saturating_add(\n                v.iter()\n                    .flatten()\n                    .flatten()\n                    .map(|(k, val)| {\n                        size_of::<(std::sync::Arc<str>, Option<std::sync::Arc<str>>)>()\n                            .saturating_add(k.len())\n                            .saturating_add(heap(val))\n                    })\n                    .sum::<usize>(),\n            ),\n            ColumnValues::List(v) => fixed(v).saturating_add(\n                v.iter()\n                    .flatten()\n                    .flatten()\n                    .map(|item| size_of::<Option<std::sync::Arc<str>>>().saturating_add(heap(item)))\n                    .sum::<usize>(),\n            ),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_schema_validity_dd5c3c89",
     "file": "src/storage/parquet/schema.rs",
-    "line": 240,
+    "line": 293,
     "decision": "match self {\n            ColumnValues::Boolean(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Int32(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Int64(v)\n            | ColumnValues::TimestampMicros(v)\n            | ColumnValues::TimestampNanos(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Float(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Double(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Utf8(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {\n                v.iter().map(Option::is_some).collect()\n            }\n            ColumnValues::UInt8(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::UInt16(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::UInt32(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::UInt64(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Decimal(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Map(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::List(v) => v.iter().map(Option::is_some).collect(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42042,7 +42082,7 @@
   {
     "id": "storage_parquet_schema_append_a264ce2f",
     "file": "src/storage/parquet/schema.rs",
-    "line": 266,
+    "line": 319,
     "decision": "match (self, other) {\n            (ColumnValues::Boolean(a), ColumnValues::Boolean(b)) => a.extend(b),\n            (ColumnValues::Int32(a), ColumnValues::Int32(b)) => a.extend(b),\n            (ColumnValues::Int64(a), ColumnValues::Int64(b)) => a.extend(b),\n            (ColumnValues::Float(a), ColumnValues::Float(b)) => a.extend(b),\n            (ColumnValues::Double(a), ColumnValues::Double(b)) => a.extend(b),\n            (ColumnValues::Utf8(a), ColumnValues::Utf8(b)) => a.extend(b),\n            (ColumnValues::TimestampMicros(a), ColumnValues::TimestampMicros(b)) => a.extend(b),\n            (ColumnValues::TimestampNanos(a), ColumnValues::TimestampNanos(b)) => a.extend(b),\n            (ColumnValues::Binary(a), ColumnValues::Binary(b)) => a.extend(b),\n            (ColumnValues::UInt8(a), ColumnValues::UInt8(b)) => a.extend(b),\n            (ColumnValues::UInt16(a), ColumnValues::UInt16(b)) => a.extend(b),\n            (ColumnValues::UInt32(a), ColumnValues::UInt32(b)) => a.extend(b),\n            (ColumnValues::UInt64(a), ColumnValues::UInt64(b)) => a.extend(b),\n            (ColumnValues::Decimal(a), ColumnValues::Decimal(b)) => a.extend(b),\n            (ColumnValues::FixedLenByteArray(a), ColumnValues::FixedLenByteArray(b)) => a.extend(b),\n            (ColumnValues::Map(a), ColumnValues::Map(b)) => a.extend(b),\n            (ColumnValues::List(a), ColumnValues::List(b)) => a.extend(b),\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,

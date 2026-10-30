@@ -11,6 +11,9 @@
 //!   commit (`Ack::Memory`, `sync()` every `SYNC_EVERY` rows), flushing
 //!   each hour as it closes (a periodic flusher), then compacts every
 //!   closed day into `archive/`. Prints `key=value` timings.
+//! - `wide <dir>`: the same driver over a request-shaped table (#854): 21
+//!   columns, four `MAP<UTF8,UTF8>` and two `BINARY`, about 1.3 KB a row,
+//!   `REQUESTS` (default 300k) over `REQUEST_HOURS` (default 3) hours.
 //! - `csv <file>`: the same events as CSV, for the row-store baseline.
 //! - `query <dir> <sql>`: one query over the table directory, the result
 //!   as CSV on stdout and `elapsed_ms=` on stderr.
@@ -38,6 +41,12 @@
 //! carry their start time in the high 32 bits; it must cover the longest
 //! session, or the answers differ from DuckDB's (a session spans about an
 //! hour at 10M events, days at 200k).
+//!
+//! `ingest` and `wide` also print the peak resident memory of each phase
+//! (`peak_append_mb`, `peak_flush_mb`, `peak_merge_mb`: the open hour, an
+//! hour's flush, the day merge), sampled every 5 ms, so a run shows which
+//! phase holds the memory (#854). `ROW_GROUP_MAX_BYTES` and `SPILL_BYTES`
+//! set the table's byte budgets; unset, rows are counted as before.
 
 #![allow(
     clippy::unwrap_used,
@@ -55,7 +64,8 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use db_core::engine::column::table::{
@@ -103,6 +113,50 @@ fn env(name: &str, default: u64) -> u64 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
+}
+
+fn opt_env(name: &str) -> Option<usize> {
+    std::env::var(name).ok()?.parse().ok()
+}
+
+/// Peak resident memory per phase (#854): a thread samples this process's
+/// resident set every 5 ms; `take` returns the largest sample since the
+/// last call, in MB, and starts the next phase.
+struct Peaks {
+    peak_kb: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Peaks {
+    fn start() -> Peaks {
+        let peak_kb = Arc::new(AtomicU64::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (p, s) = (Arc::clone(&peak_kb), Arc::clone(&stop));
+        let pid = std::process::id().to_string();
+        std::thread::spawn(move || {
+            while !s.load(Ordering::Relaxed) {
+                let out = std::process::Command::new("ps")
+                    .args(["-o", "rss=", "-p", &pid])
+                    .output()
+                    .expect("ps");
+                if let Ok(kb) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>() {
+                    p.fetch_max(kb, Ordering::Relaxed);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+        Peaks { peak_kb, stop }
+    }
+
+    fn take(&self) -> f64 {
+        self.peak_kb.swap(0, Ordering::Relaxed) as f64 / 1024.0
+    }
+}
+
+impl Drop for Peaks {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 /// xorshift64*: seeded, the same stream on every machine.
@@ -214,6 +268,8 @@ fn options() -> TableOptions {
         layout: Layout::Tiered(TierOptions {
             sort_key: vec!["session_id".into(), "request_id".into()],
             stat_columns: stat_columns(),
+            row_group_max_bytes: opt_env("ROW_GROUP_MAX_BYTES"),
+            spill_bytes: opt_env("SPILL_BYTES"),
             session_key: session_key_secs().map(|max_session_secs| SessionKey {
                 column: "session_id".into(),
                 max_session_secs,
@@ -251,43 +307,165 @@ fn codec() -> Compression {
 }
 
 fn ingest(dir: &Path) {
+    drive(dir, options(), events().map(|e| (e.ts_ns, row(&e))));
+}
+
+/// Appends `rows` (arrival time in ns, row) to a fresh table at `dir`,
+/// flushing each hour as it closes, then compacts, and prints the timings
+/// and each phase's peak memory.
+fn drive(dir: &Path, options: TableOptions, rows: impl Iterator<Item = (i64, Vec<RecordValue>)>) {
     std::fs::remove_dir_all(dir).ok();
     let sync_every = env("SYNC_EVERY", 10_000);
-    let mut writer = TableWriter::open(dir, options()).expect("open table");
-    let (mut rows, mut syncs) = (0_u64, 0_u64);
+    let mut writer = TableWriter::open(dir, options).expect("open table");
+    let (mut count, mut syncs) = (0_u64, 0_u64);
     let mut flush_s = 0.0;
+    let (mut peak_append, mut peak_flush) = (0.0_f64, 0.0_f64);
+    let peaks = Peaks::start();
     let mut hour = BASE_NS / HOUR_NS;
     let start = Instant::now();
-    for e in events() {
-        NOW.store(e.ts_ns, Ordering::SeqCst);
-        if e.ts_ns / HOUR_NS != hour {
+    for (ts_ns, row) in rows {
+        NOW.store(ts_ns, Ordering::SeqCst);
+        if ts_ns / HOUR_NS != hour {
             // A periodic flusher: write the hour that just closed.
-            hour = e.ts_ns / HOUR_NS;
+            hour = ts_ns / HOUR_NS;
+            peak_append = peak_append.max(peaks.take());
             let t = Instant::now();
             writer.flush().expect("flush");
             flush_s += t.elapsed().as_secs_f64();
+            peak_flush = peak_flush.max(peaks.take());
         }
-        writer.append_row(row(&e), Ack::Memory).expect("append");
-        rows += 1;
-        if rows % sync_every == 0 {
+        writer.append_row(row, Ack::Memory).expect("append");
+        count += 1;
+        if count % sync_every == 0 {
             writer.sync().expect("sync");
             syncs += 1;
         }
     }
     writer.sync().expect("sync");
     let ingest_s = start.elapsed().as_secs_f64();
+    peak_append = peak_append.max(peaks.take());
     // Past the last day: every hour and day is closed.
     NOW.fetch_add(DAY_NS, Ordering::SeqCst);
     let t = Instant::now();
     writer.compact().expect("compact");
     let compact_s = t.elapsed().as_secs_f64();
+    let peak_merge = peaks.take();
     writer.close().expect("close");
-    println!("events={rows}");
+    println!("events={count}");
     println!("group_commits={}", syncs + 1);
     println!("ingest_s={ingest_s:.3}");
-    println!("events_per_s={:.0}", rows as f64 / ingest_s);
+    println!("events_per_s={:.0}", count as f64 / ingest_s);
     println!("hour_flush_s={flush_s:.3}");
     println!("day_compact_s={compact_s:.3}");
+    println!("peak_append_mb={peak_append:.1}");
+    println!("peak_flush_mb={peak_flush:.1}");
+    println!("peak_merge_mb={peak_merge:.1}");
+}
+
+/// The request-shaped table (#854): 24 columns, four MAPs and two BINARYs.
+fn wide_schema() -> Vec<ColumnSpec> {
+    let mut s = vec![
+        ColumnSpec::new("session_id", ColumnType::Int64, false),
+        ColumnSpec::new("request_id", ColumnType::Int64, false),
+        ColumnSpec::new("ts", ColumnType::TimestampMicros, false),
+    ];
+    for name in [
+        "method",
+        "host",
+        "path",
+        "query",
+        "user_agent",
+        "client_ip",
+        "tls",
+        "referer",
+    ] {
+        s.push(ColumnSpec::new(name, ColumnType::Utf8, true));
+    }
+    for name in [
+        "status",
+        "bytes_in",
+        "bytes_out",
+        "latency_us",
+        "backend",
+        "rule",
+        "score",
+    ] {
+        s.push(ColumnSpec::new(name, ColumnType::Int64, true));
+    }
+    for name in ["req_headers", "resp_headers", "req_cookies", "resp_cookies"] {
+        s.push(ColumnSpec::new(name, ColumnType::MapUtf8, true));
+    }
+    for name in ["req_body", "resp_body"] {
+        s.push(ColumnSpec::new(name, ColumnType::Binary, true));
+    }
+    s
+}
+
+/// Request `i`, arriving evenly over `hours` hours of `n`: about 1.3 KB,
+/// mostly header and cookie maps and two bodies.
+fn wide_row(rng: &mut Rng, i: u64, n: u64, hours: u64) -> (i64, Vec<RecordValue>) {
+    let ts_ns = BASE_NS + (i as i128 * (hours as i128 * HOUR_NS as i128) / n as i128) as i64;
+    let session = (i / 8) as i64;
+    let text = |rng: &mut Rng, len: usize| {
+        (0..len)
+            .map(|_| (b'a' + (rng.next() % 26) as u8) as char)
+            .collect::<String>()
+    };
+    let map = |rng: &mut Rng, entries: usize, value_len: usize| {
+        RecordValue::Map(
+            (0..entries)
+                .map(|k| (format!("x-key-{k}"), Some(text(rng, value_len))))
+                .collect(),
+        )
+    };
+    let bytes = |rng: &mut Rng, len: usize| {
+        RecordValue::Bytes((0..len).map(|_| rng.next() as u8).collect())
+    };
+    let row = vec![
+        RecordValue::Int(session),
+        RecordValue::Int((i % 8) as i64),
+        RecordValue::Int(ts_ns / 1_000),
+        RecordValue::Str(["GET", "POST", "PUT"][(i % 3) as usize].into()),
+        RecordValue::Str("shop.example.com".into()),
+        RecordValue::Str(format!("/api/v1/items/{}", rng.next() % 5_000)),
+        RecordValue::Str(text(rng, 20)),
+        RecordValue::Str("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36".into()),
+        RecordValue::Str(format!("10.{}.{}.{}", i % 250, i % 200, i % 100)),
+        RecordValue::Str("TLSv1.3".into()),
+        RecordValue::Null,
+        RecordValue::Int(200 + (rng.next() % 4) as i64),
+        RecordValue::Int((rng.next() % 4_000) as i64),
+        RecordValue::Int((rng.next() % 50_000) as i64),
+        RecordValue::Int((rng.next() % 90_000) as i64),
+        RecordValue::Int((rng.next() % 8) as i64),
+        RecordValue::Int((rng.next() % 100) as i64),
+        RecordValue::Int((rng.next() % 100) as i64),
+        map(rng, 10, 24),
+        map(rng, 6, 16),
+        map(rng, 3, 20),
+        map(rng, 1, 16),
+        bytes(rng, 200),
+        bytes(rng, 300),
+    ];
+    (ts_ns, row)
+}
+
+fn wide(dir: &Path) {
+    let n = env("REQUESTS", 300_000);
+    let hours = env("REQUEST_HOURS", 3);
+    let mut rng = Rng(env("SEED", 42) | 1);
+    let mut options = options();
+    options.schema = Some(wide_schema());
+    if let Layout::Tiered(tier) = &mut options.layout {
+        tier.sort_key = vec!["session_id".into(), "request_id".into()];
+        tier.stat_columns = Vec::new();
+        tier.session_key = None;
+    }
+    drive(
+        dir,
+        options,
+        (0..n).map(move |i| wide_row(&mut rng, i, n, hours)),
+    );
 }
 
 fn csv(path: &Path) {
@@ -460,6 +638,7 @@ fn main() {
         .collect();
     match args.as_slice() {
         ["ingest", dir] => ingest(Path::new(dir)),
+        ["wide", dir] => wide(Path::new(dir)),
         ["csv", file] => csv(Path::new(file)),
         ["query", dir, sql] => query(Path::new(dir), sql),
         ["build", dir, predicate] => build(Path::new(dir), predicate),
@@ -468,7 +647,7 @@ fn main() {
         ["files", dir] => files(Path::new(dir)),
         ["storage", dir] => storage(Path::new(dir)),
         _ => eprintln!(
-            "usage: events ingest <dir> | csv <file> | query <dir> <sql> | build <dir> <predicate> | tail <dir> | sid <n> | files <dir> | storage <dir> \
+            "usage: events ingest <dir> | wide <dir> | csv <file> | query <dir> <sql> | build <dir> <predicate> | tail <dir> | sid <n> | files <dir> | storage <dir> \
              (run through tools/bench_events.sh)"
         ),
     }

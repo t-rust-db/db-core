@@ -858,6 +858,8 @@ fn tiered_table_case(dir: &Path) -> Result<(), String> {
     NOW.store(start, std::sync::atomic::Ordering::SeqCst);
     let options = TableOptions {
         layout: Layout::Tiered(TierOptions {
+            row_group_max_bytes: None,
+            spill_bytes: None,
             sort_key: vec!["user".to_string()],
             row_group_max_rows: 100,
             max_file_size: 64 * 1024,
@@ -971,6 +973,8 @@ fn record_table_case(dir: &Path) -> Result<(), String> {
     let options = TableOptions {
         schema: Some(schema.clone()),
         layout: Layout::Tiered(TierOptions {
+            row_group_max_bytes: None,
+            spill_bytes: None,
             sort_key: vec!["account".to_string(), "txn_id".to_string()],
             row_group_max_rows: 200,
             max_file_size: 32 * 1024,

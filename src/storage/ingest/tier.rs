@@ -26,6 +26,7 @@ use super::manifest::{column_bounds, FileEntry, KeyBound, KeyRange};
 use super::page::{Page, PageBody};
 use super::record::{compare_across, compare_rows, concat, gather, read_column};
 use super::snapshot::{cast, column_type};
+use crate::storage::column::VfsFile;
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::writer::{ColumnSpec, ColumnValues, ParquetWriter, WriterOptions};
 use crate::storage::parquet::{Field, ParquetFile};
@@ -374,6 +375,23 @@ fn stat_positions(specs: &[ColumnSpec], tier: &TierOptions) -> Vec<usize> {
     positions
 }
 
+/// Rows in a row group of an hour whose `rows` rows hold about `bytes`
+/// bytes: `row_group_max_rows`, fewer if `row_group_max_bytes` allows fewer
+/// at that average row size (#854). At least one.
+fn group_rows(tier: &TierOptions, bytes: usize, rows: usize) -> usize {
+    let by_rows = tier.row_group_max_rows.max(1);
+    match tier.row_group_max_bytes {
+        Some(limit) if rows > 0 && bytes > 0 => {
+            let by_bytes = limit
+                .saturating_mul(rows)
+                .checked_div(bytes)
+                .unwrap_or(usize::MAX);
+            by_rows.min(by_bytes.max(1))
+        }
+        _ => by_rows,
+    }
+}
+
 /// Writes `sorted` into `dir` as one file of LSNs `lsn_lo..=lsn_hi`, cut
 /// into row groups of at most `row_group_max_rows`.
 fn write_sorted(
@@ -384,7 +402,8 @@ fn write_sorted(
     tier: &TierOptions,
     parquet: &WriterOptions,
 ) -> Result<Vec<Output>, IngestError> {
-    let chunk = tier.row_group_max_rows.max(1);
+    let bytes = sorted.columns.iter().map(ColumnValues::byte_size).sum();
+    let chunk = group_rows(tier, bytes, sorted.rows);
     let mut files = Files::new(dir, specs, parquet, tier);
     if sorted.rows <= chunk {
         files.row_group(sorted.columns, lsn_lo, lsn_hi)?;
@@ -546,17 +565,18 @@ fn widened_specs(files: &[&ParquetFile<'_>], pages: &[Page]) -> Vec<ColumnSpec> 
 /// Merges one closed day's hour files (`inputs`, contiguous, oldest first)
 /// into `dir`, which must exist and be empty: their row groups, in order,
 /// under the day's widened schema, or a record table's `schema`.
-pub(crate) fn merge_day(
+pub(crate) fn merge_day<F: VfsFile>(
     dir: &Path,
-    inputs: &[(&FileEntry, &[u8])],
+    inputs: &[(&FileEntry, &F)],
     schema: Option<&[ColumnSpec]>,
     tier: &TierOptions,
     parquet: &WriterOptions,
 ) -> Result<Vec<Output>, IngestError> {
     let opened = inputs
         .iter()
-        .map(|(entry, bytes)| {
-            let file = ParquetFile::open(bytes).map_err(|e| corrupt(&entry.path, e.to_string()))?;
+        .map(|(entry, file)| {
+            let file =
+                ParquetFile::open_file(*file).map_err(|e| corrupt(&entry.path, e.to_string()))?;
             let fields = file.fields();
             Ok((*entry, file, fields))
         })
@@ -631,9 +651,9 @@ struct Run {
 /// [`write_hour`]. The merge holds one row group of each run, not the
 /// hour; ties keep arrival order. Without staging runs this is
 /// [`write_hour`].
-pub(crate) fn close_hour(
+pub(crate) fn close_hour<F: VfsFile>(
     dir: &Path,
-    staging: &[(&FileEntry, &[u8])],
+    staging: &[(&FileEntry, &F)],
     pages: &[Page],
     format: Format,
     schema: Option<&[ColumnSpec]>,
@@ -647,8 +667,9 @@ pub(crate) fn close_hour(
     let lsn_hi = pages.last().map_or(last.0.lsn_hi, |p| p.lsn_hi);
     let inputs = staging
         .iter()
-        .map(|(entry, bytes)| {
-            let file = ParquetFile::open(bytes).map_err(|e| corrupt(&entry.path, e.to_string()))?;
+        .map(|(entry, file)| {
+            let file =
+                ParquetFile::open_file(*file).map_err(|e| corrupt(&entry.path, e.to_string()))?;
             let fields = file.fields();
             Ok((*entry, file, fields))
         })
@@ -697,7 +718,17 @@ pub(crate) fn close_hour(
         held.push(Rc::clone(&run.chunk));
     }
 
-    let chunk = tier.row_group_max_rows.max(1);
+    // The rows' average size comes from the row groups held so far.
+    let held_bytes = held
+        .iter()
+        .flat_map(|c| c.iter())
+        .map(ColumnValues::byte_size)
+        .sum();
+    let held_rows = held
+        .iter()
+        .map(|c| c.first().map_or(0, ColumnValues::len))
+        .sum();
+    let chunk = group_rows(tier, held_bytes, held_rows);
     let mut files = Files::new(dir, specs.clone(), parquet, tier);
     // (index in `held`, row) of each row of the row group being built.
     let mut picks: Vec<(usize, usize)> = Vec::with_capacity(chunk.min(1 << 16));

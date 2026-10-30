@@ -37,6 +37,8 @@ impl Drop for TempTable {
 
 fn tier() -> TierOptions {
     TierOptions {
+        row_group_max_bytes: None,
+        spill_bytes: None,
         sort_key: vec!["kind".to_string()],
         row_group_max_rows: 3,
         max_file_size: 1 << 30,
@@ -782,4 +784,106 @@ fn a_table_changes_codec_without_rewriting_old_files() {
         "the day merge writes the current codec"
     );
     assert_eq!(all_rows(&w), sorted(lines));
+}
+
+#[test]
+fn an_open_hour_over_its_byte_budget_spills_though_under_its_row_budget() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(
+        &t.0,
+        options(TierOptions {
+            spill_bytes: Some(1),
+            ..tier()
+        }),
+    )
+    .unwrap();
+    let lines = append(&mut w, 0..3);
+    w.seal_head().unwrap();
+    let areas: Vec<Area> = w.manifest().files.iter().map(|f| f.area).collect();
+    assert_eq!(areas, [Area::Staging]);
+    assert!(w.sealed_pages().is_empty());
+    assert_eq!(all_rows(&w), sorted(lines));
+}
+
+#[test]
+fn row_groups_are_cut_by_bytes_at_the_rows_average_size() {
+    // Learn the nine rows' size, then allow a third of it per row group.
+    let probe = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = open(&probe);
+    append(&mut w, 0..9);
+    w.seal_head().unwrap();
+    let bytes: usize = w.sealed_pages().iter().map(|p| p.byte_size()).sum();
+
+    for spill in [None, Some(1)] {
+        let t = TempTable::new();
+        set_clock(0, 10, 0);
+        let mut w = TableWriter::open(
+            &t.0,
+            options(TierOptions {
+                row_group_max_rows: 1_000,
+                row_group_max_bytes: Some(bytes / 3),
+                spill_bytes: spill,
+                ..tier()
+            }),
+        )
+        .unwrap();
+        let mut lines = append(&mut w, 0..9);
+        w.seal_head().unwrap();
+        set_clock(0, 11, 0);
+        lines.extend(append(&mut w, 9..10));
+        let added = w.flush().unwrap();
+        assert_eq!(added.len(), 1);
+        let bytes = fs::read(w.dir().join(&added[0].path)).unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        assert!(
+            file.num_row_groups() >= 3,
+            "spill {spill:?}: {} row groups",
+            file.num_row_groups()
+        );
+        assert_eq!(all_rows(&w), sorted(lines));
+    }
+}
+
+// MC/DC vectors for `seal_head`'s spill condition: `sealed > spill_rows || over_bytes`.
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_seal_head_23579351__v1_neither_limit_exceeded_keeps_pages() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = open(&t);
+    append(&mut w, 0..2);
+    w.seal_head().unwrap();
+    assert!(w.manifest().files.is_empty());
+    assert_eq!(w.sealed_pages().len(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_seal_head_23579351__v2_rows_over_spill_rows_spills() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(&t.0, spilling(2)).unwrap();
+    append(&mut w, 0..3);
+    w.seal_head().unwrap();
+    assert_eq!(w.manifest().files.len(), 1);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_seal_head_23579351__v3_bytes_over_spill_bytes_alone_spills() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(
+        &t.0,
+        options(TierOptions {
+            spill_bytes: Some(1),
+            ..tier()
+        }),
+    )
+    .unwrap();
+    append(&mut w, 0..2);
+    w.seal_head().unwrap();
+    assert_eq!(w.manifest().files.len(), 1);
 }
