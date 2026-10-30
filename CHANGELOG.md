@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.208.0] - 2026-10-30
+
+### Changed
+
+- `IN` lists of numbers over a float column, or of floats over an integer column, probe hash sets instead of comparing every item (tools#90). A 30k-key float semi-join over 10M rows drops from over 20 s to 41 ms.
+- `EXPLAIN` of a `col IN (SELECT ...)` semi-join shows the `IN` filter its body runs (tools#90).
+
 ## [0.207.1] - 2026-10-30
 
 ### Fixed
