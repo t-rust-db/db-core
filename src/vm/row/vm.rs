@@ -3398,6 +3398,54 @@ mod tests {
         );
     }
 
+    /// #896: with no pager attached, `PRAGMA wal_checkpoint` answers the
+    /// not-in-WAL-mode row and `PRAGMA wal_autocheckpoint` the default.
+    #[test]
+    fn wal_pragmas_answer_without_a_pager() {
+        use super::super::program::CHECKPOINT_TRUNCATE;
+        let mut vm = Vm::new();
+        let checkpoint = Instruction::new(Opcode::Checkpoint, CHECKPOINT_TRUNCATE, 0, 0);
+        assert_eq!(step(&mut vm, 0, &checkpoint).unwrap(), Step::Next);
+        assert_eq!(
+            vm.rows(),
+            &[vec![
+                Value::Integer(0),
+                Value::Integer(-1),
+                Value::Integer(-1),
+            ]]
+        );
+
+        let mut vm = Vm::new();
+        let query = Instruction::new(Opcode::WalAutocheckpoint, 0, 0, 0);
+        assert_eq!(step(&mut vm, 0, &query).unwrap(), Step::Next);
+        let set = Instruction::new(Opcode::WalAutocheckpoint, 20, 1, 0);
+        assert_eq!(step(&mut vm, 0, &set).unwrap(), Step::Next);
+        assert_eq!(
+            vm.rows(),
+            &[
+                vec![Value::Integer(i64::from(DEFAULT_WAL_AUTOCHECKPOINT))],
+                vec![Value::Integer(i64::from(DEFAULT_WAL_AUTOCHECKPOINT))],
+            ]
+        );
+    }
+
+    /// #896: a checkpoint inside an open transaction is refused, as in SQLite.
+    #[test]
+    fn checkpoint_errors_when_a_transaction_is_open() {
+        use super::super::program::CHECKPOINT_PASSIVE;
+        let mut vm = Vm::new();
+        vm.autocommit = false;
+        let checkpoint = Instruction::new(Opcode::Checkpoint, CHECKPOINT_PASSIVE, 0, 0);
+        assert!(matches!(
+            step(&mut vm, 0, &checkpoint),
+            Err(ExecError::CheckpointDuringTransaction)
+        ));
+        assert_eq!(
+            ExecError::CheckpointDuringTransaction.to_string(),
+            "database table is locked"
+        );
+    }
+
     /// #563: a safety level may not change inside a transaction (sqlite3);
     /// the query form still answers.
     #[test]

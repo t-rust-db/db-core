@@ -48042,7 +48042,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_9109a25d",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 93,
+    "line": 94,
     "decision": "!vfs.exists(&wal_path)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -48052,7 +48052,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_1aec0f46",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 105,
+    "line": 106,
     "decision": "size < wal::HEADER_LEN as u64",
     "conditions": 1,
     "vectors_required": 2,
@@ -48062,7 +48062,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_dd1a9c00",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 115,
+    "line": 116,
     "decision": "wal_bytes.len() < wal::HEADER_LEN",
     "conditions": 1,
     "vectors_required": 2,
@@ -48072,7 +48072,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_6b7f20c9",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 127,
+    "line": 128,
     "decision": "match WalHeader::parse(&wal_bytes) {\n        Ok(header) => header,\n        // Unusable header: SQLite recovers no frames, so nothing to backfill.\n        Err(source) if source.is_unusable_header() => {\n            return Ok(CheckpointResult {\n                backfilled_frames: 0,\n                total_frames: 0,\n                checkpoint_complete: true,\n            });\n        }\n        Err(source) => return Err(to_pager_error(source)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48082,7 +48082,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_aef700eb",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 130,
+    "line": 131,
     "decision": "source.is_unusable_header()",
     "conditions": 1,
     "vectors_required": 2,
@@ -48092,7 +48092,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_00b3ae94",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 139,
+    "line": 140,
     "decision": "header.page_size != expected_page_size",
     "conditions": 1,
     "vectors_required": 2,
@@ -48102,7 +48102,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_2135ed49",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 153,
+    "line": 154,
     "decision": "total_frames == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48112,7 +48112,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_9b93ee86",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 175,
+    "line": 176,
     "decision": "safe_frame == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48122,7 +48122,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_6ef346cd",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 188,
+    "line": 189,
     "decision": "safe_frame <= already_backfilled",
     "conditions": 1,
     "vectors_required": 2,
@@ -48132,7 +48132,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_2a432e1c",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 217,
+    "line": 218,
     "decision": "*page_num == 0 || *page_num > max_page",
     "conditions": 2,
     "vectors_required": 3,
@@ -48142,7 +48142,7 @@
   {
     "id": "storage_row_pager_checkpoint_page_size_mismatch_is_an_error_274b6741",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 472,
+    "line": 473,
     "decision": "match err {\n            PagerError::Wal { source, .. } => {\n                assert!(matches!(\n                    source,\n                    wal::WalError::InvalidPageSize { page_size: 512 }\n                ));\n            }\n            other => panic!(\"expected PagerError::Wal, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
