@@ -205,6 +205,13 @@ check-features: ## Each Cargo feature builds standalone, without warnings (cargo
 			&& ! echo "$$out" | grep -qE '^warning'; then echo ok; \
 		else echo FAIL; echo "$$out" | grep -E -A3 '^(error|warning)' | head -20; exit 1; fi; \
 	done
+	@# #898: the browser build (FRANK's frank-wasm) has no unix/windows file API
+	@for f in engine-column engine-column,storage-column-write; do \
+		printf '  wasm32 %-30s ' "$$f"; \
+		if out=$$(cargo check -q --target wasm32-unknown-unknown --no-default-features --features $$f 2>&1) \
+			&& ! echo "$$out" | grep -qE '^warning'; then echo ok; \
+		else echo FAIL; echo "$$out" | grep -E -A3 '^(error|warning)' | head -20; exit 1; fi; \
+	done
 
 # ADR 0000 §Invariants (a)-(c): first-party-only closure, the named
 # `unsafe` carve-outs and nothing else, no batch/column/stream file --

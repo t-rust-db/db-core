@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.216.1] - 2026-10-30
+
+### Fixed
+
+- `PosixFile::read_at` returns `Unsupported` on targets that are neither unix nor windows, so db-core builds for `wasm32-unknown-unknown` again (broken since v0.210.0). `make check-features` and CI now `cargo check` that target (#898).
+
 ## [0.216.0] - 2026-10-30
 
 ### Changed

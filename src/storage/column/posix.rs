@@ -42,6 +42,14 @@ impl VfsFile for PosixFile {
         {
             std::os::windows::fs::FileExt::seek_read(&self.file, buf, offset)
         }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (offset, buf);
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "positioned reads need a unix or windows target",
+            ))
+        }
     }
 
     fn mmap(&self) -> io::Result<MmapRegion> {
