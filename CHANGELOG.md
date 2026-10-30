@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.216.0] - 2026-10-30
+
+### Changed
+
+- Single-`Int`-key `GROUP BY` and fused-join `GROUP BY` over build-side columns fold a worker's groups across its segments in compact accumulators; `join_many_groups` ~205 -> ~73 ms (0.6x DuckDB) at ~265 MB peak RSS (was ~560 MB), `GROUP BY customer_id` 0.12 -> 0.06 s; `RunningAgg` is 96 bytes (was 144) (#894). At 1M distinct groups peak RSS is ~100 MB higher with no time change.
+
 ## [0.215.1] - 2026-10-30
 
 ### Fixed
