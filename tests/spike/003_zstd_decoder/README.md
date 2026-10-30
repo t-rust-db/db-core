@@ -1,17 +1,17 @@
 # Spike: a zstd decoder of our own (db-core#697)
 
 Research spike for [#697](https://github.com/t-rust-db/db-core/issues/697):
-can a decoder that writes straight into a pre-sized output beat `ruzstd` on
+can a decoder that writes straight into a pre-sized output beat the `ruzstd` crate on
 Parquet page decoding? No production code changes.
 
-Outcome: yes, 1.8-2.5x `ruzstd`'s speed on real pages, about libzstd's. That
-became #700, now `src/storage/parquet/compression/zstd.rs`. This directory
-keeps the prototype it grew from.
+Outcome: yes, 1.8-2.5x that crate's speed on real pages, about libzstd's. That
+became #700, now `src/storage/parquet/compression/zstd.rs`; #692 added our own
+encoder and the crate was removed, so the comparison can no longer be re-run.
+This directory keeps the prototype it grew from.
 
 ```sh
 make help   # list targets
 make check  # prototype == input on libzstd frames (debug, fast)
-make run    # prototype vs ruzstd (release, prints MB/s)
 ```
 
 - **`prototype.rs`**: the decoder. No ring buffer, no `Read`, no dictionaries,

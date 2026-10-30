@@ -1,7 +1,7 @@
 # cargo-deny policy for db-core. See `make check-deny` / .github/workflows/ci.yml.
-# db-core's only dependencies are the two optional `storage-column` crates
-# (`memmap2`, `ruzstd`, ADR 0016/#288) and their closure; everything else in
-# the crate is std-only.
+# db-core's only dependency is the optional `storage-column` crate
+# (`memmap2`, ADR 0016/#288) and its closure; everything else in the crate
+# is std-only.
 
 [graph]
 all-features = true
@@ -11,7 +11,7 @@ ignore = []
 
 [licenses]
 # db-core itself is Apache-2.0. `MIT` is for the `storage-column` closure
-# (#288): ruzstd 0.9.1, twox-hash 2.1.5 are MIT-only; the rest are Apache-2.0 OR MIT dual-licensed.
+# (#288): the closure is Apache-2.0 OR MIT dual-licensed.
 allow = ["Apache-2.0", "MIT"]
 confidence-threshold = 0.8
 

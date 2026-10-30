@@ -172,8 +172,8 @@ jobs:
       - run: make check-stream-profile
 
   # Charter gate (ADR 0000, db-core#405): the column profile -- the
-  # Parquet analytics mode. Not first-party-only by design (memmap2/
-  # ruzstd are accepted dependencies), so only invariant (b) -- exactly
+  # Parquet analytics mode. Not first-party-only by design (memmap2
+  # is an accepted dependency), so only invariant (b) -- exactly
   # the named `unsafe` carve-out -- is checked here.
   column-profile:
     name: Column profile (charter)

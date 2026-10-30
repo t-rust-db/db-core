@@ -1,19 +1,10 @@
-//! The encoder (#692) against three decoders: ours, `ruzstd`'s, and the
-//! `zstd` CLI's (libzstd).
+//! The encoder (#692) against two decoders: ours and the `zstd` CLI's
+//! (libzstd).
 
 use super::*;
 use crate::storage::parquet::compression::zstd::decompress;
 use crate::test_rng::Rng;
-use std::io::{Read, Write};
-
-fn ruzstd_decode(frame: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    ruzstd::decoding::StreamingDecoder::new(frame)
-        .unwrap()
-        .read_to_end(&mut out)
-        .unwrap();
-    out
-}
+use std::io::Write;
 
 fn cli_decode(frame: &[u8]) -> Vec<u8> {
     let mut child = std::process::Command::new("zstd")
@@ -31,7 +22,7 @@ fn cli_decode(frame: &[u8]) -> Vec<u8> {
     output.stdout
 }
 
-/// `data` must survive every decoder.
+/// `data` must survive both decoders.
 fn check(data: &[u8], what: &str) {
     let frame = compress(data);
     assert_eq!(
@@ -39,7 +30,6 @@ fn check(data: &[u8], what: &str) {
         data,
         "{what}: ours"
     );
-    assert_eq!(ruzstd_decode(&frame), data, "{what}: ruzstd");
     assert_eq!(cli_decode(&frame), data, "{what}: libzstd");
 }
 
@@ -170,7 +160,6 @@ fn seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input() {
             data,
             "round {round}, size {size}, alphabet {alphabet}"
         );
-        assert_eq!(ruzstd_decode(&frame), data, "round {round}: ruzstd");
     }
 }
 

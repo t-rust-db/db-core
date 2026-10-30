@@ -8,7 +8,3 @@ help: ## Show this help
 .PHONY: check
 check: ## Run the correctness test (debug, fast, no perf numbers)
 	cd $(ROOT) && cargo test --features storage-column --test $(TEST_01)
-
-.PHONY: run
-run: ## Run the perf spike against ruzstd (release, prints timings)
-	cd $(ROOT) && cargo test --release --features storage-column --test $(TEST_01) -- --ignored --nocapture

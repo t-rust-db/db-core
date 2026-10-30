@@ -1,11 +1,10 @@
 //! The decoder (#700) against real frames from the `zstd` CLI (libzstd at
 //! several levels, which between them use every literals and sequence
-//! mode), against `ruzstd`'s decoder as a second reference, and against
-//! hand-built and mutated frames for its error paths.
+//! mode), and against hand-built and mutated frames for its error paths.
 
 use super::*;
 use crate::test_rng::Rng;
-use std::io::{Read, Write};
+use std::io::Write;
 
 /// `data` compressed by the `zstd` CLI with `args`.
 fn cli(data: &[u8], args: &[&str]) -> Vec<u8> {
@@ -23,16 +22,6 @@ fn cli(data: &[u8], args: &[&str]) -> Vec<u8> {
     writer.join().unwrap();
     assert!(output.status.success());
     output.stdout
-}
-
-/// `ruzstd`'s decoding of `frame`.
-fn reference(frame: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    ruzstd::decoding::StreamingDecoder::new(frame)
-        .unwrap()
-        .read_to_end(&mut out)
-        .unwrap();
-    out
 }
 
 /// Inputs that between them make libzstd use raw, RLE and compressed
@@ -80,7 +69,7 @@ fn inputs() -> Vec<(&'static str, Vec<u8>)> {
 }
 
 #[test]
-fn every_cli_frame_decodes_to_its_input_like_ruzstd() {
+fn every_cli_frame_decodes_to_its_input() {
     for (name, data) in inputs() {
         for args in [
             &["-1"][..],
@@ -95,32 +84,7 @@ fn every_cli_frame_decodes_to_its_input_like_ruzstd() {
             let got =
                 decompress(&frame, data.len()).unwrap_or_else(|e| panic!("{name} {args:?}: {e}"));
             assert!(got == data, "{name} {args:?}: wrong bytes");
-            assert!(
-                reference(&frame) == data,
-                "{name} {args:?}: ruzstd disagrees"
-            );
         }
-    }
-}
-
-#[test]
-fn ruzstd_encoded_frames_decode_to_their_input() {
-    let mut rng = Rng::new(7);
-    for size in [0usize, 1, 15, 16, 17, 100, 4096, 70_000, 200_000] {
-        let data: Vec<u8> = (0..size)
-            .map(|i| {
-                if rng.below(4) == 0 {
-                    rng.below(256) as u8
-                } else {
-                    (i % 37) as u8
-                }
-            })
-            .collect();
-        let frame = ruzstd::encoding::compress_to_vec(
-            &data[..],
-            ruzstd::encoding::CompressionLevel::Fastest,
-        );
-        assert_eq!(decompress(&frame, size).unwrap(), data, "size {size}");
     }
 }
 

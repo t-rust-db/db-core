@@ -38062,7 +38062,7 @@
   {
     "id": "storage_parquet_compression_zstd_decoder_tests_inputs_b3f7b1a9",
     "file": "src/storage/parquet/compression/zstd/decoder_tests.rs",
-    "line": 62,
+    "line": 51,
     "decision": "match (i / 4096) % 4 {\n            0 => 0u8,\n            1 => rng.below(256) as u8,\n            2 => b\"abcabcabd\"[i % 9],\n            _ => (i % 251) as u8,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38070,19 +38070,9 @@
     "wildcard_risk": true
   },
   {
-    "id": "storage_parquet_compression_zstd_decoder_tests_ruzstd_encoded_frames_decode_to_their_input_9ca45e12",
-    "file": "src/storage/parquet/compression/zstd/decoder_tests.rs",
-    "line": 112,
-    "decision": "rng.below(4) == 0",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "storage_parquet_compression_zstd_decoder_tests_read_error_505a110a",
     "file": "src/storage/parquet/compression/zstd/decoder_tests.rs",
-    "line": 142,
+    "line": 106,
     "decision": "match decompress(frame, size) {\n        Err(ZstdError::Read(why)) => why,\n        other => panic!(\"expected a read error, got {other:?}\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38092,7 +38082,7 @@
   {
     "id": "storage_parquet_compression_zstd_decoder_tests_frame_error_a0955b9d",
     "file": "src/storage/parquet/compression/zstd/decoder_tests.rs",
-    "line": 149,
+    "line": 113,
     "decision": "match decompress(frame, size) {\n        Err(ZstdError::Frame(why)) => why,\n        other => panic!(\"expected a frame error, got {other:?}\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38102,7 +38092,7 @@
   {
     "id": "storage_parquet_compression_zstd_decoder_tests_flipped_bits_never_panic_08d1775e",
     "file": "src/storage/parquet/compression/zstd/decoder_tests.rs",
-    "line": 321,
+    "line": 285,
     "decision": "rng.below(3) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -38112,7 +38102,7 @@
   {
     "id": "storage_parquet_compression_zstd_decoder_tests_flipped_bits_never_panic_f90d4a39",
     "file": "src/storage/parquet/compression/zstd/decoder_tests.rs",
-    "line": 326,
+    "line": 290,
     "decision": "let Ok(out) = decompress(&mutated, size)",
     "conditions": 1,
     "vectors_required": 2,
@@ -38722,7 +38712,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_text_0731ac83",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 62,
+    "line": 52,
     "decision": "out.len() < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -38732,7 +38722,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_text_1690a7c6",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 65,
+    "line": 55,
     "decision": "rng.below(20) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -38742,7 +38732,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_random_pages_round_trip_9ca45e12",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 99,
+    "line": 89,
     "decision": "rng.below(4) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -38752,7 +38742,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input_c5dedd32",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 134,
+    "line": 124,
     "decision": "match rng.below(4) {\n            0 => rng.below(64) as usize,\n            1 => rng.below(2_000) as usize,\n            2 => rng.below(40_000) as usize,\n            _ => rng.below(300_000) as usize,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38762,7 +38752,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input_b74c4f48",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 143,
+    "line": 133,
     "decision": "data.len() < size",
     "conditions": 1,
     "vectors_required": 2,
@@ -38772,7 +38762,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input_0a511f80",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 144,
+    "line": 134,
     "decision": "match rng.below(4) {\n                0 if data.len() > 8 => {\n                    // Copy an earlier stretch, as a match would.\n                    let from = rng.below(data.len() as u64 - 4) as usize;\n                    let len = 1 + rng.below(300) as usize;\n                    for i in 0..len {\n                        let b = data[from + i % (data.len() - from)];\n                        data.push(b);\n                    }\n                }\n                1 => {\n                    let b = rng.below(alphabet as u64) as u8;\n                    data.extend(std::iter::repeat_n(b, 1 + rng.below(500) as usize));\n                }\n                _ => {\n                    for _ in 0..1 + rng.below(40) {\n                        let v = rng.below(alphabet as u64);\n                        data.push((v >> rng.below(skew)) as u8);\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38782,7 +38772,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input_04f204a3",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 145,
+    "line": 135,
     "decision": "data.len() > 8",
     "conditions": 1,
     "vectors_required": 2,
@@ -38792,7 +38782,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_any_small_page_round_trips_89187645",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 191,
+    "line": 180,
     "decision": "rng.below(2) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -38802,7 +38792,7 @@
   {
     "id": "storage_parquet_compression_zstd_encoder_tests_any_small_page_round_trips_d5c79d7c",
     "file": "src/storage/parquet/compression/zstd/encoder/tests.rs",
-    "line": 195,
+    "line": 184,
     "decision": "d.len() < size",
     "conditions": 1,
     "vectors_required": 2,
