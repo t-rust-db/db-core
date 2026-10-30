@@ -32,6 +32,7 @@ use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::{Field, FileError};
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs, VfsFile};
 use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
+use crate::vm::column::{Bitmap, Column};
 use crate::vm::engine;
 
 #[cfg(all(
@@ -910,6 +911,20 @@ impl ListReads {
     }
 }
 
+/// A flat list column of `there.len()` rows, each empty, valid where
+/// `there` is `true` (#846).
+fn presence_column(there: &[bool]) -> Column {
+    Column::List {
+        offsets: vec![0; there.len().saturating_add(1)],
+        elements: Box::new(Column::Str {
+            offsets: vec![0],
+            data: String::new(),
+            valid: Bitmap::from_bools(std::iter::empty()),
+        }),
+        valid: Bitmap::from_bools(there.iter().copied()),
+    }
+}
+
 /// Leaf `index` decoded for every row: a MAP field (at its first leaf) as
 /// map values, a LIST field as list values, a DECIMAL as exact decimals, anything else as its typed
 /// column.
@@ -924,6 +939,12 @@ fn load_leaf(
         Some(field) if is_list(&field) && list == ListRead::Flat => rg
             .read_list_utf8_flat(&field)
             .map(|column| Loaded::Typed(Decoded::Column(column))),
+        // #846: only NULL-ness is read, so the lists are a flat column of
+        // empty ones -- offsets and a validity bitmap, about 5 bytes a row
+        // rather than a `Value` (32) each.
+        Some(field) if is_list(&field) && list == ListRead::LevelsOnly => rg
+            .read_list_utf8_presence(&field)
+            .map(|there| Loaded::Typed(Decoded::Column(presence_column(&there)))),
         Some(field) => nested_values(rg, &field, list == ListRead::LevelsOnly).map(Loaded::Values),
         None if annotation(rg, index) == Annotation::Decimal => {
             decimal_values(rg, index).map(Loaded::Values)
@@ -3289,6 +3310,25 @@ mod tests {
         super::nested_values(&file.row_group(0).unwrap(), &field, levels_only).unwrap()
     }
 
+    /// #846: the presence column a list read for NULL-ness loads as holds,
+    /// row for row, what `nested_values` gives it (a NULL list, or a list
+    /// with no elements shown).
+    #[test]
+    fn list_presence_column_agrees_with_nested_values() {
+        let bytes = std::fs::read("tests/fixtures/parquet/list_dictionary.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let field = file.fields().into_iter().next().unwrap();
+        let rg = file.row_group(0).unwrap();
+        let there = rg.read_list_utf8_presence(&field).unwrap();
+        let column = super::presence_column(&there);
+        let expected = super::nested_values(&rg, &field, true).unwrap();
+        assert_eq!(column.len(), expected.len());
+        assert!(there.contains(&true) && there.contains(&false));
+        for (i, value) in expected.iter().enumerate() {
+            assert_eq!(&column.get(i), value, "row {i}");
+        }
+    }
+
     // engine_column_nested_values_1a2c930a: `is_list(field) && levels_only`
     // (#810). `lst` is one row holding `["x"]`.
     #[test]
@@ -3358,6 +3398,40 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__engine_column_load_leaf_1a209f83__v3_a_map_is_values_whatever_the_flag() {
         let super::Loaded::Values(values) = nested_shapes_load("m", super::ListRead::Flat) else {
+            panic!("a map is read as values");
+        };
+        assert!(matches!(values.as_slice(), [Value::Map(_)]), "{values:?}");
+    }
+
+    // engine_column_load_leaf_601ae351: `is_list(&field) && list ==
+    // ListRead::LevelsOnly` (#846). `lst` is one row holding `["x"]`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_601ae351__v1_a_levels_only_list_read_is_a_typed_presence_column(
+    ) {
+        let super::Loaded::Typed(super::Decoded::Column(column)) =
+            nested_shapes_load("lst", super::ListRead::LevelsOnly)
+        else {
+            panic!("a levels-only list read is a typed column");
+        };
+        assert!(matches!(column, crate::vm::column::Column::List { .. }));
+        assert_eq!(column.get(0), Value::List(std::sync::Arc::new(Vec::new())));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_601ae351__v2_a_list_read_in_full_is_not_a_presence_column() {
+        let super::Loaded::Values(values) = nested_shapes_load("lst", super::ListRead::Full) else {
+            panic!("a full list read is values");
+        };
+        assert_eq!(values.len(), 1);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_leaf_601ae351__v3_a_map_is_values_under_levels_only() {
+        let super::Loaded::Values(values) = nested_shapes_load("m", super::ListRead::LevelsOnly)
+        else {
             panic!("a map is read as values");
         };
         assert!(matches!(values.as_slice(), [Value::Map(_)]), "{values:?}");

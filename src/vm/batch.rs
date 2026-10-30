@@ -5441,6 +5441,29 @@ impl Vm {
         })
     }
 
+    /// Fast path for [`Opcode::Map`]'s `IS NULL` / `IS NOT NULL` (#846) on a
+    /// flat list column held only as a typed register: a `Bool` column read
+    /// from the list's own validity, so a column loaded for its NULL-ness
+    /// alone is never turned into a `Value` per row. `None` otherwise.
+    fn typed_list_null_test(&self, op: MapOp, a: usize) -> Option<Column> {
+        let not_null = match op {
+            MapOp::IsNull => false,
+            MapOp::IsNotNull => true,
+            _ => return None,
+        };
+        if self.registers.contains_key(&a) {
+            return None;
+        }
+        let Column::List { valid, .. } = self.typed_registers.get(&a)?.as_ref() else {
+            return None;
+        };
+        let len = valid.len();
+        Some(Column::Bool {
+            data: (0..len).map(|i| valid.get(i) == not_null).collect(),
+            valid: Bitmap::new(len, true),
+        })
+    }
+
     /// Fast path for [`Opcode::Map`]'s `AND`/`OR` (#748) when both operands
     /// are typed `Bool` columns, as `typed_compare` and `typed_like`
     /// produce: SQL's three-valued logic over the buffers, with
@@ -5766,6 +5789,7 @@ impl Vm {
                 } else if let Some(column) = self
                     .typed_compare(*op, *a, *b)
                     .or_else(|| self.typed_bool_op(*op, *a, *b))
+                    .or_else(|| self.typed_list_null_test(*op, *a))
                 {
                     // #748: typed-only, as `typed_like` above.
                     self.registers.remove(dst);
@@ -8796,6 +8820,43 @@ mod tests {
         assert_eq!(a.register(0).unwrap(), b.register(0).unwrap());
         assert_eq!(a.register(2).unwrap(), b.register(2).unwrap());
         assert!(a.typed_register(2).is_some());
+    }
+
+    /// #846: `IS NULL` / `IS NOT NULL` on a flat list column answer from its
+    /// validity as a typed `Bool` column, with the `Value` path's answers.
+    #[test]
+    fn null_tests_on_a_flat_list_column_match_the_value_path() {
+        // [a, NULL], [], NULL, [b, a]
+        let flat = Column::List {
+            offsets: vec![0, 2, 2, 2, 4],
+            elements: Box::new(Column::Dict {
+                dict: vec![Arc::from("a"), Arc::from("b")],
+                indices: vec![0, 0, 1, 0],
+                valid: Bitmap::from_bools([true, false, true, true].into_iter()),
+            }),
+            valid: Bitmap::from_bools([true, true, false, true].into_iter()),
+        };
+        let typed = Batch::new(4).with_typed_column("labels", flat.clone());
+        let values = Batch::new(4).with_column("labels", (0..4).map(|i| flat.get(i)).collect());
+        for op in [MapOp::IsNull, MapOp::IsNotNull] {
+            let ops = [
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "labels".into(),
+                },
+                Opcode::Map {
+                    dst: 1,
+                    op,
+                    a: 0,
+                    b: 0,
+                },
+            ];
+            let (mut a, mut b) = (Vm::new(), Vm::new());
+            a.execute(&typed, &ops).unwrap();
+            b.execute(&values, &ops).unwrap();
+            assert_eq!(a.register(1).unwrap(), b.register(1).unwrap(), "{op:?}");
+            assert!(matches!(a.typed_register(1), Some(Column::Bool { .. })));
+        }
     }
 
     /// #846: a list nothing reads after `UNNEST` is dropped, not repeated per
