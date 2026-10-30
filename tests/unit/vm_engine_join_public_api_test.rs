@@ -1,7 +1,7 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
 //! Black-box tests for `vm::engine`'s pure helpers -- `finalize`,
-//! `bounded_scan_limit` -- and `vm::join`'s shared
+//! `semi_filter`, `bounded_scan_limit` -- and `vm::join`'s shared
 //! infrastructure -- `JoinHashTable`, `should_emit` -- which had zero
 //! `tests/unit` references before this (db-core#223): only reached
 //! transitively through `vm::engine::run`/`vm::batch::Vm`.
@@ -14,8 +14,10 @@
     reason = "test code fails fast (db-core#230); clippy.toml's allow-*-in-tests does not reach helper fns outside #[test]"
 )]
 
-use db_core::vm::batch::{AggPart, Instruction, JoinKind, Opcode, Program, Value};
-use db_core::vm::engine::{bounded_scan_limit, finalize};
+use std::collections::HashSet;
+
+use db_core::vm::batch::{AggPart, Batch, Instruction, JoinKind, Opcode, Program, Value};
+use db_core::vm::engine::{bounded_scan_limit, finalize, semi_filter};
 use db_core::vm::join::{should_emit, JoinHashTable};
 
 #[test]
@@ -84,6 +86,27 @@ fn finalize_applies_order_by_then_limit() {
     ];
     let out = finalize(&[], 0, false, &[(0, false)], Some(2), rows).unwrap();
     assert_eq!(out, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+}
+
+#[test]
+fn semi_filter_keeps_only_rows_whose_key_is_allowed() {
+    let batch = Batch::new(3)
+        .with_column("id", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        .with_column(
+            "name",
+            vec![
+                Value::Str("a".into()),
+                Value::Str("b".into()),
+                Value::Str("c".into()),
+            ],
+        );
+    let allowed: HashSet<String> = ["1".to_string(), "3".to_string()].into_iter().collect();
+    let filtered = semi_filter(&batch, "id", &allowed).unwrap();
+    assert_eq!(filtered.num_rows, 2);
+    assert_eq!(
+        filtered.columns.get("id").unwrap().as_slice(),
+        &[Value::Int(1), Value::Int(3)]
+    );
 }
 
 #[test]

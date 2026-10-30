@@ -58102,7 +58102,7 @@
   {
     "id": "vm_engine_a_sliced_segment_merges_the_same_on_both_aggregate_paths_550e4b19",
     "file": "src/vm/engine.rs",
-    "line": 1121,
+    "line": 1153,
     "decision": "match expected.last_mut() {\n                Some(row) if row[0] == Value::Int(key(i)) => {\n                    let Value::Int(c) = row[1] else {\n                        panic!(\"count\")\n                    };\n                    row[1] = Value::Int(c + 1);\n                    row[2] = Value::Int(c + 1);\n                }\n                _ => expected.push(vec![Value::Int(key(i)), Value::Int(1), Value::Int(1)]),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58112,7 +58112,7 @@
   {
     "id": "vm_engine_a_sliced_segment_merges_the_same_on_both_aggregate_paths_ecfb768c",
     "file": "src/vm/engine.rs",
-    "line": 1122,
+    "line": 1154,
     "decision": "row[0] == Value::Int(key(i))",
     "conditions": 1,
     "vectors_required": 2,
@@ -58122,7 +58122,7 @@
   {
     "id": "vm_engine_scan_program_f8be12f4",
     "file": "src/vm/engine.rs",
-    "line": 1382,
+    "line": 1414,
     "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -58132,7 +58132,7 @@
   {
     "id": "vm_engine_count_program_0ac42f8a",
     "file": "src/vm/engine.rs",
-    "line": 1986,
+    "line": 2033,
     "decision": "grouped",
     "conditions": 1,
     "vectors_required": 2,

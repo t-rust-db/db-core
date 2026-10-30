@@ -14,9 +14,9 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 - `IN` lists of integers over an integer column probe one hash set instead of comparing every item (tools#90).
 
-### Removed
+### Deprecated
 
-- `vm::engine::semi_filter`: it compared stringified values, giving wrong semi-join answers for NULL, float and string keys. Use `compile_semi_body`.
+- `vm::engine::semi_filter`: it compares stringified values, giving wrong semi-join answers for NULL, float and string keys. Use `compile_semi_body`; it stays until column-rs moves off it.
 
 ## [0.206.0] - 2026-10-30
 

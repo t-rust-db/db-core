@@ -8881,6 +8881,7 @@ pub fn db_core::vm::engine::run_join(&db_core::vm::batch::Batch, &db_core::vm::b
 pub fn db_core::vm::engine::run_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, db_core::vm::batch::ScanSource, &db_core::vm::engine::JoinProgram, &R) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::run_multi_join_segments<S: db_core::vm::batch::Segment, R: db_core::vm::engine::ScanSourceResolver>(alloc::vec::Vec<S>, alloc::vec::Vec<db_core::vm::batch::ScanSource>, &db_core::vm::engine::MultiJoinProgram, &R) -> db_core::vm::batch::Result<db_core::vm::batch::QueryOutput>
 pub fn db_core::vm::engine::run_streaming<S: db_core::vm::batch::Segment>(&[S], &db_core::vm::batch::Program, impl core::ops::function::FnMut(db_core::vm::batch::Chunk) -> db_core::vm::batch::Result<()>) -> db_core::vm::batch::Result<()>
+pub fn db_core::vm::engine::semi_filter(&db_core::vm::batch::Batch, &str, &std::collections::hash::set::HashSet<alloc::string::String>) -> db_core::vm::batch::Result<db_core::vm::batch::Batch>
 pub mod db_core::vm::join
 pub enum db_core::vm::join::JoinKind
 pub db_core::vm::join::JoinKind::Anti
