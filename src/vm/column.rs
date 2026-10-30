@@ -217,6 +217,16 @@ pub enum Column {
         /// Per-row validity (`true` = not NULL).
         valid: Bitmap,
     },
+    /// Binary blobs in the same offsets+data layout as [`Column::Str`], but
+    /// raw bytes (#868): compared bytewise, never as text.
+    Blob {
+        /// Row `i`'s byte range into `data` is `offsets[i]..offsets[i + 1]`.
+        offsets: Vec<u32>,
+        /// Concatenated bytes for every non-NULL row.
+        data: Vec<u8>,
+        /// Per-row validity (`true` = not NULL).
+        valid: Bitmap,
+    },
     /// Dictionary-encoded strings: `indices[i]` is row `i`'s index into
     /// `dict` (meaningless, and left at `0`, for NULL rows). Preserves the
     /// dict-code representation so `= 'literal'` can compare codes instead
@@ -264,6 +274,7 @@ impl Column {
             | Column::Float { valid, .. }
             | Column::Bool { valid, .. }
             | Column::Str { valid, .. }
+            | Column::Blob { valid, .. }
             | Column::Dict { valid, .. }
             | Column::List { valid, .. } => valid.len(),
         }
@@ -318,6 +329,30 @@ impl Column {
                         .map(|o| o.saturating_sub(base))
                         .collect(),
                     data: data.get(lo..hi).unwrap_or_default().to_string(),
+                    valid: valid.slice(start, end),
+                }
+            }
+            Column::Blob {
+                offsets,
+                data,
+                valid,
+            } => {
+                let at = |i: usize| {
+                    offsets
+                        .get(i)
+                        .and_then(|o| usize::try_from(*o).ok())
+                        .unwrap_or(0)
+                };
+                let (lo, hi) = (at(start), at(end));
+                let base = offsets.get(start).copied().unwrap_or(0);
+                Column::Blob {
+                    offsets: offsets
+                        .get(start..=end)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|o| o.saturating_sub(base))
+                        .collect(),
+                    data: data.get(lo..hi).unwrap_or_default().to_vec(),
                     valid: valid.slice(start, end),
                 }
             }
@@ -425,6 +460,26 @@ impl Column {
                 }
             }
             Column::List { .. } => return self.take_list(rows),
+            Column::Blob { offsets, data, .. } => {
+                let mut out_offsets = Vec::with_capacity(rows.len().saturating_add(1));
+                let mut out = Vec::new();
+                out_offsets.push(0);
+                for &r in rows {
+                    let lo = offsets.get(r).and_then(|x| usize::try_from(*x).ok());
+                    let hi = offsets
+                        .get(r.saturating_add(1))
+                        .and_then(|x| usize::try_from(*x).ok());
+                    if let Some(b) = lo.zip(hi).and_then(|(lo, hi)| data.get(lo..hi)) {
+                        out.extend_from_slice(b);
+                    }
+                    out_offsets.push(u32::try_from(out.len()).unwrap_or(u32::MAX));
+                }
+                Column::Blob {
+                    offsets: out_offsets,
+                    data: out,
+                    valid,
+                }
+            }
             Column::Str { .. } | Column::Dict { .. } => {
                 let mut offsets = Vec::with_capacity(rows.len().saturating_add(1));
                 let mut data = String::new();
@@ -477,6 +532,7 @@ impl Column {
             | Column::Float { valid, .. }
             | Column::Bool { valid, .. }
             | Column::Str { valid, .. }
+            | Column::Blob { valid, .. }
             | Column::Dict { valid, .. }
             | Column::List { valid, .. } => valid,
         };
@@ -497,6 +553,15 @@ impl Column {
             Column::Bool { data, .. } => data.get(i).copied().map_or(Value::Null, Value::Bool),
             Column::Str { offsets, data, .. } => {
                 str_at(offsets, data, i).map_or(Value::Null, |s| Value::Str(s.into()))
+            }
+            Column::Blob { offsets, data, .. } => {
+                let lo = offsets.get(i).and_then(|o| usize::try_from(*o).ok());
+                let hi = offsets
+                    .get(i.saturating_add(1))
+                    .and_then(|o| usize::try_from(*o).ok());
+                lo.zip(hi)
+                    .and_then(|(lo, hi)| data.get(lo..hi))
+                    .map_or(Value::Null, |b| Value::Blob(b.into()))
             }
             Column::Dict { dict, indices, .. } => indices
                 .get(i)
@@ -624,6 +689,10 @@ impl From<Vec<Value>> for Column {
             .iter()
             .all(|v| matches!(v, Value::Str(_) | Value::Null));
 
+        let all_blob = values
+            .iter()
+            .all(|v| matches!(v, Value::Blob(_) | Value::Null));
+
         if all_int {
             let data = values
                 .iter()
@@ -660,6 +729,21 @@ impl From<Vec<Value>> for Column {
                     .unwrap_or_default()
             });
             Column::Str {
+                offsets,
+                data,
+                valid,
+            }
+        } else if all_blob {
+            let mut offsets = Vec::with_capacity(values.len().saturating_add(1));
+            let mut data = Vec::new();
+            offsets.push(0);
+            for v in &values {
+                if let Value::Blob(b) = v {
+                    data.extend_from_slice(b);
+                }
+                offsets.push(u32::try_from(data.len()).unwrap_or(u32::MAX));
+            }
+            Column::Blob {
                 offsets,
                 data,
                 valid,

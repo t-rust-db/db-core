@@ -11,7 +11,7 @@
 //! per schema column, so a flush writes them as they are. A query reads a
 //! row page through [`engine_values`], which gives every value the form the
 //! column engine decodes the flushed Parquet into (an unsigned value as an
-//! integer, a decimal as a float, bytes as lowercase hex), so a record
+//! integer, a decimal as a float, bytes as a blob), so a record
 //! reads the same before and after its flush.
 //!
 //! A `MAP<UTF8, UTF8>` column (#621) takes [`RecordValue::Map`]. A map whose
@@ -31,8 +31,6 @@ use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-#[cfg(feature = "engine-column")]
-use crate::storage::column::hex;
 use crate::storage::parquet::schema::{ColumnSpec, ColumnType, ColumnValues};
 #[cfg(any(feature = "ingest", feature = "engine-column"))]
 use crate::storage::parquet::FileError;
@@ -595,7 +593,7 @@ fn push_value(column: &mut ColumnValues, value: RecordValue) {
 /// `values` (of a `column_type` column) as the column engine decodes them
 /// from Parquet (`storage::column::decode`): integers and unsigned values
 /// as `Int` (a `UINT_64` above `i64::MAX` is an error, as there), a
-/// decimal as [`Decimal::to_f64`], bytes as lowercase hex. With
+/// decimal as [`Decimal::to_f64`], bytes as a blob. With
 /// `bit_pattern` a `UINT_64` above `i64::MAX` is its signed bit pattern
 /// instead (#786).
 #[cfg(feature = "engine-column")]
@@ -619,7 +617,7 @@ pub(crate) fn engine_values(
         ColumnValues::Double(v) => map(v, |f| Value::Float(*f)),
         ColumnValues::Utf8(v) => map(v, |s| Value::Str(s.clone().into())),
         ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {
-            map(v, |b| Value::Str(hex(b).into()))
+            map(v, |b| Value::Blob(b.as_slice().into()))
         }
         ColumnValues::UInt8(v) => map(v, |u| Value::Int(i64::from(*u))),
         ColumnValues::UInt16(v) => map(v, |u| Value::Int(i64::from(*u))),

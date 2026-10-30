@@ -40,7 +40,7 @@ pub enum Annotation {
     /// SQLite reads a DECIMAL column (REAL affinity).
     Decimal,
     /// An unannotated BYTE_ARRAY (`BLOB`) or FIXED_LEN_BYTE_ARRAY:
-    /// lowercase hex text, as DuckDB's `hex()` renders it.
+    /// a blob, compared bytewise.
     Bytes,
 }
 
@@ -97,22 +97,9 @@ fn decode_annotated(
             } else {
                 rg.read_binary_column(index)?
             };
-            str_column(bytes.into_iter().map(|v| v.map(|b| hex(&b))).collect())
+            blob_column(bytes)
         }
     }))
-}
-
-/// Lowercase hex of `bytes`, as the column engine renders a BLOB.
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
-    // A nibble is below 16, so `get` always finds its digit.
-    let digit = |nibble: u8| char::from(DIGITS.get(usize::from(nibble)).copied().unwrap_or(b'0'));
-    for b in bytes {
-        out.push(digit(b >> 4));
-        out.push(digit(b & 0xf));
-    }
-    out
 }
 
 /// A fixed-width chunk's values and per-row presence (`present` empty for
@@ -388,6 +375,24 @@ fn bool_column(values: Vec<Option<bool>>) -> Column {
 /// Converts a Parquet plain-encoded (non-dictionary) string column's
 /// `Vec<Option<String>>` into [`Column::Str`]'s offsets+data layout, one
 /// [`Bitmap`] bit per row rather than an `Option` wrapper per row (#461).
+fn blob_column(values: Vec<Option<Vec<u8>>>) -> Column {
+    let valid = Bitmap::from_bools(values.iter().map(Option::is_some));
+    let mut offsets = Vec::with_capacity(values.len().saturating_add(1));
+    let mut data = Vec::new();
+    offsets.push(0);
+    for v in &values {
+        if let Some(b) = v {
+            data.extend_from_slice(b);
+        }
+        offsets.push(u32::try_from(data.len()).unwrap_or(u32::MAX));
+    }
+    Column::Blob {
+        offsets,
+        data,
+        valid,
+    }
+}
+
 fn str_column(mut values: Vec<Option<String>>) -> Column {
     let valid = Bitmap::from_bools(values.iter().map(Option::is_some));
     // Each string moves into the column's buffer once, never cloned.
@@ -404,12 +409,6 @@ fn str_column(mut values: Vec<Option<String>>) -> Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hex_is_lowercase_two_digits_per_byte() {
-        assert_eq!(hex(&[0x00, 0x0f, 0xab, 0xff]), "000fabff");
-        assert_eq!(hex(&[]), "");
-    }
 
     #[test]
     fn a_plain_string_chunk_decodes_into_str_matching_the_value_fallback() {

@@ -830,7 +830,7 @@ fn latest_scalar(result: &QueryResult) -> Option<Value> {
         Cell::Real(x) => Value::Float(*x),
         Cell::Bool(b) => Value::Bool(*b),
         Cell::Text(s) => Value::Str(s.clone().into()),
-        Cell::Blob(_) => Value::Null,
+        Cell::Blob(b) => Value::Blob(b.as_slice().into()),
         Cell::Decimal { unscaled, scale } => Value::Decimal {
             unscaled: *unscaled,
             scale: *scale,

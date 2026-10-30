@@ -56,20 +56,14 @@ pub fn scan_table_as_batch(
 }
 
 /// `value::Value` (row) → `vm::batch::Value` (batch), the adapter's own
-/// boundary conversion. `Blob` has no batch equivalent and is an error, not
-/// a silent cast — cross-mode joins key on text/integer dimension columns,
-/// never on blobs.
+/// boundary conversion.
 fn to_batch_value(v: RowValue) -> Result<Value, VmError> {
     Ok(match v {
         RowValue::Null => Value::Null,
         RowValue::Integer(n) => Value::Int(n),
         RowValue::Real(x) => Value::Float(x),
         RowValue::Text(s) => Value::Str(s.to_string().into()),
-        RowValue::Blob(_) => {
-            return Err(VmError::SegmentLoad {
-                reason: "BLOB columns have no vm::batch::Value representation".to_string(),
-            })
-        }
+        RowValue::Blob(b) => Value::Blob(b.as_ref().into()),
     })
 }
 
@@ -250,9 +244,11 @@ mod tests {
     }
 
     #[test]
-    fn to_batch_value_rejects_blob() {
-        let err = to_batch_value(RowValue::Blob(vec![1, 2, 3].into())).unwrap_err();
-        assert!(matches!(err, VmError::SegmentLoad { .. }));
+    fn to_batch_value_keeps_a_blob() {
+        assert_eq!(
+            to_batch_value(RowValue::Blob(vec![1, 2, 3].into())).unwrap(),
+            Value::Blob(vec![1, 2, 3].into())
+        );
     }
 
     #[test]

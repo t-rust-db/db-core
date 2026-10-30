@@ -1120,6 +1120,7 @@ fn render_value(value: &Value) -> String {
         // Programs hold literals only; a map or list is only ever column
         // data.
         Value::Map(_) | Value::List(_) | Value::Bytes(_) => "Value::Null".to_string(),
+        Value::Blob(b) => format!("Value::Blob(std::sync::Arc::from(&{b:?}[..]))"),
         Value::Decimal { unscaled, scale } => {
             format!("Value::Decimal {{ unscaled: {unscaled}, scale: {scale} }}")
         }

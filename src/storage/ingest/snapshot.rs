@@ -670,11 +670,10 @@ pub fn cast(v: Value, t: ColumnType) -> Value {
         (ColumnType::UInt16, Value::Int(i)) if u16::try_from(i).is_ok() => Value::Int(i),
         (ColumnType::UInt32, Value::Int(i)) if u32::try_from(i).is_ok() => Value::Int(i),
         (ColumnType::UInt64, Value::Int(i)) if i >= 0 => Value::Int(i),
-        // As the column engine reads them: a decimal as a float, bytes as
-        // lowercase hex.
+        // As the column engine reads them: a decimal as a float.
         (ColumnType::Decimal { .. }, Value::Float(f)) => Value::Float(f),
         (ColumnType::Decimal { .. }, Value::Int(i)) => Value::Float(i as f64),
-        (ColumnType::Binary | ColumnType::FixedLenByteArray(_), v @ Value::Str(_)) => v,
+        (ColumnType::Binary | ColumnType::FixedLenByteArray(_), v @ Value::Blob(_)) => v,
         _ => Value::Null,
     }
 }

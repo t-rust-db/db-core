@@ -194,7 +194,10 @@ fn a_page_reads_as_the_engine_decodes_its_flushed_file() {
         ],
         "exact, as the flushed file reads (#632)"
     );
-    assert_eq!(col("b"), [Value::Str("ab01".into()), Value::Null]);
+    assert_eq!(
+        col("b"),
+        [Value::Blob(vec![0xab, 0x01].into()), Value::Null]
+    );
     assert_eq!(col("f"), [Value::Float(1.5), Value::Null]);
     assert_eq!(col("u8"), [Value::Int(200), Value::Null]);
     assert!(page.engine_column("nope", false).is_none());

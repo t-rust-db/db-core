@@ -272,6 +272,7 @@ pub fn compare(a: &Value, b: &Value) -> Ordering {
             Value::Map(_) => 4,
             Value::List(_) => 6,
             Value::Bytes(_) => 5,
+            Value::Blob(_) => 7,
         }
     }
     if let Some(order) = numeric_cmp(a, b) {
@@ -283,6 +284,7 @@ pub fn compare(a: &Value, b: &Value) -> Ordering {
         (Value::Map(x), Value::Map(y)) => x.cmp(y),
         (Value::List(x), Value::List(y)) => x.cmp(y),
         (Value::Bytes(x), Value::Bytes(y)) => x.cmp(y),
+        (Value::Blob(x), Value::Blob(y)) => x.cmp(y),
         _ => rank(a).cmp(&rank(b)),
     }
 }

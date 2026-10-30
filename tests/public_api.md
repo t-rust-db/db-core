@@ -8518,6 +8518,7 @@ impl core::fmt::Debug for db_core::vm::batch::ScanSource
 pub fn db_core::vm::batch::ScanSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::batch::ScanSource
 pub enum db_core::vm::batch::Value
+pub db_core::vm::batch::Value::Blob(alloc::rcs::arc::Arc<[u8]>)
 pub db_core::vm::batch::Value::Bool(bool)
 pub db_core::vm::batch::Value::Bytes(alloc::rcs::arc::Arc<[u8]>)
 pub db_core::vm::batch::Value::Decimal
@@ -8820,6 +8821,10 @@ pub type db_core::vm::batch::MapEntries = alloc::vec::Vec<(alloc::rcs::arc::Arc<
 pub type db_core::vm::batch::Result<T> = core::result::Result<T, db_core::vm::batch::VmError>
 pub mod db_core::vm::column
 pub enum db_core::vm::column::Column
+pub db_core::vm::column::Column::Blob
+pub db_core::vm::column::Column::Blob::data: alloc::vec::Vec<u8>
+pub db_core::vm::column::Column::Blob::offsets: alloc::vec::Vec<u32>
+pub db_core::vm::column::Column::Blob::valid: db_core::vm::column::Bitmap
 pub db_core::vm::column::Column::Bool
 pub db_core::vm::column::Column::Bool::data: alloc::vec::Vec<bool>
 pub db_core::vm::column::Column::Bool::valid: db_core::vm::column::Bitmap
