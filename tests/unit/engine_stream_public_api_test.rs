@@ -590,3 +590,26 @@ fn json_array_paths_operators_and_inspection_functions() {
         ]
     );
 }
+
+/// #839: `json_keys` lists an object's keys, at the root or at a path.
+#[test]
+fn json_keys_lists_object_keys() {
+    let mut e = open_json();
+    let doc = r#"'{"name":"a","items":[{"v":1,"w":2}],"n":1}'"#;
+    let sql = format!(
+        "SELECT json_keys({doc}), json_keys({doc}, '$.items[0]'), json_keys({doc}, '$.name'), \
+         json_keys('[1]'), json_keys('{{oops') FROM log LIMIT 1"
+    );
+    let row = rows(&mut e, &sql).remove(0);
+    let text = |s: &str| Cell::Text(s.to_string());
+    assert_eq!(
+        row,
+        vec![
+            text(r#"["name","items","n"]"#),
+            text(r#"["v","w"]"#),
+            Cell::Null,
+            Cell::Null,
+            Cell::Null,
+        ]
+    );
+}

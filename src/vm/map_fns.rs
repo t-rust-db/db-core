@@ -50,6 +50,8 @@
 //! A NULL map gives NULL. A value that is not a map (or a key that is not a
 //! string) gives NULL too: column types are only known per row here.
 
+use std::sync::Arc;
+
 use super::batch::{ListItems, MapEntries, SlotState, Value};
 
 /// The functions handled here, with their arities.
@@ -105,6 +107,8 @@ pub(crate) const MAP_FUNCTIONS: &[(&str, usize)] = &[
     ("element_at", 2),
     ("map_keys", 1),
     ("cardinality", 1),
+    ("json_keys", 1),
+    ("json_keys", 2),
 ];
 
 /// The arity of a function that takes any number of arguments.
@@ -180,6 +184,9 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
             _ => Value::Null,
         };
     }
+    if name.eq_ignore_ascii_case("json_keys") {
+        return json_keys(args);
+    }
     if let Some((Value::List(items), rest)) = args.split_first() {
         return list_call(name, items, rest);
     }
@@ -212,6 +219,38 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
         ("cardinality", None) => Value::Int(i64::try_from(entries.len()).unwrap_or(i64::MAX)),
         _ => Value::Null,
     }
+}
+
+/// `json_keys(json[, path])` (#839): the keys of the object at `path` (the
+/// root by default), in document order. NULL for a non-string document,
+/// malformed JSON, a missing path or a value that is not an object. The
+/// object is found by the batch `json_extract`, so a path indexes arrays.
+fn json_keys(args: &[&Value]) -> Value {
+    let (Some(Value::Str(doc)), path) = (args.first(), args.get(1)) else {
+        return Value::Null;
+    };
+    let path = match path {
+        None => "$",
+        Some(Value::Str(p)) => p.as_ref(),
+        Some(_) => return Value::Null,
+    };
+    let text = |s: &str| crate::value::Value::Text(s.to_string().into());
+    let Ok(crate::value::Value::Text(object)) =
+        crate::functions::late_json_extract(&[text(doc), text(path)])
+    else {
+        return Value::Null;
+    };
+    let Some((crate::json_path::JsonValue::Object(fields), _)) =
+        crate::json_path::parse_object(&object)
+    else {
+        return Value::Null;
+    };
+    Value::List(Arc::new(
+        fields
+            .iter()
+            .map(|(k, _)| Some(Arc::from(crate::json_path::unescape(k).as_ref())))
+            .collect(),
+    ))
 }
 
 fn string_split(s: &Value, sep: &Value) -> Value {
