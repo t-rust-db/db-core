@@ -1748,6 +1748,37 @@ mod tests {
         );
     }
 
+    // functions_late_json_args_fa4ffcda (`late_json_args`):
+    // `matches!(doc, Value::Null) || matches!(path, Value::Null)`.
+    fn late_json(doc: Value, path: Value) -> Value {
+        late_json_extract(&[doc, path]).unwrap()
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_late_json_args_fa4ffcda__v1_neither_argument_is_null() {
+        let (doc, path) = (Value::Text(r#"{"a":1}"#.into()), Value::Text("$.a".into()));
+        assert_eq!(late_json(doc, path), Value::Text("1".into()));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_late_json_args_fa4ffcda__v2_a_null_document_is_null() {
+        assert_eq!(
+            late_json(Value::Null, Value::Text("$.a".into())),
+            Value::Null
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_late_json_args_fa4ffcda__v3_a_null_path_is_null() {
+        assert_eq!(
+            late_json(Value::Text(r#"{"a":1}"#.into()), Value::Null),
+            Value::Null
+        );
+    }
+
     /// #839: the batch `json_extract` is DuckDB's -- JSON text, array
     /// paths, a bare key -- and `json_extract_string` is the unquoted text.
     #[test]

@@ -155,6 +155,7 @@ fn parse_string(s: &str) -> Option<(&str, &str)> {
 /// stays zero-copy; callers that store or hand out a value decode it.
 #[cfg(any(
     feature = "ingest",
+    feature = "vm-batch",
     all(feature = "ingest-read", feature = "engine-column")
 ))]
 pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
@@ -179,6 +180,7 @@ pub(crate) fn unescape(s: &str) -> std::borrow::Cow<'_, str> {
 /// malformed.
 #[cfg(any(
     feature = "ingest",
+    feature = "vm-batch",
     all(feature = "ingest-read", feature = "engine-column")
 ))]
 fn decode_escape(tail: &str) -> Option<(char, usize)> {
@@ -200,6 +202,7 @@ fn decode_escape(tail: &str) -> Option<(char, usize)> {
 /// `\uXXXX`, or a `\uD8xx\uDCxx` surrogate pair (12 bytes).
 #[cfg(any(
     feature = "ingest",
+    feature = "vm-batch",
     all(feature = "ingest-read", feature = "engine-column")
 ))]
 fn decode_unicode_escape(tail: &str) -> Option<(char, usize)> {
@@ -227,6 +230,7 @@ fn decode_unicode_escape(tail: &str) -> Option<(char, usize)> {
 /// four bytes. Checked digit by digit: `from_str_radix` would accept `+`.
 #[cfg(any(
     feature = "ingest",
+    feature = "vm-batch",
     all(feature = "ingest-read", feature = "engine-column")
 ))]
 fn hex4(digits: &str) -> Option<u32> {
