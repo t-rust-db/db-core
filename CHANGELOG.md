@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.209.0] - 2026-10-30
+
+### Changed
+
+- `UNNEST` drops its list register instead of repeating it per element (dhat peak 129 -> 59 MB).
+- A list read only for `IS [NOT] NULL` loads as a flat presence column (RSS 94 -> 58 MB).
+
 ## [0.208.0] - 2026-10-30
 
 ### Changed
