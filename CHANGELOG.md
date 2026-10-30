@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.217.3] - 2026-10-30
+
+### Fixed
+
+- Honour the reserved bytes per page in the database header: b-tree pages, split limits and freelist trunks no longer write into the reserved tail, so files created by `/usr/bin/sqlite3` on macOS pass stock `PRAGMA integrity_check` (#904).
+- Index page splits balance by bytes instead of count, so mixed-size index keys no longer overflow a page (#904).
+
 ## [0.217.2] - 2026-10-30
 
 ### Changed
