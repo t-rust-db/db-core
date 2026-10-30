@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.206.0] - 2026-10-30
+
+### Changed
+
+- A dictionary-encoded `LIST<VARCHAR>` leaf read for `UNNEST` alone now keeps its page codes: the flat read walks each page's levels and RLE indices straight into offsets plus a dictionary column, instead of building an `Arc<str>` per element and hashing it (#840). On the 10M-row parity file `UNNEST ... GROUP BY` drops from about 2.1x / 1.6x DuckDB (8 / 1,000 distinct) to about 0.85x / 0.9x, with half the user and sys time and about 30% less RSS. A leaf with a plain fallback page reads as before.
+
 ## [0.205.0] - 2026-10-30
 
 ### Added

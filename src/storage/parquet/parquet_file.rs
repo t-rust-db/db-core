@@ -1298,6 +1298,9 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     pub(crate) fn read_list_utf8_flat(&self, field: &Field) -> Result<Column> {
         let not_a_list = || FileError::NotAStringList(field.name.clone());
         let (start, leaf) = self.list_utf8_leaf(field)?;
+        if let Some(column) = self.read_list_utf8_flat_dictionary(start, leaf, field)? {
+            return Ok(column);
+        }
         let mut items = self.read_leaf_entries(start, leaf)?;
         let present = leaf.max_def_level;
         let optional = leaf.element.repetition == Some(footer::Repetition::Optional);
@@ -1344,6 +1347,156 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
             elements: Box::new(sink.finish()),
             valid: Bitmap::from_bools(row_valid.into_iter()),
         })
+    }
+
+    /// [`Self::read_list_utf8_flat`] for a leaf whose pages are all
+    /// dictionary-encoded (#840): the elements stay as dictionary codes from
+    /// the page's RLE indices into the column, with no per-element `Arc`
+    /// clone, pointer hash or intermediate value vector. `None` when the
+    /// chunk has no dictionary page first or has a non-dictionary data page,
+    /// and the caller falls back to the per-element read.
+    #[cfg(feature = "engine-column")]
+    fn read_list_utf8_flat_dictionary(
+        &self,
+        column_index: usize,
+        leaf: &SchemaNode,
+        field: &Field,
+    ) -> Result<Option<Column>> {
+        let not_a_list = || FileError::NotAStringList(field.name.clone());
+        let leaf_values = count(
+            "column_chunk.num_values",
+            self.column_meta(column_index)?.num_values,
+        )?;
+        let mut pages = self.pages_with(column_index, leaf_values)?;
+        let present = leaf.max_def_level;
+        let optional = leaf.element.repetition == Some(footer::Repetition::Optional);
+        let element = present.saturating_sub(u32::from(optional));
+
+        // The dictionary with equal strings sharing one code, as the
+        // per-element sink gives them, and each page code's remapped code.
+        let mut dict: Option<(Vec<Arc<str>>, Vec<u32>)> = None;
+        let mut offsets: Vec<u32> = vec![0];
+        let mut row_valid: Vec<bool> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        let mut element_valid: Vec<bool> = Vec::new();
+        while let Some((header, compressed)) = pages.next()? {
+            match header.page_type {
+                PageType::Dictionary(dictionary_page_header) => {
+                    if dict.is_some() {
+                        return Err(FileError::UnexpectedDictionaryPage);
+                    }
+                    let body = pages.body(compressed, header.uncompressed_page_size)?;
+                    let count =
+                        usize::try_from(dictionary_page_header.num_values).map_err(|_| {
+                            FileError::InvalidMetadata {
+                                field: "dictionary_page.num_values",
+                                value: i64::from(dictionary_page_header.num_values),
+                            }
+                        })?;
+                    let mut buf: &[u8] = &body;
+                    let mut bit_pos = 0usize;
+                    let mut first: HashMap<Arc<str>, u32> = HashMap::with_capacity(count);
+                    let mut unique: Vec<Arc<str>> = Vec::with_capacity(count);
+                    let mut remap: Vec<u32> = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let reader::LeafScalar::Str(entry) = reader::read_plain_scalar(
+                            &mut buf,
+                            footer::PhysicalType::ByteArray,
+                            &mut bit_pos,
+                        )?
+                        else {
+                            return Err(not_a_list());
+                        };
+                        let next = u32::try_from(unique.len()).map_err(|_| not_a_list())?;
+                        let code = *first.entry(Arc::clone(&entry)).or_insert(next);
+                        if code == next {
+                            unique.push(entry);
+                        }
+                        remap.push(code);
+                    }
+                    dict = Some((unique, remap));
+                }
+                PageType::Data(data_page_header) => {
+                    let Some((_, remap)) = dict.as_ref() else {
+                        return Ok(None);
+                    };
+                    if !matches!(
+                        data_page_header.encoding,
+                        Encoding::PlainDictionary | Encoding::RleDictionary
+                    ) {
+                        return Ok(None);
+                    }
+                    let page_body = pages.body(compressed, header.uncompressed_page_size)?;
+                    let (rep_levels, def_levels, value_bytes) = reader::split_rep_def_levels(
+                        &page_body,
+                        &data_page_header,
+                        leaf.max_rep_level,
+                        leaf.max_def_level,
+                    )?;
+                    let num_values =
+                        usize::try_from(data_page_header.num_values).map_err(|_| {
+                            FileError::InvalidMetadata {
+                                field: "data_page.num_values",
+                                value: i64::from(data_page_header.num_values),
+                            }
+                        })?;
+                    let defined = if def_levels.is_empty() {
+                        num_values
+                    } else {
+                        def_levels.iter().filter(|&&d| d == present).count()
+                    };
+                    let mut codes =
+                        reader::read_dictionary_indices(value_bytes, defined)?.into_iter();
+                    // A page's levels are walked as they decode, so no
+                    // chunk-wide level or code vector is ever held.
+                    for i in 0..num_values {
+                        let def = def_levels.get(i).copied().unwrap_or(present);
+                        let rep = rep_levels.get(i).copied().unwrap_or(0);
+                        if def < element {
+                            if rep != 0 {
+                                return Err(not_a_list());
+                            }
+                            row_valid.push(def.saturating_add(1) == element);
+                            offsets.push(u32::try_from(indices.len()).map_err(|_| not_a_list())?);
+                            continue;
+                        }
+                        if rep == 0 {
+                            row_valid.push(true);
+                            offsets.push(0);
+                        } else if row_valid.is_empty() {
+                            return Err(not_a_list());
+                        }
+                        if def == present {
+                            let code = codes.next().ok_or_else(not_a_list)?;
+                            let code = *remap.get(code as usize).ok_or_else(not_a_list)?;
+                            indices.push(code);
+                            element_valid.push(true);
+                        } else if def < present {
+                            indices.push(0);
+                            element_valid.push(false);
+                        } else {
+                            return Err(not_a_list());
+                        }
+                        let end = u32::try_from(indices.len()).map_err(|_| not_a_list())?;
+                        if let Some(last) = offsets.last_mut() {
+                            *last = end;
+                        }
+                    }
+                }
+            }
+        }
+        let Some((unique, _)) = dict else {
+            return Ok(None);
+        };
+        Ok(Some(Column::List {
+            offsets,
+            elements: Box::new(Column::Dict {
+                dict: unique,
+                indices,
+                valid: Bitmap::from_bools(element_valid.into_iter()),
+            }),
+            valid: Bitmap::from_bools(row_valid.into_iter()),
+        }))
     }
 
     /// A dictionary-encoded INT64 column's dictionary and per-row indices,
@@ -3323,6 +3476,38 @@ mod tests {
                 assert_eq!(flat, expected, "dict={dictionary} rg={row_group_rows}");
             }
         }
+    }
+
+    /// #840: a DuckDB-written LIST leaf is dictionary-encoded; its flat read
+    /// keeps the page codes as a dictionary column and agrees with the full
+    /// decode on NULL lists, empty lists, NULL elements and repeats.
+    #[cfg(feature = "engine-column")]
+    #[test]
+    fn list_flat_of_a_dictionary_encoded_leaf_matches_the_full_decode() {
+        use crate::vm::batch::Value;
+        let bytes = std::fs::read("tests/fixtures/parquet/list_dictionary.parquet").unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let field = file.fields().into_iter().next().unwrap();
+        let mut rows = 0;
+        for rg in file.row_groups() {
+            let column = rg.read_list_utf8_flat(&field).unwrap();
+            let Column::List { elements, .. } = &column else {
+                panic!("a flat list read is a list column");
+            };
+            let Column::Dict { dict, .. } = elements.as_ref() else {
+                panic!("a dictionary-encoded leaf reads as codes");
+            };
+            let mut seen = std::collections::HashSet::new();
+            assert!(dict.iter().all(|s| seen.insert(Arc::clone(s))), "{dict:?}");
+            let full = rg.read_list_utf8_column(&field).unwrap();
+            assert_eq!(column.len(), full.len());
+            for (i, row) in full.into_iter().enumerate() {
+                let expected = row.map_or(Value::Null, |l| Value::List(Arc::new(l)));
+                assert_eq!(column.get(i), expected, "row {i}");
+            }
+            rows += column.len();
+        }
+        assert_eq!(rows, 200);
     }
 
     /// The column an [`ElementSink`] builds from `elements`.
