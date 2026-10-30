@@ -2506,10 +2506,9 @@ impl Parser {
 
     /// `->` / `->>` (JSON extract operators, V11). The row dialect reports
     /// them `Unsupported`. The column dialect (#839) parses `a -> p` as
-    /// DuckDB's JSON-text extract (`json_extract;subtype`, a string comes
-    /// back quoted) and `a ->> p` as `json_extract(a, p)`, the SQL value.
-    /// A literal `p` that is a bare key or an index is the path `$.key` /
-    /// `$[n]`, as in sqlite3.
+    /// DuckDB's `json_extract(a, p)` (JSON text, a string quoted) and
+    /// `a ->> p` as `json_extract_string(a, p)`. A literal `p` that is an
+    /// index is the path `$[n]`; a bare key is a path as it stands.
     fn arrow_expr(&mut self) -> PResult<Expr> {
         let lhs = self.collate_expr()?;
         if matches!(self.peek().kind, TokenKind::Arrow | TokenKind::ArrowArrow) {
@@ -2531,20 +2530,14 @@ impl Parser {
             let as_text = self.peek().kind == TokenKind::ArrowArrow;
             self.advance_span();
             let mut path = self.collate_expr()?;
-            match &path.kind {
-                ExprKind::Literal(Literal::Integer(n)) => {
-                    path.kind = ExprKind::Literal(Literal::Str(format!("$[{n}]")));
-                }
-                ExprKind::Literal(Literal::Str(k)) if !k.starts_with('$') => {
-                    path.kind = ExprKind::Literal(Literal::Str(format!("$.{k}")));
-                }
-                _ => {}
+            if let ExprKind::Literal(Literal::Integer(n)) = &path.kind {
+                path.kind = ExprKind::Literal(Literal::Str(format!("$[{n}]")));
             }
             let span = join_span(lhs.span, path.span);
             let name = if as_text {
-                "json_extract"
+                "json_extract_string"
             } else {
-                crate::functions::JSON_EXTRACT_SUBTYPED
+                "json_extract"
             };
             lhs = Expr {
                 kind: ExprKind::FunctionCall {

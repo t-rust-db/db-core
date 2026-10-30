@@ -496,7 +496,7 @@ fn json_extract_with_alias_and_group_by_matches_the_oracle() {
     let mut e = open_json();
     let got: BTreeMap<String, i64> = rows(
         &mut e,
-        "SELECT json_extract(message,'$.status') AS s, count(*) FROM log \
+        "SELECT json_extract_string(message,'$.status') AS s, count(*) FROM log \
          WHERE message LIKE '%status%' GROUP BY s ORDER BY s",
     )
     .into_iter()
@@ -523,7 +523,10 @@ fn json_extract_with_alias_and_group_by_matches_the_oracle() {
 #[test]
 fn json_extract_returns_null_for_missing_key_or_malformed_json() {
     let mut e = open_json();
-    let got = rows(&mut e, "SELECT json_extract(message,'$.status') FROM log");
+    let got = rows(
+        &mut e,
+        "SELECT json_extract_string(message,'$.status') FROM log",
+    );
     assert!(got.iter().any(|r| r[0] == Cell::Null));
     assert_eq!(got.len(), 1000);
 }
@@ -556,17 +559,20 @@ fn group_by_with_the_count_first_keeps_select_list_order() {
     assert_eq!(got, want);
 }
 
-/// #839: the column dialect's JSON functions over a literal document --
-/// array paths, `->` (JSON text), `->>` / `json_extract_string` (SQL
-/// value), `json_array_length`, `json_type`, `json_valid`.
+/// #839: the column dialect's JSON functions over a literal document, as
+/// DuckDB answers them -- `json_extract` and `->` give JSON text (a string
+/// quoted), `json_extract_string` and `->>` the unquoted text, a path may
+/// index arrays or be a bare key, and `json_array_length`, `json_type` and
+/// `json_valid` inspect a document.
 #[test]
 fn json_array_paths_operators_and_inspection_functions() {
     let mut e = open_json();
     let doc = r#"'{"name":"a","tags":["x","y"],"items":[{"v":1},{"v":2}]}'"#;
     let sql = format!(
         "SELECT json_extract({doc}, '$.tags[0]'), json_extract({doc}, '$.items[1].v'), \
-         json_extract({doc}, '$.tags[#-1]'), {doc} -> 'name', {doc} ->> 'name', \
-         {doc} -> '$.tags', {doc} ->> '$.items[0].v', json_extract_string({doc}, '$.name'), \
+         json_extract({doc}, '$.tags[#-1]'), json_extract({doc}, 'name'), {doc} -> 'name', \
+         {doc} ->> 'name', {doc} -> '$.tags', {doc} ->> '$.items[0].v', \
+         json_extract_string({doc}, '$.tags[1]'), json_extract({doc}, '$.nope'), \
          json_array_length({doc}, '$.tags'), json_type({doc}, '$.tags'), json_valid({doc}), \
          json_valid('{{oops') FROM log LIMIT 1"
     );
@@ -575,14 +581,16 @@ fn json_array_paths_operators_and_inspection_functions() {
     assert_eq!(
         row,
         vec![
-            text("x"),
-            Cell::Int(2),
-            text("y"),
+            text("\"x\""),
+            text("2"),
+            text("\"y\""),
+            text("\"a\""),
             text("\"a\""),
             text("a"),
             text(r#"["x","y"]"#),
-            Cell::Int(1),
-            text("a"),
+            text("1"),
+            text("y"),
+            Cell::Null,
             Cell::Int(2),
             text("array"),
             Cell::Int(1),
@@ -598,7 +606,7 @@ fn json_keys_lists_object_keys() {
     let doc = r#"'{"name":"a","items":[{"v":1,"w":2}],"n":1}'"#;
     let sql = format!(
         "SELECT json_keys({doc}), json_keys({doc}, '$.items[0]'), json_keys({doc}, '$.name'), \
-         json_keys('[1]'), json_keys('{{oops') FROM log LIMIT 1"
+         json_keys('[1]'), json_keys('{{oops'), json_keys({doc}, '$.nope') FROM log LIMIT 1"
     );
     let row = rows(&mut e, &sql).remove(0);
     let text = |s: &str| Cell::Text(s.to_string());
@@ -607,23 +615,12 @@ fn json_keys_lists_object_keys() {
         vec![
             text(r#"["name","items","n"]"#),
             text(r#"["v","w"]"#),
-            Cell::Null,
+            text("[]"),
+            text("[]"),
             Cell::Null,
             Cell::Null,
         ]
     );
-}
-
-/// #839: a JSON path literal without its `$` is refused at plan time
-/// instead of giving NULL on every row.
-#[test]
-fn a_json_path_without_a_dollar_is_refused() {
-    let mut e = open_json();
-    let err = e
-        .run_query("SELECT json_extract(message, 'status') FROM log")
-        .map(|_| ())
-        .expect_err("refused");
-    assert!(err.to_string().contains("json_extract"), "{err}");
 }
 
 /// #839: `json_array_elements_text` lists a JSON array's elements as text,

@@ -751,15 +751,68 @@ pub fn trigram_key(t: [u8; 3]) -> i64 {
     i64::from(t[0]) << 16 | i64::from(t[1]) << 8 | i64::from(t[2])
 }
 
-/// The batch engine's `json_extract(text, path)` (#307, ADR 0018 "late
-/// `json_extract`"): the row engine's sqlite3 one ([`json`], #651), so a
-/// path indexes arrays (`$.a[0]`, `$.a[#-1]`) and an object or array
-/// leaf comes back as its JSON text (#839). Malformed JSON and a missing
-/// path are `Value::Null`, not an error, per this module's
-/// null-propagation convention (`substr`, `instr`).
+/// The path of a column-dialect JSON call as DuckDB reads it: a path that
+/// does not start with `$` is a key (`'a'` is `'$.a'`).
+#[cfg(feature = "vm-batch")]
+fn late_json_args(args: &[Value]) -> Option<[Value; 2]> {
+    let [doc, path] = args else {
+        return None;
+    };
+    if matches!(doc, Value::Null) || matches!(path, Value::Null) {
+        return None;
+    }
+    let path = as_text(path);
+    let path = if path.starts_with('$') {
+        path.to_string()
+    } else {
+        format!("$.{path}")
+    };
+    Some([doc.clone(), Value::Text(path.into())])
+}
+
+/// The JSON text of the value at `args`' path, or `Err` for malformed JSON.
+/// The row engine's subtyped extract goes through the SQL value, which
+/// turns a boolean into `1`/`0`; `json_type` gives it back.
+#[cfg(feature = "vm-batch")]
+fn late_json_text(args: &[Value; 2]) -> Result<Value, FunctionError> {
+    let text = call(JSON_EXTRACT_SUBTYPED, args)?;
+    if let Ok(Value::Text(kind)) = call("json_type", args) {
+        if matches!(&*kind, "true" | "false") {
+            return Ok(Value::Text(kind));
+        }
+    }
+    Ok(text)
+}
+
+/// The batch engine's `json_extract(text, path)` (#307, ADR 0018): as in
+/// DuckDB (ADR 0030, #839) the JSON text of the value -- a string quoted,
+/// a number or boolean as written, an object or array whole. The path
+/// indexes arrays (`$.a[0]`, `$.a[#-1]`). Malformed JSON, a missing path
+/// and a JSON `null` are `Value::Null`, not an error, per this module's
+/// null-propagation convention (`substr`, `instr`). The row engine's
+/// `json_extract` is sqlite3's ([`json`], #651).
 #[cfg(feature = "vm-batch")]
 pub(crate) fn late_json_extract(args: &[Value]) -> Result<Value, FunctionError> {
-    Ok(call("json_extract", args).unwrap_or(Value::Null))
+    Ok(late_json_args(args)
+        .and_then(|a| late_json_text(&a).ok())
+        .unwrap_or(Value::Null))
+}
+
+/// The batch engine's `json_extract_string(text, path)` and `->>`: the
+/// value as text -- a string unquoted, a number or boolean as written, an
+/// object or array whole; NULL for a missing path or a JSON `null` (#839).
+#[cfg(feature = "vm-batch")]
+pub(crate) fn late_json_extract_string(args: &[Value]) -> Result<Value, FunctionError> {
+    let Some(args) = late_json_args(args) else {
+        return Ok(Value::Null);
+    };
+    Ok(match late_json_text(&args) {
+        Ok(Value::Text(t)) if t.starts_with('"') => {
+            call("json_extract", &args).unwrap_or(Value::Null)
+        }
+        Ok(v) => v,
+        Err(_) => Value::Null,
+    })
 }
 
 /// `logfmt_extract(text, key)` -- late parse of a `key=value` line
@@ -1695,19 +1748,28 @@ mod tests {
         );
     }
 
-    /// #839: the batch `json_extract` indexes arrays and returns an
-    /// object leaf as JSON text.
+    /// #839: the batch `json_extract` is DuckDB's -- JSON text, array
+    /// paths, a bare key -- and `json_extract_string` is the unquoted text.
     #[test]
-    fn late_json_extract_indexes_arrays() {
-        let doc = r#"{"tags":["x","y"],"items":[{"v":1},{"v":2}]}"#;
-        let get = |path: &str| {
-            late_json_extract(&[Value::Text(doc.into()), Value::Text(path.into())]).unwrap()
-        };
-        assert_eq!(get("$.tags[0]"), Value::Text("x".into()));
-        assert_eq!(get("$.tags[#-1]"), Value::Text("y".into()));
-        assert_eq!(get("$.items[1].v"), Value::Integer(2));
-        assert_eq!(get("$.items[0]"), Value::Text(r#"{"v":1}"#.into()));
-        assert_eq!(get("$.tags[5]"), Value::Null);
+    fn late_json_extract_is_duckdbs() {
+        let doc = r#"{"tags":["x","y"],"items":[{"v":1},{"v":2}],"n":1.5,"b":true,"z":null}"#;
+        let args = |path: &str| [Value::Text(doc.into()), Value::Text(path.into())];
+        let json = |path: &str| late_json_extract(&args(path)).unwrap();
+        let string = |path: &str| late_json_extract_string(&args(path)).unwrap();
+        let t = |s: &str| Value::Text(s.into());
+        assert_eq!(json("$.tags[0]"), t(r#""x""#));
+        assert_eq!(string("$.tags[0]"), t("x"));
+        assert_eq!(json("$.tags[#-1]"), t(r#""y""#));
+        assert_eq!(json("$.items[1].v"), t("2"));
+        assert_eq!(string("$.items[1].v"), t("2"));
+        assert_eq!(json("$.items[0]"), t(r#"{"v":1}"#));
+        assert_eq!(string("$.items[0]"), t(r#"{"v":1}"#));
+        assert_eq!(json("$.n"), t("1.5"));
+        assert_eq!(string("$.b"), t("true"));
+        assert_eq!(json("n"), t("1.5"));
+        assert_eq!(json("$.tags[5]"), Value::Null);
+        assert_eq!(json("$.missing"), Value::Null);
+        assert_eq!(string("$.z"), Value::Null);
     }
 
     /// #656: `json_extract` over JSON nested past the parser's depth cap

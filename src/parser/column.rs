@@ -841,8 +841,7 @@ pub(crate) fn is_known_scalar_function(name: &str, arity: usize) -> bool {
             | ("logfmt_extract", 2)
             | ("regexp_extract", 3)
             | ("ilike", 2)
-    ) || (name == crate::functions::JSON_EXTRACT_SUBTYPED && arity == 2)
-        || crate::functions::takes_any_expression(name, arity)
+    ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::is_map_function_call(name, arity)
 }
 

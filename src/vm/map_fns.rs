@@ -227,9 +227,10 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
 }
 
 /// `json_keys(json[, path])` (#839): the keys of the object at `path` (the
-/// root by default), in document order. NULL for a non-string document,
-/// malformed JSON, a missing path or a value that is not an object. The
-/// object is found by the batch `json_extract`, so a path indexes arrays.
+/// root by default), in document order; `[]` for a value that is not an
+/// object, as in DuckDB. NULL for a non-string document, malformed JSON or
+/// a missing path. The value is found by the batch `json_extract`, so a
+/// path indexes arrays.
 fn json_keys(args: &[&Value]) -> Value {
     let (Some(Value::Str(doc)), path) = (args.first(), args.get(1)) else {
         return Value::Null;
@@ -248,7 +249,7 @@ fn json_keys(args: &[&Value]) -> Value {
     let Some((crate::json_path::JsonValue::Object(fields), _)) =
         crate::json_path::parse_object(&object)
     else {
-        return Value::Null;
+        return Value::List(Arc::new(Vec::new()));
     };
     Value::List(Arc::new(
         fields
@@ -502,34 +503,13 @@ fn slice(items: &ListItems, begin: i64, end: i64) -> Value {
 /// Why literal argument `position` of `name` is not usable, for the
 /// plan-time check (#828): `list_aggr`'s aggregate and `list_sort`'s
 /// order must be string literals DuckDB accepts here. `value` is the
-/// argument when it is a string literal. The path of a JSON function
-/// (#839) is checked by the row engine's own path parser, and only when it
-/// is a literal. Like sqlite3's it reads the path as far as the document
-/// goes, so against `{}` it refuses a path that does not start with `$`
-/// and leaves a malformed tail (`$.a[`) to give NULL.
+/// argument when it is a string literal.
 #[cfg(feature = "parser-column")]
 pub(crate) fn literal_arg_error(
     name: &str,
     position: usize,
     value: Option<&str>,
 ) -> Option<String> {
-    if position == 1
-        && matches!(
-            name.to_ascii_lowercase().as_str(),
-            "json_extract"
-                | "json_extract_string"
-                | "json_array_length"
-                | "json_type"
-                | "json_keys"
-        )
-    {
-        let doc = crate::value::Value::Text("{}".into());
-        let path = crate::value::Value::Text(value?.into());
-        return match crate::functions::call("json_extract", &[doc, path]) {
-            Err(crate::functions::FunctionError::Sql(why)) => Some(format!("{name}: {why}")),
-            _ => None,
-        };
-    }
     let allowed: &[&str] = match (name.to_ascii_lowercase().as_str(), position) {
         ("list_aggr" | "list_aggregate", 1) => {
             &["string_agg", "count", "min", "max", "first", "last"]
@@ -971,13 +951,6 @@ mod tests {
             None
         );
         assert_eq!(literal_arg_error("list_sort", 0, None), None);
-        // #839: a JSON path literal is checked, a computed one is not.
-        assert_eq!(literal_arg_error("json_extract", 1, Some("$.a[0]")), None);
-        assert_eq!(literal_arg_error("json_keys", 1, Some("$.a[#-1]")), None);
-        assert!(literal_arg_error("json_type", 1, Some("a.b")).is_some());
-        assert!(literal_arg_error("json_extract", 1, Some("")).is_some());
-        assert_eq!(literal_arg_error("json_extract", 1, None), None);
-        assert_eq!(literal_arg_error("string_split", 1, None), None);
     }
 
     #[test]

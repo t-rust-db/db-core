@@ -5719,16 +5719,19 @@ impl Vm {
                 } else {
                     let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];
                     let mut result = Vec::with_capacity(num_rows);
-                    // The late-parse `json_extract` (#307), not the row
-                    // engine's sqlite3 one.
-                    let late_json_extract = name.eq_ignore_ascii_case("json_extract")
-                        || name.eq_ignore_ascii_case("json_extract_string");
+                    // The late-parse `json_extract` (#307) and
+                    // `json_extract_string` (#839), not the row engine's
+                    // sqlite3 ones.
+                    let late_json_extract = name.eq_ignore_ascii_case("json_extract");
+                    let late_json_string = name.eq_ignore_ascii_case("json_extract_string");
                     for row in 0..num_rows {
                         for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
                             *slot = to_scalar_value(&reg[row]);
                         }
                         let value = if late_json_extract {
                             crate::functions::late_json_extract(&call_args)
+                        } else if late_json_string {
+                            crate::functions::late_json_extract_string(&call_args)
                         } else {
                             crate::functions::call(name, &call_args)
                         }
