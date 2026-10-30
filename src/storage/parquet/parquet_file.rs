@@ -1488,6 +1488,10 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
         let mut row_valid: Vec<bool> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
         let mut element_valid: Vec<bool> = Vec::new();
+        // One window of a page's levels and codes at a time (#856).
+        let mut def_window = [0u32; PAGE_WINDOW];
+        let mut rep_window = [0u32; PAGE_WINDOW];
+        let mut code_window = [0u32; PAGE_WINDOW];
         while let Some((header, compressed)) = pages.next()? {
             match header.page_type {
                 PageType::Dictionary(dictionary_page_header) => {
@@ -1536,7 +1540,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                         return Ok(None);
                     }
                     let page_body = pages.body(compressed, header.uncompressed_page_size)?;
-                    let (rep_levels, def_levels, value_bytes) = reader::split_rep_def_levels(
+                    let mut levels = reader::open_rep_def_levels(
                         &page_body,
                         &data_page_header,
                         leaf.max_rep_level,
@@ -1549,46 +1553,60 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                                 value: i64::from(data_page_header.num_values),
                             }
                         })?;
-                    let defined = if def_levels.is_empty() {
-                        num_values
-                    } else {
-                        def_levels.iter().filter(|&&d| d == present).count()
-                    };
                     let mut codes =
-                        reader::read_dictionary_indices(value_bytes, defined)?.into_iter();
-                    // A page's levels are walked as they decode, so no
-                    // chunk-wide level or code vector is ever held.
-                    for i in 0..num_values {
-                        let def = def_levels.get(i).copied().unwrap_or(present);
-                        let rep = rep_levels.get(i).copied().unwrap_or(0);
-                        if def < element {
-                            if rep != 0 {
+                        reader::open_dictionary_indices(levels.value_bytes, num_values)?;
+                    // The levels and codes are read a window at a time into
+                    // the buffers above (#856): no decoded vector of either
+                    // is ever held, per page or per chunk.
+                    let mut done = 0usize;
+                    while done < num_values {
+                        let take = num_values.saturating_sub(done).min(PAGE_WINDOW);
+                        let defs = def_window.get_mut(..take).ok_or_else(not_a_list)?;
+                        match levels.def.as_mut() {
+                            Some(def) => def.read_into(defs).map_err(ReadError::from)?,
+                            None => defs.fill(present),
+                        }
+                        let reps = rep_window.get_mut(..take).ok_or_else(not_a_list)?;
+                        match levels.rep.as_mut() {
+                            Some(rep) => rep.read_into(reps).map_err(ReadError::from)?,
+                            None => reps.fill(0),
+                        }
+                        let wanted = defs.iter().filter(|&&d| d == present).count();
+                        let window_codes = code_window.get_mut(..wanted).ok_or_else(not_a_list)?;
+                        codes.read_into(window_codes).map_err(ReadError::from)?;
+                        let mut window_codes = window_codes.iter();
+                        done = done.saturating_add(take);
+                        for (&def, &rep) in defs.iter().zip(reps.iter()) {
+                            if def < element {
+                                if rep != 0 {
+                                    return Err(not_a_list());
+                                }
+                                row_valid.push(def.saturating_add(1) == element);
+                                offsets
+                                    .push(u32::try_from(indices.len()).map_err(|_| not_a_list())?);
+                                continue;
+                            }
+                            if rep == 0 {
+                                row_valid.push(true);
+                                offsets.push(0);
+                            } else if row_valid.is_empty() {
                                 return Err(not_a_list());
                             }
-                            row_valid.push(def.saturating_add(1) == element);
-                            offsets.push(u32::try_from(indices.len()).map_err(|_| not_a_list())?);
-                            continue;
-                        }
-                        if rep == 0 {
-                            row_valid.push(true);
-                            offsets.push(0);
-                        } else if row_valid.is_empty() {
-                            return Err(not_a_list());
-                        }
-                        if def == present {
-                            let code = codes.next().ok_or_else(not_a_list)?;
-                            let code = *remap.get(code as usize).ok_or_else(not_a_list)?;
-                            indices.push(code);
-                            element_valid.push(true);
-                        } else if def < present {
-                            indices.push(0);
-                            element_valid.push(false);
-                        } else {
-                            return Err(not_a_list());
-                        }
-                        let end = u32::try_from(indices.len()).map_err(|_| not_a_list())?;
-                        if let Some(last) = offsets.last_mut() {
-                            *last = end;
+                            if def == present {
+                                let code = *window_codes.next().ok_or_else(not_a_list)?;
+                                let code = *remap.get(code as usize).ok_or_else(not_a_list)?;
+                                indices.push(code);
+                                element_valid.push(true);
+                            } else if def < present {
+                                indices.push(0);
+                                element_valid.push(false);
+                            } else {
+                                return Err(not_a_list());
+                            }
+                            let end = u32::try_from(indices.len()).map_err(|_| not_a_list())?;
+                            if let Some(last) = offsets.last_mut() {
+                                *last = end;
+                            }
                         }
                     }
                 }
@@ -2116,6 +2134,12 @@ fn int96_to_epoch_micros(v: reader::Int96) -> Option<i64> {
 /// cardinality.
 #[cfg(feature = "engine-column")]
 const CARDINALITY_SAMPLE: usize = 16_384;
+
+/// How many of a page's entries a dictionary flat-list read decodes levels
+/// and codes for at a time (#856): three 2 KB windows on the stack in place
+/// of a vector per stream per page.
+#[cfg(feature = "engine-column")]
+const PAGE_WINDOW: usize = 512;
 
 /// Where a flat list's elements are built (#809): a dictionary when at most a
 /// quarter of a sample of the first [`CARDINALITY_SAMPLE`] present elements

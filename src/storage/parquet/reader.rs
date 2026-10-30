@@ -78,14 +78,20 @@ fn split_definition_levels<'a>(
     Ok((levels, rest))
 }
 
-/// One RLE/Bit-Packed Hybrid level section: a 4-byte little-endian length
-/// prefix followed by that many bytes of level data.
-fn read_level_section(buf: &[u8], max_level: u32, num_values: usize) -> Result<(Vec<u32>, &[u8])> {
+/// A level section's bytes and the bytes after it: a 4-byte little-endian
+/// length prefix, then that many bytes of level data.
+fn split_level_section(buf: &[u8]) -> Result<(&[u8], &[u8])> {
     let (len_bytes, rest) = buf
         .split_first_chunk::<4>()
         .ok_or(ReadError::UnexpectedEof)?;
     let len = u32::from_le_bytes(*len_bytes) as usize;
-    let (levels_bytes, rest) = rest.split_at_checked(len).ok_or(ReadError::UnexpectedEof)?;
+    rest.split_at_checked(len).ok_or(ReadError::UnexpectedEof)
+}
+
+/// One RLE/Bit-Packed Hybrid level section: a 4-byte little-endian length
+/// prefix followed by that many bytes of level data.
+fn read_level_section(buf: &[u8], max_level: u32, num_values: usize) -> Result<(Vec<u32>, &[u8])> {
+    let (levels_bytes, rest) = split_level_section(buf)?;
     let bit_width = encoding::bit_width_for_max_level(max_level);
     let levels = encoding::decode_hybrid_rle_bitpacked(levels_bytes, bit_width, num_values)?;
     Ok((levels, rest))
@@ -118,6 +124,59 @@ pub fn split_rep_def_levels<'a>(
         levels
     };
     Ok((rep_levels, def_levels, buf))
+}
+
+/// A nested/repeated data page's repetition and definition levels as lazy
+/// readers, and the bytes after them (#856): what
+/// [`split_rep_def_levels`] returns without decoding either level vector.
+/// A reader is `None` when its max level is 0, which reads as no levels.
+pub(crate) struct PageLevels<'a> {
+    pub(crate) rep: Option<encoding::HybridRleReader<'a>>,
+    pub(crate) def: Option<encoding::HybridRleReader<'a>>,
+    pub(crate) value_bytes: &'a [u8],
+}
+
+/// [`split_rep_def_levels`] that leaves the levels encoded: each is read a
+/// value at a time through its [`encoding::HybridRleReader`].
+pub(crate) fn open_rep_def_levels<'a>(
+    page_body: &'a [u8],
+    header: &DataPageHeader,
+    max_rep_level: u32,
+    max_def_level: u32,
+) -> Result<PageLevels<'a>> {
+    let num_values = value_count(header.num_values)?;
+    let mut buf = page_body;
+    let mut open = |max_level: u32| -> Result<Option<encoding::HybridRleReader<'a>>> {
+        if max_level == 0 {
+            return Ok(None);
+        }
+        let (levels_bytes, rest) = split_level_section(buf)?;
+        buf = rest;
+        let bit_width = encoding::bit_width_for_max_level(max_level);
+        Ok(Some(encoding::HybridRleReader::new(
+            levels_bytes,
+            bit_width,
+            num_values,
+        )?))
+    };
+    let rep = open(max_rep_level)?;
+    let def = open(max_def_level)?;
+    Ok(PageLevels {
+        rep,
+        def,
+        value_bytes: buf,
+    })
+}
+
+/// [`read_dictionary_indices`] as a lazy reader over a page's index stream
+/// (#856), bounded by the page's `num_values`.
+pub(crate) fn open_dictionary_indices(
+    data: &[u8],
+    num_values: usize,
+) -> Result<encoding::HybridRleReader<'_>> {
+    let bit_width = u32::from(*data.first().ok_or(ReadError::UnexpectedEof)?);
+    let rest = data.get(1..).ok_or(ReadError::UnexpectedEof)?;
+    Ok(encoding::HybridRleReader::new(rest, bit_width, num_values)?)
 }
 
 /// A leaf scalar value, decoded from a nested/repeated column's PLAIN data
