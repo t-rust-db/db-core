@@ -244,6 +244,7 @@ pub fn decode_hybrid_rle_bitpacked(
     Ok(out)
 }
 
+#[cfg(feature = "engine-column")]
 /// The run a [`HybridRleReader`] is part-way through.
 enum Run<'a> {
     /// No run is open: the next read opens one from its header.
@@ -255,6 +256,7 @@ enum Run<'a> {
     Packed { bytes: &'a [u8], left: usize },
 }
 
+#[cfg(feature = "engine-column")]
 /// A lazy reader over an RLE/Bit-Packed Hybrid stream (#856): the same
 /// values [`decode_hybrid_rle_bitpacked`] returns, filled into a caller's
 /// slice a window at a time instead of returned as a vector of the whole
@@ -273,6 +275,7 @@ pub(crate) struct HybridRleReader<'a> {
     at: usize,
 }
 
+#[cfg(feature = "engine-column")]
 impl<'a> HybridRleReader<'a> {
     /// A reader over `data` for `num_values` values of `bit_width` bits
     /// (at most 32).
@@ -396,6 +399,7 @@ impl<'a> HybridRleReader<'a> {
     }
 }
 
+#[cfg(feature = "engine-column")]
 /// The 8 values of one bit-packed group: `group` is its `bit_width` bytes.
 fn unpack_group(group: &[u8], bit_width: u32) -> [u32; 8] {
     if bit_width <= 8 {

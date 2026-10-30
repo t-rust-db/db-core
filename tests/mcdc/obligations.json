@@ -40112,7 +40112,7 @@
   {
     "id": "storage_parquet_encoding_new_26ec5816",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 280,
+    "line": 283,
     "decision": "bit_width > 32",
     "conditions": 1,
     "vectors_required": 2,
@@ -40122,7 +40122,7 @@
   {
     "id": "storage_parquet_encoding_new_6249d37f",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 284,
+    "line": 287,
     "decision": "bit_width == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40132,7 +40132,7 @@
   {
     "id": "storage_parquet_encoding_read_into_89500fd5",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 306,
+    "line": 309,
     "decision": "out.len() > self.remaining",
     "conditions": 1,
     "vectors_required": 2,
@@ -40142,7 +40142,7 @@
   {
     "id": "storage_parquet_encoding_read_into_06a0fafe",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 312,
+    "line": 315,
     "decision": "filled < out.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40152,7 +40152,7 @@
   {
     "id": "storage_parquet_encoding_read_into_d0af9c87",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 317,
+    "line": 320,
     "decision": "let Some(slot) = out.get_mut(filled)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40162,7 +40162,7 @@
   {
     "id": "storage_parquet_encoding_read_into_06a0fafe_2",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 322,
+    "line": 325,
     "decision": "filled < out.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40172,7 +40172,7 @@
   {
     "id": "storage_parquet_encoding_read_into_02b1a1db",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 324,
+    "line": 327,
     "decision": "match &mut self.run {\n                Run::Repeated { value, left } if *left > 0 => {\n                    let n = (*left).min(room);\n                    out.get_mut(filled..filled.saturating_add(n))\n                        .ok_or(EncodingError::UnexpectedEof)?\n                        .fill(*value);\n                    *left = left.saturating_sub(n);\n                    filled = filled.saturating_add(n);\n                }\n                Run::Packed { bytes, left } if *left > 0 => {\n                    let width = self.bit_width as usize;\n                    while *left > 0 && filled < out.len() {\n                        let (group, tail) = bytes\n                            .split_at_checked(width)\n                            .ok_or(EncodingError::UnexpectedEof)?;\n                        *bytes = tail;\n                        let values = unpack_group(group, self.bit_width);\n                        *left = left.saturating_sub(8);\n                        let n = 8usize.min(out.len().saturating_sub(filled));\n                        out.get_mut(filled..filled.saturating_add(n))\n                            .ok_or(EncodingError::UnexpectedEof)?\n                            .copy_from_slice(values.get(..n).ok_or(EncodingError::UnexpectedEof)?);\n                        filled = filled.saturating_add(n);\n                        if n < 8 {\n                            // The read ends inside this group: keep the rest.\n                            self.pending = values;\n                            self.at = n;\n                        }\n                    }\n                }\n                _ => self.open_run()?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40182,7 +40182,7 @@
   {
     "id": "storage_parquet_encoding_read_into_3170cc48",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 325,
+    "line": 328,
     "decision": "*left > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40192,7 +40192,7 @@
   {
     "id": "storage_parquet_encoding_read_into_3170cc48_2",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 333,
+    "line": 336,
     "decision": "*left > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40202,7 +40202,7 @@
   {
     "id": "storage_parquet_encoding_read_into_ce2efa74",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 335,
+    "line": 338,
     "decision": "*left > 0 && filled < out.len()",
     "conditions": 2,
     "vectors_required": 3,
@@ -40212,7 +40212,7 @@
   {
     "id": "storage_parquet_encoding_read_into_400819c1",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 347,
+    "line": 350,
     "decision": "n < 8",
     "conditions": 1,
     "vectors_required": 2,
@@ -40222,7 +40222,7 @@
   {
     "id": "storage_parquet_encoding_open_run_c081fc50",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 364,
+    "line": 367,
     "decision": "header & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -40232,7 +40232,7 @@
   {
     "id": "storage_parquet_encoding_unpack_group_0db7b3e5",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 401,
+    "line": 405,
     "decision": "bit_width <= 8",
     "conditions": 1,
     "vectors_required": 2,
@@ -40242,7 +40242,7 @@
   {
     "id": "storage_parquet_encoding_unpack_group_12c3c77f",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 412,
+    "line": 416,
     "decision": "let Some(slot) = values.get_mut(at)",
     "conditions": 1,
     "vectors_required": 2,
@@ -40252,7 +40252,7 @@
   {
     "id": "storage_parquet_encoding_decode_delta_binary_packed_c16e83b7",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 451,
+    "line": 455,
     "decision": "total_count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40262,7 +40262,7 @@
   {
     "id": "storage_parquet_encoding_decode_delta_binary_packed_cba90171",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 459,
+    "line": 463,
     "decision": "out.len() < total_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -40272,7 +40272,7 @@
   {
     "id": "storage_parquet_encoding_decode_delta_binary_packed_e3e20ddd",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 466,
+    "line": 470,
     "decision": "out.len() >= total_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -40282,7 +40282,7 @@
   {
     "id": "storage_parquet_encoding_decode_delta_binary_packed_26aeb291",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 470,
+    "line": 474,
     "decision": "bit_width > 64",
     "conditions": 1,
     "vectors_required": 2,
@@ -40292,7 +40292,7 @@
   {
     "id": "storage_parquet_encoding_decode_delta_binary_packed_6249d37f",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 484,
+    "line": 488,
     "decision": "bit_width == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40302,7 +40302,7 @@
   {
     "id": "storage_parquet_encoding_write_varint_2427714d",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 538,
+    "line": 542,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40312,7 +40312,7 @@
   {
     "id": "storage_parquet_encoding_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 542,
+    "line": 546,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40322,7 +40322,7 @@
   {
     "id": "storage_parquet_encoding_pack_bits_6249d37f",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 636,
+    "line": 640,
     "decision": "bit_width == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -40332,7 +40332,7 @@
   {
     "id": "storage_parquet_encoding_pack_bits_9466a82b",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 643,
+    "line": 647,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -40342,7 +40342,7 @@
   {
     "id": "storage_parquet_encoding_a_bit_packed_run_whose_byte_size_overflows_is_invalid_length_43333d26",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 742,
+    "line": 746,
     "decision": "header >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -40352,7 +40352,7 @@
   {
     "id": "storage_parquet_encoding_varints_364d7716",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 799,
+    "line": 803,
     "decision": "v >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -40362,7 +40362,7 @@
   {
     "id": "storage_parquet_encoding_varint_364d7716",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 897,
+    "line": 901,
     "decision": "v >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -40372,7 +40372,7 @@
   {
     "id": "storage_parquet_encoding_stream_ff92a7b4",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 910,
+    "line": 914,
     "decision": "bit_width >= 32",
     "conditions": 1,
     "vectors_required": 2,
@@ -40382,7 +40382,7 @@
   {
     "id": "storage_parquet_encoding_stream_cd6e0472",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 916,
+    "line": 920,
     "decision": "values.len() < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -40392,7 +40392,7 @@
   {
     "id": "storage_parquet_encoding_stream_47fd0170",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 922,
+    "line": 926,
     "decision": "values.len() >= n",
     "conditions": 1,
     "vectors_required": 2,
@@ -40402,7 +40402,7 @@
   {
     "id": "storage_parquet_encoding_stream_7f998e5a",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 930,
+    "line": 934,
     "decision": "i < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -40412,7 +40412,7 @@
   {
     "id": "storage_parquet_encoding_stream_43a60d5c",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 937,
+    "line": 941,
     "decision": "bits >= 8",
     "conditions": 1,
     "vectors_required": 2,
@@ -40422,7 +40422,7 @@
   {
     "id": "storage_parquet_encoding_read_windows_4265c954",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 953,
+    "line": 957,
     "decision": "all.len() < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -42002,7 +42002,7 @@
   {
     "id": "storage_parquet_reader_open_rep_def_levels_6126445a",
     "file": "src/storage/parquet/reader.rs",
-    "line": 150,
+    "line": 152,
     "decision": "max_level == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42012,7 +42012,7 @@
   {
     "id": "storage_parquet_reader_read_plain_scalar_aad368b4",
     "file": "src/storage/parquet/reader.rs",
-    "line": 210,
+    "line": 213,
     "decision": "match physical_type {\n        PhysicalType::Int32 => Ok(LeafScalar::Int32(read_plain_i32(buf)?)),\n        PhysicalType::Int64 => Ok(LeafScalar::Int64(read_plain_i64(buf)?)),\n        PhysicalType::Float => Ok(LeafScalar::Float(read_plain_f32(buf)?)),\n        PhysicalType::Double => Ok(LeafScalar::Double(read_plain_f64(buf)?)),\n        PhysicalType::ByteArray => Ok(LeafScalar::Str(read_plain_string(buf)?.into())),\n        PhysicalType::Boolean => {\n            let byte = *buf.first().ok_or(ReadError::UnexpectedEof)?;\n            let bit = (byte >> (*bit_pos % 8)) & 1;\n            *bit_pos = bit_pos.checked_add(1).ok_or(ReadError::UnexpectedEof)?;\n            if (*bit_pos).is_multiple_of(8) {\n                *buf = buf.get(1..).ok_or(ReadError::UnexpectedEof)?;\n            }\n            Ok(LeafScalar::Bool(bit == 1))\n        }\n        other => Err(ReadError::UnsupportedNestedPhysicalType(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42022,7 +42022,7 @@
   {
     "id": "storage_parquet_reader_read_plain_scalar_c071969a",
     "file": "src/storage/parquet/reader.rs",
-    "line": 220,
+    "line": 223,
     "decision": "(*bit_pos).is_multiple_of(8)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42032,7 +42032,7 @@
   {
     "id": "storage_parquet_reader_presence_5547f7bf",
     "file": "src/storage/parquet/reader.rs",
-    "line": 238,
+    "line": 241,
     "decision": "definition_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42042,7 +42042,7 @@
   {
     "id": "storage_parquet_reader_assemble_5547f7bf",
     "file": "src/storage/parquet/reader.rs",
-    "line": 262,
+    "line": 265,
     "decision": "definition_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42052,7 +42052,7 @@
   {
     "id": "storage_parquet_reader_assemble_af1aadaf",
     "file": "src/storage/parquet/reader.rs",
-    "line": 269,
+    "line": 272,
     "decision": "present",
     "conditions": 1,
     "vectors_required": 2,
@@ -42062,7 +42062,7 @@
   {
     "id": "storage_parquet_reader_take_9e5f6a02",
     "file": "src/storage/parquet/reader.rs",
-    "line": 287,
+    "line": 290,
     "decision": "buf.len() < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -42072,7 +42072,7 @@
   {
     "id": "storage_parquet_reader_decode_dictionary_string_picked_04ab849f",
     "file": "src/storage/parquet/reader.rs",
-    "line": 385,
+    "line": 388,
     "decision": "keep",
     "conditions": 1,
     "vectors_required": 2,
@@ -42082,7 +42082,7 @@
   {
     "id": "storage_parquet_reader_assemble_dictionary_5547f7bf",
     "file": "src/storage/parquet/reader.rs",
-    "line": 467,
+    "line": 470,
     "decision": "definition_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42092,7 +42092,7 @@
   {
     "id": "storage_parquet_reader_assemble_dictionary_af1aadaf",
     "file": "src/storage/parquet/reader.rs",
-    "line": 475,
+    "line": 478,
     "decision": "present",
     "conditions": 1,
     "vectors_required": 2,
@@ -42102,7 +42102,7 @@
   {
     "id": "storage_parquet_reader_present_count_5547f7bf",
     "file": "src/storage/parquet/reader.rs",
-    "line": 492,
+    "line": 495,
     "decision": "definition_levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42112,7 +42112,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_index_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 514,
+    "line": 517,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42122,7 +42122,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_index_column_af1aadaf",
     "file": "src/storage/parquet/reader.rs",
-    "line": 523,
+    "line": 526,
     "decision": "present",
     "conditions": 1,
     "vectors_required": 2,
@@ -42132,7 +42132,7 @@
   {
     "id": "storage_parquet_reader_read_int64_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 539,
+    "line": 542,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42142,7 +42142,7 @@
   {
     "id": "storage_parquet_reader_read_int64_column_45e46c69",
     "file": "src/storage/parquet/reader.rs",
-    "line": 543,
+    "line": 546,
     "decision": "header.encoding == Encoding::DeltaBinaryPacked",
     "conditions": 1,
     "vectors_required": 2,
@@ -42152,7 +42152,7 @@
   {
     "id": "storage_parquet_reader_read_int64_column_af1aadaf",
     "file": "src/storage/parquet/reader.rs",
-    "line": 549,
+    "line": 552,
     "decision": "present",
     "conditions": 1,
     "vectors_required": 2,
@@ -42162,7 +42162,7 @@
   {
     "id": "storage_parquet_reader_read_int64_column_dictionary_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 569,
+    "line": 572,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42172,7 +42172,7 @@
   {
     "id": "storage_parquet_reader_read_double_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 584,
+    "line": 587,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42182,7 +42182,7 @@
   {
     "id": "storage_parquet_reader_read_plain_fixed_6801cf3a",
     "file": "src/storage/parquet/reader.rs",
-    "line": 611,
+    "line": 614,
     "decision": "num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42192,7 +42192,7 @@
   {
     "id": "storage_parquet_reader_read_plain_fixed_944bcff7",
     "file": "src/storage/parquet/reader.rs",
-    "line": 615,
+    "line": 618,
     "decision": "levels.is_empty() || levels.iter().all(|&level| level == max_def_level)",
     "conditions": 2,
     "vectors_required": 3,
@@ -42202,7 +42202,7 @@
   {
     "id": "storage_parquet_reader_read_plain_fixed_bf3d0ff3",
     "file": "src/storage/parquet/reader.rs",
-    "line": 617,
+    "line": 620,
     "decision": "!levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42212,7 +42212,7 @@
   {
     "id": "storage_parquet_reader_read_plain_fixed_66766719",
     "file": "src/storage/parquet/reader.rs",
-    "line": 626,
+    "line": 629,
     "decision": "level == max_def_level",
     "conditions": 1,
     "vectors_required": 2,
@@ -42222,7 +42222,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_fixed_6801cf3a",
     "file": "src/storage/parquet/reader.rs",
-    "line": 652,
+    "line": 655,
     "decision": "num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42232,7 +42232,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_fixed_944bcff7",
     "file": "src/storage/parquet/reader.rs",
-    "line": 665,
+    "line": 668,
     "decision": "levels.is_empty() || levels.iter().all(|&level| level == max_def_level)",
     "conditions": 2,
     "vectors_required": 3,
@@ -42242,7 +42242,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_fixed_bf3d0ff3",
     "file": "src/storage/parquet/reader.rs",
-    "line": 671,
+    "line": 674,
     "decision": "!levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42252,7 +42252,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_fixed_66766719",
     "file": "src/storage/parquet/reader.rs",
-    "line": 680,
+    "line": 683,
     "decision": "level == max_def_level",
     "conditions": 1,
     "vectors_required": 2,
@@ -42262,7 +42262,7 @@
   {
     "id": "storage_parquet_reader_read_plain_strings_6801cf3a",
     "file": "src/storage/parquet/reader.rs",
-    "line": 710,
+    "line": 713,
     "decision": "num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42272,7 +42272,7 @@
   {
     "id": "storage_parquet_reader_read_plain_strings_3c3dada9",
     "file": "src/storage/parquet/reader.rs",
-    "line": 714,
+    "line": 717,
     "decision": "levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42282,7 +42282,7 @@
   {
     "id": "storage_parquet_reader_read_plain_strings_119202e7",
     "file": "src/storage/parquet/reader.rs",
-    "line": 722,
+    "line": 725,
     "decision": "is_present",
     "conditions": 1,
     "vectors_required": 2,
@@ -42292,7 +42292,7 @@
   {
     "id": "storage_parquet_reader_read_plain_strings_a8bd23e6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 725,
+    "line": 728,
     "decision": "bytes.first().is_some_and(|&b| b & 0xC0 == 0x80)",
     "conditions": 1,
     "vectors_required": 2,
@@ -42302,7 +42302,7 @@
   {
     "id": "storage_parquet_reader_read_plain_strings_bf3d0ff3",
     "file": "src/storage/parquet/reader.rs",
-    "line": 731,
+    "line": 734,
     "decision": "!levels.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -42312,7 +42312,7 @@
   {
     "id": "storage_parquet_reader_read_plain_fixed_at_242a8da5",
     "file": "src/storage/parquet/reader.rs",
-    "line": 758,
+    "line": 761,
     "decision": "all_present",
     "conditions": 1,
     "vectors_required": 2,
@@ -42322,7 +42322,7 @@
   {
     "id": "storage_parquet_reader_read_plain_fixed_at_66766719",
     "file": "src/storage/parquet/reader.rs",
-    "line": 765,
+    "line": 768,
     "decision": "level == max_def_level",
     "conditions": 1,
     "vectors_required": 2,
@@ -42332,7 +42332,7 @@
   {
     "id": "storage_parquet_reader_read_plain_fixed_at_084cc378",
     "file": "src/storage/parquet/reader.rs",
-    "line": 773,
+    "line": 776,
     "decision": "r >= num_values",
     "conditions": 1,
     "vectors_required": 2,
@@ -42342,7 +42342,7 @@
   {
     "id": "storage_parquet_reader_read_plain_fixed_at_e3b5d9f1",
     "file": "src/storage/parquet/reader.rs",
-    "line": 778,
+    "line": 781,
     "decision": "!is_present",
     "conditions": 1,
     "vectors_required": 2,
@@ -42352,7 +42352,7 @@
   {
     "id": "storage_parquet_reader_read_double_column_dictionary_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 819,
+    "line": 822,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42362,7 +42362,7 @@
   {
     "id": "storage_parquet_reader_read_boolean_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 835,
+    "line": 838,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42372,7 +42372,7 @@
   {
     "id": "storage_parquet_reader_read_boolean_column_dictionary_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 859,
+    "line": 862,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42382,7 +42382,7 @@
   {
     "id": "storage_parquet_reader_read_string_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 875,
+    "line": 878,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42392,7 +42392,7 @@
   {
     "id": "storage_parquet_reader_read_bytes_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 889,
+    "line": 892,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42402,7 +42402,7 @@
   {
     "id": "storage_parquet_reader_read_string_column_dictionary_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 904,
+    "line": 907,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42412,7 +42412,7 @@
   {
     "id": "storage_parquet_reader_read_int32_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 919,
+    "line": 922,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42422,7 +42422,7 @@
   {
     "id": "storage_parquet_reader_read_int32_column_dictionary_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 934,
+    "line": 937,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42432,7 +42432,7 @@
   {
     "id": "storage_parquet_reader_read_float_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 949,
+    "line": 952,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42442,7 +42442,7 @@
   {
     "id": "storage_parquet_reader_read_float_column_dictionary_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 964,
+    "line": 967,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42452,7 +42452,7 @@
   {
     "id": "storage_parquet_reader_read_fixed_len_byte_array_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 981,
+    "line": 984,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42462,7 +42462,7 @@
   {
     "id": "storage_parquet_reader_read_fixed_len_byte_array_column_dictionary_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 998,
+    "line": 1001,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42472,7 +42472,7 @@
   {
     "id": "storage_parquet_reader_read_int96_column_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1013,
+    "line": 1016,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42482,7 +42482,7 @@
   {
     "id": "storage_parquet_reader_read_int96_column_dictionary_5a0692d6",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1036,
+    "line": 1039,
     "decision": "header.num_values == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42492,7 +42492,7 @@
   {
     "id": "storage_parquet_reader_encode_def_levels_62d37561",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1131,
+    "line": 1134,
     "decision": "idx < n && levels[idx] == 1",
     "conditions": 2,
     "vectors_required": 3,
@@ -42502,7 +42502,7 @@
   {
     "id": "storage_parquet_reader_encode_dictionary_indices_9466a82b",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1612,
+    "line": 1615,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -42512,7 +42512,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_fixed_rejects_a_code_past_the_dictionary_4c7ae637",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1753,
+    "line": 1756,
     "decision": "max_def_level == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42522,7 +42522,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_fixed_rejects_a_code_past_the_dictionary_4c7ae637_2",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1758,
+    "line": 1761,
     "decision": "max_def_level == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42532,7 +42532,7 @@
   {
     "id": "storage_parquet_reader_plain_scalar_booleans_advance_a_byte_every_eight_bits_cf8788a7",
     "file": "src/storage/parquet/reader.rs",
-    "line": 2014,
+    "line": 2017,
     "decision": "match read_plain_scalar(&mut buf, PhysicalType::Boolean, &mut bit_pos).unwrap() {\n                LeafScalar::Bool(b) => bits.push(b),\n                other => panic!(\"expected a boolean, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42582,7 +42582,7 @@
   {
     "id": "storage_parquet_schema_byte_size_bf49d43d",
     "file": "src/storage/parquet/schema.rs",
-    "line": 252,
+    "line": 253,
     "decision": "match self {\n            ColumnValues::Boolean(v) => fixed(v),\n            ColumnValues::Int32(v) => fixed(v),\n            ColumnValues::Int64(v)\n            | ColumnValues::TimestampMicros(v)\n            | ColumnValues::TimestampNanos(v) => fixed(v),\n            ColumnValues::Float(v) => fixed(v),\n            ColumnValues::Double(v) => fixed(v),\n            ColumnValues::Utf8(v) => {\n                fixed(v).saturating_add(v.iter().flatten().map(String::len).sum::<usize>())\n            }\n            ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => bytes(v),\n            ColumnValues::UInt8(v) => fixed(v),\n            ColumnValues::UInt16(v) => fixed(v),\n            ColumnValues::UInt32(v) => fixed(v),\n            ColumnValues::UInt64(v) => fixed(v),\n            ColumnValues::Decimal(v) => fixed(v),\n            ColumnValues::Map(v) => fixed(v).saturating_add(\n                v.iter()\n                    .flatten()\n                    .flatten()\n                    .map(|(k, val)| {\n                        size_of::<(std::sync::Arc<str>, Option<std::sync::Arc<str>>)>()\n                            .saturating_add(k.len())\n                            .saturating_add(heap(val))\n                    })\n                    .sum::<usize>(),\n            ),\n            ColumnValues::List(v) => fixed(v).saturating_add(\n                v.iter()\n                    .flatten()\n                    .flatten()\n                    .map(|item| size_of::<Option<std::sync::Arc<str>>>().saturating_add(heap(item)))\n                    .sum::<usize>(),\n            ),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42592,7 +42592,7 @@
   {
     "id": "storage_parquet_schema_validity_dd5c3c89",
     "file": "src/storage/parquet/schema.rs",
-    "line": 293,
+    "line": 294,
     "decision": "match self {\n            ColumnValues::Boolean(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Int32(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Int64(v)\n            | ColumnValues::TimestampMicros(v)\n            | ColumnValues::TimestampNanos(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Float(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Double(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Utf8(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => {\n                v.iter().map(Option::is_some).collect()\n            }\n            ColumnValues::UInt8(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::UInt16(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::UInt32(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::UInt64(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Decimal(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::Map(v) => v.iter().map(Option::is_some).collect(),\n            ColumnValues::List(v) => v.iter().map(Option::is_some).collect(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42602,7 +42602,7 @@
   {
     "id": "storage_parquet_schema_append_a264ce2f",
     "file": "src/storage/parquet/schema.rs",
-    "line": 319,
+    "line": 320,
     "decision": "match (self, other) {\n            (ColumnValues::Boolean(a), ColumnValues::Boolean(b)) => a.extend(b),\n            (ColumnValues::Int32(a), ColumnValues::Int32(b)) => a.extend(b),\n            (ColumnValues::Int64(a), ColumnValues::Int64(b)) => a.extend(b),\n            (ColumnValues::Float(a), ColumnValues::Float(b)) => a.extend(b),\n            (ColumnValues::Double(a), ColumnValues::Double(b)) => a.extend(b),\n            (ColumnValues::Utf8(a), ColumnValues::Utf8(b)) => a.extend(b),\n            (ColumnValues::TimestampMicros(a), ColumnValues::TimestampMicros(b)) => a.extend(b),\n            (ColumnValues::TimestampNanos(a), ColumnValues::TimestampNanos(b)) => a.extend(b),\n            (ColumnValues::Binary(a), ColumnValues::Binary(b)) => a.extend(b),\n            (ColumnValues::UInt8(a), ColumnValues::UInt8(b)) => a.extend(b),\n            (ColumnValues::UInt16(a), ColumnValues::UInt16(b)) => a.extend(b),\n            (ColumnValues::UInt32(a), ColumnValues::UInt32(b)) => a.extend(b),\n            (ColumnValues::UInt64(a), ColumnValues::UInt64(b)) => a.extend(b),\n            (ColumnValues::Decimal(a), ColumnValues::Decimal(b)) => a.extend(b),\n            (ColumnValues::FixedLenByteArray(a), ColumnValues::FixedLenByteArray(b)) => a.extend(b),\n            (ColumnValues::Map(a), ColumnValues::Map(b)) => a.extend(b),\n            (ColumnValues::List(a), ColumnValues::List(b)) => a.extend(b),\n            _ => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
