@@ -346,29 +346,67 @@ fn agg_arg(_expr: &AstExpr, agg: AggFunc, args: &FunctionArgs) -> Result<Option<
 /// lets an aggregate sit under (only a numeric scalar's arguments, #788, are
 /// among them).
 fn agg_expr_calls(expr: &AstExpr) -> Vec<&AstExpr> {
-    match &expr.kind {
-        ExprKind::FunctionCall { name, .. } if AggFunc::from_name(name).is_some() => vec![expr],
+    // Exhaustive, no `_` arm: a node it skipped hid the aggregates under
+    // it, so `HAVING CASE WHEN count(*) > 0 THEN 1 END` compared against
+    // nothing and dropped every group (#886). A new node kind must decide
+    // here. Subqueries are their own aggregate scope.
+    let children: Vec<&AstExpr> = match &expr.kind {
+        ExprKind::FunctionCall { name, .. } if AggFunc::from_name(name).is_some() => {
+            return vec![expr];
+        }
         // A scalar's arguments (#788): `ROUND(SUM(x) / 100.0, 2)`.
         ExprKind::FunctionCall {
             args: FunctionArgs::List(list),
             ..
-        } => list.iter().flat_map(agg_expr_calls).collect(),
-        ExprKind::Binary { lhs, rhs, .. }
-        | ExprKind::Is { lhs, rhs, .. }
-        | ExprKind::Like {
-            expr: lhs,
-            pattern: rhs,
+        } => list.iter().collect(),
+        ExprKind::FunctionCall {
+            args: FunctionArgs::Star,
             ..
-        } => {
-            let mut out = agg_expr_calls(lhs);
-            out.extend(agg_expr_calls(rhs));
-            out
         }
+        | ExprKind::Literal(_)
+        | ExprKind::Param(_)
+        | ExprKind::Column { .. }
+        | ExprKind::Subquery(_)
+        | ExprKind::Exists { .. } => vec![],
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => vec![lhs, rhs],
+        ExprKind::Like {
+            expr,
+            pattern,
+            escape,
+            ..
+        } => [&**expr, &**pattern]
+            .into_iter()
+            .chain(escape.as_deref())
+            .collect(),
         ExprKind::Paren(inner)
         | ExprKind::Unary { expr: inner, .. }
-        | ExprKind::IsNull { expr: inner, .. } => agg_expr_calls(inner),
-        _ => vec![],
-    }
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. }
+        | ExprKind::InSubquery { expr: inner, .. } => vec![inner],
+        ExprKind::Between { expr, lo, hi, .. } => vec![expr, lo, hi],
+        ExprKind::In { expr, list, .. } => std::iter::once(&**expr).chain(list).collect(),
+        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().collect(),
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => operand
+            .as_deref()
+            .into_iter()
+            .chain(whens.iter().flat_map(|(w, t)| [w, t]))
+            .chain(else_.as_deref())
+            .collect(),
+    };
+    children.into_iter().flat_map(agg_expr_calls).collect()
+}
+
+/// The aggregate `name` names. Only called on calls [`agg_expr_calls`]
+/// picked out as aggregates, so an unknown name is a planner bug -- it
+/// used to fall back to `COUNT` silently (#886).
+fn agg_func_of(name: &str) -> Result<AggFunc> {
+    AggFunc::from_name(name)
+        .ok_or_else(|| PlanError::Internal(format!("{name} is not an aggregate function")))
 }
 
 /// The source register of one aggregate call nested in an expression
@@ -391,7 +429,7 @@ fn agg_call_source(call: &AstExpr, ctx: &mut Ctx) -> Result<Option<usize>> {
             "{name}(DISTINCT ...) inside an expression"
         )));
     }
-    let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
+    let func = agg_func_of(name)?;
     // Its partial is a sketch no expression or `HAVING` operand can read (#603).
     if func == AggFunc::ApproxCountDistinct {
         return Err(PlanError::UnsupportedSelectItem(format!(
@@ -731,14 +769,57 @@ fn onto_merged(
         ExprKind::Like {
             expr: inner,
             pattern,
+            escape,
             ..
         } => {
             *inner = recurse(inner)?;
             *pattern = recurse(pattern)?;
+            if let Some(escape) = escape {
+                *escape = recurse(escape)?;
+            }
         }
         ExprKind::Paren(inner)
         | ExprKind::Unary { expr: inner, .. }
-        | ExprKind::IsNull { expr: inner, .. } => *inner = recurse(inner)?,
+        | ExprKind::IsNull { expr: inner, .. }
+        | ExprKind::Cast { expr: inner, .. }
+        | ExprKind::Collate { expr: inner, .. } => *inner = recurse(inner)?,
+        ExprKind::Between {
+            expr: inner,
+            lo,
+            hi,
+            ..
+        } => {
+            *inner = recurse(inner)?;
+            *lo = recurse(lo)?;
+            *hi = recurse(hi)?;
+        }
+        ExprKind::In {
+            expr: inner, list, ..
+        } => {
+            *inner = recurse(inner)?;
+            for item in list.iter_mut() {
+                *item = onto_merged(item, terms, calls, slots)?;
+            }
+        }
+        // #886: left as-is (`_ => {}`), a `CASE` kept its aggregate calls
+        // un-merged, so `HAVING CASE WHEN count(*) > 0 ...` compared
+        // against nothing and dropped every group.
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            if let Some(operand) = operand {
+                *operand = recurse(operand)?;
+            }
+            for (when, then) in whens.iter_mut() {
+                *when = onto_merged(when, terms, calls, slots)?;
+                *then = onto_merged(then, terms, calls, slots)?;
+            }
+            if let Some(else_) = else_ {
+                *else_ = recurse(else_)?;
+            }
+        }
         ExprKind::FunctionCall {
             args: FunctionArgs::List(list),
             ..
@@ -747,18 +828,26 @@ fn onto_merged(
                 *arg = onto_merged(arg, terms, calls, slots)?;
             }
         }
+        ExprKind::FunctionCall {
+            args: FunctionArgs::Star,
+            ..
+        }
+        | ExprKind::Literal(_)
+        | ExprKind::Param(_) => {}
         ExprKind::Column { .. } => {
             let name = expr_column_name(expr).unwrap_or_default();
             return Err(PlanError::UnsupportedSelectItem(format!(
                 "column `{name}` must be a GROUP BY key or inside an aggregate"
             )));
         }
-        ExprKind::InSubquery { .. } | ExprKind::Exists { .. } => {
+        ExprKind::InSubquery { .. }
+        | ExprKind::InSubqueryMulti { .. }
+        | ExprKind::Subquery(_)
+        | ExprKind::Exists { .. } => {
             return Err(PlanError::UnsupportedSelectItem(
                 "a subquery in a grouped or aggregate SELECT list".into(),
             ));
         }
-        _ => {}
     }
     Ok(out)
 }
@@ -2278,7 +2367,7 @@ fn compile_filtered(
                         "agg_expr_calls returned a non-FunctionCall node".into(),
                     ));
                 };
-                let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
+                let func = agg_func_of(name)?;
                 slots.push(push_aggregate(
                     func,
                     *src,
@@ -2304,7 +2393,7 @@ fn compile_filtered(
                         "agg_expr_calls returned a non-FunctionCall node".into(),
                     ));
                 };
-                let func = AggFunc::from_name(name).unwrap_or(AggFunc::Count);
+                let func = agg_func_of(name)?;
                 Some(push_aggregate(
                     func,
                     *src,

@@ -1,0 +1,102 @@
+# #886: HAVING with an aggregate under CASE, and DuckDB's implicit cast of a
+# predicate to BOOLEAN (nonzero number true, NULL false, text converted).
+
+# HAVING with an aggregate inside CASE (it dropped every group)
+query T nosort
+SELECT source FROM events GROUP BY source HAVING CASE WHEN count(*) > 0 THEN 1 ELSE 0 END ORDER BY source
+----
+a
+b
+c
+
+query T nosort
+SELECT source FROM events GROUP BY source HAVING CASE WHEN sum(ts) > 30 THEN 1 ELSE 0 END ORDER BY source
+----
+a
+b
+c
+
+query T nosort
+SELECT source FROM events GROUP BY source HAVING CASE count(*) WHEN 1 THEN 0 ELSE 1 END ORDER BY source
+----
+a
+b
+
+query T nosort
+SELECT source FROM events GROUP BY source HAVING count(*) ORDER BY source
+----
+a
+b
+c
+
+# A number is a predicate: true when nonzero (only Bool(true) kept a row)
+query I nosort
+SELECT count(*) FROM events WHERE 1
+----
+6
+
+query I nosort
+SELECT count(*) FROM events WHERE 0
+----
+0
+
+query I nosort
+SELECT count(*) FROM events WHERE ts
+----
+6
+
+query I nosort
+SELECT count(*) FROM events WHERE NULL
+----
+0
+
+query I nosort
+SELECT count(*) FROM events WHERE CASE WHEN ts > 30 THEN 1 ELSE 0 END
+----
+3
+
+# ... in AND, OR, NOT, CASE WHEN and FILTER too
+query I nosort
+SELECT count(*) FROM events WHERE ts AND 1
+----
+6
+
+query I nosort
+SELECT count(*) FROM events WHERE 0 OR ts
+----
+6
+
+query I nosort
+SELECT count(*) FROM events WHERE NOT (ts - 10)
+----
+1
+
+query IT nosort
+SELECT ts, CASE WHEN ts - 10 THEN 'y' ELSE 'n' END FROM events ORDER BY ts
+----
+10
+n
+20
+y
+30
+y
+40
+y
+50
+y
+60
+y
+
+query I nosort
+SELECT count(*) FILTER (WHERE ts - 10) FROM events
+----
+5
+
+# Text converts as in a comparison; text that does not is an error
+query I nosort
+SELECT count(*) FROM events WHERE 'true'
+----
+6
+
+statement error
+SELECT count(*) FROM events WHERE source

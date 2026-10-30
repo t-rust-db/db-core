@@ -3167,6 +3167,32 @@ pub enum VmError {
     },
 }
 
+/// A value as a boolean, as DuckDB casts a `WHERE`/`HAVING`/`CASE WHEN`/
+/// `AND`/`OR`/`NOT`/`FILTER` operand to `BOOLEAN`: a number is true when
+/// nonzero, NULL is false, text converts as in a comparison (`'true'`,
+/// `'t'`, `'1'`, ...), anything else is a [`VmError::Conversion`]. Only
+/// `Bool(true)` used to count (#886), so `WHERE 1`, `WHERE ts`, `HAVING
+/// count(*)` and `CASE WHEN n THEN ...` silently went the false way.
+fn predicate_truth(value: &Value) -> Result<bool> {
+    match value {
+        Value::Bool(b) => Ok(*b),
+        Value::Null => Ok(false),
+        Value::Int(i) => Ok(*i != 0),
+        Value::Float(x) => Ok(*x != 0.0),
+        Value::Decimal { unscaled, .. } => Ok(*unscaled != 0),
+        Value::Str(text) => Ok(matches!(
+            convert_str_like(text, &Value::Bool(true))?,
+            Value::Bool(true)
+        )),
+        Value::Map(_) | Value::List(_) | Value::Bytes(_) | Value::Blob(_) => {
+            Err(VmError::Conversion {
+                value: format!("{value:?}"),
+                to: "BOOLEAN",
+            })
+        }
+    }
+}
+
 impl fmt::Display for VmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -6637,8 +6663,17 @@ impl Vm {
                 self.resolve_selection(opcode)?;
                 self.ensure_materialized(*cond);
                 let (then_rows, else_rows): (Vec<usize>, Vec<usize>) = {
-                    let cond_values = self.reg(*cond, opcode)?;
-                    (0..cond_values.len()).partition(|&i| cond_values.get(i).is_some_and(as_bool))
+                    let truths = self
+                        .reg(*cond, opcode)?
+                        .iter()
+                        .map(predicate_truth)
+                        .collect::<Result<Vec<bool>>>()?;
+                    let (then_rows, else_rows): (Vec<_>, Vec<_>) =
+                        truths.iter().enumerate().partition(|(_, keep)| **keep);
+                    (
+                        then_rows.into_iter().map(|(i, _)| i).collect(),
+                        else_rows.into_iter().map(|(i, _)| i).collect(),
+                    )
                 };
                 let num_rows = then_rows.len().saturating_add(else_rows.len());
                 let (then_values, then_kind) = self.run_branch(opcode, then, &then_rows)?;
@@ -6749,15 +6784,15 @@ impl Vm {
                     .map(|i| valid.get(i) && data.get(i).copied().unwrap_or(false))
                     .collect(),
                 other => (0..other.len())
-                    .map(|i| matches!(other.get(i), Value::Bool(true)))
-                    .collect(),
+                    .map(|i| predicate_truth(&other.get(i)))
+                    .collect::<Result<_>>()?,
             },
             None => {
                 self.ensure_materialized(*predicate);
                 self.reg(*predicate, opcode)?
                     .iter()
-                    .map(|v| matches!(v, Value::Bool(true)))
-                    .collect()
+                    .map(predicate_truth)
+                    .collect::<Result<_>>()?
             }
         };
         let base_len = mask.len();
@@ -8713,7 +8748,7 @@ fn in_list_values(values: &[Value], list: &[Value], negated: bool) -> Result<Vec
                 let r = apply_map_op(cmp, v, item)?;
                 acc = Some(match acc {
                     None => r,
-                    Some(prev) => three_valued(join, truth(&prev), truth(&r)),
+                    Some(prev) => three_valued(join, truth(&prev)?, truth(&r)?),
                 });
             }
             Ok(acc.unwrap_or(Value::Bool(negated)))
@@ -8739,7 +8774,7 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     // FALSE, not NULL -- the null-propagation rule below dropped those
     // rows from every WHERE and HAVING.
     if matches!(op, MapOp::And | MapOp::Or) {
-        return Ok(three_valued(op, truth(a), truth(b)));
+        return Ok(three_valued(op, truth(a)?, truth(b)?));
     }
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Ok(Value::Null);
@@ -8778,9 +8813,9 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
         MapOp::Le => comparison(a, b, |o| matches!(o, Some(Less | Equal))),
         MapOp::Gt => comparison(a, b, |o| o == Some(Greater)),
         MapOp::Ge => comparison(a, b, |o| matches!(o, Some(Greater | Equal))),
-        MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),
-        MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),
-        MapOp::Not => Value::Bool(!as_bool(a)),
+        MapOp::And => Value::Bool(predicate_truth(a)? && predicate_truth(b)?),
+        MapOp::Or => Value::Bool(predicate_truth(a)? || predicate_truth(b)?),
+        MapOp::Not => Value::Bool(!predicate_truth(a)?),
         MapOp::Concat => Value::Str(Cow::Owned(format!("{a}{b}"))),
         MapOp::Neg => match a {
             // `-i64::MIN` has no integer representation: an error, as in
@@ -8807,7 +8842,7 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
         MapOp::Copy => a.clone(),
         MapOp::MaskIf => {
             // MaskIf keeps `a` wherever the predicate register is true.
-            if matches!(b, Value::Bool(true)) {
+            if predicate_truth(b)? {
                 a.clone()
             } else {
                 Value::Null
@@ -8899,10 +8934,6 @@ fn comparison(a: &Value, b: &Value, pred: impl Fn(Option<std::cmp::Ordering>) ->
     Value::Bool(pred(compare_values(a, b)))
 }
 
-fn as_bool(v: &Value) -> bool {
-    matches!(v, Value::Bool(true))
-}
-
 /// A string compared with `v` is converted to `v`'s type first (#679).
 fn converts_from_str(v: &Value) -> bool {
     matches!(
@@ -8942,10 +8973,10 @@ fn convert_str_like(s: &str, like: &Value) -> Result<Value> {
 }
 
 /// A value as a SQL truth value: `None` for NULL (unknown).
-fn truth(v: &Value) -> Option<bool> {
+fn truth(v: &Value) -> Result<Option<bool>> {
     match v {
-        Value::Null => None,
-        other => Some(as_bool(other)),
+        Value::Null => Ok(None),
+        other => predicate_truth(other).map(Some),
     }
 }
 
