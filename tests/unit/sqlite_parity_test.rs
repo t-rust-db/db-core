@@ -1308,3 +1308,37 @@ fn count_star_over_a_derived_table_counts_its_rows() {
         assert_eq!(rows, vec![vec![Cell::Int(want)]], "{sql}");
     }
 }
+
+/// #873: a corrupt page under a table was read as "end of table": with
+/// table `t`'s root page type zeroed, `count(*)` returned 0, a scan
+/// returned no rows and `sum` NULL -- silently wrong. sqlite3 reports
+/// "database disk image is malformed" for each; the row engine now fails
+/// with the storage error too.
+#[test]
+fn a_corrupt_table_page_is_an_error_not_an_empty_table() {
+    let db = TempDb::new("corrupt-root");
+    let mut bytes = std::fs::read(db.path()).unwrap();
+    let page_size = match u16::from_be_bytes([bytes[16], bytes[17]]) {
+        1 => 65_536,
+        n => usize::from(n),
+    };
+    // Page 2 is `t`'s root; byte 0 of a non-first page is its type.
+    bytes[page_size] = 0x00;
+    std::fs::write(db.path(), &bytes).unwrap();
+
+    let mut e = RowEngine::open(db.path()).unwrap();
+    for sql in [
+        "SELECT count(*) FROM t",
+        "SELECT a, b FROM t",
+        "SELECT sum(a) FROM t",
+        "SELECT a FROM t WHERE rowid = 1",
+        // Writes used to report "cursor slot does not support ...".
+        "INSERT INTO t VALUES (9, 'x')",
+        "DELETE FROM t WHERE a = 1",
+    ] {
+        match e.run_query(sql) {
+            Err(err) => assert!(err.to_string().contains("cursor failed"), "{sql}: {err}"),
+            Ok(r) => panic!("{sql}: corrupt page read as {:?}", r.rows),
+        }
+    }
+}

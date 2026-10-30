@@ -32,7 +32,7 @@ pub(super) fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
             let cursor = vm.cursor_mut(instr.p1)?;
             // A storage-backed cursor takes the record bytes as they are
             // (byte-exact with MakeRecord); in-memory ones decode them.
-            let inserted = match cursor.insert_payload(rowid, &payload) {
+            let inserted = match cursor.insert_payload(rowid, &payload)? {
                 Some(ok) => ok,
                 None => {
                     let values = decode_record(&payload, encoding).map_err(|e| {
@@ -41,7 +41,7 @@ pub(super) fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
                             reason: e.to_string(),
                         }
                     })?;
-                    cursor.insert(rowid, values)
+                    cursor.insert(rowid, values)?
                 }
             };
             if !inserted {
@@ -78,19 +78,19 @@ pub(super) fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
             };
             let encoding = vm.text_encoding;
             let cursor = vm.cursor_mut(instr.p1)?;
-            let updated = match cursor.update_payload(rowid, &payload) {
+            let updated = match cursor.update_payload(rowid, &payload)? {
                 Some(ok) => ok,
                 None => {
                     // Cursor kinds without a combined rewrite (in-memory
                     // fixtures, ephemeral tables) fall back to the
                     // Delete+Insert pair a storage-backed cursor avoids.
-                    if !cursor.delete() {
+                    if !cursor.delete()? {
                         return Err(ExecError::MalformedInstruction {
                             opcode: "Update",
                             reason: "cursor slot does not support deletion".to_string(),
                         });
                     }
-                    match cursor.insert_payload(rowid, &payload) {
+                    match cursor.insert_payload(rowid, &payload)? {
                         Some(ok) => ok,
                         None => {
                             let values = decode_record(&payload, encoding).map_err(|e| {
@@ -99,7 +99,7 @@ pub(super) fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
                                     reason: e.to_string(),
                                 }
                             })?;
-                            cursor.insert(rowid, values)
+                            cursor.insert(rowid, values)?
                         }
                     }
                 }
@@ -115,7 +115,7 @@ pub(super) fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
         }
 
         Opcode::Delete => {
-            let deleted = vm.cursor_mut(instr.p1)?.delete();
+            let deleted = vm.cursor_mut(instr.p1)?.delete()?;
             if !deleted {
                 return Err(ExecError::MalformedInstruction {
                     opcode: "Delete",
@@ -126,7 +126,7 @@ pub(super) fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
             Ok(Step::Next)
         }
         Opcode::NewRowid => {
-            let next = vm.cursor(instr.p1)?.next_rowid();
+            let next = vm.cursor(instr.p1)?.next_rowid()?;
             // sqlite-rs: p5 != 0 with P4::Str(table) is AUTOINCREMENT —
             // the schema hook consults/updates sqlite_sequence so a rowid
             // is never reused after a delete.
@@ -174,10 +174,10 @@ pub(super) fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
                 let cursor = vm.cursor_mut(instr.p1)?;
                 match cursor.ephemeral_idx_insert(&key, &collations, stored) {
                     Some(ok) => ok,
-                    None => cursor.idx_insert(key),
+                    None => cursor.idx_insert(key)?,
                 }
             } else {
-                vm.cursor_mut(instr.p1)?.idx_delete(&key)
+                vm.cursor_mut(instr.p1)?.idx_delete(&key)?
             };
             if !ok {
                 return Err(ExecError::MalformedInstruction {

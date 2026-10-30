@@ -53,7 +53,7 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
             Ok(Step::Next)
         }
         Opcode::SorterSort | Opcode::Sort | Opcode::HashAggRewind => {
-            let has_row = vm.cursor_mut(instr.p1)?.rewind();
+            let has_row = vm.cursor_mut(instr.p1)?.rewind()?;
             Ok(if has_row {
                 Step::Next
             } else {
@@ -61,7 +61,7 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
             })
         }
         Opcode::SorterNext | Opcode::HashAggNext => {
-            let has_row = vm.cursor_mut(instr.p1)?.next();
+            let has_row = vm.cursor_mut(instr.p1)?.next()?;
             Ok(if has_row {
                 Step::Jump(to_pc(instr.p2))
             } else {

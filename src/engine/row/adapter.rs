@@ -16,6 +16,7 @@ use std::rc::Rc;
 
 use crate::storage::row::pager::checkpoint::CheckpointMode;
 use crate::value::Collation;
+use crate::vm::row::cursor::{CursorError, CursorResult};
 use crate::vm::row::cursor_factory::{CursorFactory, CursorFactoryError};
 use crate::vm::row::schema_storage::{SchemaStorage, SchemaStorageError};
 use crate::vm::row::transaction::{Transaction, TransactionError};
@@ -37,6 +38,13 @@ type HeaderEntries = Vec<(u64, usize)>;
 
 fn storage_err(e: impl std::fmt::Display) -> String {
     e.to_string()
+}
+
+/// A b-tree or record failure as the VM's cursor error (#873): these used
+/// to read as "no row" / "end of table", so a corrupt file returned
+/// `count(*)` = 0 or no rows instead of failing.
+fn cursor_err(e: impl std::fmt::Display) -> CursorError {
+    CursorError(e.to_string())
 }
 
 // ---------------------------------------------------------------- tables
@@ -87,54 +95,63 @@ impl TableCursorAdapter {
         }
     }
 
-    fn position(&mut self, rowid: Result<Option<i64>, btree::BtreeError>) -> bool {
-        self.current_rowid = rowid.ok().flatten();
+    fn position(&mut self, rowid: Result<Option<i64>, btree::BtreeError>) -> CursorResult<bool> {
         *self.payload.borrow_mut() = None;
-        self.current_rowid.is_some()
+        self.current_rowid = None;
+        self.current_rowid = rowid.map_err(cursor_err)?;
+        Ok(self.current_rowid.is_some())
     }
 
     /// Ensures `payload`/`entries` hold the current row's payload and
     /// header offsets, parsing the header at most once per positioned
     /// row. `entries`' backing allocation is reused across rows.
-    fn ensure_cached(&self) -> Option<()> {
+    /// `Ok(false)` when there is no current row.
+    fn ensure_cached(&self) -> CursorResult<bool> {
         if self.payload.borrow().is_some() {
-            return Some(());
+            return Ok(true);
         }
-        self.current_rowid?;
-        let payload = self.cursor.current_payload().ok()?;
-        parse_header_into(&payload, &mut self.entries.borrow_mut()).ok()?;
+        if self.current_rowid.is_none() {
+            return Ok(false);
+        }
+        let payload = self.cursor.current_payload().map_err(cursor_err)?;
+        parse_header_into(&payload, &mut self.entries.borrow_mut()).map_err(cursor_err)?;
         *self.payload.borrow_mut() = Some(payload);
-        Some(())
+        Ok(true)
     }
 
-    fn max_rowid(&self) -> i64 {
+    fn max_rowid(&self) -> CursorResult<i64> {
         let mut probe = TableCursor::new(Rc::clone(&self.source), &self.header, self.root_page);
-        probe.last().ok().flatten().unwrap_or(0)
+        Ok(probe.last().map_err(cursor_err)?.unwrap_or(0))
     }
 }
 
 impl Cursor for TableCursorAdapter {
-    fn rewind(&mut self) -> bool {
+    fn rewind(&mut self) -> CursorResult<bool> {
         let r = self.cursor.first();
         self.position(r)
     }
 
-    fn next(&mut self) -> bool {
+    fn next(&mut self) -> CursorResult<bool> {
         let r = self.cursor.next();
         self.position(r)
     }
 
-    fn last(&mut self) -> bool {
+    fn last(&mut self) -> CursorResult<bool> {
         let r = self.cursor.last();
         self.position(r)
     }
 
-    fn prev(&mut self) -> bool {
-        let r = self.cursor.prev();
+    fn prev(&mut self) -> CursorResult<bool> {
+        // `prev` without a `last` first is the b-tree reporting a call
+        // order it doesn't walk, not a damaged file: no row, as before.
+        let r = match self.cursor.prev() {
+            Err(btree::BtreeError::CursorNotPositioned { .. }) => Ok(None),
+            r => r,
+        };
         self.position(r)
     }
 
-    fn seek(&mut self, rowid: i64) -> bool {
+    fn seek(&mut self, rowid: i64) -> CursorResult<bool> {
         let r = self
             .cursor
             .seek(rowid)
@@ -142,25 +159,30 @@ impl Cursor for TableCursorAdapter {
         self.position(r)
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
         // The header (serial types/offsets) is parsed at most once per
         // positioned row via `ensure_cached`, regardless of how many
         // columns a projection reads (db-core#485); only the requested
         // column's body is decoded here. `None` is "no current row"
         // (db-core#231); a column index past the record's end is
-        // `Some(Null)`, SQLite's short-record rule.
-        self.ensure_cached()?;
+        // `Some(Null)`, SQLite's short-record rule. A record that doesn't
+        // decode is an error, no longer "no current row" (#873).
+        if !self.ensure_cached()? {
+            return Ok(None);
+        }
         let payload = self.payload.borrow();
-        let payload = payload.as_ref()?;
+        let Some(payload) = payload.as_ref() else {
+            return Ok(None);
+        };
         let entries = self.entries.borrow();
         match entries.get(col) {
             Some(&(serial_type, offset)) => {
                 let (value, _) =
                     decode_serial_value(serial_type, payload, offset, self.header.text_encoding)
-                        .ok()?;
-                Some(value)
+                        .map_err(cursor_err)?;
+                Ok(Some(value))
             }
-            None => Some(Value::Null),
+            None => Ok(Some(Value::Null)),
         }
     }
 
@@ -168,73 +190,81 @@ impl Cursor for TableCursorAdapter {
         self.current_rowid
     }
 
-    fn payload(&self) -> Option<Rc<[u8]>> {
-        self.ensure_cached()?;
+    fn payload(&self) -> CursorResult<Option<Rc<[u8]>>> {
+        if !self.ensure_cached()? {
+            return Ok(None);
+        }
         let payload = self.payload.borrow();
-        let payload = payload.as_ref()?;
-        Some(Rc::from(&payload[..]))
+        Ok(payload.as_ref().map(|payload| Rc::from(&payload[..])))
     }
 
-    fn insert_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
-        let writer = self.writer.as_ref()?;
-        let ok = btree::insert_row(
+    fn insert_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> CursorResult<Option<bool>> {
+        let Some(writer) = self.writer.as_ref() else {
+            return Ok(None);
+        };
+        let inserted = btree::insert_row(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             rowid,
             payload,
-        )
-        .is_ok();
+        );
         *self.payload.borrow_mut() = None;
-        Some(ok)
+        inserted.map_err(cursor_err)?;
+        Ok(Some(true))
     }
 
-    fn update_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
-        let writer = self.writer.as_ref()?;
-        let ok = btree::update_row(
+    fn update_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> CursorResult<Option<bool>> {
+        let Some(writer) = self.writer.as_ref() else {
+            return Ok(None);
+        };
+        let updated = btree::update_row(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             rowid,
             payload,
-        )
-        .is_ok();
+        );
         // The rowid is unchanged (codegen only emits `Update` for that
         // case); only the cached payload/header, not `current_rowid`,
         // needs invalidating.
         *self.payload.borrow_mut() = None;
-        Some(ok)
+        updated.map_err(cursor_err)?;
+        Ok(Some(true))
     }
 
-    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
+    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> CursorResult<bool> {
         let payload =
             crate::storage::row::record::encode_record(&values, self.header.text_encoding);
-        self.insert_payload(rowid, &Rc::from(payload))
-            .unwrap_or(false)
+        Ok(self
+            .insert_payload(rowid, &Rc::from(payload))?
+            .unwrap_or(false))
     }
 
-    fn delete(&mut self) -> bool {
+    fn delete(&mut self) -> CursorResult<bool> {
         let (Some(writer), Some(rowid)) = (self.writer.as_ref(), self.current_rowid) else {
-            return false;
+            return Ok(false);
         };
-        let ok = btree::delete_row(
+        let deleted = btree::delete_row(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             rowid,
-        )
-        .is_ok();
+        );
         self.current_rowid = None;
         *self.payload.borrow_mut() = None;
-        ok
+        deleted.map_err(cursor_err)?;
+        Ok(true)
     }
 
-    fn next_rowid(&self) -> i64 {
-        self.max_rowid().saturating_add(1)
+    fn next_rowid(&self) -> CursorResult<i64> {
+        Ok(self.max_rowid()?.saturating_add(1))
     }
 
-    fn count(&self) -> Option<i64> {
-        btree::count_table_rows(&self.source, self.root_page).ok()
+    fn count(&self) -> CursorResult<Option<i64>> {
+        btree::count_table_rows(&self.source, self.root_page)
+            .map(Some)
+            .map_err(cursor_err)
     }
 }
 
@@ -267,12 +297,17 @@ impl IndexCursorAdapter {
         }
     }
 
-    fn set_current(&mut self, row: Result<Option<IndexRow>, btree::BtreeError>) -> bool {
-        self.current = row.ok().flatten().and_then(|row| {
-            let values = decode_record(&row.payload, self.header.text_encoding).ok()?;
-            Some((row, values))
-        });
-        self.current.is_some()
+    fn set_current(
+        &mut self,
+        row: Result<Option<IndexRow>, btree::BtreeError>,
+    ) -> CursorResult<bool> {
+        self.current = None;
+        let Some(row) = row.map_err(cursor_err)? else {
+            return Ok(false);
+        };
+        let values = decode_record(&row.payload, self.header.text_encoding).map_err(cursor_err)?;
+        self.current = Some((row, values));
+        Ok(true)
     }
 
     /// sqlite-rs `decode_leading_columns`: the entry's first `probe.len()`
@@ -300,29 +335,31 @@ impl IndexCursorAdapter {
 }
 
 impl Cursor for IndexCursorAdapter {
-    fn rewind(&mut self) -> bool {
+    fn rewind(&mut self) -> CursorResult<bool> {
         let r = self.cursor.first();
         self.set_current(r)
     }
 
-    fn next(&mut self) -> bool {
+    fn next(&mut self) -> CursorResult<bool> {
         let r = self.cursor.next();
         self.set_current(r)
     }
 
-    fn last(&mut self) -> bool {
+    fn last(&mut self) -> CursorResult<bool> {
         let r = self.cursor.last();
         self.set_current(r)
     }
 
-    fn prev(&mut self) -> bool {
+    fn prev(&mut self) -> CursorResult<bool> {
         let r = self.cursor.prev();
         self.set_current(r)
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
-        let (_, values) = self.current.as_ref()?;
-        Some(values.get(col).cloned().unwrap_or(Value::Null))
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        Ok(self
+            .current
+            .as_ref()
+            .map(|(_, values)| values.get(col).cloned().unwrap_or(Value::Null)))
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -337,19 +374,19 @@ impl Cursor for IndexCursorAdapter {
         }
     }
 
-    fn seek_index_eq(&mut self, key: &[Value], collations: &[Collation]) -> bool {
+    fn seek_index_eq(&mut self, key: &[Value], collations: &[Collation]) -> CursorResult<bool> {
         let r = self.cursor.seek(key, self.header.text_encoding);
-        if !self.set_current(r) {
-            return false;
+        if !self.set_current(r)? {
+            return Ok(false);
         }
         let matched = self.compare_leading(key, collations) == Some(Ordering::Equal);
         if !matched {
             self.current = None;
         }
-        matched
+        Ok(matched)
     }
 
-    fn seek_index_ge(&mut self, key: &[Value], _collations: &[Collation]) -> bool {
+    fn seek_index_ge(&mut self, key: &[Value], _collations: &[Collation]) -> CursorResult<bool> {
         let r = self.cursor.seek(key, self.header.text_encoding);
         self.set_current(r)
     }
@@ -364,9 +401,9 @@ impl Cursor for IndexCursorAdapter {
         )
     }
 
-    fn idx_insert(&mut self, key: Vec<Value>) -> bool {
+    fn idx_insert(&mut self, key: Vec<Value>) -> CursorResult<bool> {
         let Some(writer) = self.writer.as_ref() else {
-            return false;
+            return Ok(false);
         };
         btree::insert_entry(
             &mut writer.borrow_mut(),
@@ -375,12 +412,13 @@ impl Cursor for IndexCursorAdapter {
             &key,
             self.header.text_encoding,
         )
-        .is_ok()
+        .map_err(cursor_err)?;
+        Ok(true)
     }
 
-    fn idx_delete(&mut self, key: &[Value]) -> bool {
+    fn idx_delete(&mut self, key: &[Value]) -> CursorResult<bool> {
         let Some(writer) = self.writer.as_ref() else {
-            return false;
+            return Ok(false);
         };
         btree::delete_entry(
             &mut writer.borrow_mut(),
@@ -389,7 +427,8 @@ impl Cursor for IndexCursorAdapter {
             key,
             self.header.text_encoding,
         )
-        .is_ok()
+        .map_err(cursor_err)?;
+        Ok(true)
     }
 }
 
@@ -453,24 +492,32 @@ impl StorageFactory {
     /// when that table is `WITHOUT ROWID` (#722): its root is an index
     /// b-tree page, and `sqlite_master` has the `CREATE TABLE` that says
     /// which columns are the key. `None` for an ordinary table.
-    fn without_rowid_layout(&self, root: u32) -> Option<Vec<usize>> {
+    ///
+    /// A page or catalog read that fails is an error (#873): it used to
+    /// read as "an ordinary table", opening the wrong cursor kind.
+    fn without_rowid_layout(&self, root: u32) -> Result<Option<Vec<usize>>, CursorFactoryError> {
         // Page 1 holds `sqlite_master`, a table whatever its header says.
         if root <= 1 {
-            return None;
+            return Ok(None);
         }
-        let page = self.source.read_page(root).ok()?;
+        let failed = |e: String| CursorFactoryError(format!("opening root page {root}: {e}"));
+        let page = self
+            .source
+            .read_page(root)
+            .map_err(|e| failed(storage_err(e)))?;
         // 0x02 interior index, 0x0a leaf index.
         if !matches!(page.first(), Some(0x02 | 0x0a)) {
-            return None;
+            return Ok(None);
         }
-        let sql = btree::table_sql_by_root(&self.source, &self.header, root).ok()??;
-        crate::schema::without_rowid_layout(&sql)
+        let sql = btree::table_sql_by_root(&self.source, &self.header, root)
+            .map_err(|e| failed(storage_err(e)))?;
+        Ok(sql.and_then(|sql| crate::schema::without_rowid_layout(&sql)))
     }
 }
 
 impl CursorFactory for StorageFactory {
     fn open_read(&mut self, root: u32) -> Result<Box<dyn Cursor>, CursorFactoryError> {
-        if let Some(stored_at) = self.without_rowid_layout(root) {
+        if let Some(stored_at) = self.without_rowid_layout(root)? {
             let inner = IndexCursorAdapter::new(
                 Rc::clone(&self.source),
                 self.writer.clone(),
@@ -539,38 +586,56 @@ impl WithoutRowidCursorAdapter {
     }
 
     /// `payload`, a record in declared column order, as the entry the
-    /// b-tree stores: each value moved to its stored position. `None` for
-    /// a record that is not one, or has more values than the table has
-    /// columns.
-    fn stored_row(&self, payload: &[u8]) -> Option<Vec<Value>> {
-        let declared = decode_record(payload, self.inner.header.text_encoding).ok()?;
-        let mut stored = vec![Value::Null; self.stored_at.len()];
-        for (column, value) in declared.into_iter().enumerate() {
-            *stored.get_mut(*self.stored_at.get(column)?)? = value;
+    /// b-tree stores: each value moved to its stored position. An error
+    /// for a record that is not one, or has more values than the table has
+    /// columns (#873: these read as "does not support insertion").
+    fn stored_row(&self, payload: &[u8]) -> CursorResult<Vec<Value>> {
+        let declared =
+            decode_record(payload, self.inner.header.text_encoding).map_err(cursor_err)?;
+        let width = self.stored_at.len();
+        if declared.len() > width {
+            return Err(CursorError(format!(
+                "a record of {} values for a table of {width} columns",
+                declared.len()
+            )));
         }
-        Some(stored)
+        let mut stored = vec![Value::Null; width];
+        for (column, value) in declared.into_iter().enumerate() {
+            let slot = self
+                .stored_at
+                .get(column)
+                .and_then(|&at| stored.get_mut(at))
+                .ok_or_else(|| CursorError(format!("column {column} has no stored position")))?;
+            *slot = value;
+        }
+        Ok(stored)
     }
 }
 
 impl Cursor for WithoutRowidCursorAdapter {
-    fn rewind(&mut self) -> bool {
+    fn rewind(&mut self) -> CursorResult<bool> {
         self.inner.rewind()
     }
 
-    fn next(&mut self) -> bool {
+    fn next(&mut self) -> CursorResult<bool> {
         self.inner.next()
     }
 
-    fn last(&mut self) -> bool {
+    fn last(&mut self) -> CursorResult<bool> {
         self.inner.last()
     }
 
-    fn prev(&mut self) -> bool {
+    fn prev(&mut self) -> CursorResult<bool> {
         self.inner.prev()
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
-        self.inner.column(*self.stored_at.get(col)?)
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        // A declared column with no stored position reads NULL, as a
+        // column past a record's end does.
+        match self.stored_at.get(col) {
+            Some(&at) => self.inner.column(at),
+            None => Ok(self.inner.current.as_ref().map(|_| Value::Null)),
+        }
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -581,10 +646,10 @@ impl Cursor for WithoutRowidCursorAdapter {
     /// `PRIMARY KEY` columns, in key order, which come first in the stored
     /// record). The row has every other column after them, so a probe is
     /// never as long as the entry unless every column is in the key.
-    fn seek_index_eq(&mut self, key: &[Value], collations: &[Collation]) -> bool {
+    fn seek_index_eq(&mut self, key: &[Value], collations: &[Collation]) -> CursorResult<bool> {
         let seeked = self.inner.cursor.seek(key, self.inner.header.text_encoding);
-        if !self.inner.set_current(seeked) {
-            return false;
+        if !self.inner.set_current(seeked)? {
+            return Ok(false);
         }
         let matched = self.inner.current.as_ref().is_some_and(|(_, values)| {
             values.len() >= key.len()
@@ -601,15 +666,15 @@ impl Cursor for WithoutRowidCursorAdapter {
         if !matched {
             self.inner.current = None;
         }
-        matched
+        Ok(matched)
     }
 
     /// Removes the row the cursor is on; it is positioned nowhere after.
-    fn delete(&mut self) -> bool {
+    fn delete(&mut self) -> CursorResult<bool> {
         let (Some(writer), Some((_, stored))) =
             (self.inner.writer.as_ref(), self.inner.current.take())
         else {
-            return false;
+            return Ok(false);
         };
         btree::delete_entry(
             &mut writer.borrow_mut(),
@@ -618,53 +683,53 @@ impl Cursor for WithoutRowidCursorAdapter {
             &stored,
             self.inner.header.text_encoding,
         )
-        .is_ok()
+        .map_err(cursor_err)?;
+        Ok(true)
     }
 
     /// Adds the row `payload` (a record in declared column order, as
     /// `MakeRecord` builds it). The caller has already probed that no row
     /// has the same key: the b-tree itself only refuses an identical
     /// record.
-    fn insert_payload(&mut self, _rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
+    fn insert_payload(&mut self, _rowid: i64, payload: &Rc<[u8]>) -> CursorResult<Option<bool>> {
         self.inner.current = None;
-        let (Some(writer), Some(stored)) = (self.inner.writer.as_ref(), self.stored_row(payload))
-        else {
-            return Some(false);
+        let Some(writer) = self.inner.writer.as_ref() else {
+            return Ok(Some(false));
         };
-        Some(
-            btree::insert_entry(
-                &mut writer.borrow_mut(),
-                &self.inner.header,
-                self.inner.root_page,
-                &stored,
-                self.inner.header.text_encoding,
-            )
-            .is_ok(),
+        let stored = self.stored_row(payload)?;
+        btree::insert_entry(
+            &mut writer.borrow_mut(),
+            &self.inner.header,
+            self.inner.root_page,
+            &stored,
+            self.inner.header.text_encoding,
         )
+        .map_err(cursor_err)?;
+        Ok(Some(true))
     }
 
     /// Replaces the row the cursor is on with `payload`, which must keep
     /// its key: the entry is removed and the new one put in its place.
-    fn update_payload(&mut self, _rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
-        if !self.delete() {
-            return Some(false);
+    fn update_payload(&mut self, _rowid: i64, payload: &Rc<[u8]>) -> CursorResult<Option<bool>> {
+        if !self.delete()? {
+            return Ok(Some(false));
         }
         self.insert_payload(0, payload)
     }
 
-    fn count(&self) -> Option<i64> {
+    fn count(&self) -> CursorResult<Option<i64>> {
         let mut cursor = IndexCursor::new(
             Rc::clone(&self.source),
             self.inner.header.usable_page_size(),
             self.inner.root_page,
         );
         let mut rows: i64 = 0;
-        let mut entry = cursor.first().ok()?;
+        let mut entry = cursor.first().map_err(cursor_err)?;
         while entry.is_some() {
             rows = rows.saturating_add(1);
-            entry = cursor.next().ok()?;
+            entry = cursor.next().map_err(cursor_err)?;
         }
-        Some(rows)
+        Ok(Some(rows))
     }
 }
 
@@ -1188,9 +1253,9 @@ mod tests {
             });
             let mut factory = StorageFactory::read_only(Rc::clone(&counting), header);
             let mut cursor = factory.open_read(root_page).unwrap();
-            assert!(cursor.rewind());
+            assert!(cursor.rewind().unwrap());
             for col in 0..cols {
-                assert!(cursor.column(col).is_some());
+                assert!(cursor.column(col).unwrap().is_some());
             }
             let reads = *counting.reads.borrow();
             reads

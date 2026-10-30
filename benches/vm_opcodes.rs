@@ -591,10 +591,12 @@ fn bench_row_scan_column(r: &mut common::Report) {
     let mut vm = RowVm::new();
     let mut table = EphemeralTableCursor::new();
     for i in 0..ROWS {
-        table.insert(
-            i64::try_from(i).unwrap_or(i64::MAX),
-            vec![RowValue::Integer(i64::try_from(i).unwrap_or(i64::MAX))],
-        );
+        table
+            .insert(
+                i64::try_from(i).unwrap_or(i64::MAX),
+                vec![RowValue::Integer(i64::try_from(i).unwrap_or(i64::MAX))],
+            )
+            .unwrap();
     }
     vm.open_cursor(0, Box::new(table)).unwrap();
     assert!(execute(&mut vm, &program).is_ok());
@@ -641,10 +643,12 @@ fn bench_row_in_subquery_count_scan(r: &mut common::Report) {
     let mut vm = RowVm::new();
     let mut table = EphemeralTableCursor::new();
     for i in 0..ROWS {
-        table.insert(
-            i64::try_from(i).unwrap_or(i64::MAX),
-            vec![RowValue::Integer(i64::try_from(i).unwrap_or(i64::MAX))],
-        );
+        table
+            .insert(
+                i64::try_from(i).unwrap_or(i64::MAX),
+                vec![RowValue::Integer(i64::try_from(i).unwrap_or(i64::MAX))],
+            )
+            .unwrap();
     }
     vm.open_cursor(0, Box::new(table)).unwrap();
     let mut lookup = EphemeralIndexCursor::new();

@@ -34,7 +34,9 @@ use super::aggregate::{self, AggState};
 use super::cast::cast_to;
 use super::coerce;
 use super::compare::compare;
-use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, PseudoCursor, SorterCursor};
+use super::cursor::{
+    Cursor, CursorError, EphemeralTableCursor, HashAggCursor, PseudoCursor, SorterCursor,
+};
 use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
 use super::program::{
@@ -165,6 +167,10 @@ pub enum ExecError {
     /// A [`super::cursor_factory::CursorFactory`] call failed
     /// (db-core#125).
     CursorFactoryFailed(CursorFactoryError),
+    /// A cursor's storage failed under it (#873): a corrupt page, a record
+    /// that doesn't decode, an I/O error on a read or write. These used to
+    /// read as "no row" / "end of table" or "does not support".
+    CursorFailed(CursorError),
     /// `opcode` needs a [`super::schema_storage::SchemaStorage`] hook
     /// but none is installed (db-core#128).
     SchemaStorageMissing {
@@ -249,11 +255,18 @@ impl std::fmt::Display for ExecError {
                 write!(f, "attached databases are not supported")
             }
             ExecError::CursorFactoryFailed(err) => write!(f, "cursor factory failed: {err}"),
+            ExecError::CursorFailed(err) => write!(f, "cursor failed: {err}"),
             ExecError::SchemaStorageMissing { opcode } => {
                 write!(f, "{opcode}: no schema storage hook is installed")
             }
             ExecError::SchemaStorageFailed(err) => write!(f, "schema storage failed: {err}"),
         }
+    }
+}
+
+impl From<CursorError> for ExecError {
+    fn from(err: CursorError) -> Self {
+        ExecError::CursorFailed(err)
     }
 }
 
@@ -973,18 +986,19 @@ fn bit_not(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
     Ok(Step::Next)
 }
 
-/// `Count`: the cursor's own count when it has one, else a full scan.
-fn count_rows(cursor: &mut dyn Cursor) -> i64 {
-    if let Some(n) = cursor.count() {
-        return n;
+/// `Count`: the cursor's own count when it has one, else a full scan. A
+/// storage failure is an error, not a count of 0 (#873).
+fn count_rows(cursor: &mut dyn Cursor) -> Result<i64, CursorError> {
+    if let Some(n) = cursor.count()? {
+        return Ok(n);
     }
     let mut n: i64 = 0;
-    let mut has_row = cursor.rewind();
+    let mut has_row = cursor.rewind()?;
     while has_row {
         n = n.saturating_add(1);
-        has_row = cursor.next();
+        has_row = cursor.next()?;
     }
-    n
+    Ok(n)
 }
 
 fn register_as_i64(vm: &Vm, reg: i32) -> Result<i64, ExecError> {
@@ -1242,7 +1256,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
 #[inline(always)]
 fn step_next(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
     vm.clear_null_row(instr.p1)?;
-    let has_row = vm.cursor_mut(instr.p1)?.next();
+    let has_row = vm.cursor_mut(instr.p1)?.next()?;
     Ok(if has_row {
         Step::Jump(to_pc(instr.p2))
     } else {
@@ -1266,7 +1280,7 @@ fn step_column(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
         vm.pseudo_column(instr.p1, reg, col, "Column")?
     } else {
         vm.cursor(instr.p1)?
-            .column(col)
+            .column(col)?
             .ok_or(ExecError::NoCurrentRow {
                 opcode: "Column",
                 slot: instr.p1,
@@ -2879,7 +2893,7 @@ mod tests {
     fn open_index_cursor(vm: &mut Vm, slot: i32, rows: &[(i64, Value)]) {
         let mut cursor = super::super::cursor::InMemoryIndexCursor::new(vec![asc_key(0)]);
         for (rowid, value) in rows {
-            cursor.insert(*rowid, vec![value.clone()]);
+            cursor.insert(*rowid, vec![value.clone()]).unwrap();
         }
         vm.open_cursor(slot, Box::new(cursor)).unwrap();
     }
@@ -3177,25 +3191,32 @@ mod tests {
 
     #[test]
     fn insert_payload_hands_a_storage_cursor_the_exact_record_bytes() {
+        use super::super::cursor::CursorResult;
         use std::rc::Rc;
         type Seen = Rc<std::cell::RefCell<Option<(i64, Rc<[u8]>)>>>;
         struct Sink(Seen);
         impl Cursor for Sink {
-            fn rewind(&mut self) -> bool {
-                false
+            fn rewind(&mut self) -> CursorResult<bool> {
+                Ok(false)
             }
-            fn next(&mut self) -> bool {
-                false
+            fn next(&mut self) -> CursorResult<bool> {
+                Ok(false)
             }
-            fn column(&self, _: usize) -> Option<Value> {
-                Some(Value::Null)
+            fn column(&self, _: usize) -> CursorResult<Option<Value>> {
+                Ok(Some(Value::Null))
             }
             fn rowid(&self) -> Option<i64> {
                 Some(0)
             }
-            fn insert_payload(&mut self, rowid: i64, payload: &Rc<[u8]>) -> Option<bool> {
-                *self.0.borrow_mut() = Some((rowid, Rc::clone(payload)));
-                Some(true)
+            fn insert_payload(
+                &mut self,
+                rowid: i64,
+                payload: &Rc<[u8]>,
+            ) -> CursorResult<Option<bool>> {
+                Ok({
+                    *self.0.borrow_mut() = Some((rowid, Rc::clone(payload)));
+                    Some(true)
+                })
             }
         }
         let seen = Rc::new(std::cell::RefCell::new(None));

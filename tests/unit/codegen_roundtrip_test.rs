@@ -66,7 +66,7 @@ fn run(schemas: &[TableSchema], sql: &str, seed: Vec<(i64, Vec<Value>)>) -> Vec<
     let mut vm = Vm::new();
     let mut table = EphemeralTableCursor::new();
     for (rowid, values) in seed {
-        table.insert(rowid, values);
+        table.insert(rowid, values).unwrap();
     }
     vm.open_cursor(0, Box::new(table)).unwrap();
     execute(&mut vm, &program).unwrap()
@@ -150,11 +150,11 @@ fn where_clause_scalar_subquery() {
     // nested subquery scan gets an explicit `OpenRead`.
     let mut vm = Vm::new();
     let mut t = EphemeralTableCursor::new();
-    t.insert(1, vec![Value::Integer(5)]);
-    t.insert(2, vec![Value::Integer(15)]);
+    t.insert(1, vec![Value::Integer(5)]).unwrap();
+    t.insert(2, vec![Value::Integer(15)]).unwrap();
     vm.open_cursor(0, Box::new(t)).unwrap();
     let mut bound = EphemeralTableCursor::new();
-    bound.insert(1, vec![Value::Integer(10)]);
+    bound.insert(1, vec![Value::Integer(10)]).unwrap();
     vm.open_cursor(cursor_slot_for_root(&program, 3), Box::new(bound))
         .unwrap();
 
@@ -250,7 +250,7 @@ fn run_two(
     for (root, seed) in [(2, t.1), (3, u.1)] {
         let mut table = EphemeralTableCursor::new();
         for (rowid, values) in seed {
-            table.insert(rowid, values);
+            table.insert(rowid, values).unwrap();
         }
         vm.open_cursor(cursor_slot_for_root(&program, root), Box::new(table))
             .unwrap();
@@ -455,7 +455,7 @@ fn with_clause_later_cte_may_reference_an_earlier_one() {
                 (3, ints(&[4])),
                 (4, ints(&[5])),
             ] {
-                t.insert(rowid, values);
+                t.insert(rowid, values).unwrap();
             }
             vm.open_cursor(instr.p1, Box::new(t)).unwrap();
         }
@@ -511,7 +511,7 @@ fn with_clause_over_a_union_all_compound_substitutes_every_arm() {
         if instr.opcode == Opcode::OpenRead {
             let mut t = EphemeralTableCursor::new();
             for (rowid, values) in [(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))] {
-                t.insert(rowid, values);
+                t.insert(rowid, values).unwrap();
             }
             vm.open_cursor(instr.p1, Box::new(t)).unwrap();
         }
@@ -583,7 +583,7 @@ fn run_with_params(sql: &str, params: Vec<Value>, seed: Vec<(i64, Vec<Value>)>) 
     vm.bind_params(params);
     let mut table = EphemeralTableCursor::new();
     for (rowid, values) in seed {
-        table.insert(rowid, values);
+        table.insert(rowid, values).unwrap();
     }
     vm.open_cursor(0, Box::new(table)).unwrap();
     execute(&mut vm, &program).unwrap()
@@ -868,13 +868,13 @@ fn between_in_exists_and_in_subquery_in_the_select_list() {
     .unwrap();
     let mut vm = Vm::new();
     let mut t = EphemeralTableCursor::new();
-    t.insert(1, ints(&[2]));
-    t.insert(2, ints(&[9]));
+    t.insert(1, ints(&[2])).unwrap();
+    t.insert(2, ints(&[9])).unwrap();
     vm.open_cursor(0, Box::new(t)).unwrap();
     for instr in &program.instructions {
         if instr.opcode == Opcode::OpenRead && instr.p2 == 3 {
             let mut u = EphemeralTableCursor::new();
-            u.insert(1, ints(&[2]));
+            u.insert(1, ints(&[2])).unwrap();
             vm.open_cursor(instr.p1, Box::new(u)).unwrap();
         }
     }
@@ -907,10 +907,10 @@ fn scalar_subquery_in_the_select_list() {
     let program = compile_statement("SELECT (SELECT n FROM bound) FROM t", &schemas, &[]).unwrap();
     let mut vm = Vm::new();
     let mut t = EphemeralTableCursor::new();
-    t.insert(1, ints(&[1]));
+    t.insert(1, ints(&[1])).unwrap();
     vm.open_cursor(0, Box::new(t)).unwrap();
     let mut bound = EphemeralTableCursor::new();
-    bound.insert(1, ints(&[10]));
+    bound.insert(1, ints(&[10])).unwrap();
     vm.open_cursor(cursor_slot_for_root(&program, 3), Box::new(bound))
         .unwrap();
     let rows = execute(&mut vm, &program).unwrap();
