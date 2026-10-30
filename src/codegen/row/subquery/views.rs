@@ -24,7 +24,7 @@ use crate::parser::row::error::ParseOutcome;
 
 use crate::codegen::row::select::CodegenError;
 
-use super::cte::{apply_column_aliases, expand_with_clause};
+use super::cte::{apply_column_aliases, expand_with_clause_within, Expansion};
 
 /// A view's catalog entry, pre-parsed once per query by the caller
 /// (`bin/sqlite-rs/query.rs`) from `schema::ViewSchema::sql`.
@@ -85,7 +85,7 @@ impl ExpandViews for Select {
         }
         let mut out = self.clone();
         let mut stack = Vec::new();
-        expand_views_in_select(&mut out, views, &mut stack)?;
+        expand_views_in_select(&mut out, views, &mut stack, &mut Expansion::new())?;
         Ok(Cow::Owned(out))
     }
 }
@@ -124,18 +124,19 @@ fn expand_views_in_select(
     select: &mut Select,
     views: &[ResolvedView],
     stack: &mut Vec<String>,
+    expansion: &mut Expansion,
 ) -> Result<(), CodegenError> {
     if let Some(from) = &mut select.from {
-        expand_table_ref(&mut from.first, views, stack)?;
+        expand_table_ref(&mut from.first, views, stack, expansion)?;
         for join in &mut from.joins {
-            expand_table_ref(&mut join.table, views, stack)?;
+            expand_table_ref(&mut join.table, views, stack, expansion)?;
         }
     }
     for arm in &mut select.compound {
         if let Some(from) = &mut arm.from {
-            expand_table_ref(&mut from.first, views, stack)?;
+            expand_table_ref(&mut from.first, views, stack, expansion)?;
             for join in &mut from.joins {
-                expand_table_ref(&mut join.table, views, stack)?;
+                expand_table_ref(&mut join.table, views, stack, expansion)?;
             }
         }
     }
@@ -146,6 +147,7 @@ fn expand_table_ref(
     table_ref: &mut TableRef,
     views: &[ResolvedView],
     stack: &mut Vec<String>,
+    expansion: &mut Expansion,
 ) -> Result<(), CodegenError> {
     match &mut table_ref.kind {
         TableRefKind::Name(name) => {
@@ -167,14 +169,18 @@ fn expand_table_ref(
             // of `compile_select_program`. Expanding it here, before
             // recursing for nested views, mirrors the ordering already
             // used at the top level (CTEs first, then views).
-            let mut query = expand_with_clause(&view.query).into_owned();
+            // Every view reference inlines the view's body, so it is
+            // charged against the statement's expansion budget (#876).
+            expansion.enter(&view.query)?;
+            let mut query = expand_with_clause_within(&view.query, expansion)?.into_owned();
             if let Some(columns) = &view.columns {
                 apply_column_aliases(&mut query, columns);
             }
             stack.push(view.name.clone());
-            let result = expand_views_in_select(&mut query, views, stack);
+            let result = expand_views_in_select(&mut query, views, stack, expansion);
             stack.pop();
             result?;
+            expansion.leave();
             // Same alias-defaulting rule as CTE substitution (#376): a
             // bare `FROM view_name` (no explicit alias) needs the
             // subquery's alias set to the view's own name, since a
@@ -185,7 +191,7 @@ fn expand_table_ref(
             table_ref.alias = alias;
             Ok(())
         }
-        TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack),
+        TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack, expansion),
         TableRefKind::Unnest { .. } => Ok(()),
     }
 }

@@ -97,6 +97,18 @@ pub enum CodegenError {
         name: String,
     },
 
+    /// #876: expanding `WITH` CTEs and catalog views into subqueries would
+    /// copy more than `max_bytes` of their SQL, or nest them more than
+    /// `max_depth` deep. Each reference inlines the referenced body, so a
+    /// handful of CTEs that each reference the one before twice grow
+    /// exponentially, and a long chain nests deeper than codegen's stack.
+    ExpansionTooLarge {
+        /// Most bytes of CTE/view SQL one statement may inline.
+        max_bytes: usize,
+        /// Deepest CTE/view nesting one statement may expand to.
+        max_depth: usize,
+    },
+
     /// db-core#232: a planner invariant did not hold -- a register, cursor
     /// or column position the compiler had just established could not be
     /// looked up again. This is a codegen bug, never a property of the
@@ -137,6 +149,14 @@ impl std::fmt::Display for CodegenError {
                  result columns: expected {expected}, found {found}"
             ),
             Self::CircularView { name } => write!(f, "view {name} is circularly defined"),
+            Self::ExpansionTooLarge {
+                max_bytes,
+                max_depth,
+            } => write!(
+                f,
+                "CTEs and views expand to more than {max_bytes} bytes of SQL or {max_depth} \
+                 levels of nesting"
+            ),
             Self::Internal { reason } => write!(f, "planner invariant violated: {reason}"),
         }
     }
@@ -291,6 +311,14 @@ mod tests {
             }
             .to_string(),
             "view v is circularly defined"
+        );
+        assert_eq!(
+            CodegenError::ExpansionTooLarge {
+                max_bytes: 10,
+                max_depth: 2
+            }
+            .to_string(),
+            "CTEs and views expand to more than 10 bytes of SQL or 2 levels of nesting"
         );
     }
 

@@ -366,6 +366,9 @@ pub db_core::codegen::row::select::CodegenError::CircularView::name: alloc::stri
 pub db_core::codegen::row::select::CodegenError::CompoundColumnMismatch
 pub db_core::codegen::row::select::CodegenError::CompoundColumnMismatch::expected: usize
 pub db_core::codegen::row::select::CodegenError::CompoundColumnMismatch::found: usize
+pub db_core::codegen::row::select::CodegenError::ExpansionTooLarge
+pub db_core::codegen::row::select::CodegenError::ExpansionTooLarge::max_bytes: usize
+pub db_core::codegen::row::select::CodegenError::ExpansionTooLarge::max_depth: usize
 pub db_core::codegen::row::select::CodegenError::Internal
 pub db_core::codegen::row::select::CodegenError::Internal::reason: alloc::string::String
 pub db_core::codegen::row::select::CodegenError::NoFromClause
@@ -433,6 +436,9 @@ pub db_core::codegen::row::CodegenError::CircularView::name: alloc::string::Stri
 pub db_core::codegen::row::CodegenError::CompoundColumnMismatch
 pub db_core::codegen::row::CodegenError::CompoundColumnMismatch::expected: usize
 pub db_core::codegen::row::CodegenError::CompoundColumnMismatch::found: usize
+pub db_core::codegen::row::CodegenError::ExpansionTooLarge
+pub db_core::codegen::row::CodegenError::ExpansionTooLarge::max_bytes: usize
+pub db_core::codegen::row::CodegenError::ExpansionTooLarge::max_depth: usize
 pub db_core::codegen::row::CodegenError::Internal
 pub db_core::codegen::row::CodegenError::Internal::reason: alloc::string::String
 pub db_core::codegen::row::CodegenError::NoFromClause
@@ -588,7 +594,7 @@ pub fn db_core::codegen::row::compile_select_with_catalog_and_stats(&db_core::pa
 pub fn db_core::codegen::row::compile_statement(&str, &[db_core::schema::TableSchema], &[db_core::schema::ViewSchema]) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::dispatch::DispatchError>
 pub fn db_core::codegen::row::compile_update(&db_core::parser::ast::Update, &db_core::schema::TableSchema) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::compile_update_with_catalog(&db_core::parser::ast::Update, &db_core::schema::TableSchema, &[db_core::schema::TableSchema]) -> core::result::Result<db_core::vm::row::program::Program, db_core::codegen::row::select::CodegenError>
-pub fn db_core::codegen::row::expand_with_clause(&db_core::parser::ast::Select) -> alloc::borrow::Cow<'_, db_core::parser::ast::Select>
+pub fn db_core::codegen::row::expand_with_clause(&db_core::parser::ast::Select) -> core::result::Result<alloc::borrow::Cow<'_, db_core::parser::ast::Select>, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::explain_query_plan(&db_core::parser::ast::Select, &[db_core::schema::TableSchema], &std::collections::hash::map::HashMap<alloc::string::String, db_core::codegen::row::planner::Stats>, &[db_core::schema::TableSchema]) -> core::result::Result<alloc::vec::Vec<db_core::codegen::row::EqpRow>, db_core::codegen::row::select::CodegenError>
 pub fn db_core::codegen::row::flatten_from_subqueries(&mut db_core::parser::ast::Select)
 pub fn db_core::codegen::row::leading_keywords(&str) -> alloc::vec::Vec<alloc::string::String>
