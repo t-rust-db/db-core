@@ -1,12 +1,12 @@
-//! ZSTD page decompression (#700): a decoder of our own, from RFC 8878,
-//! for the frames Parquet pages hold.
+//! ZSTD page decompression (#700) and compression (#692): a decoder and
+//! an encoder of our own, from RFC 8878, for the frames Parquet pages hold.
 //!
 //! A page is one frame whose decompressed size the page header gives, so
 //! the decoder writes straight into an output buffer of that size (plus a
 //! little slack for 16-byte wild copies) instead of streaming through a
 //! window, as `ruzstd`'s decoder did. Spike #697 measured it at 1.8-2.5x
-//! `ruzstd`'s speed on real pages, about libzstd's. `ruzstd` stays for the
-//! writer's encoding until #692.
+//! `ruzstd`'s speed on real pages, about libzstd's. The writer's encoder
+//! (#692) is `encoder.rs`; `ruzstd` is only a test reference now.
 //!
 //! The first hand-written decoder (#47) foundered on FSE/Huffman bit order
 //! with nothing to diff against; this one is checked byte for byte against
@@ -20,10 +20,13 @@
 mod bits;
 #[cfg(test)]
 mod decoder_tests;
+mod encoder;
 mod frame;
 mod fse;
 mod huffman;
 mod xxhash;
+
+pub(crate) use encoder::compress;
 
 use std::fmt;
 

@@ -18,10 +18,10 @@ const SLACK: usize = 32;
 
 /// The largest block, and the most literals a block can regenerate
 /// (RFC 8878 §3.1.1.2: `Block_Maximum_Size`).
-const MAX_BLOCK: usize = 128 * 1024;
+pub(super) const MAX_BLOCK: usize = 128 * 1024;
 
 /// Literals-length code -> (baseline, extra bits).
-const LL_CODES: [(u32, u32); 36] = [
+pub(super) const LL_CODES: [(u32, u32); 36] = [
     (0, 0),
     (1, 0),
     (2, 0),
@@ -61,7 +61,7 @@ const LL_CODES: [(u32, u32); 36] = [
 ];
 
 /// Match-length code -> (baseline, extra bits).
-const ML_CODES: [(u32, u32); 53] = [
+pub(super) const ML_CODES: [(u32, u32); 53] = [
     (3, 0),
     (4, 0),
     (5, 0),
