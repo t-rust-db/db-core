@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.217.0] - 2026-10-30
+
+### Added
+
+- Automatic WAL checkpoint after `wal_autocheckpoint` frames (default 1000), and `PRAGMA wal_autocheckpoint` / `PRAGMA wal_checkpoint(PASSIVE|FULL|RESTART|TRUNCATE)`. The `-wal` no longer grows without bound; a complete checkpoint restarts it on the next commit (#896).
+
 ## [0.216.1] - 2026-10-30
 
 ### Fixed
