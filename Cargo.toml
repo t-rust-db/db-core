@@ -158,6 +158,10 @@ path = "tests/unit/group_by_reset_subroutine_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_like_glob_matcher"
+path = "tests/unit/like_glob_matcher_test.rs"
+
+[[test]]
 name = "unit_cond"
 path = "tests/unit/cond_test.rs"
 required-features = ["engine-row"]

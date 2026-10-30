@@ -19710,189 +19710,109 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_like_rec_17bf5b36",
+    "id": "functions_matches_0f507561",
     "file": "src/functions.rs",
-    "line": 527,
-    "decision": "exact",
+    "line": 562,
+    "decision": "match self {\n            Token::AnyRun | Token::AnyOne => true,\n            Token::Char(p) => match case {\n                Case::Exact => *p == c,\n                Case::FoldAscii => p.eq_ignore_ascii_case(&c),\n            },\n            Token::Class { negate, ranges } => {\n                ranges.iter().any(|(lo, hi)| *lo <= c && c <= *hi) != *negate\n            }\n            Token::Never => false,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_matches_52f16ebe",
+    "file": "src/functions.rs",
+    "line": 564,
+    "decision": "match case {\n                Case::Exact => *p == c,\n                Case::FoldAscii => p.eq_ignore_ascii_case(&c),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_like_tokens_a7a5f842",
+    "file": "src/functions.rs",
+    "line": 583,
+    "decision": "let Some(&c) = p.get(i)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "functions_like_rec_7ed28956",
+    "id": "functions_like_tokens_6f25d98e",
     "file": "src/functions.rs",
-    "line": 529,
-    "decision": "pi == p.len()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_like_rec_c331028c",
-    "file": "src/functions.rs",
-    "line": 533,
-    "decision": "Some(pc) == escape && pi.saturating_add(1) < p.len()",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_like_rec_9e288648",
-    "file": "src/functions.rs",
-    "line": 535,
-    "decision": "ti >= t.len() || !same(t[ti], literal)",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_like_rec_660540fd",
-    "file": "src/functions.rs",
-    "line": 542,
-    "decision": "match pc {\n            '%' => {\n                // Collapse consecutive '%' (a run behaves as one).\n                while pi < p.len() && p[pi] == '%' {\n                    pi = pi.saturating_add(1);\n                }\n                if pi == p.len() {\n                    return true;\n                }\n                for start in ti..=t.len() {\n                    if like_rec(t, p, escape, exact, start, pi) {\n                        return true;\n                    }\n                }\n                return false;\n            }\n            '_' => {\n                if ti >= t.len() {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = pi.saturating_add(1);\n            }\n            _ => {\n                if ti >= t.len() || !same(t[ti], pc) {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = pi.saturating_add(1);\n            }\n        }",
+    "line": 585,
+    "decision": "match next {\n            Some(literal) if Some(c) == escape => (Token::Char(literal), 2),\n            None if Some(c) == escape => (Token::Never, 1),\n            _ => match c {\n                '%' => (Token::AnyRun, 1),\n                '_' => (Token::AnyOne, 1),\n                c => (Token::Char(c), 1),\n            },\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "functions_like_rec_01f56809",
+    "id": "functions_like_tokens_fe4471ee",
     "file": "src/functions.rs",
-    "line": 545,
-    "decision": "pi < p.len() && p[pi] == '%'",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_like_rec_7ed28956_2",
-    "file": "src/functions.rs",
-    "line": 548,
-    "decision": "pi == p.len()",
+    "line": 586,
+    "decision": "Some(c) == escape",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "functions_like_rec_7ecbf390",
+    "id": "functions_like_tokens_fe4471ee_2",
     "file": "src/functions.rs",
-    "line": 552,
-    "decision": "like_rec(t, p, escape, exact, start, pi)",
+    "line": 587,
+    "decision": "Some(c) == escape",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "functions_like_rec_3e32d163",
+    "id": "functions_like_tokens_dd762ed4",
     "file": "src/functions.rs",
-    "line": 559,
-    "decision": "ti >= t.len()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_like_rec_b8d0afd0",
-    "file": "src/functions.rs",
-    "line": 566,
-    "decision": "ti >= t.len() || !same(t[ti], pc)",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_glob_rec_7ed28956",
-    "file": "src/functions.rs",
-    "line": 591,
-    "decision": "pi == p.len()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_glob_rec_e8365e93",
-    "file": "src/functions.rs",
-    "line": 594,
-    "decision": "match p[pi] {\n            '*' => {\n                while pi < p.len() && p[pi] == '*' {\n                    pi = pi.saturating_add(1);\n                }\n                if pi == p.len() {\n                    return true;\n                }\n                for start in ti..=t.len() {\n                    if glob_rec(t, p, start, pi) {\n                        return true;\n                    }\n                }\n                return false;\n            }\n            '?' => {\n                if ti >= t.len() {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = pi.saturating_add(1);\n            }\n            '[' => {\n                let Some((matches, next_pi)) = glob_class(p, pi, t.get(ti).copied()) else {\n                    return false;\n                };\n                if ti >= t.len() || !matches {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = next_pi;\n            }\n            c => {\n                if ti >= t.len() || t[ti] != c {\n                    return false;\n                }\n                ti = ti.saturating_add(1);\n                pi = pi.saturating_add(1);\n            }\n        }",
+    "line": 588,
+    "decision": "match c {\n                '%' => (Token::AnyRun, 1),\n                '_' => (Token::AnyOne, 1),\n                c => (Token::Char(c), 1),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "functions_glob_rec_01d0fd5a",
+    "id": "functions_glob_tokens_a7a5f842",
     "file": "src/functions.rs",
-    "line": 596,
-    "decision": "pi < p.len() && p[pi] == '*'",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_glob_rec_7ed28956_2",
-    "file": "src/functions.rs",
-    "line": 599,
-    "decision": "pi == p.len()",
+    "line": 605,
+    "decision": "let Some(&c) = p.get(i)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "functions_glob_rec_80ec1907",
+    "id": "functions_glob_tokens_9eb95163",
     "file": "src/functions.rs",
-    "line": 603,
-    "decision": "glob_rec(t, p, start, pi)",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
+    "line": 606,
+    "decision": "match c {\n            '*' => (Token::AnyRun, i.saturating_add(1)),\n            '?' => (Token::AnyOne, i.saturating_add(1)),\n            '[' => match glob_class(&p, i) {\n                Some((token, next)) => (token, next),\n                None => (Token::Never, p.len()),\n            },\n            c => (Token::Char(c), i.saturating_add(1)),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "functions_glob_rec_3e32d163",
+    "id": "functions_glob_tokens_5fc111b8",
     "file": "src/functions.rs",
-    "line": 610,
-    "decision": "ti >= t.len()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_glob_rec_36b485df",
-    "file": "src/functions.rs",
-    "line": 620,
-    "decision": "ti >= t.len() || !matches",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_glob_rec_688fbf64",
-    "file": "src/functions.rs",
-    "line": 627,
-    "decision": "ti >= t.len() || t[ti] != c",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
+    "line": 609,
+    "decision": "match glob_class(&p, i) {\n                Some((token, next)) => (token, next),\n                None => (Token::Never, p.len()),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {
     "id": "functions_glob_class_66b5f274",
     "file": "src/functions.rs",
-    "line": 643,
+    "line": 627,
     "decision": "negate",
     "conditions": 1,
     "vectors_required": 2,
@@ -19900,60 +19820,90 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_glob_class_70dcf3a0",
+    "id": "functions_glob_class_ef4a98fa",
     "file": "src/functions.rs",
-    "line": 649,
-    "decision": "i >= p.len()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_glob_class_1d2aadbb",
-    "file": "src/functions.rs",
-    "line": 652,
-    "decision": "p[i] == ']' && i > class_start",
+    "line": 634,
+    "decision": "c == ']' && i > class_start",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "functions_glob_class_18591d42",
+    "id": "functions_glob_class_eefcea16",
     "file": "src/functions.rs",
-    "line": 656,
-    "decision": "i.saturating_add(2) < p.len()\n            && p[i.saturating_add(1)] == '-'\n            && p[i.saturating_add(2)] != ']'",
-    "conditions": 3,
-    "vectors_required": 4,
-    "compiler_void": false,
-    "wildcard_risk": false
+    "line": 637,
+    "decision": "match (p.get(i.saturating_add(1)), p.get(i.saturating_add(2))) {\n            (Some('-'), Some(&hi)) if hi != ']' => {\n                ranges.push((c, hi));\n                i = i.saturating_add(3);\n            }\n            _ => {\n                ranges.push((c, c));\n                i = i.saturating_add(1);\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
   },
   {
-    "id": "functions_glob_class_cfda0f15",
+    "id": "functions_glob_class_d8f24a9a",
     "file": "src/functions.rs",
-    "line": 661,
-    "decision": "let Some(c) = c",
+    "line": 638,
+    "decision": "hi != ']'",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "functions_glob_class_78a99761",
+    "id": "functions_wildcard_match_5bc33073",
     "file": "src/functions.rs",
     "line": 662,
-    "decision": "c >= lo && c <= hi",
-    "conditions": 2,
-    "vectors_required": 3,
+    "decision": "match tokens.get(pi) {\n            Some(Token::AnyRun) => {\n                pi = pi.saturating_add(1);\n                resume = Some((pi, ti));\n                continue;\n            }\n            Some(token) => {\n                if let Some(&c) = t.get(ti) {\n                    if token.matches(c, case) {\n                        ti = ti.saturating_add(1);\n                        pi = pi.saturating_add(1);\n                        continue;\n                    }\n                }\n            }\n            None if ti == t.len() => return true,\n            None => {}\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_wildcard_match_db3b326c",
+    "file": "src/functions.rs",
+    "line": 677,
+    "decision": "ti == t.len()",
+    "conditions": 1,
+    "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "functions_glob_class_03e48905",
+    "id": "functions_wildcard_match_12078a79",
     "file": "src/functions.rs",
-    "line": 668,
-    "decision": "Some(p[i]) == c",
+    "line": 669,
+    "decision": "let Some(&c) = t.get(ti)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_wildcard_match_33c53b76",
+    "file": "src/functions.rs",
+    "line": 670,
+    "decision": "token.matches(c, case)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_wildcard_match_0deaccbe",
+    "file": "src/functions.rs",
+    "line": 680,
+    "decision": "match resume {\n            Some((after_run, absorbed)) if absorbed < t.len() => {\n                let absorbed = absorbed.saturating_add(1);\n                resume = Some((after_run, absorbed));\n                pi = after_run;\n                ti = absorbed;\n            }\n            _ => return false,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "functions_wildcard_match_6dcbea32",
+    "file": "src/functions.rs",
+    "line": 681,
+    "decision": "absorbed < t.len()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -19962,7 +19912,7 @@
   {
     "id": "functions_like_fn_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 680,
+    "line": 695,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -19970,20 +19920,50 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_like_fn_1f8cb866",
+    "id": "functions_like_fn_b3386239",
     "file": "src/functions.rs",
-    "line": 683,
-    "decision": "match args.get(2) {\n        Some(e) => as_text(e).chars().next(),\n        None => None,\n    }",
+    "line": 699,
+    "decision": "pattern.len() > MAX_LIKE_PATTERN_LENGTH",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_like_fn_81310047",
+    "file": "src/functions.rs",
+    "line": 702,
+    "decision": "match args.get(2) {\n        Some(e) => {\n            let e = as_text(e);\n            let mut chars = e.chars();\n            match (chars.next(), chars.next()) {\n                (Some(c), None) => Some(c),\n                _ => {\n                    return Err(FunctionError::Sql(\n                        \"ESCAPE expression must be a single character\".into(),\n                    ))\n                }\n            }\n        }\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
+    "id": "functions_like_fn_b885766b",
+    "file": "src/functions.rs",
+    "line": 706,
+    "decision": "match (chars.next(), chars.next()) {\n                (Some(c), None) => Some(c),\n                _ => {\n                    return Err(FunctionError::Sql(\n                        \"ESCAPE expression must be a single character\".into(),\n                    ))\n                }\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "functions_glob_fn_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 696,
+    "line": 725,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_glob_fn_b3386239",
+    "file": "src/functions.rs",
+    "line": 729,
+    "decision": "pattern.len() > MAX_LIKE_PATTERN_LENGTH",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -19992,7 +19972,7 @@
   {
     "id": "functions_iif_87177c1d",
     "file": "src/functions.rs",
-    "line": 710,
+    "line": 742,
     "decision": "is_true(cond)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20002,7 +19982,7 @@
   {
     "id": "functions_is_true_c8b5f3f2",
     "file": "src/functions.rs",
-    "line": 720,
+    "line": 752,
     "decision": "match v {\n        Value::Null => false,\n        Value::Blob(b) => is_true(&Value::Text(String::from_utf8_lossy(b).as_ref().into())),\n        Value::Integer(i) => *i != 0,\n        Value::Real(r) => *r != 0.0,\n        Value::Text(s) => match crate::coerce::coerce_text_to_numeric(s) {\n            Value::Integer(i) => i != 0,\n            Value::Real(r) => r != 0.0,\n            _ => false,\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20012,7 +19992,7 @@
   {
     "id": "functions_is_true_ccb66663",
     "file": "src/functions.rs",
-    "line": 725,
+    "line": 757,
     "decision": "match crate::coerce::coerce_text_to_numeric(s) {\n            Value::Integer(i) => i != 0,\n            Value::Real(r) => r != 0.0,\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20022,7 +20002,7 @@
   {
     "id": "functions_late_json_args_fa4ffcda",
     "file": "src/functions.rs",
-    "line": 761,
+    "line": 793,
     "decision": "matches!(doc, Value::Null) || matches!(path, Value::Null)",
     "conditions": 2,
     "vectors_required": 3,
@@ -20032,7 +20012,7 @@
   {
     "id": "functions_late_json_args_313060fd",
     "file": "src/functions.rs",
-    "line": 765,
+    "line": 797,
     "decision": "path.starts_with('$')",
     "conditions": 1,
     "vectors_required": 2,
@@ -20042,7 +20022,7 @@
   {
     "id": "functions_late_json_text_ad6b29e0",
     "file": "src/functions.rs",
-    "line": 779,
+    "line": 811,
     "decision": "let Ok(Value::Text(kind)) = call(\"json_type\", args)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20052,7 +20032,7 @@
   {
     "id": "functions_late_json_text_f15610c2",
     "file": "src/functions.rs",
-    "line": 780,
+    "line": 812,
     "decision": "matches!(&*kind, \"true\" | \"false\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -20062,7 +20042,7 @@
   {
     "id": "functions_late_json_extract_string_e19b848f",
     "file": "src/functions.rs",
-    "line": 809,
+    "line": 841,
     "decision": "match late_json_text(&args) {\n        Ok(Value::Text(t)) if t.starts_with('\"') => {\n            call(\"json_extract\", &args).unwrap_or(Value::Null)\n        }\n        Ok(v) => v,\n        Err(_) => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20072,7 +20052,7 @@
   {
     "id": "functions_late_json_extract_string_7bbbd138",
     "file": "src/functions.rs",
-    "line": 810,
+    "line": 842,
     "decision": "t.starts_with('\"')",
     "conditions": 1,
     "vectors_required": 2,
@@ -20082,7 +20062,7 @@
   {
     "id": "functions_logfmt_extract_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 823,
+    "line": 855,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -20092,7 +20072,7 @@
   {
     "id": "functions_logfmt_extract_3cb9704d",
     "file": "src/functions.rs",
-    "line": 828,
+    "line": 860,
     "decision": "k == key",
     "conditions": 1,
     "vectors_required": 2,
@@ -20102,7 +20082,7 @@
   {
     "id": "functions_logfmt_extract_b1d7ca99",
     "file": "src/functions.rs",
-    "line": 829,
+    "line": 861,
     "decision": "match found {\n        Some(v) => Value::Text(v.to_string().into()),\n        None => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20112,7 +20092,7 @@
   {
     "id": "functions_regexp_extract_8b7ce2d7",
     "file": "src/functions.rs",
-    "line": 841,
+    "line": 873,
     "decision": "args.iter().any(|v| matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -20122,7 +20102,7 @@
   {
     "id": "functions_compile_6c91149b",
     "file": "src/functions.rs",
-    "line": 915,
+    "line": 947,
     "decision": "i < chars.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20132,7 +20112,7 @@
   {
     "id": "functions_compile_fae27a97",
     "file": "src/functions.rs",
-    "line": 916,
+    "line": 948,
     "decision": "match chars[i] {\n                '(' => {\n                    nodes.push(Node::GroupOpen);\n                    open_groups.push(next_group);\n                    next_group = next_group.checked_add(1)?;\n                    i = i.checked_add(1)?;\n                }\n                ')' => {\n                    let idx = open_groups.pop()?;\n                    nodes.push(Node::GroupClose(idx));\n                    i = i.checked_add(1)?;\n                }\n                '.' => {\n                    i = i.checked_add(1)?;\n                    let quant = take_quant(&chars, &mut i);\n                    nodes.push(Node::Atom {\n                        atom: Atom::Any,\n                        items: Vec::new(),\n                        quant,\n                    });\n                }\n                '[' => {\n                    let (negate, items, next_i) = parse_class(&chars, i)?;\n                    i = next_i;\n                    let quant = take_quant(&chars, &mut i);\n                    nodes.push(Node::Atom {\n                        atom: Atom::Class { negate },\n                        items,\n                        quant,\n                    });\n                }\n                '\\\\' => {\n                    let c = *chars.get(i.checked_add(1)?)?;\n                    i = i.checked_add(2)?;\n                    let quant = take_quant(&chars, &mut i);\n                    nodes.push(Node::Atom {\n                        atom: Atom::Lit(c),\n                        items: Vec::new(),\n                        quant,\n                    });\n                }\n                c => {\n                    i = i.checked_add(1)?;\n                    let quant = take_quant(&chars, &mut i);\n                    nodes.push(Node::Atom {\n                        atom: Atom::Lit(c),\n                        items: Vec::new(),\n                        quant,\n                    });\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20142,7 +20122,7 @@
   {
     "id": "functions_compile_766b9098",
     "file": "src/functions.rs",
-    "line": 968,
+    "line": 1000,
     "decision": "!open_groups.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20152,7 +20132,7 @@
   {
     "id": "functions_take_quant_1a51cd0d",
     "file": "src/functions.rs",
-    "line": 978,
+    "line": 1010,
     "decision": "match chars.get(*i) {\n            Some('*') => {\n                *i = i.saturating_add(1);\n                Quant::Star\n            }\n            Some('+') => {\n                *i = i.saturating_add(1);\n                Quant::Plus\n            }\n            Some('?') => {\n                *i = i.saturating_add(1);\n                Quant::Opt\n            }\n            _ => Quant::One,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20162,7 +20142,7 @@
   {
     "id": "functions_parse_class_66b5f274",
     "file": "src/functions.rs",
-    "line": 1001,
+    "line": 1033,
     "decision": "negate",
     "conditions": 1,
     "vectors_required": 2,
@@ -20172,7 +20152,7 @@
   {
     "id": "functions_parse_class_7a99804d",
     "file": "src/functions.rs",
-    "line": 1007,
+    "line": 1039,
     "decision": "i >= chars.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20182,7 +20162,7 @@
   {
     "id": "functions_parse_class_d7d31f3a",
     "file": "src/functions.rs",
-    "line": 1010,
+    "line": 1042,
     "decision": "chars[i] == ']' && i > class_start",
     "conditions": 2,
     "vectors_required": 3,
@@ -20192,7 +20172,7 @@
   {
     "id": "functions_parse_class_328d12a6",
     "file": "src/functions.rs",
-    "line": 1013,
+    "line": 1045,
     "decision": "i.checked_add(2)? < chars.len()\n                && chars[i.checked_add(1)?] == '-'\n                && chars[i.checked_add(2)?] != ']'",
     "conditions": 3,
     "vectors_required": 4,
@@ -20202,7 +20182,7 @@
   {
     "id": "functions_class_matches_30b11503",
     "file": "src/functions.rs",
-    "line": 1027,
+    "line": 1059,
     "decision": "match item {\n            ClassItem::Char(x) => *x == c,\n            ClassItem::Range(lo, hi) => c >= *lo && c <= *hi,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20212,7 +20192,7 @@
   {
     "id": "functions_atom_matches_ae01dce1",
     "file": "src/functions.rs",
-    "line": 1035,
+    "line": 1067,
     "decision": "match atom {\n            Atom::Lit(x) => x == c,\n            Atom::Any => true,\n            Atom::Class { negate } => class_matches(items, negate, c),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20222,7 +20202,7 @@
   {
     "id": "functions_group_01b7c5b2",
     "file": "src/functions.rs",
-    "line": 1056,
+    "line": 1088,
     "decision": "n == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -20232,7 +20212,7 @@
   {
     "id": "functions_find_def6613d",
     "file": "src/functions.rs",
-    "line": 1073,
+    "line": 1105,
     "decision": "let Some(end) = match_seq(&re.nodes, 0, &chars, start, &mut groups, &mut open)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20242,7 +20222,7 @@
   {
     "id": "functions_match_seq_a370b685",
     "file": "src/functions.rs",
-    "line": 1095,
+    "line": 1127,
     "decision": "match node {\n            Node::GroupOpen => {\n                open.push(ti);\n                let r = match_seq(nodes, ni.saturating_add(1), text, ti, groups, open);\n                if r.is_none() {\n                    open.pop();\n                }\n                r\n            }\n            Node::GroupClose(idx) => {\n                let start = *open.last()?;\n                open.pop();\n                let slot = idx.checked_sub(1)?;\n                let previous = groups.get(slot).copied().unwrap_or(None);\n                if let Some(g) = groups.get_mut(slot) {\n                    *g = Some((start, ti));\n                }\n                let r = match_seq(nodes, ni.saturating_add(1), text, ti, groups, open);\n                if r.is_none() {\n                    if let Some(g) = groups.get_mut(slot) {\n                        *g = previous;\n                    }\n                    open.push(start);\n                }\n                r\n            }\n            Node::Atom { atom, items, quant } => match quant {\n                Quant::One => {\n                    let c = *text.get(ti)?;\n                    if atom_matches(*atom, items, c) {\n                        match_seq(\n                            nodes,\n                            ni.saturating_add(1),\n                            text,\n                            ti.saturating_add(1),\n                            groups,\n                            open,\n                        )\n                    } else {\n                        None\n                    }\n                }\n                Quant::Opt => try_repeat(nodes, ni, *atom, items, 0, 1, text, ti, groups, open),\n                Quant::Star => try_repeat(\n                    nodes,\n                    ni,\n                    *atom,\n                    items,\n                    0,\n                    usize::MAX,\n                    text,\n                    ti,\n                    groups,\n                    open,\n                ),\n                Quant::Plus => try_repeat(\n                    nodes,\n                    ni,\n                    *atom,\n                    items,\n                    1,\n                    usize::MAX,\n                    text,\n                    ti,\n                    groups,\n                    open,\n                ),\n            },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20252,7 +20232,7 @@
   {
     "id": "functions_match_seq_720606be",
     "file": "src/functions.rs",
-    "line": 1099,
+    "line": 1131,
     "decision": "r.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20262,7 +20242,7 @@
   {
     "id": "functions_match_seq_746cfe7a",
     "file": "src/functions.rs",
-    "line": 1109,
+    "line": 1141,
     "decision": "let Some(g) = groups.get_mut(slot)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20272,7 +20252,7 @@
   {
     "id": "functions_match_seq_720606be_2",
     "file": "src/functions.rs",
-    "line": 1113,
+    "line": 1145,
     "decision": "r.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20282,7 +20262,7 @@
   {
     "id": "functions_match_seq_746cfe7a_2",
     "file": "src/functions.rs",
-    "line": 1114,
+    "line": 1146,
     "decision": "let Some(g) = groups.get_mut(slot)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20292,7 +20272,7 @@
   {
     "id": "functions_match_seq_576d42cd",
     "file": "src/functions.rs",
-    "line": 1121,
+    "line": 1153,
     "decision": "match quant {\n                Quant::One => {\n                    let c = *text.get(ti)?;\n                    if atom_matches(*atom, items, c) {\n                        match_seq(\n                            nodes,\n                            ni.saturating_add(1),\n                            text,\n                            ti.saturating_add(1),\n                            groups,\n                            open,\n                        )\n                    } else {\n                        None\n                    }\n                }\n                Quant::Opt => try_repeat(nodes, ni, *atom, items, 0, 1, text, ti, groups, open),\n                Quant::Star => try_repeat(\n                    nodes,\n                    ni,\n                    *atom,\n                    items,\n                    0,\n                    usize::MAX,\n                    text,\n                    ti,\n                    groups,\n                    open,\n                ),\n                Quant::Plus => try_repeat(\n                    nodes,\n                    ni,\n                    *atom,\n                    items,\n                    1,\n                    usize::MAX,\n                    text,\n                    ti,\n                    groups,\n                    open,\n                ),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20302,7 +20282,7 @@
   {
     "id": "functions_match_seq_8626ac25",
     "file": "src/functions.rs",
-    "line": 1124,
+    "line": 1156,
     "decision": "atom_matches(*atom, items, c)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20312,7 +20292,7 @@
   {
     "id": "functions_try_repeat_d84b03c5",
     "file": "src/functions.rs",
-    "line": 1185,
+    "line": 1217,
     "decision": "positions.len().saturating_sub(1) < max\n            && text.get(cur).is_some_and(|c| atom_matches(atom, items, *c))",
     "conditions": 2,
     "vectors_required": 3,
@@ -20322,7 +20302,7 @@
   {
     "id": "functions_try_repeat_acf60509",
     "file": "src/functions.rs",
-    "line": 1192,
+    "line": 1224,
     "decision": "min > last",
     "conditions": 1,
     "vectors_required": 2,
@@ -20332,7 +20312,7 @@
   {
     "id": "functions_try_repeat_adad5739",
     "file": "src/functions.rs",
-    "line": 1196,
+    "line": 1228,
     "decision": "let Some(end) = match_seq(\n                nodes,\n                ni.saturating_add(1),\n                text,\n                positions[k],\n                groups,\n                open,\n            )",
     "conditions": 1,
     "vectors_required": 2,
@@ -20342,7 +20322,7 @@
   {
     "id": "functions_call_at_2f86c9e9",
     "file": "src/functions.rs",
-    "line": 1399,
+    "line": 1431,
     "decision": "match datetime::lookup_at(&name.to_ascii_lowercase(), args.len()) {\n        Some(f) => f(args, now_ns),\n        None => call(name, args),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20352,7 +20332,7 @@
   {
     "id": "functions_call_c0e7d4e5",
     "file": "src/functions.rs",
-    "line": 1551,
+    "line": 1583,
     "decision": "match lookup(name, args.len()) {\n        Some(f) => f(args),\n        None => Err(FunctionError::Unknown {\n            name: name.to_string(),\n            arity: args.len(),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20362,7 +20342,7 @@
   {
     "id": "functions_prepare_error_0d9838fe",
     "file": "src/functions.rs",
-    "line": 1570,
+    "line": 1602,
     "decision": "exists(name, arity)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20372,7 +20352,7 @@
   {
     "id": "functions_prepare_error_5fb8b6fb",
     "file": "src/functions.rs",
-    "line": 1574,
+    "line": 1606,
     "decision": "SCALAR_FUNCTION_NAMES.contains(&lower.as_str())",
     "conditions": 1,
     "vectors_required": 2,
@@ -20382,7 +20362,7 @@
   {
     "id": "functions_is_branch_scalar_cb2c5826",
     "file": "src/functions.rs",
-    "line": 1628,
+    "line": 1660,
     "decision": "match name.to_ascii_lowercase().as_str() {\n        SELECT_FN => arity == 3,\n        \"coalesce\" => arity >= 2,\n        \"ifnull\" => arity == 2,\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20392,7 +20372,7 @@
   {
     "id": "functions_core_lookup_b10398d3",
     "file": "src/functions.rs",
-    "line": 1645,
+    "line": 1677,
     "decision": "match (name, arity) {\n        (\"length\", 1) => Some(length),\n        (\"upper\", 1) => Some(upper),\n        (\"lower\", 1) => Some(lower),\n        (\"abs\", 1) => Some(abs),\n        (\"coalesce\", n) if n >= 2 => Some(coalesce),\n        (\"ifnull\", 2) => Some(coalesce),\n        (\"nullif\", 2) => Some(nullif),\n        (\"typeof\", 1) => Some(typeof_fn),\n        (\"sqlite_version\", 0) => Some(sqlite_version),\n        (\"hex\", 1) => Some(hex),\n        (\"unhex\", 1) => Some(unhex),\n        (\"quote\", 1) => Some(quote),\n        (\"min\", n) if n >= 1 => Some(scalar_min),\n        (\"max\", n) if n >= 1 => Some(scalar_max),\n        (\"round\", 1 | 2) => Some(round_fn),\n        (\"sign\", 1) => Some(sign),\n        (\"instr\", 2) => Some(instr),\n        (\"zeroblob\", 1) => Some(zeroblob),\n        (\"iif\" | \"if\", n) if n >= 2 => Some(iif),\n        (\"substr\", 2 | 3) => Some(substr),\n        (\"trim\", 1 | 2) => Some(trim_fn),\n        (\"ltrim\", 1 | 2) => Some(ltrim_fn),\n        (\"rtrim\", 1 | 2) => Some(rtrim_fn),\n        (\"replace\", 3) => Some(replace_fn),\n        (\"like\", 2 | 3) => Some(like_fn),\n        (\"glob\", 2) => Some(glob_fn),\n        (\"logfmt_extract\", 2) => Some(logfmt_extract),\n        (\"regexp_extract\", 3) => Some(regexp_extract),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20402,7 +20382,7 @@
   {
     "id": "functions_core_lookup_3c4eb680",
     "file": "src/functions.rs",
-    "line": 1650,
+    "line": 1682,
     "decision": "n >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -20412,7 +20392,7 @@
   {
     "id": "functions_core_lookup_3c4e8ca9",
     "file": "src/functions.rs",
-    "line": 1658,
+    "line": 1690,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -20422,7 +20402,7 @@
   {
     "id": "functions_core_lookup_3c4e8ca9_2",
     "file": "src/functions.rs",
-    "line": 1659,
+    "line": 1691,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -20432,7 +20412,7 @@
   {
     "id": "functions_core_lookup_3c4eb680_2",
     "file": "src/functions.rs",
-    "line": 1664,
+    "line": 1696,
     "decision": "n >= 2",
     "conditions": 1,
     "vectors_required": 2,

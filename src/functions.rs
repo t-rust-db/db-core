@@ -503,8 +503,7 @@ fn replace_fn(args: &[Value]) -> Result<Value, FunctionError> {
 /// it directly without going through the function-call machinery.
 pub fn like_match(text: &str, pattern: &str, escape: Option<char>) -> bool {
     let t: Vec<char> = text.chars().collect();
-    let p: Vec<char> = pattern.chars().collect();
-    like_rec(&t, &p, escape, false, 0, 0)
+    wildcard_match(&t, &like_tokens(pattern, escape), Case::FoldAscii)
 }
 
 /// `LIKE` as DuckDB matches it: case-sensitive, `%` and `_` the only
@@ -512,69 +511,7 @@ pub fn like_match(text: &str, pattern: &str, escape: Option<char>) -> bool {
 /// both sides first. sqlite3's [`like_match`] folds ASCII case instead.
 pub fn like_match_exact(text: &str, pattern: &str) -> bool {
     let t: Vec<char> = text.chars().collect();
-    let p: Vec<char> = pattern.chars().collect();
-    like_rec(&t, &p, None, true, 0, 0)
-}
-
-fn like_rec(
-    t: &[char],
-    p: &[char],
-    escape: Option<char>,
-    exact: bool,
-    mut ti: usize,
-    mut pi: usize,
-) -> bool {
-    let same = |a: char, b: char| if exact { a == b } else { ascii_eq(a, b) };
-    loop {
-        if pi == p.len() {
-            return ti == t.len();
-        }
-        let pc = p[pi];
-        if Some(pc) == escape && pi.saturating_add(1) < p.len() {
-            let literal = p[pi.saturating_add(1)];
-            if ti >= t.len() || !same(t[ti], literal) {
-                return false;
-            }
-            ti = ti.saturating_add(1);
-            pi = pi.saturating_add(2);
-            continue;
-        }
-        match pc {
-            '%' => {
-                // Collapse consecutive '%' (a run behaves as one).
-                while pi < p.len() && p[pi] == '%' {
-                    pi = pi.saturating_add(1);
-                }
-                if pi == p.len() {
-                    return true;
-                }
-                for start in ti..=t.len() {
-                    if like_rec(t, p, escape, exact, start, pi) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            '_' => {
-                if ti >= t.len() {
-                    return false;
-                }
-                ti = ti.saturating_add(1);
-                pi = pi.saturating_add(1);
-            }
-            _ => {
-                if ti >= t.len() || !same(t[ti], pc) {
-                    return false;
-                }
-                ti = ti.saturating_add(1);
-                pi = pi.saturating_add(1);
-            }
-        }
-    }
-}
-
-fn ascii_eq(a: char, b: char) -> bool {
-    a.eq_ignore_ascii_case(&b)
+    wildcard_match(&t, &like_tokens(pattern, None), Case::Exact)
 }
 
 /// SQLite `GLOB`: case-sensitive, `*` = any run, `?` = any one char,
@@ -582,96 +519,174 @@ fn ascii_eq(a: char, b: char) -> bool {
 /// the same reason as [`like_match`].
 pub fn glob_match(text: &str, pattern: &str) -> bool {
     let t: Vec<char> = text.chars().collect();
-    let p: Vec<char> = pattern.chars().collect();
-    glob_rec(&t, &p, 0, 0)
+    wildcard_match(&t, &glob_tokens(pattern), Case::Exact)
 }
 
-fn glob_rec(t: &[char], p: &[char], mut ti: usize, mut pi: usize) -> bool {
-    loop {
-        if pi == p.len() {
-            return ti == t.len();
-        }
-        match p[pi] {
-            '*' => {
-                while pi < p.len() && p[pi] == '*' {
-                    pi = pi.saturating_add(1);
-                }
-                if pi == p.len() {
-                    return true;
-                }
-                for start in ti..=t.len() {
-                    if glob_rec(t, p, start, pi) {
-                        return true;
-                    }
-                }
-                return false;
+/// sqlite3's `SQLITE_MAX_LIKE_PATTERN_LENGTH`: `like()`/`glob()` refuse a
+/// longer pattern (in bytes) with [`PATTERN_TOO_COMPLEX`] (#871).
+const MAX_LIKE_PATTERN_LENGTH: usize = 50_000;
+
+/// sqlite3's message for a pattern over [`MAX_LIKE_PATTERN_LENGTH`].
+const PATTERN_TOO_COMPLEX: &str = "LIKE or GLOB pattern too complex";
+
+/// How a literal pattern character compares with a text character.
+#[derive(Clone, Copy)]
+enum Case {
+    Exact,
+    /// sqlite3's `LIKE`: ASCII letters match either case.
+    FoldAscii,
+}
+
+/// One element of a compiled `LIKE`/`GLOB` pattern. Every kind but
+/// `AnyRun` consumes exactly one text character, which is what lets
+/// [`wildcard_match`] backtrack to the latest `AnyRun` only.
+enum Token {
+    /// `%` / `*`: any run of characters, including none.
+    AnyRun,
+    /// `_` / `?`: any one character.
+    AnyOne,
+    /// A literal (or escaped metacharacter).
+    Char(char),
+    /// `[...]` / `[^...]`: inclusive ranges (a single char is `(c, c)`).
+    Class {
+        negate: bool,
+        ranges: Vec<(char, char)>,
+    },
+    /// An unterminated `[` or a trailing `ESCAPE`: matches nothing, so
+    /// the pattern can't match.
+    Never,
+}
+
+impl Token {
+    fn matches(&self, c: char, case: Case) -> bool {
+        match self {
+            Token::AnyRun | Token::AnyOne => true,
+            Token::Char(p) => match case {
+                Case::Exact => *p == c,
+                Case::FoldAscii => p.eq_ignore_ascii_case(&c),
+            },
+            Token::Class { negate, ranges } => {
+                ranges.iter().any(|(lo, hi)| *lo <= c && c <= *hi) != *negate
             }
-            '?' => {
-                if ti >= t.len() {
-                    return false;
-                }
-                ti = ti.saturating_add(1);
-                pi = pi.saturating_add(1);
-            }
-            '[' => {
-                let Some((matches, next_pi)) = glob_class(p, pi, t.get(ti).copied()) else {
-                    return false;
-                };
-                if ti >= t.len() || !matches {
-                    return false;
-                }
-                ti = ti.saturating_add(1);
-                pi = next_pi;
-            }
-            c => {
-                if ti >= t.len() || t[ti] != c {
-                    return false;
-                }
-                ti = ti.saturating_add(1);
-                pi = pi.saturating_add(1);
-            }
+            Token::Never => false,
         }
     }
 }
 
+/// `pattern` as `LIKE` tokens: `escape` followed by any character is that
+/// character literally; an `escape` with nothing after it matches nothing,
+/// as in sqlite3's `patternCompare` (`'a\' LIKE 'a\' ESCAPE '\'` is 0).
+fn like_tokens(pattern: &str, escape: Option<char>) -> Vec<Token> {
+    let p: Vec<char> = pattern.chars().collect();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while let Some(&c) = p.get(i) {
+        let next = p.get(i.saturating_add(1)).copied();
+        let (token, width) = match next {
+            Some(literal) if Some(c) == escape => (Token::Char(literal), 2),
+            None if Some(c) == escape => (Token::Never, 1),
+            _ => match c {
+                '%' => (Token::AnyRun, 1),
+                '_' => (Token::AnyOne, 1),
+                c => (Token::Char(c), 1),
+            },
+        };
+        tokens.push(token);
+        i = i.saturating_add(width);
+    }
+    tokens
+}
+
+/// `pattern` as `GLOB` tokens.
+fn glob_tokens(pattern: &str) -> Vec<Token> {
+    let p: Vec<char> = pattern.chars().collect();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while let Some(&c) = p.get(i) {
+        let (token, next) = match c {
+            '*' => (Token::AnyRun, i.saturating_add(1)),
+            '?' => (Token::AnyOne, i.saturating_add(1)),
+            '[' => match glob_class(&p, i) {
+                Some((token, next)) => (token, next),
+                None => (Token::Never, p.len()),
+            },
+            c => (Token::Char(c), i.saturating_add(1)),
+        };
+        tokens.push(token);
+        i = next;
+    }
+    tokens
+}
+
 /// Parses a `[...]`/`[^...]` class starting at `p[start]` (`p[start]
-/// == '['`); returns whether `c` matched and the index just past the
-/// `]`.
-fn glob_class(p: &[char], start: usize, c: Option<char>) -> Option<(bool, usize)> {
+/// == '['`); returns the class and the index just past the `]`, or
+/// `None` for an unterminated class.
+fn glob_class(p: &[char], start: usize) -> Option<(Token, usize)> {
     let mut i = start.saturating_add(1);
     let negate = p.get(i) == Some(&'^');
     if negate {
         i = i.saturating_add(1);
     }
     let class_start = i;
-    let mut matched = false;
+    let mut ranges = Vec::new();
     loop {
-        if i >= p.len() {
-            return None; // unterminated class: treat as no match
+        let c = *p.get(i)?;
+        if c == ']' && i > class_start {
+            return Some((Token::Class { negate, ranges }, i.saturating_add(1)));
         }
-        if p[i] == ']' && i > class_start {
-            i = i.saturating_add(1);
-            break;
-        }
-        if i.saturating_add(2) < p.len()
-            && p[i.saturating_add(1)] == '-'
-            && p[i.saturating_add(2)] != ']'
-        {
-            let (lo, hi) = (p[i], p[i.saturating_add(2)]);
-            if let Some(c) = c {
-                if c >= lo && c <= hi {
-                    matched = true;
-                }
+        match (p.get(i.saturating_add(1)), p.get(i.saturating_add(2))) {
+            (Some('-'), Some(&hi)) if hi != ']' => {
+                ranges.push((c, hi));
+                i = i.saturating_add(3);
             }
-            i = i.saturating_add(3);
-        } else {
-            if Some(p[i]) == c {
-                matched = true;
+            _ => {
+                ranges.push((c, c));
+                i = i.saturating_add(1);
             }
-            i = i.saturating_add(1);
         }
     }
-    Some((matched != negate && c.is_some(), i))
+}
+
+/// Matches `t` against compiled `tokens` without recursion (#871): on a
+/// mismatch, retry from the most recent `AnyRun` with it absorbing one
+/// more character. Only the latest `AnyRun` ever needs revisiting since
+/// every other token consumes exactly one character, so this is
+/// O(|t| * |tokens|) time and O(1) stack -- the recursive matcher it
+/// replaces was exponential in the number of `%`s and overflowed the
+/// stack on a long pattern.
+fn wildcard_match(t: &[char], tokens: &[Token], case: Case) -> bool {
+    let (mut ti, mut pi) = (0usize, 0usize);
+    // (token index just past the latest `AnyRun`, text index it resumes at)
+    let mut resume: Option<(usize, usize)> = None;
+    loop {
+        match tokens.get(pi) {
+            Some(Token::AnyRun) => {
+                pi = pi.saturating_add(1);
+                resume = Some((pi, ti));
+                continue;
+            }
+            Some(token) => {
+                if let Some(&c) = t.get(ti) {
+                    if token.matches(c, case) {
+                        ti = ti.saturating_add(1);
+                        pi = pi.saturating_add(1);
+                        continue;
+                    }
+                }
+            }
+            None if ti == t.len() => return true,
+            None => {}
+        }
+        match resume {
+            Some((after_run, absorbed)) if absorbed < t.len() => {
+                let absorbed = absorbed.saturating_add(1);
+                resume = Some((after_run, absorbed));
+                pi = after_run;
+                ti = absorbed;
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// `like(pattern, text[, escape])` -- note SQLite's argument order is
@@ -680,11 +695,25 @@ fn like_fn(args: &[Value]) -> Result<Value, FunctionError> {
     if args.iter().any(|v| matches!(v, Value::Null)) {
         return Ok(Value::Null);
     }
+    let pattern = as_text(&args[0]);
+    if pattern.len() > MAX_LIKE_PATTERN_LENGTH {
+        return Err(FunctionError::Sql(PATTERN_TOO_COMPLEX.into()));
+    }
     let escape = match args.get(2) {
-        Some(e) => as_text(e).chars().next(),
+        Some(e) => {
+            let e = as_text(e);
+            let mut chars = e.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Some(c),
+                _ => {
+                    return Err(FunctionError::Sql(
+                        "ESCAPE expression must be a single character".into(),
+                    ))
+                }
+            }
+        }
         None => None,
     };
-    let pattern = as_text(&args[0]);
     let text = as_text(&args[1]);
     Ok(Value::Integer(i64::from(like_match(
         &text, &pattern, escape,
@@ -697,6 +726,9 @@ fn glob_fn(args: &[Value]) -> Result<Value, FunctionError> {
         return Ok(Value::Null);
     }
     let pattern = as_text(&args[0]);
+    if pattern.len() > MAX_LIKE_PATTERN_LENGTH {
+        return Err(FunctionError::Sql(PATTERN_TOO_COMPLEX.into()));
+    }
     let text = as_text(&args[1]);
     Ok(Value::Integer(i64::from(glob_match(&text, &pattern))))
 }
@@ -2374,6 +2406,8 @@ mod tests {
             v("like", &[t("a\\%b"), t("a%b"), t("\\")]),
             Value::Integer(1)
         );
+        // A trailing escape matches nothing, as in sqlite3 (#871).
+        assert_eq!(v("like", &[t("a\\"), t("a\\"), t("\\")]), Value::Integer(0));
         // GLOB character classes, including negation.
         assert_eq!(v("glob", &[t("a[^b]c"), t("abc")]), Value::Integer(0));
         assert_eq!(v("glob", &[t("a[^b]c"), t("axc")]), Value::Integer(1));
@@ -2388,6 +2422,32 @@ mod tests {
         assert!(!like_match("abcd", "a_c", None));
         assert!(glob_match("abc", "a*c"));
         assert!(!glob_match("ABC", "abc"));
+    }
+
+    /// #871: sqlite3's limits on `like()`/`glob()` (the row engine's
+    /// `LIKE`/`GLOB` operators compile to them).
+    #[test]
+    fn like_and_glob_reject_what_sqlite3_rejects() {
+        let t = |s: &str| Value::Text(s.into());
+        let too_complex = Err(FunctionError::Sql(PATTERN_TOO_COMPLEX.into()));
+        let long = "%".repeat(MAX_LIKE_PATTERN_LENGTH + 1);
+        assert_eq!(call("like", &[t(&long), t("a")]), too_complex);
+        assert_eq!(call("glob", &[t(&long), t("a")]), too_complex);
+        // The limit counts bytes, as sqlite3 does: 25,001 two-byte chars.
+        assert_eq!(call("like", &[t(&"é".repeat(25_001)), t("a")]), too_complex);
+        let at_limit = "%".repeat(MAX_LIKE_PATTERN_LENGTH);
+        assert_eq!(call("like", &[t(&at_limit), t("a")]), Ok(Value::Integer(1)));
+
+        let bad_escape = Err(FunctionError::Sql(
+            "ESCAPE expression must be a single character".into(),
+        ));
+        assert_eq!(call("like", &[t("a"), t("a"), t("xy")]), bad_escape);
+        assert_eq!(call("like", &[t("a"), t("a"), t("")]), bad_escape);
+        assert_eq!(
+            call("like", &[t("a"), t("a"), t("é")]),
+            Ok(Value::Integer(1)),
+            "one multi-byte character is a valid escape"
+        );
     }
 
     #[test]
@@ -2447,297 +2507,34 @@ mod tests {
         );
     }
 
-    /// MC/DC vector (obligation `functions_like_rec_c331028c`, `like_rec`'s decision
-    /// `Some(pc) == escape && pi.saturating_add(1) < p.len()`): leaf A
-    /// (`pc` is the escape char) false -- the escape branch is skipped
-    /// entirely and `pc` is handled as a normal pattern char.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_c331028c__v1_not_escape_char_skips_branch() {
-        assert!(like_match("a", "a", Some('\\')));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_c331028c`): leaf A true, leaf B
-    /// (a char follows the escape) false -- the escape char is the last
-    /// pattern char, so the branch is skipped and it's matched literally
-    /// instead. Independence pair for B against
-    /// `mcdc__functions_like_rec_c331028c__v3_escape_with_following_char_takes_branch`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_c331028c__v2_trailing_escape_has_no_following_char() {
-        assert!(like_match("\\", "\\", Some('\\')));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_c331028c`): both leaves true -- the
-    /// escape branch is taken, so the following char is matched
-    /// literally. Independence pair for A against
-    /// `mcdc__functions_like_rec_c331028c__v1_not_escape_char_skips_branch`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_c331028c__v3_escape_with_following_char_takes_branch() {
-        assert!(like_match("%", "\\%", Some('\\')));
-        assert!(!like_match("x", "\\%", Some('\\')));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_9e288648`, `like_rec`'s escaped-
-    /// literal decision `ti >= t.len() || !ascii_eq(t[ti], literal)`):
-    /// leaf A (text exhausted) true -- no match regardless of `literal`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_9e288648__v1_text_exhausted_no_match() {
-        assert!(!like_match("", "\\%", Some('\\')));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_9e288648`): leaf A false, leaf B
-    /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_like_rec_9e288648__v3_escaped_literal_matches`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_9e288648__v2_escaped_literal_mismatches() {
-        assert!(!like_match("x", "\\%", Some('\\')));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_9e288648`): both leaves false --
-    /// the escaped literal matches, so matching continues. Independence
-    /// pair for A against `mcdc__functions_like_rec_9e288648__v1_text_exhausted_no_match`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_9e288648__v3_escaped_literal_matches() {
-        assert!(like_match("%", "\\%", Some('\\')));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_01f56809`, `like_rec`'s `%`
-    /// collapse-loop decision `pi < p.len() && p[pi] == '%'`): both
-    /// leaves true -- a run of two `%` collapses through one extra
-    /// iteration.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_01f56809__v1_run_of_percent_collapses() {
-        assert!(like_match("axb", "a%%b", None));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_01f56809`): leaf A true, leaf B
-    /// (next pattern char is `%`) false -- the loop stops after a single
-    /// `%` because the following char differs. Independence pair for B
-    /// against `mcdc__functions_like_rec_01f56809__v1_run_of_percent_collapses`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_01f56809__v2_single_percent_then_other_char() {
-        assert!(like_match("axb", "a%b", None));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_01f56809`): leaf A (more pattern
-    /// left) false -- the loop stops because `%` is the last pattern
-    /// char, matching the rest of the text unconditionally. Independence
-    /// pair for A against `mcdc__functions_like_rec_01f56809__v2_single_percent_then_other_char`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_01f56809__v3_trailing_percent_matches_end() {
-        assert!(like_match("axyz", "a%", None));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`, `like_rec`'s literal
-    /// char decision `ti >= t.len() || !ascii_eq(t[ti], pc)`): leaf A
-    /// (text exhausted) true -- no match regardless of `pc`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_b8d0afd0__v1_text_exhausted_no_match() {
-        assert!(!like_match("", "a", None));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`): leaf A false, leaf B
-    /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_like_rec_b8d0afd0__v3_literal_matches`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_b8d0afd0__v2_literal_mismatches() {
-        assert!(!like_match("x", "a", None));
-    }
-
-    /// MC/DC vector (obligation `functions_like_rec_b8d0afd0`): both leaves false --
-    /// the literal matches. Independence pair for A against
-    /// `mcdc__functions_like_rec_b8d0afd0__v1_text_exhausted_no_match`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_like_rec_b8d0afd0__v3_literal_matches() {
-        assert!(like_match("a", "a", None));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_01d0fd5a`, `glob_rec`'s `*`
-    /// collapse-loop decision `pi < p.len() && p[pi] == '*'`): both
-    /// leaves true -- a run of two `*` collapses through one extra
-    /// iteration.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_01d0fd5a__v1_run_of_star_collapses() {
-        assert!(glob_match("axb", "a**b"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_01d0fd5a`): leaf A true, leaf B
-    /// (next pattern char is `*`) false -- the loop stops after a single
-    /// `*` because the following char differs. Independence pair for B
-    /// against `mcdc__functions_glob_rec_01d0fd5a__v1_run_of_star_collapses`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_01d0fd5a__v2_single_star_then_other_char() {
-        assert!(glob_match("axb", "a*b"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_01d0fd5a`): leaf A (more pattern
-    /// left) false -- the loop stops because `*` is the last pattern
-    /// char, matching the rest of the text unconditionally. Independence
-    /// pair for A against `mcdc__functions_glob_rec_01d0fd5a__v2_single_star_then_other_char`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_01d0fd5a__v3_trailing_star_matches_end() {
-        assert!(glob_match("axyz", "a*"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_36b485df`, `glob_rec`'s character-
-    /// class decision `ti >= t.len() || !matches`): leaf A (text
-    /// exhausted) true -- no match regardless of `matches`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_36b485df__v1_text_exhausted_no_match() {
-        assert!(!glob_match("", "[a-z]"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_36b485df`): leaf A false, leaf B
-    /// (class didn't match) true -- no match. Independence pair for B
-    /// against `mcdc__functions_glob_rec_36b485df__v3_class_matches`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_36b485df__v2_class_mismatches() {
-        assert!(!glob_match("Z", "[a-z]"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_36b485df`): both leaves false --
-    /// the class matches. Independence pair for A against
-    /// `mcdc__functions_glob_rec_36b485df__v1_text_exhausted_no_match`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_36b485df__v3_class_matches() {
-        assert!(glob_match("m", "[a-z]"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_688fbf64`, `glob_rec`'s literal
-    /// char decision `ti >= t.len() || t[ti] != c`): leaf A (text
-    /// exhausted) true -- no match regardless of `c`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_688fbf64__v1_text_exhausted_no_match() {
-        assert!(!glob_match("", "a"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_688fbf64`): leaf A false, leaf B
-    /// (char mismatch) true -- no match. Independence pair for B against
-    /// `mcdc__functions_glob_rec_688fbf64__v3_literal_matches`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_688fbf64__v2_literal_mismatches() {
-        assert!(!glob_match("x", "a"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_rec_688fbf64`): both leaves false --
-    /// the literal matches. Independence pair for A against
-    /// `mcdc__functions_glob_rec_688fbf64__v1_text_exhausted_no_match`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_rec_688fbf64__v3_literal_matches() {
-        assert!(glob_match("a", "a"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_class_1d2aadbb`, `glob_class`'s
+    /// MC/DC vector (obligation `functions_glob_class_ef4a98fa`, `glob_class`'s
     /// terminator decision `p[i] == ']' && i > class_start`): leaf A
     /// (`p[i]` is `']'`) false -- an ordinary class char, loop keeps
     /// going.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_1d2aadbb__v1_non_bracket_continues() {
+    fn mcdc__functions_glob_class_ef4a98fa__v1_non_bracket_continues() {
         assert!(glob_match("a", "[ab]"));
     }
 
-    /// MC/DC vector (obligation `functions_glob_class_1d2aadbb`): leaf A true, leaf B
+    /// MC/DC vector (obligation `functions_glob_class_ef4a98fa`): leaf A true, leaf B
     /// (past the class start) false -- a `]` as the very first class
     /// char is a literal member, not the terminator. Independence pair
-    /// for B against `mcdc__functions_glob_class_1d2aadbb__v3_bracket_past_start_terminates`.
+    /// for B against `mcdc__functions_glob_class_ef4a98fa__v3_bracket_past_start_terminates`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_1d2aadbb__v2_leading_bracket_is_literal_member() {
+    fn mcdc__functions_glob_class_ef4a98fa__v2_leading_bracket_is_literal_member() {
         assert!(glob_match("]", "[]a]"));
     }
 
-    /// MC/DC vector (obligation `functions_glob_class_1d2aadbb`): both leaves true -- a
+    /// MC/DC vector (obligation `functions_glob_class_ef4a98fa`): both leaves true -- a
     /// `]` past the class start terminates the class. Independence pair
-    /// for A against `mcdc__functions_glob_class_1d2aadbb__v1_non_bracket_continues`.
+    /// for A against `mcdc__functions_glob_class_ef4a98fa__v1_non_bracket_continues`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_1d2aadbb__v3_bracket_past_start_terminates() {
+    fn mcdc__functions_glob_class_ef4a98fa__v3_bracket_past_start_terminates() {
         assert!(!glob_match("a", "[a]b"));
         assert!(glob_match("ab", "[a]b"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_class_18591d42`, `glob_class`'s range-
-    /// detection decision `i.saturating_add(2) < p.len() && p[i + 1] ==
-    /// '-' && p[i + 2] != ']'`, 3 conditions): all leaves true -- a real
-    /// range like `a-z`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_18591d42__v1_all_true_is_range() {
-        assert!(glob_match("m", "[a-z]"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_class_18591d42`): leaves A and B true,
-    /// leaf C (`p[i+2] != ']'`) false -- `-` immediately followed by the
-    /// class terminator is not a range, so `-` is a literal member.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_18591d42__v2_dash_before_terminator_is_literal() {
-        assert!(glob_match("-", "[a-]"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_class_18591d42`): leaf A true, leaf B
-    /// (`p[i+1] == '-'`) false -- no dash follows, so it's a plain class
-    /// member, not a range.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_18591d42__v3_no_dash_is_not_range() {
-        assert!(glob_match("b", "[ab]"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_class_18591d42`): leaf A (`i+2 <
-    /// p.len()`) false -- too close to the end of the pattern for a
-    /// range, so treated as a literal member (the class ends up
-    /// unterminated here, so `glob` reports no match).
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_18591d42__v4_too_short_for_range() {
-        assert!(!glob_match("a", "[a-"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_class_78a99761`, `glob_class`'s range-
-    /// bounds decision `c >= lo && c <= hi`): both leaves true -- `c`
-    /// falls inside `[lo, hi]`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_78a99761__v1_within_bounds_matches() {
-        assert!(glob_match("m", "[a-z]"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_class_78a99761`): leaf A (`c >= lo`)
-    /// false -- below the lower bound, no match regardless of `c <= hi`.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_78a99761__v2_below_lower_bound() {
-        assert!(!glob_match("A", "[a-z]"));
-    }
-
-    /// MC/DC vector (obligation `functions_glob_class_78a99761`): leaf A true, leaf B
-    /// (`c <= hi`) false -- above the upper bound, no match.
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_glob_class_78a99761__v3_above_upper_bound() {
-        assert!(!glob_match("~", "[a-z]"));
     }
 
     #[test]
