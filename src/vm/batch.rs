@@ -3782,6 +3782,427 @@ impl DictGroupFold {
     }
 }
 
+/// #894: a single-`Int`-key `GroupReduce`'s groups and accumulators, kept
+/// by one worker across every segment it claims -- not per segment -- so
+/// each row is hashed once, into the worker's table, and `Combine` sees
+/// the worker's groups once rather than one partial row per group per
+/// segment. Aggregates are the same [`RunningAgg`]s the per-segment
+/// `GroupReduce` uses, so the result is theirs exactly. Groups are
+/// numbered in first-seen order, each remembering the
+/// [`order_key`](super::combine::order_key) of its first row for the
+/// final merge's ordering.
+#[derive(Default)]
+pub(crate) struct IntGroupFold {
+    table: Option<IntKeyTable>,
+    keys: Vec<Value>,
+    /// One compact accumulator column per aggregate, in `aggs` order.
+    slim: Vec<SlimAcc>,
+    /// Each group's first row's [`order_key`](super::combine::order_key).
+    first_seen: Vec<u64>,
+    /// The segment and the row within it the batch being run starts at:
+    /// set by the caller before each run.
+    segment: usize,
+    offset: usize,
+    /// Whether the last `GroupReduce` folded into this one -- and so wrote
+    /// no registers.
+    folded: bool,
+}
+
+impl IntGroupFold {
+    /// How many groups it holds.
+    pub(crate) fn groups(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Takes the groups out, leaving it empty.
+    pub(crate) fn take(&mut self) -> IntGroupFold {
+        std::mem::take(self)
+    }
+
+    /// [`int_group_by_single_column`] into this fold's groups: the group of
+    /// each row, a new one only for a key no earlier row has seen.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "as in `int_group_by_single_column`: `p = physical(row)` is in range for the column's `data`/`valid`"
+    )]
+    fn assign(
+        &mut self,
+        data: &[i64],
+        valid: &Bitmap,
+        num_rows: usize,
+        physical: impl Fn(usize) -> usize,
+    ) -> Result<Vec<usize>> {
+        let table = self
+            .table
+            .get_or_insert_with(|| IntKeyTable::with_capacity(1 << 10));
+        let mut row_group = Vec::with_capacity(num_rows);
+        for row in 0..num_rows {
+            let p = physical(row);
+            let (group, inserted) = if valid.get(p) {
+                table.get_or_insert(data[p], self.keys.len())?
+            } else {
+                table.null_group_or_insert(self.keys.len())
+            };
+            if inserted {
+                self.keys.push(if valid.get(p) {
+                    Value::Int(data[p])
+                } else {
+                    Value::Null
+                });
+                self.first_seen.push(super::combine::order_key(
+                    self.segment,
+                    self.offset.saturating_add(p),
+                ));
+            }
+            row_group.push(group);
+        }
+        Ok(row_group)
+    }
+
+    /// Whether every aggregate can fold into this one: a count, or a
+    /// sum, average, minimum or maximum of a typed `Int` or `Float`
+    /// column of `len` rows, of the type earlier slices had (#894).
+    fn accepts(
+        &self,
+        aggs: &[(AggFunc, Option<usize>)],
+        len: usize,
+        typed_registers: &HashMap<usize, Arc<Column>>,
+    ) -> bool {
+        aggs.iter().enumerate().all(|(i, (func, src))| {
+            let (typed, float) = match (func, src) {
+                (AggFunc::Count, None) => return true,
+                (
+                    AggFunc::Count
+                    | AggFunc::Sum
+                    | AggFunc::Avg
+                    | AggFunc::AvgSum
+                    | AggFunc::Min
+                    | AggFunc::Max,
+                    Some(reg),
+                ) => match typed_registers.get(reg).map(|c| c.as_ref()) {
+                    Some(column @ (Column::Int { .. } | Column::Float { .. }))
+                        if column.len() == len =>
+                    {
+                        (true, matches!(column, Column::Float { .. }))
+                    }
+                    _ => (false, false),
+                },
+                _ => (false, false),
+            };
+            typed && self.slim.get(i).is_none_or(|acc| acc.float == float)
+        })
+    }
+
+    /// Folds the rows' aggregate inputs into their groups (`row_group`),
+    /// growing every accumulator column to `num_groups` first.
+    fn push_rows(
+        &mut self,
+        aggs: &[(AggFunc, Option<usize>)],
+        row_group: &[usize],
+        num_groups: usize,
+        physical: impl Fn(usize) -> usize,
+        typed_registers: &HashMap<usize, Arc<Column>>,
+    ) -> Result<()> {
+        for (i, (func, src)) in aggs.iter().enumerate() {
+            let column = src
+                .and_then(|reg| typed_registers.get(&reg))
+                .map(|c| c.as_ref());
+            if self.slim.len() <= i {
+                self.slim
+                    .push(SlimAcc::new(matches!(column, Some(Column::Float { .. }))));
+            }
+            let Some(acc) = self.slim.get_mut(i) else {
+                continue;
+            };
+            acc.resize(*func, num_groups);
+            acc.push_rows(*func, column, row_group, &physical)?;
+        }
+        Ok(())
+    }
+
+    /// The groups as `program`'s `Emit` would output them after one
+    /// `GroupReduce` over every row folded in, with each group's first-seen
+    /// key.
+    pub(crate) fn finish(self, program: &[Opcode]) -> Result<(QueryOutput, Vec<u64>)> {
+        let (body, emit) = program.split_at(program.len().saturating_sub(1));
+        let Some(Opcode::GroupReduce {
+            group_by,
+            aggs,
+            agg_dst,
+        }) = body.last()
+        else {
+            return Err(VmError::MalformedProgram {
+                opcode: "GroupReduce",
+                reason: "a folded program does not end in GroupReduce".to_string(),
+            });
+        };
+        let mut vm = Vm::new();
+        for (((func, src), dst), acc) in aggs.iter().zip(agg_dst.iter()).zip(&self.slim) {
+            let result: Vec<Value> = (0..self.keys.len())
+                .map(|g| acc.finalize(g, *func, src.is_none(), "GroupReduce"))
+                .collect::<Result<_>>()?;
+            vm.registers.insert(*dst, Arc::new(result));
+        }
+        let keys = Arc::new(self.keys);
+        for reg in group_by.iter() {
+            vm.registers.insert(*reg, Arc::clone(&keys));
+        }
+        vm.execute(&Batch::new(0), emit)?;
+        Ok((vm.take_output(), self.first_seen))
+    }
+}
+
+/// One aggregate's accumulators for every group of an [`IntGroupFold`],
+/// column-major and holding only what its function over an `Int` or
+/// `Float` input needs: 8 to 24 bytes a group where a [`RunningAgg`] is
+/// 96, which is what a worker holding its groups across segments can
+/// afford (#894). [`SlimAcc::finalize`] loads a group into a
+/// [`RunningAgg`] and finalizes that, so the value (or error) is the
+/// per-segment `GroupReduce`'s.
+#[derive(Debug, Default)]
+struct SlimAcc {
+    /// Whether the input is a `Float` column (else `Int`).
+    float: bool,
+    /// An integer sum's total.
+    sum_int: Vec<i128>,
+    /// An integer minimum's or maximum's value.
+    extreme_int: Vec<i64>,
+    /// A float sum's total, or a float minimum's or maximum's value.
+    float_val: Vec<f64>,
+    /// The rows counted: all of them for `COUNT(*)`, the non-`NULL` ones
+    /// otherwise -- so also whether a sum or extreme has seen a value.
+    n: Vec<i64>,
+}
+
+impl SlimAcc {
+    fn new(float: bool) -> Self {
+        SlimAcc {
+            float,
+            ..SlimAcc::default()
+        }
+    }
+
+    /// Grows the columns `func` uses to `groups`.
+    fn resize(&mut self, func: AggFunc, groups: usize) {
+        self.n.resize(groups, 0);
+        match (func, self.float) {
+            (AggFunc::Count, _) => {}
+            (AggFunc::Min | AggFunc::Max, false) => self.extreme_int.resize(groups, 0),
+            (_, false) => self.sum_int.resize(groups, 0),
+            (_, true) => self.float_val.resize(groups, 0.0),
+        }
+    }
+
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`p = physical(row)` is in range for the column (its length was checked by `accepts`); `g` is a group id below the `resize`d length of every column"
+    )]
+    fn push_rows(
+        &mut self,
+        func: AggFunc,
+        column: Option<&Column>,
+        row_group: &[usize],
+        physical: &impl Fn(usize) -> usize,
+    ) -> Result<()> {
+        let bump = |n: &mut i64| *n = n.saturating_add(1);
+        match (func, column) {
+            (AggFunc::Count, None) => {
+                for &g in row_group {
+                    bump(&mut self.n[g]);
+                }
+            }
+            (AggFunc::Count, Some(Column::Int { valid, .. } | Column::Float { valid, .. })) => {
+                for (row, &g) in row_group.iter().enumerate() {
+                    if valid.get(physical(row)) {
+                        bump(&mut self.n[g]);
+                    }
+                }
+            }
+            (AggFunc::Sum | AggFunc::Avg | AggFunc::AvgSum, Some(Column::Int { data, valid })) => {
+                for (row, &g) in row_group.iter().enumerate() {
+                    let p = physical(row);
+                    if valid.get(p) {
+                        self.sum_int[g] = self.sum_int[g].saturating_add(i128::from(data[p]));
+                        bump(&mut self.n[g]);
+                    }
+                }
+            }
+            (
+                AggFunc::Sum | AggFunc::Avg | AggFunc::AvgSum,
+                Some(Column::Float { data, valid }),
+            ) => {
+                for (row, &g) in row_group.iter().enumerate() {
+                    let p = physical(row);
+                    if valid.get(p) {
+                        self.float_val[g] += data[p];
+                        bump(&mut self.n[g]);
+                    }
+                }
+            }
+            (AggFunc::Min | AggFunc::Max, Some(Column::Int { data, valid })) => {
+                let want = if func == AggFunc::Min {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
+                for (row, &g) in row_group.iter().enumerate() {
+                    let p = physical(row);
+                    if valid.get(p) {
+                        // The first value always stands; `|`, not `||`, so the
+                        // comparison against the slot's zero is harmless.
+                        let better = data[p].cmp(&self.extreme_int[g]) == want;
+                        if (self.n[g] == 0) | better {
+                            self.extreme_int[g] = data[p];
+                        }
+                        bump(&mut self.n[g]);
+                    }
+                }
+            }
+            (AggFunc::Min | AggFunc::Max, Some(Column::Float { data, valid })) => {
+                let want = if func == AggFunc::Min {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                };
+                for (row, &g) in row_group.iter().enumerate() {
+                    let p = physical(row);
+                    if valid.get(p) {
+                        let better = data[p].total_cmp(&self.float_val[g]) == want;
+                        if (self.n[g] == 0) | better {
+                            self.float_val[g] = data[p];
+                        }
+                        bump(&mut self.n[g]);
+                    }
+                }
+            }
+            _ => {
+                return Err(VmError::MalformedProgram {
+                    opcode: "GroupReduce",
+                    reason: "an aggregate that cannot fold reached an integer-key fold".to_string(),
+                })
+            }
+        }
+        Ok(())
+    }
+
+    /// Group `g`'s final value, as [`RunningAgg::finalize`] gives it for
+    /// the same rows.
+    fn finalize(
+        &self,
+        g: usize,
+        func: AggFunc,
+        is_count_star: bool,
+        opcode: &'static str,
+    ) -> Result<Value> {
+        let n = self.n.get(g).copied().unwrap_or(0);
+        let mut acc = RunningAgg::default();
+        match func {
+            AggFunc::Count if is_count_star => acc.row_count = n,
+            AggFunc::Count => acc.non_null_count = n,
+            AggFunc::Min | AggFunc::Max => {
+                if n > 0 {
+                    acc.extremes = if self.float {
+                        let x = self.float_val.get(g).copied().unwrap_or(0.0);
+                        Extremes::Float(x, x)
+                    } else {
+                        let x = self.extreme_int.get(g).copied().unwrap_or(0);
+                        Extremes::Int(x, x)
+                    };
+                }
+            }
+            _ => {
+                acc.numeric_count = n;
+                if self.float {
+                    acc.float_sum = self.float_val.get(g).copied().unwrap_or(0.0);
+                    acc.saw_float = n > 0;
+                } else {
+                    acc.int_sum = self.sum_int.get(g).copied().unwrap_or(0);
+                }
+            }
+        }
+        acc.finalize(func, is_count_star, opcode)
+    }
+}
+
+/// Whether `program` over `batch` can fold into an [`IntGroupFold`]: a
+/// single-key `GROUP BY` aggregate body (see [`folds_dict_groups`]) whose
+/// key is a typed `Int` column loaded straight from the batch and whose
+/// aggregates keep O(1) state per group -- not the distinct counts and
+/// sketches, which a worker would then hold across its segments. A guess
+/// only: a key that turns out not to be a typed `Int` at run time just
+/// emits its groups the ordinary way.
+pub(crate) fn int_fold_applies(program: &[Opcode], batch: &Batch) -> bool {
+    if !folds_dict_groups(program) {
+        return false;
+    }
+    let [rest @ .., Opcode::GroupReduce { group_by, aggs, .. }, _] = program else {
+        return false;
+    };
+    let [key] = group_by.as_ref() else {
+        return false;
+    };
+    !aggs.iter().any(|(func, _)| {
+        matches!(
+            func,
+            AggFunc::ApproxCountDistinct
+                | AggFunc::ExactCountDistinct
+                | AggFunc::ExactCountDistinctStr
+        )
+    }) && rest.iter().any(|op| {
+        matches!(op, Opcode::LoadColumn { reg, column } if reg == key
+        && matches!(
+            batch.typed_columns.get(column.as_ref()).map(|c| c.as_ref()),
+            Some(Column::Int { .. })
+        ))
+    })
+}
+
+/// [`execute_in_slices`] for a program [`int_fold_applies`] to: each
+/// slice's groups fold into `fold` (which keeps them across segments)
+/// instead of being emitted. After every slice `sink` gets the fold, to
+/// hand its groups on if it has grown too large, and the output of the
+/// slice if it did not fold. `segment` numbers the batch for the groups'
+/// first-seen keys.
+pub(crate) fn execute_in_slices_folding(
+    batch: &Batch,
+    program: &[Opcode],
+    fold: &mut IntGroupFold,
+    segment: usize,
+    mut sink: impl FnMut(Option<(usize, QueryOutput)>, &mut IntGroupFold) -> Result<()>,
+) -> Result<()> {
+    let (body, emit) = program.split_at(program.len().saturating_sub(1));
+    let sliced = batch.num_rows > SLICE_ROWS && sliceable(program);
+    let starts: Vec<usize> = if sliced {
+        (0..batch.num_rows).step_by(SLICE_ROWS).collect()
+    } else {
+        vec![0]
+    };
+    for start in starts {
+        let slice_batch;
+        let slice = if sliced {
+            slice_batch = batch.slice(start, SLICE_ROWS);
+            &slice_batch
+        } else {
+            batch
+        };
+        fold.segment = segment;
+        fold.offset = start;
+        let mut vm = Vm::new();
+        vm.int_fold = Some(std::mem::take(fold));
+        let ran = vm.execute(slice, body);
+        *fold = vm.int_fold.take().unwrap_or_default();
+        ran?;
+        let output = if fold.folded {
+            None
+        } else {
+            vm.execute(slice, emit)?;
+            Some((start, vm.take_output()))
+        };
+        sink(output, fold)?;
+    }
+    Ok(())
+}
+
 /// SQL join-key equality between a probe row and an already-built row's
 /// key columns: NULL never matches anything, including another NULL (as
 /// distinct from [`GroupKey`]'s `GROUP BY` semantics, where `Null ==
@@ -4218,17 +4639,24 @@ struct RunningAgg {
     float_sum: f64,
     /// Whether any input was a float: then `SUM` is a float.
     saw_float: bool,
-    /// The decimal inputs' total, exact at `dec_scale` (the largest scale
-    /// seen) (#632); `None` before the first decimal.
-    dec_scale: Option<u8>,
-    dec_sum: i128,
-    /// The exact decimal total left `i128`: `SUM` is then an error.
-    dec_overflow: bool,
-    /// The decimal inputs' total as a float, for `AVG` and mixed input.
-    dec_float: f64,
+    /// The decimal inputs' totals (#632); `None` before the first decimal.
+    /// Boxed: rare, and unboxed it was a quarter of this struct (#894).
+    decimals: Option<Box<DecimalSum>>,
     /// The smallest and largest non-`Null` input, in [`agg_cmp`]'s order:
     /// integers stay exact and text compares byte-wise (#631).
     extremes: Extremes,
+}
+
+/// A [`RunningAgg`]'s decimal state (#632).
+#[derive(Debug, Clone, Default)]
+struct DecimalSum {
+    /// The exact total's scale: the largest scale seen.
+    scale: u8,
+    sum: i128,
+    /// The exact total left `i128`: `SUM` is then an error.
+    overflow: bool,
+    /// The total as a float, for `AVG` and mixed input.
+    float: f64,
 }
 
 /// `MIN`/`MAX`'s running pair (#763): primitives while every input so
@@ -4245,7 +4673,7 @@ enum Extremes {
     Int(i64, i64),
     /// Ordered by `total_cmp`, as [`numeric_cmp`] orders floats.
     Float(f64, f64),
-    Boxed(Value, Value),
+    Boxed(Box<(Value, Value)>),
     /// `approx_count_distinct`'s sketch (#603), in the slot no other
     /// aggregate of the same accumulator uses, so `RunningAgg` stays its
     /// size.
@@ -4373,11 +4801,11 @@ impl RunningAgg {
             | Extremes::NotStrs => (value.clone(), value.clone()),
             Extremes::Int(min, max) => (Value::Int(min), Value::Int(max)),
             Extremes::Float(min, max) => (Value::Float(min), Value::Float(max)),
-            Extremes::Boxed(min, max) => (min, max),
+            Extremes::Boxed(pair) => *pair,
         };
         keep_extreme(&mut min, value, std::cmp::Ordering::Less);
         keep_extreme(&mut max, value, std::cmp::Ordering::Greater);
-        self.extremes = Extremes::Boxed(min, max);
+        self.extremes = Extremes::Boxed(Box::new((min, max)));
     }
 
     /// Folds one more non-`Null` integer, read straight from a typed
@@ -4426,21 +4854,27 @@ impl RunningAgg {
         self.row_count = self.row_count.saturating_add(1);
         self.non_null_count = self.non_null_count.saturating_add(1);
         self.numeric_count = self.numeric_count.saturating_add(1);
-        self.dec_float += decimal_to_f64(unscaled, scale);
-        let total_scale = self.dec_scale.unwrap_or(scale).max(scale);
+        let state = self.decimals.get_or_insert_with(|| {
+            Box::new(DecimalSum {
+                scale,
+                ..DecimalSum::default()
+            })
+        });
+        state.float += decimal_to_f64(unscaled, scale);
+        let total_scale = state.scale.max(scale);
         let rescale = |value: i128, from: u8| {
             pow10(u32::from(total_scale.abs_diff(from))).and_then(|p| value.checked_mul(p))
         };
-        let current = rescale(self.dec_sum, self.dec_scale.unwrap_or(total_scale));
+        let current = rescale(state.sum, state.scale);
         let added = rescale(unscaled, scale);
         match (current, added) {
             (Some(c), Some(a)) => match c.checked_add(a) {
-                Some(sum) => self.dec_sum = sum,
-                None => self.dec_overflow = true,
+                Some(sum) => state.sum = sum,
+                None => state.overflow = true,
             },
-            _ => self.dec_overflow = true,
+            _ => state.overflow = true,
         }
-        self.dec_scale = Some(total_scale);
+        state.scale = total_scale;
         self.push_extreme(&Value::Decimal { unscaled, scale });
     }
 
@@ -4455,7 +4889,7 @@ impl RunningAgg {
     fn set_text_extremes(&mut self, min: Option<String>, max: Option<String>) {
         let owned = |text: String| Value::Str(Cow::Owned(text));
         self.extremes = match (min, max) {
-            (Some(min), Some(max)) => Extremes::Boxed(owned(min), owned(max)),
+            (Some(min), Some(max)) => Extremes::Boxed(Box::new((owned(min), owned(max)))),
             _ => Extremes::Empty,
         };
     }
@@ -4487,16 +4921,17 @@ impl RunningAgg {
             AggFunc::Sum if self.saw_float => Value::Float(self.total()),
             // Decimals (with any integers at scale 0): exact, at the
             // largest scale seen, an error past DECIMAL(38) (#632).
-            AggFunc::Sum if self.dec_scale.is_some() => {
-                let scale = self.dec_scale.unwrap_or(0);
+            AggFunc::Sum if self.decimals.is_some() => {
+                let dec = self.decimals.as_deref().cloned().unwrap_or_default();
+                let scale = dec.scale;
                 let overflow = || VmError::DecimalOverflow { opcode };
-                if self.dec_overflow {
+                if dec.overflow {
                     return Err(overflow());
                 }
                 let ints = pow10(u32::from(scale))
                     .and_then(|p| self.int_sum.checked_mul(p))
                     .ok_or_else(overflow)?;
-                let unscaled = self.dec_sum.checked_add(ints).ok_or_else(overflow)?;
+                let unscaled = dec.sum.checked_add(ints).ok_or_else(overflow)?;
                 if unscaled.unsigned_abs() >= 10_u128.pow(38) {
                     return Err(overflow());
                 }
@@ -4524,7 +4959,7 @@ impl RunningAgg {
                 | Extremes::NotStrs => Value::Null,
                 Extremes::Int(min, _) => Value::Int(*min),
                 Extremes::Float(min, _) => Value::Float(*min),
-                Extremes::Boxed(min, _) => min.clone(),
+                Extremes::Boxed(pair) => pair.0.clone(),
             },
             AggFunc::Max => match &self.extremes {
                 Extremes::Empty
@@ -4536,7 +4971,7 @@ impl RunningAgg {
                 | Extremes::NotStrs => Value::Null,
                 Extremes::Int(_, max) => Value::Int(*max),
                 Extremes::Float(_, max) => Value::Float(*max),
-                Extremes::Boxed(_, max) => max.clone(),
+                Extremes::Boxed(pair) => pair.1.clone(),
             },
             // The partial, not the estimate: `Combine` merges it across
             // segments, then finalizes (#603).
@@ -4598,7 +5033,7 @@ impl RunningAgg {
             reason = "a float SUM or an AVG: the integer part joins a float result"
         )]
         let ints = self.int_sum as f64;
-        ints + self.float_sum + self.dec_float
+        ints + self.float_sum + self.decimals.as_ref().map_or(0.0, |dec| dec.float)
     }
 }
 
@@ -4852,6 +5287,8 @@ pub struct Vm {
     /// #751: set by [`execute_in_slices`] while it folds a segment's
     /// slices; see [`DictGroupFold`].
     group_fold: Option<DictGroupFold>,
+    /// #894: set by [`execute_in_slices_folding`]; see [`IntGroupFold`].
+    int_fold: Option<IntGroupFold>,
     /// Instructions executed so far, checked against [`MAX_STEPS`] by
     /// [`Vm::execute`]/[`Vm::run`].
     steps: usize,
@@ -6240,7 +6677,19 @@ impl Vm {
                 .map(Arc::clone),
             _ => None,
         };
-        for (func, src) in aggs.iter() {
+        // #894: a worker's int-key fold takes this opcode's groups when
+        // the key and every aggregate input are typed columns it holds
+        // compactly; their inputs are then read in place, never
+        // materialized.
+        let mut int_fold = self.int_fold.take();
+        let int_folding = match (int_group_by.as_deref(), int_fold.as_ref()) {
+            (Some(key), Some(f)) => f.accepts(aggs, key.len(), &self.typed_registers),
+            _ => false,
+        };
+        if let Some(f) = int_fold.as_mut() {
+            f.folded = int_folding;
+        }
+        for (func, src) in aggs.iter().filter(|_| !int_folding) {
             if let Some(reg) = src {
                 // #820: a string distinct count reads a dictionary's codes
                 // or a string column's bytes in place.
@@ -6350,11 +6799,31 @@ impl Vm {
             // buckets group ids by hash (collisions possible, so
             // each bucket is checked for an exact match) rather
             // than owning a `GroupKey` per entry.
-            _ => match int_key {
-                Some((data, valid)) => int_group_by_single_column(data, valid, num_rows, physical)?,
-                None => group_by_key_views(&key_views, num_rows, physical)?,
+            _ => match (int_key, int_fold.as_mut()) {
+                (Some((data, valid)), Some(f)) if int_folding => {
+                    let row_group = f.assign(data, valid, num_rows, physical)?;
+                    (row_group, f.keys.len(), Vec::new())
+                }
+                (Some((data, valid)), _) => {
+                    int_group_by_single_column(data, valid, num_rows, physical)?
+                }
+                (None, _) => group_by_key_views(&key_views, num_rows, physical)?,
             },
         };
+        if int_folding {
+            if let Some(f) = int_fold.as_mut() {
+                f.push_rows(
+                    aggs,
+                    &row_group,
+                    num_groups,
+                    physical,
+                    &self.typed_registers,
+                )?;
+            }
+            self.group_fold = fold;
+            self.int_fold = int_fold;
+            return Ok(());
+        }
 
         for (i, ((func, src), dst)) in aggs.iter().zip(agg_dst.iter()).enumerate() {
             // #477: one `RunningAgg` per group instead of
@@ -6535,6 +7004,7 @@ impl Vm {
             self.registers.insert(*dst, Arc::new(result));
         }
         self.group_fold = fold;
+        self.int_fold = int_fold;
         if folding {
             return Ok(());
         }

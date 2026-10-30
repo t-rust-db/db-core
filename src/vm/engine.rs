@@ -23,10 +23,11 @@
 use std::sync::Mutex;
 
 use super::batch::{
-    chunk_len, compare_rows_for_order, execute_in_slices, hash_group_key, run_morsels,
-    run_morsels_fold, run_parallel, run_parallel_streaming, run_parallel_top_n, sliceable, AggPart,
-    Batch, Chunk, GroupKey, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource, Segment,
-    TopN, Value, Vm, VmError, SLICE_ROWS,
+    chunk_len, compare_rows_for_order, execute_in_slices, execute_in_slices_folding,
+    hash_group_key, int_fold_applies, run_morsels, run_morsels_fold, run_parallel,
+    run_parallel_streaming, run_parallel_top_n, sliceable, AggPart, Batch, Chunk, GroupKey,
+    IntGroupFold, JoinTables, Opcode, Program, QueryOutput, Result, ScanSource, Segment, TopN,
+    Value, Vm, VmError, SLICE_ROWS,
 };
 use super::combine::{
     combine_chunks, combine_partials, eval_agg_expr, finish_avg, finish_int_set, finish_sketch,
@@ -326,17 +327,48 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
         .collect();
     let mut partials = run_morsels_fold(
         &items,
-        || Combiner::new(agg_parts, num_group_keys),
-        |combiner, (segment_index, segment)| {
+        || Worker {
+            combiner: Combiner::new(agg_parts, num_group_keys),
+            fold: None,
+        },
+        |worker, (segment_index, segment)| {
             let batch = segment.load()?;
-            crate::vm::batch::execute_in_slices(&batch, body, |offset, output| {
-                for chunk in output.into_chunks() {
-                    combiner.push_chunk(&chunk, |row| {
-                        order_key(*segment_index, offset.saturating_add(row))
-                    })?;
-                }
-                Ok(())
-            })?;
+            let Worker { combiner, fold } = worker;
+            if int_fold_applies(body, &batch) {
+                // A single `Int` key: this worker's groups fold across its
+                // segments, one hash per row (#894). Checked after every
+                // slice, so the fold never holds more than a slice's
+                // groups over the spill threshold.
+                let int_fold = fold.get_or_insert_with(IntGroupFold::default);
+                execute_in_slices_folding(
+                    &batch,
+                    body,
+                    int_fold,
+                    *segment_index,
+                    |output, int_fold| {
+                        if let Some((offset, output)) = output {
+                            for chunk in output.into_chunks() {
+                                combiner.push_chunk(&chunk, |row| {
+                                    order_key(*segment_index, offset.saturating_add(row))
+                                })?;
+                            }
+                        }
+                        if int_fold.groups() > SPILL_GROUPS {
+                            flush_fold(Some(int_fold.take()), combiner, body)?;
+                        }
+                        Ok(())
+                    },
+                )?;
+            } else {
+                execute_in_slices(&batch, body, |offset, output| {
+                    for chunk in output.into_chunks() {
+                        combiner.push_chunk(&chunk, |row| {
+                            order_key(*segment_index, offset.saturating_add(row))
+                        })?;
+                    }
+                    Ok(())
+                })?;
+            }
             if combiner.groups() > SPILL_GROUPS {
                 spill(
                     &shared,
@@ -349,7 +381,11 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
         // The worker's last groups go the same way, in parallel, so the
         // final merge sees disjoint partitions, not every worker's copy
         // of the groups (#863).
-        |combiner| {
+        |worker| {
+            let Worker {
+                mut combiner, fold, ..
+            } = worker;
+            flush_fold(fold, &mut combiner, body)?;
             if combiner.groups() > HANDOFF_GROUPS {
                 spill(&shared, combiner, num_group_keys)?;
                 return Ok(Partial::default());
@@ -364,6 +400,39 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
             .finish_partial()
     }));
     Ok(partials)
+}
+
+/// A pre-aggregating worker's state: its combiner, and the groups of a
+/// single-`Int`-key `GROUP BY` it has folded across its segments but not
+/// yet handed to the combiner (#894).
+struct Worker {
+    combiner: Combiner,
+    fold: Option<IntGroupFold>,
+}
+
+/// Hands `fold`'s groups, finalized as the segments' own partial rows
+/// would be, to `combiner`.
+fn flush_fold(
+    fold: Option<IntGroupFold>,
+    combiner: &mut Combiner,
+    program: &[Opcode],
+) -> Result<()> {
+    let Some(fold) = fold.filter(|fold| fold.groups() > 0) else {
+        return Ok(());
+    };
+    let (output, first_seen) = fold.finish(program)?;
+    let mut base = 0usize;
+    for chunk in output.into_chunks() {
+        let rows = chunk_len(&chunk);
+        combiner.push_chunk(&chunk, |row| {
+            first_seen
+                .get(base.saturating_add(row))
+                .copied()
+                .unwrap_or(u64::MAX)
+        })?;
+        base = base.saturating_add(rows);
+    }
+    Ok(())
 }
 
 /// Merges `combiner`'s groups into the shared `partitions`, each group
@@ -2121,6 +2190,181 @@ mod preaggregation_tests {
         let direct =
             combine_chunks(&[AggPart::GroupKey, AggPart::Sum], 1, per_segment.chunks()).unwrap();
         assert_eq!(run(&segs, &program).unwrap(), direct);
+    }
+
+    /// A segment of `rows` rows over `keys` int keys (every ninth `NULL`),
+    /// with an int column (every seventh `NULL`) and a float column of
+    /// halves, so float sums are exact whatever order they are added in --
+    /// once as typed columns, once as `Value`s.
+    fn mixed_segment(seg: usize, rows: usize, keys: usize, typed: bool) -> InMemorySegment {
+        use crate::vm::batch::{Bitmap, Column};
+        let key = |r: usize| (r * 7 + seg * 13) % keys;
+        let int = |r: usize| i64::try_from(r * 3 + seg).unwrap() - 500;
+        let float = |r: usize| f64::from(u32::try_from((r + seg) % 40).unwrap()) / 2.0 - 5.0;
+        let key_null = |r: usize| r % 9 == 4;
+        let int_null = |r: usize| r % 7 == 3;
+        let batch = Batch::new(rows);
+        InMemorySegment(if typed {
+            let mut keys_valid = Bitmap::new(rows, true);
+            let mut ints_valid = Bitmap::new(rows, true);
+            for r in (0..rows).filter(|&r| key_null(r)) {
+                keys_valid.set(r, false);
+            }
+            for r in (0..rows).filter(|&r| int_null(r)) {
+                ints_valid.set(r, false);
+            }
+            batch
+                .with_typed_column(
+                    "k",
+                    Column::Int {
+                        data: (0..rows).map(|r| i64::try_from(key(r)).unwrap()).collect(),
+                        valid: keys_valid,
+                    },
+                )
+                .with_typed_column(
+                    "i",
+                    Column::Int {
+                        data: (0..rows).map(int).collect(),
+                        valid: ints_valid,
+                    },
+                )
+                .with_typed_column(
+                    "f",
+                    Column::Float {
+                        data: (0..rows).map(float).collect(),
+                        valid: Bitmap::new(rows, true),
+                    },
+                )
+        } else {
+            batch
+                .with_column(
+                    "k",
+                    (0..rows)
+                        .map(|r| {
+                            if key_null(r) {
+                                Value::Null
+                            } else {
+                                Value::Int(i64::try_from(key(r)).unwrap())
+                            }
+                        })
+                        .collect(),
+                )
+                .with_column(
+                    "i",
+                    (0..rows)
+                        .map(|r| {
+                            if int_null(r) {
+                                Value::Null
+                            } else {
+                                Value::Int(int(r))
+                            }
+                        })
+                        .collect(),
+                )
+                .with_column("f", (0..rows).map(|r| Value::Float(float(r))).collect())
+        })
+    }
+
+    /// Every aggregate the single-`Int`-key fold holds compactly (#894),
+    /// over typed columns -- sliced segments, `NULL` keys and inputs -- must
+    /// give what the same data as `Value` columns (which never fold) does.
+    #[test]
+    fn int_key_fold_matches_the_unfolded_path() {
+        let aggs: Vec<(AggFunc, Option<usize>)> = vec![
+            (AggFunc::Count, None),
+            (AggFunc::Count, Some(1)),
+            (AggFunc::Sum, Some(1)),
+            (AggFunc::Sum, Some(2)),
+            (AggFunc::Min, Some(1)),
+            (AggFunc::Max, Some(1)),
+            (AggFunc::Min, Some(2)),
+            (AggFunc::Max, Some(2)),
+            (AggFunc::AvgSum, Some(2)),
+            (AggFunc::Count, Some(2)),
+            (AggFunc::AvgSum, Some(1)),
+            (AggFunc::Count, Some(1)),
+        ];
+        let parts = vec![
+            AggPart::GroupKey,
+            AggPart::Count,
+            AggPart::Count,
+            AggPart::Sum,
+            AggPart::Sum,
+            AggPart::Min,
+            AggPart::Max,
+            AggPart::Min,
+            AggPart::Max,
+            AggPart::Avg(9, 10),
+            AggPart::Avg(11, 12),
+        ];
+        let first_dst = 3usize;
+        let mut ops = vec![
+            Instruction::new(Opcode::LoadColumn {
+                reg: 0,
+                column: "k".into(),
+            }),
+            Instruction::new(Opcode::LoadColumn {
+                reg: 1,
+                column: "i".into(),
+            }),
+            Instruction::new(Opcode::LoadColumn {
+                reg: 2,
+                column: "f".into(),
+            }),
+        ];
+        let agg_dst: Vec<usize> = (first_dst..first_dst + aggs.len()).collect();
+        ops.push(Instruction::new(Opcode::GroupReduce {
+            group_by: vec![0].into(),
+            aggs: aggs.into(),
+            agg_dst: agg_dst.clone().into(),
+        }));
+        ops.push(Instruction::new(Opcode::Emit {
+            registers: std::iter::once(0).chain(agg_dst).collect::<Vec<_>>().into(),
+        }));
+        ops.push(Instruction::new(Opcode::Combine {
+            agg_parts: parts.into(),
+            num_group_keys: 1,
+            distinct: false,
+            output_order: Vec::new().into(),
+            project: Vec::new().into(),
+        }));
+        let program = Program::new(ops);
+        // Past `SLICE_ROWS`, so each segment folds in several slices.
+        let typed: Vec<InMemorySegment> = (0..6)
+            .map(|seg| mixed_segment(seg, 20_000, 600, true))
+            .collect();
+        let values: Vec<InMemorySegment> = (0..6)
+            .map(|seg| mixed_segment(seg, 20_000, 600, false))
+            .collect();
+        let (body, ..) = program.split_finalize();
+        assert!(crate::vm::batch::int_fold_applies(&body, &typed[0].0));
+        assert!(!crate::vm::batch::int_fold_applies(&body, &values[0].0));
+        // The pre-aggregation itself, not `run()`, which only pre-aggregates
+        // given several segments per thread.
+        let parts = [
+            AggPart::GroupKey,
+            AggPart::Count,
+            AggPart::Count,
+            AggPart::Sum,
+            AggPart::Sum,
+            AggPart::Min,
+            AggPart::Max,
+            AggPart::Min,
+            AggPart::Max,
+            AggPart::Avg(9, 10),
+            AggPart::Avg(11, 12),
+        ];
+        let per_segment = run_parallel(&values, &body).unwrap();
+        let expected = combine_chunks(&parts, 1, per_segment.chunks()).unwrap();
+        let got = super::combine_partials(
+            &parts,
+            1,
+            run_parallel_preaggregate(&typed, &body, &parts, 1).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(got.rows().count(), 601);
+        // Groups come out in first-seen order, which both paths agree on.
+        assert_eq!(got, expected);
     }
 
     /// The pre-aggregated `run()` must produce exactly what the direct
