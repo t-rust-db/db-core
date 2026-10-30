@@ -57562,7 +57562,7 @@
   {
     "id": "vm_combine_start_5ef36f9b",
     "file": "src/vm/combine.rs",
-    "line": 812,
+    "line": 823,
     "decision": "self.num_group_keys > num_slots",
     "conditions": 1,
     "vectors_required": 2,
@@ -57572,7 +57572,7 @@
   {
     "id": "vm_combine_start_partial_5ef36f9b",
     "file": "src/vm/combine.rs",
-    "line": 842,
+    "line": 853,
     "decision": "self.num_group_keys > num_slots",
     "conditions": 1,
     "vectors_required": 2,
@@ -57582,7 +57582,7 @@
   {
     "id": "vm_combine_start_index_7730fcfd",
     "file": "src/vm/combine.rs",
-    "line": 868,
+    "line": 879,
     "decision": "int_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -57592,7 +57592,7 @@
   {
     "id": "vm_combine_map_rows_int_9fdc21a8",
     "file": "src/vm/combine.rs",
-    "line": 894,
+    "line": 905,
     "decision": "match &keys[r] {\n                Value::Int(key) => table.get_or_insert(*key, self.first_seen.len())?,\n                Value::Null => table.null_group_or_insert(self.first_seen.len()),\n                _ => return Ok(Some(r)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57602,7 +57602,7 @@
   {
     "id": "vm_combine_map_rows_int_df6fc515",
     "file": "src/vm/combine.rs",
-    "line": 899,
+    "line": 910,
     "decision": "inserted",
     "conditions": 1,
     "vectors_required": 2,
@@ -57612,7 +57612,7 @@
   {
     "id": "vm_combine_map_rows_generic_49c06867",
     "file": "src/vm/combine.rs",
-    "line": 955,
+    "line": 966,
     "decision": "match existing {\n                Some(g) => {\n                    self.first_seen[g] = self.first_seen[g].min(order(r));\n                    self.row_group.push(g);\n                }\n                None => {\n                    map.insert(hashes[r], self.first_seen.len());\n                    push_new_group(&mut self.acc, chunk, r);\n                    self.first_seen.push(order(r));\n                    self.row_group.push(NEW_GROUP);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57622,7 +57622,7 @@
   {
     "id": "vm_combine_finish_distinct_many_a516fd68",
     "file": "src/vm/combine.rs",
-    "line": 994,
+    "line": 1005,
     "decision": "parts\n            .get(block.clone())\n            .is_none_or(|p| p.iter().any(|p| *p != AggPart::DistinctKey))",
     "conditions": 1,
     "vectors_required": 2,
@@ -57632,7 +57632,7 @@
   {
     "id": "vm_combine_finish_distinct_many_2c9bedeb",
     "file": "src/vm/combine.rs",
-    "line": 1009,
+    "line": 1020,
     "decision": "num_slots.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -57642,7 +57642,7 @@
   {
     "id": "vm_combine_finish_distinct_many_5676ddaf",
     "file": "src/vm/combine.rs",
-    "line": 1021,
+    "line": 1032,
     "decision": "at > keys",
     "conditions": 1,
     "vectors_required": 2,
@@ -57652,7 +57652,7 @@
   {
     "id": "vm_combine_finish_distinct_many_6784fae3",
     "file": "src/vm/combine.rs",
-    "line": 1040,
+    "line": 1051,
     "decision": "passes\n            .iter()\n            .any(|p| p.len() != width || p.iter().any(|c| c.len() != rows))",
     "conditions": 1,
     "vectors_required": 2,
@@ -57662,7 +57662,7 @@
   {
     "id": "vm_combine_finish_distinct_many_65ed9eb1",
     "file": "src/vm/combine.rs",
-    "line": 1048,
+    "line": 1059,
     "decision": "c < keys || c >= block.end",
     "conditions": 2,
     "vectors_required": 3,
@@ -57672,7 +57672,7 @@
   {
     "id": "vm_combine_finish_distinct_many_d9698cea",
     "file": "src/vm/combine.rs",
-    "line": 1050,
+    "line": 1061,
     "decision": "c == keys",
     "conditions": 1,
     "vectors_required": 2,
@@ -57682,7 +57682,7 @@
   {
     "id": "vm_combine_finish_2b07adfc",
     "file": "src/vm/combine.rs",
-    "line": 1060,
+    "line": 1071,
     "decision": "self.parts.contains(&AggPart::DistinctKey)",
     "conditions": 1,
     "vectors_required": 2,
@@ -57692,7 +57692,7 @@
   {
     "id": "vm_combine_finish_3e73b76d",
     "file": "src/vm/combine.rs",
-    "line": 1063,
+    "line": 1074,
     "decision": "self.num_slots.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -57702,7 +57702,7 @@
   {
     "id": "vm_combine_finish_distinct_9dcb0059",
     "file": "src/vm/combine.rs",
-    "line": 1084,
+    "line": 1095,
     "decision": "distinct > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -57712,7 +57712,7 @@
   {
     "id": "vm_combine_finish_distinct_2ade4492",
     "file": "src/vm/combine.rs",
-    "line": 1091,
+    "line": 1102,
     "decision": "match p {\n                AggPart::DistinctKey => AggPart::Count,\n                other => *other,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57722,7 +57722,7 @@
   {
     "id": "vm_combine_finish_distinct_2c9bedeb",
     "file": "src/vm/combine.rs",
-    "line": 1105,
+    "line": 1116,
     "decision": "num_slots.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -57732,7 +57732,7 @@
   {
     "id": "vm_combine_finish_distinct_4038b4f9",
     "file": "src/vm/combine.rs",
-    "line": 1106,
+    "line": 1117,
     "decision": "let Some(column) = columns.get_mut(keys)",
     "conditions": 1,
     "vectors_required": 2,
@@ -57742,7 +57742,7 @@
   {
     "id": "vm_combine_finish_distinct_f71d60b5",
     "file": "src/vm/combine.rs",
-    "line": 1121,
+    "line": 1132,
     "decision": "keys > 0 || regroup.num_slots.is_some()",
     "conditions": 2,
     "vectors_required": 3,
@@ -57752,7 +57752,7 @@
   {
     "id": "vm_combine_push_partial_ca6ecb47",
     "file": "src/vm/combine.rs",
-    "line": 1157,
+    "line": 1168,
     "decision": "partial.columns.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -57762,7 +57762,7 @@
   {
     "id": "vm_combine_push_partial_abcbe8fe",
     "file": "src/vm/combine.rs",
-    "line": 1160,
+    "line": 1171,
     "decision": "match self.num_slots {\n            Some(n) => n,\n            None => self.start_partial(partial)?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57772,7 +57772,7 @@
   {
     "id": "vm_combine_push_partial_cab084bc",
     "file": "src/vm/combine.rs",
-    "line": 1165,
+    "line": 1176,
     "decision": "partial.columns.len() != num_slots\n            || partial.columns.iter().any(|column| column.len() != n)\n            || partial.first_seen.len() != n",
     "conditions": 3,
     "vectors_required": 4,
@@ -57782,7 +57782,7 @@
   {
     "id": "vm_combine_push_partial_89c69d19",
     "file": "src/vm/combine.rs",
-    "line": 1181,
+    "line": 1192,
     "decision": "match (&mut self.index, keys.first()) {\n                (KeyIndex::Int(table), Some(AccColumn::Ints { data, nulls })) => {\n                    Some(match (data.get(r), nulls.get(r)) {\n                        (Some(&key), Some(false)) => {\n                            table.get_or_insert(key, self.first_seen.len())?\n                        }\n                        _ => table.null_group_or_insert(self.first_seen.len()),\n                    })\n                }\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57792,7 +57792,7 @@
   {
     "id": "vm_combine_push_partial_b83b7aaf",
     "file": "src/vm/combine.rs",
-    "line": 1183,
+    "line": 1194,
     "decision": "match (data.get(r), nulls.get(r)) {\n                        (Some(&key), Some(false)) => {\n                            table.get_or_insert(key, self.first_seen.len())?\n                        }\n                        _ => table.null_group_or_insert(self.first_seen.len()),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57802,7 +57802,7 @@
   {
     "id": "vm_combine_push_partial_8c5e185d",
     "file": "src/vm/combine.rs",
-    "line": 1192,
+    "line": 1203,
     "decision": "match found {\n                Some(found) => found,\n                None => {\n                    if !matches!(self.index, KeyIndex::Generic(_)) {\n                        self.demote_to_generic();\n                    }\n                    let KeyIndex::Generic(map) = &mut self.index else {\n                        return Err(VmError::MalformedProgram {\n                            opcode: \"Combine\",\n                            reason: \"key index not initialized\".to_string(),\n                        });\n                    };\n                    let hash = acc_key_hash(keys, r);\n                    let acc = &self.acc;\n                    let existing = map.candidates(hash).find(|&g| {\n                        keys.iter()\n                            .enumerate()\n                            .all(|(c, column)| acc[c].eq_entry(g, column, r))\n                    });\n                    match existing {\n                        Some(g) => (g, false),\n                        None => {\n                            let g = self.first_seen.len();\n                            map.insert(hash, g);\n                            (g, true)\n                        }\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57812,7 +57812,7 @@
   {
     "id": "vm_combine_push_partial_b082ed50",
     "file": "src/vm/combine.rs",
-    "line": 1195,
+    "line": 1206,
     "decision": "!matches!(self.index, KeyIndex::Generic(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -57822,7 +57822,7 @@
   {
     "id": "vm_combine_push_partial_3479999b",
     "file": "src/vm/combine.rs",
-    "line": 1211,
+    "line": 1222,
     "decision": "match existing {\n                        Some(g) => (g, false),\n                        None => {\n                            let g = self.first_seen.len();\n                            map.insert(hash, g);\n                            (g, true)\n                        }\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57832,7 +57832,7 @@
   {
     "id": "vm_combine_push_partial_df6fc515",
     "file": "src/vm/combine.rs",
-    "line": 1221,
+    "line": 1232,
     "decision": "inserted",
     "conditions": 1,
     "vectors_required": 2,
@@ -57842,7 +57842,7 @@
   {
     "id": "vm_combine_push_partial_a6210db7",
     "file": "src/vm/combine.rs",
-    "line": 1230,
+    "line": 1241,
     "decision": "*op != SlotOp::Key",
     "conditions": 1,
     "vectors_required": 2,
@@ -57852,7 +57852,7 @@
   {
     "id": "vm_combine_reorder_by_first_seen_645a86cd",
     "file": "src/vm/combine.rs",
-    "line": 1247,
+    "line": 1258,
     "decision": "first_seen.windows(2).all(|w| w[0] <= w[1])",
     "conditions": 1,
     "vectors_required": 2,
@@ -57862,7 +57862,7 @@
   {
     "id": "vm_combine_reorder_by_first_seen_edf8b411",
     "file": "src/vm/combine.rs",
-    "line": 1256,
+    "line": 1267,
     "decision": "done[start]",
     "conditions": 1,
     "vectors_required": 2,
@@ -57872,7 +57872,7 @@
   {
     "id": "vm_combine_reorder_by_first_seen_85eed1d6",
     "file": "src/vm/combine.rs",
-    "line": 1263,
+    "line": 1274,
     "decision": "next == start",
     "conditions": 1,
     "vectors_required": 2,
@@ -57882,7 +57882,7 @@
   {
     "id": "vm_combine_output_columns_82acc151",
     "file": "src/vm/combine.rs",
-    "line": 1289,
+    "line": 1300,
     "decision": "match part {\n            AggPart::Avg(sum_i, count_i) => {\n                let column = acc[*sum_i]\n                    .iter()\n                    .zip(acc[*count_i].iter())\n                    .map(|(sum, count)| finish_avg(sum, count))\n                    .collect::<Result<Vec<_>>>()?;\n                out.push(column);\n                cursor = count_i.saturating_add(1);\n            }\n            // Merged, but not itself an output column (#496) -- its acc\n            // column is consumed (the cursor still advances past it) but\n            // never pushed to `out`; only an `Expr` part reads it.\n            AggPart::Hidden(_) => {\n                cursor = cursor.saturating_add(1);\n            }\n            // The merged sketch becomes its estimate (#603).\n            AggPart::ApproxCountDistinct => {\n                if let Some(column) = acc.get_mut(cursor) {\n                    out.push(\n                        std::mem::take(column)\n                            .iter()\n                            .map(finish_sketch)\n                            .collect::<Result<Vec<_>>>()?,\n                    );\n                }\n                cursor = cursor.saturating_add(1);\n            }\n            // The merged set becomes its size (#817).\n            AggPart::ExactCountDistinct => {\n                if let Some(column) = acc.get_mut(cursor) {\n                    out.push(\n                        std::mem::take(column)\n                            .iter()\n                            .map(finish_int_set)\n                            .collect::<Result<Vec<_>>>()?,\n                    );\n                }\n                cursor = cursor.saturating_add(1);\n            }\n            // The same for strings (#820).\n            AggPart::ExactCountDistinctStr => {\n                if let Some(column) = acc.get_mut(cursor) {\n                    out.push(\n                        std::mem::take(column)\n                            .iter()\n                            .map(finish_str_set)\n                            .collect::<Result<Vec<_>>>()?,\n                    );\n                }\n                cursor = cursor.saturating_add(1);\n            }\n            // No acc column of its own -- both operands name a slot\n            // another part already claimed above, so the cursor doesn't\n            // move (#496).\n            AggPart::Expr(map_op, lhs, rhs) => {\n                let column = (0..len)\n                    .map(|r| {\n                        eval_agg_expr(*map_op, lhs, rhs, |i| {\n                            acc.get(i).and_then(|c| c.get(r)).cloned().ok_or_else(|| {\n                                VmError::MalformedProgram {\n                                    opcode: \"Combine\",\n                                    reason: format!(\n                                        \"Expr operand slot {i} is outside the emitted row\"\n                                    ),\n                                }\n                            })\n                        })\n                    })\n                    .collect::<Result<Vec<_>>>()?;\n                out.push(column);\n            }\n            _ => {\n                if let Some(column) = acc.get_mut(cursor) {\n                    out.push(std::mem::take(column));\n                }\n                cursor = cursor.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57892,7 +57892,7 @@
   {
     "id": "vm_combine_output_columns_14250ea4",
     "file": "src/vm/combine.rs",
-    "line": 1307,
+    "line": 1318,
     "decision": "let Some(column) = acc.get_mut(cursor)",
     "conditions": 1,
     "vectors_required": 2,
@@ -57902,7 +57902,7 @@
   {
     "id": "vm_combine_output_columns_14250ea4_2",
     "file": "src/vm/combine.rs",
-    "line": 1319,
+    "line": 1330,
     "decision": "let Some(column) = acc.get_mut(cursor)",
     "conditions": 1,
     "vectors_required": 2,
@@ -57912,7 +57912,7 @@
   {
     "id": "vm_combine_output_columns_14250ea4_3",
     "file": "src/vm/combine.rs",
-    "line": 1331,
+    "line": 1342,
     "decision": "let Some(column) = acc.get_mut(cursor)",
     "conditions": 1,
     "vectors_required": 2,
@@ -57922,7 +57922,7 @@
   {
     "id": "vm_combine_output_columns_14250ea4_4",
     "file": "src/vm/combine.rs",
-    "line": 1362,
+    "line": 1373,
     "decision": "let Some(column) = acc.get_mut(cursor)",
     "conditions": 1,
     "vectors_required": 2,
@@ -57932,7 +57932,7 @@
   {
     "id": "vm_combine_typed_partials_merge_as_untyped_chunks_do_e238f981",
     "file": "src/vm/combine.rs",
-    "line": 1740,
+    "line": 1751,
     "decision": "match next(25) {\n                    0 => Value::Null,\n                    // One late chunk has a float key: the column demotes.\n                    1 if segment == 9 => Value::Float(0.5),\n                    k => Value::Int(i64::try_from(k).unwrap_or(0)),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57942,7 +57942,7 @@
   {
     "id": "vm_combine_typed_partials_merge_as_untyped_chunks_do_29c94cfe",
     "file": "src/vm/combine.rs",
-    "line": 1743,
+    "line": 1754,
     "decision": "segment == 9",
     "conditions": 1,
     "vectors_required": 2,
@@ -57952,7 +57952,7 @@
   {
     "id": "vm_combine_typed_partials_merge_as_untyped_chunks_do_c4bf3a26",
     "file": "src/vm/combine.rs",
-    "line": 1748,
+    "line": 1759,
     "decision": "match next(6) {\n                    0 => Value::Null,\n                    k => s(&format!(\"name{k}\")),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57962,7 +57962,7 @@
   {
     "id": "vm_engine_resolve_scan_source_23b8c749",
     "file": "src/vm/engine.rs",
-    "line": 80,
+    "line": 82,
     "decision": "match source {\n        ScanSource::InMemory(batch) => Ok(batch),\n        other => resolver.resolve(&other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57972,7 +57972,7 @@
   {
     "id": "vm_engine_run_25e45644",
     "file": "src/vm/engine.rs",
-    "line": 124,
+    "line": 126,
     "decision": "match program.instructions.last().map(|i| &i.opcode) {\n        Some(Opcode::Limit { offset, .. }) if *offset > 0 => Ok(output.skip_rows(*offset)),\n        _ => Ok(output),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -57982,7 +57982,7 @@
   {
     "id": "vm_engine_run_750de75b",
     "file": "src/vm/engine.rs",
-    "line": 125,
+    "line": 127,
     "decision": "*offset > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -57992,7 +57992,7 @@
   {
     "id": "vm_engine_branch_output_columns_b91f6aed",
     "file": "src/vm/engine.rs",
-    "line": 134,
+    "line": 136,
     "decision": "match combine {\n        None => body,\n        Some(Opcode::Combine { project, .. }) if !project.is_empty() => project,\n        // A projection without aggregates or reordering: the `Emit` is the\n        // output.\n        Some(Opcode::Combine {\n            agg_parts,\n            output_order,\n            ..\n        }) if agg_parts.is_empty() && output_order.is_empty() => body,\n        Some(_) => return Vec::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58002,7 +58002,7 @@
   {
     "id": "vm_engine_branch_output_columns_1e899256",
     "file": "src/vm/engine.rs",
-    "line": 136,
+    "line": 138,
     "decision": "!project.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58012,7 +58012,7 @@
   {
     "id": "vm_engine_branch_output_columns_83d0052f",
     "file": "src/vm/engine.rs",
-    "line": 143,
+    "line": 145,
     "decision": "agg_parts.is_empty() && output_order.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -58022,7 +58022,7 @@
   {
     "id": "vm_engine_run_page_5532ff3c",
     "file": "src/vm/engine.rs",
-    "line": 178,
+    "line": 180,
     "decision": "match sort {\n        Some(Opcode::Sort { keys, hidden }) => (keys, *hidden),\n        _ => (&[], 0),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58032,7 +58032,7 @@
   {
     "id": "vm_engine_run_page_a7421897",
     "file": "src/vm/engine.rs",
-    "line": 182,
+    "line": 184,
     "decision": "match limit_op {\n        // Every path keeps the first `n + offset` rows; `run` drops the\n        // first `offset` of them at the end (#679).\n        Some(Opcode::Limit { n, offset }) => Some(n.saturating_add(*offset)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58042,7 +58042,7 @@
   {
     "id": "vm_engine_run_page_fd227952",
     "file": "src/vm/engine.rs",
-    "line": 189,
+    "line": 191,
     "decision": "let Some(limit) = bounded_scan_limit(program)",
     "conditions": 1,
     "vectors_required": 2,
@@ -58052,7 +58052,7 @@
   {
     "id": "vm_engine_run_page_52938cc0",
     "file": "src/vm/engine.rs",
-    "line": 197,
+    "line": 199,
     "decision": "is_identity_finalize(agg_parts, *distinct, output_order, project, order_by, limit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -58062,7 +58062,7 @@
   {
     "id": "vm_engine_run_page_534e66b2",
     "file": "src/vm/engine.rs",
-    "line": 207,
+    "line": 209,
     "decision": "!agg_parts.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58072,7 +58072,7 @@
   {
     "id": "vm_engine_run_page_7330e6cc",
     "file": "src/vm/engine.rs",
-    "line": 208,
+    "line": 210,
     "decision": "segments.is_empty() && *num_group_keys == 0",
     "conditions": 2,
     "vectors_required": 3,
@@ -58082,7 +58082,7 @@
   {
     "id": "vm_engine_run_page_d590bc3f",
     "file": "src/vm/engine.rs",
-    "line": 221,
+    "line": 223,
     "decision": "preaggregation_pays(segments.len())",
     "conditions": 1,
     "vectors_required": 2,
@@ -58092,7 +58092,7 @@
   {
     "id": "vm_engine_run_page_90c1a10a",
     "file": "src/vm/engine.rs",
-    "line": 230,
+    "line": 232,
     "decision": "!*distinct && order_by.is_empty() && limit.is_none()",
     "conditions": 3,
     "vectors_required": 4,
@@ -58102,7 +58102,7 @@
   {
     "id": "vm_engine_run_page_ba633210",
     "file": "src/vm/engine.rs",
-    "line": 237,
+    "line": 239,
     "decision": "match (agg_parts.is_empty() && !distinct, order_by, limit) {\n        (true, &[(col, descending)], Some(limit)) => run_parallel_top_n(\n            segments,\n            &body,\n            &TopN {\n                col,\n                descending,\n                limit,\n            },\n        )?,\n        _ => run_parallel(segments, &body)?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58112,7 +58112,7 @@
   {
     "id": "vm_engine_run_page_1c741d3f",
     "file": "src/vm/engine.rs",
-    "line": 261,
+    "line": 263,
     "decision": "hidden == 0 || keep.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -58120,9 +58120,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "vm_engine_run_parallel_preaggregate_b7b1b7ef",
+    "file": "src/vm/engine.rs",
+    "line": 324,
+    "decision": "combiner.groups() > SPILL_GROUPS",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "vm_engine_run_parallel_segment_partials_d80b3ca6",
     "file": "src/vm/engine.rs",
-    "line": 330,
+    "line": 359,
     "decision": "batch.num_rows <= SLICE_ROWS || !sliceable(body)",
     "conditions": 2,
     "vectors_required": 3,
@@ -58132,7 +58142,7 @@
   {
     "id": "vm_engine_run_parallel_segment_partials_f73a6b12",
     "file": "src/vm/engine.rs",
-    "line": 344,
+    "line": 373,
     "decision": "chunk.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58142,7 +58152,7 @@
   {
     "id": "vm_engine_apply_projection_f1396e38",
     "file": "src/vm/engine.rs",
-    "line": 383,
+    "line": 412,
     "decision": "project.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58152,7 +58162,7 @@
   {
     "id": "vm_engine_is_streamable_4fa297ed",
     "file": "src/vm/engine.rs",
-    "line": 419,
+    "line": 448,
     "decision": "match sort {\n        Some(Opcode::Sort { keys, .. }) => keys,\n        _ => &[],\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58162,7 +58172,7 @@
   {
     "id": "vm_engine_is_streamable_a7421897",
     "file": "src/vm/engine.rs",
-    "line": 423,
+    "line": 452,
     "decision": "match limit_op {\n        // Every path keeps the first `n + offset` rows; `run` drops the\n        // first `offset` of them at the end (#679).\n        Some(Opcode::Limit { n, offset }) => Some(n.saturating_add(*offset)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58172,7 +58182,7 @@
   {
     "id": "vm_engine_run_streaming_4fa297ed",
     "file": "src/vm/engine.rs",
-    "line": 462,
+    "line": 491,
     "decision": "match sort {\n        Some(Opcode::Sort { keys, .. }) => keys,\n        _ => &[],\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58182,7 +58192,7 @@
   {
     "id": "vm_engine_run_streaming_a7421897",
     "file": "src/vm/engine.rs",
-    "line": 466,
+    "line": 495,
     "decision": "match limit_op {\n        // Every path keeps the first `n + offset` rows; `run` drops the\n        // first `offset` of them at the end (#679).\n        Some(Opcode::Limit { n, offset }) => Some(n.saturating_add(*offset)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58192,7 +58202,7 @@
   {
     "id": "vm_engine_run_streaming_ba8e2005",
     "file": "src/vm/engine.rs",
-    "line": 472,
+    "line": 501,
     "decision": "!is_identity_finalize(agg_parts, *distinct, output_order, project, order_by, limit)",
     "conditions": 1,
     "vectors_required": 2,
@@ -58202,7 +58212,7 @@
   {
     "id": "vm_engine_run_streaming_534e66b2",
     "file": "src/vm/engine.rs",
-    "line": 473,
+    "line": 502,
     "decision": "!agg_parts.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58212,7 +58222,7 @@
   {
     "id": "vm_engine_run_streaming_3a6ee6e5",
     "file": "src/vm/engine.rs",
-    "line": 475,
+    "line": 504,
     "decision": "*distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -58222,7 +58232,7 @@
   {
     "id": "vm_engine_run_streaming_da76838d",
     "file": "src/vm/engine.rs",
-    "line": 478,
+    "line": 507,
     "decision": "match (!order_by.is_empty(), limit) {\n                (true, Some(_)) => \"query has ORDER BY ... LIMIT\".to_string(),\n                (true, None) => \"query has ORDER BY\".to_string(),\n                (false, Some(_)) => \"query has LIMIT\".to_string(),\n                // Only a non-empty `output_order` or `project` is left\n                // (#585, #623); codegen sets one only alongside\n                // aggregates, but a hand-built program can carry one on\n                // its own.\n                (false, None) => \"query reorders or projects its output columns\".to_string(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58232,7 +58242,7 @@
   {
     "id": "vm_engine_bounded_scan_limit_084b8c51",
     "file": "src/vm/engine.rs",
-    "line": 512,
+    "line": 541,
     "decision": "sort.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58242,7 +58252,7 @@
   {
     "id": "vm_engine_bounded_scan_limit_72191bdf",
     "file": "src/vm/engine.rs",
-    "line": 518,
+    "line": 547,
     "decision": "*distinct\n        || !agg_parts.is_empty()\n        || !output_order.is_empty()\n        || !project.is_empty()\n        || body.iter().any(|op| matches!(op, Opcode::Filter { .. }))",
     "conditions": 5,
     "vectors_required": 6,
@@ -58252,7 +58262,7 @@
   {
     "id": "vm_engine_bounded_scan_c3749a12",
     "file": "src/vm/engine.rs",
-    "line": 537,
+    "line": 566,
     "decision": "output.num_rows() >= limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -58262,7 +58272,7 @@
   {
     "id": "vm_engine_finalize_152001eb",
     "file": "src/vm/engine.rs",
-    "line": 567,
+    "line": 596,
     "decision": "agg_parts.contains(&AggPart::DistinctKey)",
     "conditions": 1,
     "vectors_required": 2,
@@ -58272,7 +58282,7 @@
   {
     "id": "vm_engine_finalize_6c8f518a",
     "file": "src/vm/engine.rs",
-    "line": 576,
+    "line": 605,
     "decision": "width == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -58282,7 +58292,7 @@
   {
     "id": "vm_engine_finalize_534e66b2",
     "file": "src/vm/engine.rs",
-    "line": 580,
+    "line": 609,
     "decision": "!agg_parts.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58292,7 +58302,7 @@
   {
     "id": "vm_engine_finalize_8118da6f",
     "file": "src/vm/engine.rs",
-    "line": 601,
+    "line": 630,
     "decision": "match existing {\n                Some(i) => merge_rows(&ops, &mut groups[i].1, &row)?,\n                None => {\n                    bucket.push(groups.len());\n                    groups.push((key_slice.to_vec(), row));\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58302,7 +58312,7 @@
   {
     "id": "vm_engine_finalize_56b6a17b",
     "file": "src/vm/engine.rs",
-    "line": 625,
+    "line": 654,
     "decision": "distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -58312,7 +58322,7 @@
   {
     "id": "vm_engine_finalize_05e7b4ec",
     "file": "src/vm/engine.rs",
-    "line": 630,
+    "line": 659,
     "decision": "!order_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58322,7 +58332,7 @@
   {
     "id": "vm_engine_finalize_de1ce4a5",
     "file": "src/vm/engine.rs",
-    "line": 634,
+    "line": 663,
     "decision": "let Some(limit) = limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -58332,7 +58342,7 @@
   {
     "id": "vm_engine_finalize_row_f3f72e2f",
     "file": "src/vm/engine.rs",
-    "line": 664,
+    "line": 693,
     "decision": "match part {\n            // `Avg`'s two registers (sum, count) occupy one `parts` entry\n            // but two `row` slots; every part after it is offset in `row`\n            // by however many extra registers came before -- comparing\n            // `count_i` against the *parts* enumeration index (as this\n            // used to) confuses the two spaces and, once another\n            // aggregate follows an `AVG` in the same query, silently\n            // corrupts or drops it (db-core#404).\n            AggPart::Avg(sum_i, count_i) => {\n                out.push(finish_avg(&row[*sum_i], &row[*count_i])?);\n                row_idx = count_i.saturating_add(1);\n            }\n            // The merged sketch becomes its estimate (#603).\n            AggPart::ApproxCountDistinct => {\n                out.push(finish_sketch(&row[row_idx])?);\n                row_idx = row_idx.saturating_add(1);\n            }\n            // The merged set becomes its size (#817).\n            AggPart::ExactCountDistinct => {\n                out.push(finish_int_set(&row[row_idx])?);\n                row_idx = row_idx.saturating_add(1);\n            }\n            // The same for strings (#820).\n            AggPart::ExactCountDistinctStr => {\n                out.push(finish_str_set(&row[row_idx])?);\n                row_idx = row_idx.saturating_add(1);\n            }\n            // Merged into `row[row_idx]` like its plain counterpart, but\n            // not itself an output value (#496) -- the cursor still\n            // advances past its slot; only an `Expr` part reads it.\n            AggPart::Hidden(_) => {\n                row_idx = row_idx.saturating_add(1);\n            }\n            // No row slot of its own -- both operands name a slot another\n            // part already claimed, so the cursor doesn't move (#496).\n            AggPart::Expr(map_op, lhs, rhs) => {\n                out.push(eval_agg_expr(*map_op, lhs, rhs, |i| {\n                    row.get(i)\n                        .cloned()\n                        .ok_or_else(|| VmError::MalformedProgram {\n                            opcode: \"Combine\",\n                            reason: format!(\"Expr operand slot {i} is outside the emitted row\"),\n                        })\n                })?);\n            }\n            _ => {\n                out.push(row[row_idx].clone());\n                row_idx = row_idx.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58342,7 +58352,7 @@
   {
     "id": "vm_engine_load_cba4f5f5",
     "file": "src/vm/engine.rs",
-    "line": 843,
+    "line": 872,
     "decision": "let Some(fused) = &self.shape.fused_group_by",
     "conditions": 1,
     "vectors_required": 2,
@@ -58352,7 +58362,7 @@
   {
     "id": "vm_engine_load_78760142",
     "file": "src/vm/engine.rs",
-    "line": 844,
+    "line": 873,
     "decision": "match fused.first() {\n                Some((reg, _)) => vm.register(*reg)?.len(),\n                None => 0,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58362,7 +58372,7 @@
   {
     "id": "vm_engine_run_multi_join_segments_e916149e",
     "file": "src/vm/engine.rs",
-    "line": 929,
+    "line": 958,
     "decision": "rights.len() != plan.builds.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -58372,7 +58382,7 @@
   {
     "id": "vm_engine_run_multi_join_segments_3366051e",
     "file": "src/vm/engine.rs",
-    "line": 942,
+    "line": 971,
     "decision": "i > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -58382,7 +58392,7 @@
   {
     "id": "vm_engine_a_sliced_segment_merges_the_same_on_both_aggregate_paths_550e4b19",
     "file": "src/vm/engine.rs",
-    "line": 1153,
+    "line": 1182,
     "decision": "match expected.last_mut() {\n                Some(row) if row[0] == Value::Int(key(i)) => {\n                    let Value::Int(c) = row[1] else {\n                        panic!(\"count\")\n                    };\n                    row[1] = Value::Int(c + 1);\n                    row[2] = Value::Int(c + 1);\n                }\n                _ => expected.push(vec![Value::Int(key(i)), Value::Int(1), Value::Int(1)]),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -58392,7 +58402,7 @@
   {
     "id": "vm_engine_a_sliced_segment_merges_the_same_on_both_aggregate_paths_ecfb768c",
     "file": "src/vm/engine.rs",
-    "line": 1154,
+    "line": 1183,
     "decision": "row[0] == Value::Int(key(i))",
     "conditions": 1,
     "vectors_required": 2,
@@ -58402,7 +58412,7 @@
   {
     "id": "vm_engine_scan_program_f8be12f4",
     "file": "src/vm/engine.rs",
-    "line": 1414,
+    "line": 1443,
     "decision": "with_filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -58412,7 +58422,7 @@
   {
     "id": "vm_engine_count_program_0ac42f8a",
     "file": "src/vm/engine.rs",
-    "line": 2033,
+    "line": 2105,
     "decision": "grouped",
     "conditions": 1,
     "vectors_required": 2,

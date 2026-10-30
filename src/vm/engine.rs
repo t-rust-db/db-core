@@ -20,6 +20,8 @@
 //! an already-materialized table, resolved via [`ScanSourceResolver`] when
 //! it isn't. And [`semi_filter`].
 
+use std::sync::Mutex;
+
 use super::batch::{
     chunk_len, compare_rows_for_order, execute_in_slices, hash_group_key, run_morsels,
     run_morsels_fold, run_parallel, run_parallel_streaming, run_parallel_top_n, sliceable, AggPart,
@@ -275,6 +277,10 @@ fn run_page<S: Segment>(segments: &[S], program: &Program) -> Result<QueryOutput
 /// clearly faster.
 const PREAGGREGATE_MIN_SEGMENTS_PER_THREAD: usize = 4;
 
+/// Groups a worker's pre-aggregation may hold before it spills them into
+/// the shared combiner (#643).
+const SPILL_GROUPS: usize = 4_096;
+
 /// Whether `num_segments` gives each worker enough segments to make
 /// per-worker pre-aggregation worthwhile.
 fn preaggregation_pays(num_segments: usize) -> bool {
@@ -297,7 +303,12 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
     num_group_keys: usize,
 ) -> Result<Vec<Partial>> {
     let items: Vec<(usize, &S)> = segments.iter().enumerate().collect();
-    run_morsels_fold(
+    // A worker that has seen more than `SPILL_GROUPS` groups hands them to
+    // one shared combiner and starts over, so the pool holds the groups
+    // once plus a bounded partial per worker, not every worker's copy of
+    // them (#643).
+    let shared = Mutex::new(Combiner::new(agg_parts, num_group_keys));
+    let mut partials = run_morsels_fold(
         &items,
         || Combiner::new(agg_parts, num_group_keys),
         |combiner, (segment_index, segment)| {
@@ -309,10 +320,28 @@ pub(crate) fn run_parallel_preaggregate<S: Segment>(
                     })?;
                 }
                 Ok(())
-            })
+            })?;
+            if combiner.groups() > SPILL_GROUPS {
+                let spilled = std::mem::replace(combiner, Combiner::new(agg_parts, num_group_keys))
+                    .finish_partial();
+                // Poison recovery: a panicking worker re-raises when the
+                // pool's scope closes, so the state is never used after.
+                shared
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .merge_partial(&spilled)?;
+            }
+            Ok(())
         },
         |combiner| Ok(combiner.finish_partial()),
-    )
+    )?;
+    partials.push(
+        shared
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish_partial(),
+    );
+    Ok(partials)
 }
 
 /// [`run_parallel`] for an aggregate body that is not pre-aggregated per
@@ -1981,13 +2010,56 @@ mod preaggregation_tests {
         let partials =
             run_parallel_preaggregate(&segs, &body, &[AggPart::GroupKey, AggPart::Sum], 1).unwrap();
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-        assert!(partials.len() <= threads.min(num_segments));
+        // The workers' partials and the shared combiner's (empty here).
+        assert!(partials.len() <= threads.min(num_segments) + 1);
         let total: usize = partials.iter().map(super::Partial::len).sum();
         assert!(
             total <= threads * groups as usize,
             "{total} partial rows for {threads} threads x {groups} groups"
         );
         assert!(total < num_segments * groups as usize / 2 || threads * 2 > num_segments);
+    }
+
+    /// The shared combiner's partial, last of `run_parallel_preaggregate`'s.
+    fn spilled_groups(groups: i64) -> usize {
+        let segs = segments(40, groups);
+        let program = group_sum_program();
+        let (body, ..) = program.split_finalize();
+        run_parallel_preaggregate(&segs, &body, &[AggPart::GroupKey, AggPart::Sum], 1)
+            .unwrap()
+            .last()
+            .map_or(0, super::Partial::len)
+    }
+
+    // vm_engine_run_parallel_preaggregate_b7b1b7ef
+    // (`run_parallel_preaggregate`): `combiner.groups() > SPILL_GROUPS`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_parallel_preaggregate_b7b1b7ef__v1_few_groups_stay_in_the_worker() {
+        assert_eq!(spilled_groups(500), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_parallel_preaggregate_b7b1b7ef__v2_many_groups_spill_to_the_shared_combiner(
+    ) {
+        let groups = i64::try_from(super::SPILL_GROUPS).unwrap() + 900;
+        assert!(spilled_groups(groups) > 0);
+    }
+
+    /// More groups than `SPILL_GROUPS` per worker: the spill into the shared
+    /// combiner must not change the answer or the group order (#643).
+    #[test]
+    fn spilled_preaggregation_matches_the_direct_merge() {
+        let segs = segments(40, i64::try_from(super::SPILL_GROUPS).unwrap() + 900);
+        let program = group_sum_program();
+        let (body, ..) = program.split_finalize();
+        let per_segment = run_parallel(&segs, &body).unwrap();
+        let direct =
+            combine_chunks(&[AggPart::GroupKey, AggPart::Sum], 1, per_segment.chunks()).unwrap();
+        for _ in 0..3 {
+            assert_eq!(run(&segs, &program).unwrap(), direct);
+        }
     }
 
     /// The pre-aggregated `run()` must produce exactly what the direct
