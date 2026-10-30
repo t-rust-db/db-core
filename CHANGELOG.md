@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.207.1] - 2026-10-30
+
+### Fixed
+
+- Comparisons of two `Int64` values (column or literal) are exact above 2^53; they no longer round through `f64` and report equal values that differ by less than one ulp (#845).
+
 ## [0.207.0] - 2026-10-30
 
 ### Added
