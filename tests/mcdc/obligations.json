@@ -50690,19 +50690,9 @@
     "wildcard_risk": true
   },
   {
-    "id": "storage_stream_clf_epoch_nanos_c3b66372",
-    "file": "src/storage/stream/clf.rs",
-    "line": 270,
-    "decision": "year < 1970\n            || month == 0\n            || month > 12\n            || day == 0\n            || day > 31\n            || hour > 23\n            || minute > 59\n            || second > 59",
-    "conditions": 8,
-    "vectors_required": 9,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "storage_stream_clf_closing_quote_5dd4da66",
     "file": "src/storage/stream/clf.rs",
-    "line": 321,
+    "line": 285,
     "decision": "escaped",
     "conditions": 1,
     "vectors_required": 2,
@@ -50712,7 +50702,7 @@
   {
     "id": "storage_stream_clf_closing_quote_e1f54dec",
     "file": "src/storage/stream/clf.rs",
-    "line": 323,
+    "line": 287,
     "decision": "b == b'\\\\'",
     "conditions": 1,
     "vectors_required": 2,
@@ -50722,7 +50712,7 @@
   {
     "id": "storage_stream_clf_closing_quote_b3e1fbc8",
     "file": "src/storage/stream/clf.rs",
-    "line": 325,
+    "line": 289,
     "decision": "b == b'\"'",
     "conditions": 1,
     "vectors_required": 2,
@@ -50732,7 +50722,7 @@
   {
     "id": "storage_stream_clf_unescape_427a91e8",
     "file": "src/storage/stream/clf.rs",
-    "line": 342,
+    "line": 306,
     "decision": "!s.contains('\\\\')",
     "conditions": 1,
     "vectors_required": 2,
@@ -50742,7 +50732,7 @@
   {
     "id": "storage_stream_clf_unescape_5eae6dca",
     "file": "src/storage/stream/clf.rs",
-    "line": 348,
+    "line": 312,
     "decision": "let Some(&b) = bytes.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -50752,7 +50742,7 @@
   {
     "id": "storage_stream_clf_unescape_e1f54dec",
     "file": "src/storage/stream/clf.rs",
-    "line": 349,
+    "line": 313,
     "decision": "b == b'\\\\'",
     "conditions": 1,
     "vectors_required": 2,
@@ -50762,7 +50752,7 @@
   {
     "id": "storage_stream_clf_decode_escape_9aed186d",
     "file": "src/storage/stream/clf.rs",
-    "line": 366,
+    "line": 330,
     "decision": "match tail.get(1)? {\n        b'\"' => b'\"',\n        b'\\\\' => b'\\\\',\n        b'b' => 0x08,\n        b'n' => b'\\n',\n        b'r' => b'\\r',\n        b't' => b'\\t',\n        b'v' => 0x0b,\n        b'x' => {\n            let hex = std::str::from_utf8(tail.get(2..4)?).ok()?;\n            if !hex.bytes().all(|h| h.is_ascii_hexdigit()) {\n                return None;\n            }\n            return Some((u8::from_str_radix(hex, 16).ok()?, 4));\n        }\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50772,7 +50762,7 @@
   {
     "id": "storage_stream_clf_decode_escape_3eba840b",
     "file": "src/storage/stream/clf.rs",
-    "line": 376,
+    "line": 340,
     "decision": "!hex.bytes().all(|h| h.is_ascii_hexdigit())",
     "conditions": 1,
     "vectors_required": 2,
@@ -50782,7 +50772,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_f5d7610b",
     "file": "src/storage/stream/clf.rs",
-    "line": 411,
+    "line": 395,
     "decision": "match batch.fields.get(\"status\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(500)]),\n            other => panic!(\"expected Int status, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50792,7 +50782,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_16fe556f",
     "file": "src/storage/stream/clf.rs",
-    "line": 415,
+    "line": 399,
     "decision": "match batch.fields.get(\"bytes\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(1834)]),\n            other => panic!(\"expected Int bytes, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50802,7 +50792,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_f4a42f69",
     "file": "src/storage/stream/clf.rs",
-    "line": 419,
+    "line": 403,
     "decision": "match batch.fields.get(\"method\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"GET\"]),\n            other => panic!(\"expected Dict method, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50812,7 +50802,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_05a59703",
     "file": "src/storage/stream/clf.rs",
-    "line": 424,
+    "line": 408,
     "decision": "match batch.fields.get(\"ip\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"10.0.0.1\"]),\n            other => panic!(\"expected Dict ip, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50822,7 +50812,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_62645b81",
     "file": "src/storage/stream/clf.rs",
-    "line": 428,
+    "line": 412,
     "decision": "match batch.fields.get(\"user\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"alice\"]),\n            other => panic!(\"expected Dict user, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50832,7 +50822,7 @@
   {
     "id": "storage_stream_clf_parses_basic_combined_log_line_5761bd0c",
     "file": "src/storage/stream/clf.rs",
-    "line": 432,
+    "line": 416,
     "decision": "match batch.fields.get(\"referer\") {\n            Some(FieldColumn::Dict { dict, .. }) => {\n                assert_eq!(dict.as_slice(), [\"https://example.com\"]);\n            }\n            other => panic!(\"expected Dict referer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50842,7 +50832,7 @@
   {
     "id": "storage_stream_clf_an_escaped_quote_does_not_end_the_request_field_2e6baeb8",
     "file": "src/storage/stream/clf.rs",
-    "line": 447,
+    "line": 431,
     "decision": "match batch.fields.get(\"status\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(404)]),\n            other => panic!(\"expected Int status, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50852,7 +50842,7 @@
   {
     "id": "storage_stream_clf_an_escaped_quote_does_not_end_the_request_field_0636ad87",
     "file": "src/storage/stream/clf.rs",
-    "line": 451,
+    "line": 435,
     "decision": "match batch.fields.get(\"bytes\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(12)]),\n            other => panic!(\"expected Int bytes, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50862,7 +50852,7 @@
   {
     "id": "storage_stream_clf_an_escaped_quote_does_not_end_the_request_field_57f4f00d",
     "file": "src/storage/stream/clf.rs",
-    "line": 455,
+    "line": 439,
     "decision": "match batch.fields.get(\"referer\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [r\"r\\\\\"]),\n            other => panic!(\"expected Dict referer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50872,7 +50862,7 @@
   {
     "id": "storage_stream_clf_an_escaped_quote_does_not_end_the_request_field_a521dfe1",
     "file": "src/storage/stream/clf.rs",
-    "line": 459,
+    "line": 443,
     "decision": "match batch.fields.get(\"ua\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"ua\"]),\n            other => panic!(\"expected Dict ua, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50882,7 +50872,7 @@
   {
     "id": "storage_stream_clf_dash_placeholders_are_not_recorded_as_fields_5a0f38c8",
     "file": "src/storage/stream/clf.rs",
-    "line": 496,
+    "line": 480,
     "decision": "match batch.fields.get(\"status\") {\n            Some(FieldColumn::Int(v)) => assert_eq!(v, &[Some(200)]),\n            other => panic!(\"expected Int status, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50892,7 +50882,7 @@
   {
     "id": "storage_stream_clf_status_ge_500_and_method_eq_post_selects_expected_rows_aa2fdc4c",
     "file": "src/storage/stream/clf.rs",
-    "line": 524,
+    "line": 508,
     "decision": "match batch.fields.get(\"status\").unwrap() {\n            FieldColumn::Int(v) => v.clone(),\n            other => panic!(\"expected Int, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50902,7 +50892,7 @@
   {
     "id": "storage_stream_clf_status_ge_500_and_method_eq_post_selects_expected_rows_6d0faed0",
     "file": "src/storage/stream/clf.rs",
-    "line": 528,
+    "line": 512,
     "decision": "match batch.fields.get(\"method\").unwrap() {\n            FieldColumn::Dict { dict, indices } => indices\n                .iter()\n                .map(|i| i.map(|i| dict[usize::from(i)]))\n                .collect::<Vec<_>>(),\n            other => panic!(\"expected Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50912,7 +50902,7 @@
   {
     "id": "storage_stream_clf_high_cardinality_path_degrades_dict_to_str_365991f5",
     "file": "src/storage/stream/clf.rs",
-    "line": 556,
+    "line": 540,
     "decision": "match batch.fields.get(\"path\") {\n            Some(FieldColumn::Str(v)) => assert_eq!(v.len(), 300),\n            other => panic!(\"expected Dict->Str degrade for high-cardinality path, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50922,7 +50912,7 @@
   {
     "id": "storage_stream_clf_high_cardinality_path_degrades_dict_to_str_f6c68aff",
     "file": "src/storage/stream/clf.rs",
-    "line": 561,
+    "line": 545,
     "decision": "match batch.fields.get(\"method\") {\n            Some(FieldColumn::Dict { dict, .. }) => assert_eq!(dict.as_slice(), [\"GET\"]),\n            other => panic!(\"expected method to stay Dict, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51760,19 +51750,39 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_jsonl_resolve_timestamp_6435ef1e",
+    "id": "storage_stream_jsonl_resolve_timestamp_2eecc5ea",
     "file": "src/storage/stream/jsonl.rs",
     "line": 282,
-    "decision": "match value {\n        JsonValue::Str(s) => timestamp::parse_flexible(s),\n        #[allow(clippy::cast_possible_truncation)]\n        JsonValue::Int(n) => timestamp::parse_epoch(&n.to_string()),\n        JsonValue::Float(f) => timestamp::parse_epoch(&(*f as i64).to_string()),\n        _ => None,\n    }",
+    "decision": "match value {\n        JsonValue::Str(s) => timestamp::parse_flexible(s),\n        JsonValue::Int(n) => timestamp::parse_epoch(&n.to_string()),\n        JsonValue::Float(f) => float_epoch(*f),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
+    "id": "storage_stream_jsonl_float_epoch_5d895487",
+    "file": "src/storage/stream/jsonl.rs",
+    "line": 306,
+    "decision": "fraction.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_jsonl_float_epoch_2fa136bf",
+    "file": "src/storage/stream/jsonl.rs",
+    "line": 312,
+    "decision": "whole.starts_with('-')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_stream_jsonl_resolve_level_281926cd",
     "file": "src/storage/stream/jsonl.rs",
-    "line": 294,
+    "line": 322,
     "decision": "match value {\n        JsonValue::Str(s) => alias::parse_level(s),\n        JsonValue::Int(n) => Severity::from_number(*n),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51782,7 +51792,7 @@
   {
     "id": "storage_stream_jsonl_pino_shaped_line_promotes_ts_level_msg_9172bdea",
     "file": "src/storage/stream/jsonl.rs",
-    "line": 338,
+    "line": 381,
     "decision": "match batch.fields.get(\"req.method\").expect(\"flattened field\") {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict[indices[0].expect(\"value\") as usize], \"GET\");\n            }\n            other => panic!(\"expected dict-encoded str, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51792,7 +51802,7 @@
   {
     "id": "storage_stream_jsonl_nested_array_kept_as_raw_string_679695a0",
     "file": "src/storage/stream/jsonl.rs",
-    "line": 359,
+    "line": 402,
     "decision": "match batch.fields.get(\"tags\").expect(\"tags field\") {\n            FieldColumn::Dict { dict, indices } => {\n                assert_eq!(dict[indices[0].expect(\"value\") as usize], \"[1,2,3]\");\n            }\n            other => panic!(\"expected dict-encoded str, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -52370,19 +52380,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_syslog_to_epoch_nanos_078f2393",
-    "file": "src/storage/stream/syslog.rs",
-    "line": 246,
-    "decision": "month == 0 || month > 12 || day == 0 || day > 31",
-    "conditions": 4,
-    "vectors_required": 5,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "storage_stream_syslog_parse_word_714ff8b9",
     "file": "src/storage/stream/syslog.rs",
-    "line": 277,
+    "line": 249,
     "decision": "s.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -52392,7 +52392,7 @@
   {
     "id": "storage_stream_syslog_parse_word_900cc980",
     "file": "src/storage/stream/syslog.rs",
-    "line": 280,
+    "line": 252,
     "decision": "match s.find(char::is_whitespace) {\n            Some(i) => {\n                let word = s.get(..i).unwrap_or(\"\");\n                let rest = s.get(i..).unwrap_or(\"\").trim_start();\n                (Some(word), rest)\n            }\n            None => (Some(s), \"\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -52402,7 +52402,7 @@
   {
     "id": "storage_stream_syslog_parse_tag_pid_a46d8852",
     "file": "src/storage/stream/syslog.rs",
-    "line": 299,
+    "line": 271,
     "decision": "end == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -52412,7 +52412,7 @@
   {
     "id": "storage_stream_syslog_parse_tag_pid_5a30a4cf",
     "file": "src/storage/stream/syslog.rs",
-    "line": 307,
+    "line": 279,
     "decision": "rest.starts_with('[')",
     "conditions": 1,
     "vectors_required": 2,
@@ -52422,7 +52422,7 @@
   {
     "id": "storage_stream_syslog_single_digit_day_with_and_without_padding_0e225bd4",
     "file": "src/storage/stream/syslog.rs",
-    "line": 385,
+    "line": 376,
     "decision": "match batch.fields.get(\"tag\") {\n            Some(crate::storage::stream::FieldColumn::Dict { dict, .. }) => {\n                assert_eq!(dict.as_slice(), [\"nginx\"]);\n            }\n            other => panic!(\"{other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -52432,7 +52432,7 @@
   {
     "id": "storage_stream_timestamp_epoch_nanos_104c1cd5",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 13,
+    "line": 11,
     "decision": "y < 1970\n        || m == 0\n        || m > 12\n        || d == 0\n        || d > 31\n        || h > 23\n        || min > 59\n        || s > 60\n        || nanos > 999_999_999",
     "conditions": 9,
     "vectors_required": 10,
@@ -52440,9 +52440,39 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_stream_timestamp_epoch_nanos_9c68fc80",
+    "file": "src/storage/stream/timestamp.rs",
+    "line": 24,
+    "decision": "d > days_in_month(y, m)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_timestamp_days_in_month_d602db06",
+    "file": "src/storage/stream/timestamp.rs",
+    "line": 48,
+    "decision": "match m {\n        2 if is_leap_year(y) => 29,\n        2 => 28,\n        4 | 6 | 9 | 11 => 30,\n        _ => 31,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_stream_timestamp_days_in_month_9ff97182",
+    "file": "src/storage/stream/timestamp.rs",
+    "line": 49,
+    "decision": "is_leap_year(y)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_stream_timestamp_apply_zone_offset_6d98e87c",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 57,
+    "line": 85,
     "decision": "zone.is_empty() || zone.eq_ignore_ascii_case(\"Z\")",
     "conditions": 2,
     "vectors_required": 3,
@@ -52452,7 +52482,7 @@
   {
     "id": "storage_stream_timestamp_apply_zone_offset_e7c2363a",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 60,
+    "line": 88,
     "decision": "zone.starts_with('-')",
     "conditions": 1,
     "vectors_required": 2,
@@ -52462,7 +52492,7 @@
   {
     "id": "storage_stream_timestamp_apply_zone_offset_cab3108c",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 63,
+    "line": 91,
     "decision": "digits.len() < 4",
     "conditions": 1,
     "vectors_required": 2,
@@ -52472,7 +52502,7 @@
   {
     "id": "storage_stream_timestamp_parse_iso8601_3e79a698",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 84,
+    "line": 112,
     "decision": "s.len() < 19",
     "conditions": 1,
     "vectors_required": 2,
@@ -52482,7 +52512,7 @@
   {
     "id": "storage_stream_timestamp_parse_iso8601_9e5c6f39",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 88,
+    "line": 116,
     "decision": "s.get(4..5)? != \"-\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -52492,7 +52522,7 @@
   {
     "id": "storage_stream_timestamp_parse_iso8601_4277e879",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 92,
+    "line": 120,
     "decision": "s.get(7..8)? != \"-\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -52502,7 +52532,7 @@
   {
     "id": "storage_stream_timestamp_parse_iso8601_6354738d",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 97,
+    "line": 125,
     "decision": "sep != \"T\" && sep != \"t\" && sep != \" \"",
     "conditions": 3,
     "vectors_required": 4,
@@ -52512,7 +52542,7 @@
   {
     "id": "storage_stream_timestamp_parse_iso8601_a1c05e35",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 101,
+    "line": 129,
     "decision": "s.get(13..14)? != \":\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -52522,7 +52552,7 @@
   {
     "id": "storage_stream_timestamp_parse_iso8601_16c21565",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 105,
+    "line": 133,
     "decision": "s.get(16..17)? != \":\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -52532,7 +52562,7 @@
   {
     "id": "storage_stream_timestamp_parse_iso8601_9df57ad8",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 112,
+    "line": 140,
     "decision": "rest.starts_with('.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -52542,7 +52572,7 @@
   {
     "id": "storage_stream_timestamp_parse_iso8601_31e7009e",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 120,
+    "line": 148,
     "decision": "padded.len() < 9",
     "conditions": 1,
     "vectors_required": 2,
@@ -52552,7 +52582,7 @@
   {
     "id": "storage_stream_timestamp_parse_epoch_9466aaa5",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 137,
+    "line": 165,
     "decision": "digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit())",
     "conditions": 2,
     "vectors_required": 3,
@@ -52560,14 +52590,24 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_timestamp_parse_epoch_5b2fd44e",
+    "id": "storage_stream_timestamp_epoch_unit_nanos_3e0366c5",
     "file": "src/storage/stream/timestamp.rs",
-    "line": 141,
-    "decision": "match digits.len() {\n        10 => 1_000_000_000,\n        13 => 1_000_000,\n        16 => 1_000,\n        19 => 1,\n        _ => return None,\n    }",
+    "line": 175,
+    "decision": "match digits {\n        10 => Some(1_000_000_000),\n        13 => Some(1_000_000),\n        16 => Some(1_000),\n        19 => Some(1),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
+  },
+  {
+    "id": "storage_stream_timestamp_every_date_from_1970_to_2200_is_one_day_after_the_last_9c68fc80",
+    "file": "src/storage/stream/timestamp.rs",
+    "line": 372,
+    "decision": "d > days_in_month(y, m)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
   },
   {
     "id": "test_clock_set_fe25222e",

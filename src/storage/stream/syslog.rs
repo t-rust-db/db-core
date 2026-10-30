@@ -230,7 +230,8 @@ impl SyslogParser {
         Some((hour, minute, second))
     }
 
-    /// Convert date/time to nanoseconds since Unix epoch (simplified).
+    /// Convert date/time in `self.year` to nanoseconds since Unix epoch
+    /// ([`super::timestamp::epoch_nanos`]'s calendar, #882).
     fn to_epoch_nanos(
         &self,
         month: u32,
@@ -239,36 +240,7 @@ impl SyslogParser {
         minute: u32,
         second: u32,
     ) -> Option<i64> {
-        // Days in each month (non-leap year approximation)
-        const DAYS_BEFORE_MONTH: [u32; 12] =
-            [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-
-        if month == 0 || month > 12 || day == 0 || day > 31 {
-            return None;
-        }
-
-        let month_idx = month.saturating_sub(1) as usize;
-        let days_before = DAYS_BEFORE_MONTH.get(month_idx).copied()?;
-
-        // Days since epoch for year (simplified: 365.25 days/year from 1970)
-        let years_since_epoch = self.year.saturating_sub(1970);
-        let leap_years = years_since_epoch / 4; // Approximation
-        #[allow(clippy::cast_sign_loss)]
-        let days_from_years = (years_since_epoch as u32)
-            .saturating_mul(365)
-            .saturating_add(leap_years as u32);
-
-        let total_days = days_from_years
-            .saturating_add(days_before)
-            .saturating_add(day.saturating_sub(1));
-
-        let total_seconds = i64::from(total_days)
-            .saturating_mul(86400)
-            .saturating_add(i64::from(hour).saturating_mul(3600))
-            .saturating_add(i64::from(minute).saturating_mul(60))
-            .saturating_add(i64::from(second));
-
-        Some(total_seconds.saturating_mul(1_000_000_000))
+        super::timestamp::epoch_nanos(self.year, month, day, hour, minute, second, 0)
     }
 
     /// Parse a word (whitespace-delimited), returning (word, rest).
@@ -342,6 +314,25 @@ mod tests {
     use super::*;
     use crate::storage::stream::SourceKind;
 
+    /// #882: syslog dates used a `/ 4` leap-year approximation (a day
+    /// early in 2025), and a year before 1970 wrapped instead of failing.
+    #[test]
+    fn timestamp_uses_the_gregorian_calendar() {
+        let ts = |year: i32, line: &'static [u8]| {
+            let source = Source::new(SourceKind::File, "/var/log/test.log");
+            let (batch, _) = SyslogParser::with_year(year).parse_batch(source, line, 10);
+            batch.timestamp_ns.first().copied().flatten()
+        };
+        let jan1 = b"<134>Jan  1 00:00:00 host app: x\n";
+        assert_eq!(ts(2025, jan1), Some(1_735_689_600_000_000_000));
+        assert_eq!(
+            ts(2024, b"<134>Mar  1 00:00:00 host app: x\n"),
+            Some(1_709_251_200_000_000_000)
+        );
+        assert_eq!(ts(2023, b"<134>Feb 29 00:00:00 host app: x\n"), None);
+        assert_eq!(ts(1969, jan1), None);
+    }
+
     #[test]
     fn parse_basic_syslog() {
         let parser = SyslogParser::with_year(2024);
@@ -411,46 +402,5 @@ mod tests {
             batch.message.first(),
             Some(&Some("Just a plain line without syslog format"))
         );
-    }
-}
-
-#[cfg(test)]
-#[allow(non_snake_case)]
-mod mcdc_vectors {
-    //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
-    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
-
-    use super::SyslogParser;
-
-    // syslog_209: `month == 0 || month > 12 || day == 0 || day > 31`
-    #[test]
-    fn mcdc__storage_stream_syslog_to_epoch_nanos_078f2393__v1_month_zero() {
-        let p = SyslogParser::with_year(2026);
-        assert_eq!(p.to_epoch_nanos(0, 1, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_syslog_to_epoch_nanos_078f2393__v2_month_over_twelve() {
-        let p = SyslogParser::with_year(2026);
-        assert_eq!(p.to_epoch_nanos(13, 1, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_syslog_to_epoch_nanos_078f2393__v3_day_zero() {
-        let p = SyslogParser::with_year(2026);
-        assert_eq!(p.to_epoch_nanos(1, 0, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_syslog_to_epoch_nanos_078f2393__v4_day_over_thirty_one() {
-        let p = SyslogParser::with_year(2026);
-        assert_eq!(p.to_epoch_nanos(1, 32, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_syslog_to_epoch_nanos_078f2393__v5_all_false_is_valid() {
-        let p = SyslogParser::with_year(2026);
-        assert!(p.to_epoch_nanos(1, 1, 0, 0, 0).is_some());
     }
 }
