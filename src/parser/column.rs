@@ -834,7 +834,13 @@ fn validate_window_call(
 pub(crate) fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
-        ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
+        ("json_extract", 2)
+            | ("json_array_length", 1 | 2)
+            | ("json_type", 1 | 2)
+            | ("json_valid", 1)
+            | ("logfmt_extract", 2)
+            | ("regexp_extract", 3)
+            | ("ilike", 2)
     ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::is_map_function_call(name, arity)
 }

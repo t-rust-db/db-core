@@ -751,36 +751,15 @@ pub fn trigram_key(t: [u8; 3]) -> i64 {
     i64::from(t[0]) << 16 | i64::from(t[1]) << 8 | i64::from(t[2])
 }
 
-/// The batch engine's `json_extract(text, path)` -- late parse of embedded JSON (#307,
-/// ADR 0018 "late `json_extract`" for structure the ingest-time parser
-/// left as a string). Malformed JSON, a missing path or a path through
-/// a non-object all return `Value::Null` rather than an error, matching
-/// this module's existing null-propagation convention (`substr`,
-/// `instr`); a nested object/array leaf also returns `Value::Null` --
-/// re-serializing a parsed [`crate::json_path::JsonValue::Object`] back
-/// to JSON text is unscoped work with no caller today ([`JsonValue::Array`]
-/// keeps its raw text, so extracting an array leaf does work). The row
-/// engine's `json_extract` is sqlite3's ([`json`], #651).
+/// The batch engine's `json_extract(text, path)` (#307, ADR 0018 "late
+/// `json_extract`"): the row engine's sqlite3 one ([`json`], #651), so a
+/// path indexes arrays (`$.a[0]`, `$.a[#-1]`) and an object or array
+/// leaf comes back as its JSON text (#839). Malformed JSON and a missing
+/// path are `Value::Null`, not an error, per this module's
+/// null-propagation convention (`substr`, `instr`).
 #[cfg(feature = "vm-batch")]
 pub(crate) fn late_json_extract(args: &[Value]) -> Result<Value, FunctionError> {
-    if args.iter().any(|v| matches!(v, Value::Null)) {
-        return Ok(Value::Null);
-    }
-    let text = as_text(&args[0]);
-    let path = as_text(&args[1]);
-    let Some((root, _)) = crate::json_path::parse_value(&text) else {
-        return Ok(Value::Null);
-    };
-    Ok(match crate::json_path::lookup(&root, &path) {
-        Some(crate::json_path::JsonValue::Null | crate::json_path::JsonValue::Object(_)) | None => {
-            Value::Null
-        }
-        Some(crate::json_path::JsonValue::Bool(b)) => Value::Integer(i64::from(b)),
-        Some(crate::json_path::JsonValue::Int(i)) => Value::Integer(i),
-        Some(crate::json_path::JsonValue::Float(f)) => Value::Real(f),
-        Some(crate::json_path::JsonValue::Str(s)) => Value::Text(s.to_string().into()),
-        Some(crate::json_path::JsonValue::Array(raw)) => Value::Text(raw.to_string().into()),
-    })
+    Ok(call("json_extract", args).unwrap_or(Value::Null))
 }
 
 /// `logfmt_extract(text, key)` -- late parse of a `key=value` line
@@ -1714,6 +1693,21 @@ mod tests {
             prepare_error("GLOB", 1).as_deref(),
             Some("wrong number of arguments to function glob()")
         );
+    }
+
+    /// #839: the batch `json_extract` indexes arrays and returns an
+    /// object leaf as JSON text.
+    #[test]
+    fn late_json_extract_indexes_arrays() {
+        let doc = r#"{"tags":["x","y"],"items":[{"v":1},{"v":2}]}"#;
+        let get = |path: &str| {
+            late_json_extract(&[Value::Text(doc.into()), Value::Text(path.into())]).unwrap()
+        };
+        assert_eq!(get("$.tags[0]"), Value::Text("x".into()));
+        assert_eq!(get("$.tags[#-1]"), Value::Text("y".into()));
+        assert_eq!(get("$.items[1].v"), Value::Integer(2));
+        assert_eq!(get("$.items[0]"), Value::Text(r#"{"v":1}"#.into()));
+        assert_eq!(get("$.tags[5]"), Value::Null);
     }
 
     /// #656: `json_extract` over JSON nested past the parser's depth cap
