@@ -5492,8 +5492,8 @@ impl Vm {
     /// answers. `None` otherwise; the caller then takes the general path.
     fn typed_in_list(&self, src: usize, list: &[Value], negated: bool) -> Option<Column> {
         let column = self.typed_registers.get(&src)?;
-        if let Column::Int { data, valid } = column.as_ref() {
-            return int_in_list(data, valid, list, negated);
+        if matches!(column.as_ref(), Column::Int { .. } | Column::Float { .. }) {
+            return numeric_in_list(column.as_ref(), list, negated);
         }
         if !matches!(column.as_ref(), Column::Str { .. } | Column::Dict { .. }) {
             return None;
@@ -7707,41 +7707,88 @@ fn merge_branches(
     Ok(result)
 }
 
-/// [`Opcode::InList`] over a typed [`Column::Int`] when every item is an
-/// integer or NULL (tools#90: a semi-join's key list can hold thousands):
-/// the items go into one hash set, probed once per row. An integer equals
-/// an integer only when the two are the same number, so the set gives the
-/// comparison chain's answers. `None` for any other item; the caller then
-/// takes the general path, which converts a float or string item.
-fn int_in_list(data: &[i64], valid: &Bitmap, list: &[Value], negated: bool) -> Option<Column> {
+/// [`Opcode::InList`] over a typed [`Column::Int`] or [`Column::Float`]
+/// when every item is an integer, a float or NULL (tools#90: a
+/// semi-join's key list can hold thousands): the items go into hash sets,
+/// probed once per row, with [`compare_values`]' answers. An integer row
+/// equals an integer item exactly and a float item as an `f64`; a float
+/// row equals either as an `f64`. Floats are keyed by their bits, `-0.0`
+/// as `0.0`; a NaN equals nothing. `None` for any other item; the caller
+/// then takes the general path.
+fn numeric_in_list(column: &Column, list: &[Value], negated: bool) -> Option<Column> {
+    let float_rows = matches!(column, Column::Float { .. });
     // Murmur, not SipHash: every row probes (see [`SlotState`]).
-    let mut set = std::collections::HashSet::with_capacity_and_hasher(list.len(), SlotState);
+    let mut ints = std::collections::HashSet::with_capacity_and_hasher(list.len(), SlotState);
+    let mut floats = std::collections::HashSet::with_hasher(SlotState);
     let mut has_null = false;
     for item in list {
         match item {
-            Value::Int(n) => {
-                set.insert(*n);
+            Value::Int(n) if !float_rows => {
+                ints.insert(*n);
+            }
+            Value::Int(_) | Value::Float(_) => {
+                if let Some(key) = item.as_f64().and_then(float_key) {
+                    floats.insert(key);
+                }
             }
             Value::Null => has_null = true,
             _ => return None,
         }
     }
-    // As `typed_in_list`: a miss is NULL when the list holds a NULL.
-    let mut out = Vec::with_capacity(data.len());
-    let mut out_valid = Bitmap::new(data.len(), true);
-    for (i, n) in data.iter().enumerate() {
-        let hit = set.contains(n);
-        if !valid.get(i) || (!hit && has_null) {
-            out.push(false);
-            out_valid.set(i, false);
-        } else {
-            out.push(hit != negated);
+    let float_hit = |x: f64| float_key(x).is_some_and(|k| floats.contains(&k));
+    let (len, valid) = match column {
+        Column::Int { data, valid } => (data.len(), valid),
+        Column::Float { data, valid } => (data.len(), valid),
+        _ => return None,
+    };
+    let hit = |i: usize| match column {
+        Column::Int { data, .. } => data.get(i).is_some_and(|n| {
+            ints.contains(n)
+                || (!floats.is_empty() && Value::Int(*n).as_f64().is_some_and(float_hit))
+        }),
+        Column::Float { data, .. } => data.get(i).copied().is_some_and(float_hit),
+        _ => false,
+    };
+    Some(in_list_answers(len, valid, hit, has_null, negated))
+}
+
+/// The bits a float is hashed by in [`numeric_in_list`]: `-0.0` as `0.0`,
+/// since the two compare equal; `None` for a NaN, which equals nothing.
+fn float_key(x: f64) -> Option<u64> {
+    if x.is_nan() {
+        None
+    } else if x == 0.0 {
+        Some(0)
+    } else {
+        Some(x.to_bits())
+    }
+}
+
+/// A typed `IN` result over `len` rows from each row's `hit`: TRUE on a
+/// match (FALSE negated); NULL for a NULL row, or a miss when the list
+/// holds a NULL; otherwise FALSE (TRUE negated).
+fn in_list_answers(
+    len: usize,
+    valid: &Bitmap,
+    hit: impl Fn(usize) -> bool,
+    has_null: bool,
+    negated: bool,
+) -> Column {
+    let mut out = Vec::with_capacity(len);
+    let mut out_valid = Bitmap::new(len, true);
+    for i in 0..len {
+        match valid.get(i).then(|| hit(i)) {
+            Some(row_hit) if row_hit || !has_null => out.push(row_hit != negated),
+            _ => {
+                out.push(false);
+                out_valid.set(i, false);
+            }
         }
     }
-    Some(Column::Bool {
+    Column::Bool {
         data: out,
         valid: out_valid,
-    })
+    }
 }
 
 /// [`Opcode::InList`] over plain values: each row compared with every item
@@ -15776,27 +15823,27 @@ mod tests {
         );
     }
 
-    /// `int_in_list`'s one row over `n` (`None`: a NULL row) against `list`.
+    /// `numeric_in_list`'s one row over `n` (`None`: a NULL row) against `list`.
     fn int_in_list_row(n: Option<i64>, list: &[Value]) -> Option<bool> {
-        let valid = crate::vm::column::Bitmap::from_bools([n.is_some()].into_iter());
-        let Some(Column::Bool { data, valid }) =
-            int_in_list(&[n.unwrap_or(0)], &valid, list, false)
-        else {
+        let column = Column::Int {
+            data: vec![n.unwrap_or(0)],
+            valid: crate::vm::column::Bitmap::from_bools([n.is_some()].into_iter()),
+        };
+        let Some(Column::Bool { data, valid }) = numeric_in_list(&column, list, false) else {
             panic!("an integer list takes the hash set");
         };
         valid.get(0).then(|| data[0])
     }
 
-    // vm_batch_int_in_list_bb76c592: `!valid.get(i) || (!hit && has_null)`
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__vm_batch_int_in_list_bb76c592__v1_null_row_is_null() {
+    fn in_list_answers_a_null_row_with_null() {
         assert_eq!(int_in_list_row(None, &[Value::Int(0)]), None);
     }
 
+    // vm_batch_in_list_answers_bf777106: `row_hit || !has_null`
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_int_in_list_bb76c592__v2_hit_is_true_despite_a_null_item() {
+    fn mcdc__vm_batch_in_list_answers_bf777106__v1_hit_is_true_despite_a_null_item() {
         assert_eq!(
             int_in_list_row(Some(3), &[Value::Int(3), Value::Null]),
             Some(true)
@@ -15805,7 +15852,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_int_in_list_bb76c592__v3_miss_with_a_null_item_is_null() {
+    fn mcdc__vm_batch_in_list_answers_bf777106__v2_miss_with_a_null_item_is_null() {
         assert_eq!(
             int_in_list_row(Some(4), &[Value::Int(3), Value::Null]),
             None
@@ -15814,7 +15861,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__vm_batch_int_in_list_bb76c592__v4_miss_without_a_null_item_is_false() {
+    fn mcdc__vm_batch_in_list_answers_bf777106__v3_miss_without_a_null_item_is_false() {
         assert_eq!(int_in_list_row(Some(4), &[Value::Int(3)]), Some(false));
     }
 
@@ -15862,6 +15909,55 @@ mod tests {
                 Value::Null
             ]
         );
+    }
+
+    /// A float column, or an integer column with float items, is hashed
+    /// too: `-0.0` equals `0.0`, a NaN equals nothing, and an integer row
+    /// equals a float item as an `f64` (so `2^53 + 1` equals `2^53` as a
+    /// float but not as an integer), as the chain compares them.
+    #[test]
+    fn in_list_of_numbers_over_a_numeric_column_answers_as_the_comparison_chain() {
+        let big = 9_007_199_254_740_993_i64;
+        let ints = vec![
+            Value::Int(5),
+            Value::Int(big),
+            Value::Int(0),
+            Value::Null,
+            Value::Int(i64::MIN),
+        ];
+        let floats = vec![
+            Value::Float(1.0),
+            Value::Float(-0.0),
+            Value::Float(f64::NAN),
+            Value::Null,
+            Value::Float(2.5),
+        ];
+        let lists = [
+            vec![Value::Float(5.0), Value::Int(big - 1)],
+            vec![Value::Float((big - 1) as f64), Value::Float(-0.0)],
+            vec![Value::Float(5.5), Value::Null],
+            vec![Value::Float(f64::NAN), Value::Int(1)],
+            vec![Value::Int(2), Value::Float(2.5), Value::Float(0.0)],
+            (0..1000).map(|i| Value::Float(f64::from(i))).collect(),
+        ];
+        for values in [ints, floats] {
+            let typed = Batch::new(5).with_typed_column("c", Column::from(values.clone()));
+            let plain = Batch::new(5).with_column("c", values);
+            for (batch, typed) in [(&typed, true), (&plain, false)] {
+                for list in &lists {
+                    for negated in [false, true] {
+                        let (probe, reference, materialized) =
+                            in_list_both_ways(batch, list, negated);
+                        assert_eq!(
+                            probe.unwrap(),
+                            reference.unwrap(),
+                            "{list:?} negated={negated}"
+                        );
+                        assert_eq!(!materialized, typed, "the typed column stays typed");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

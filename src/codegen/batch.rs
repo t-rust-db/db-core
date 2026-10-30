@@ -1974,8 +1974,9 @@ pub fn compile_with_distinct_columns(
     compile_filtered(select, int_columns, str_columns, None)
 }
 
-/// [`compile_with_distinct_columns`], with `semi`'s `(column, keys)` as the
-/// `WHERE` filter `column IN (keys)` when given ([`compile_semi_body`]):
+/// [`compile_with_distinct_columns`], with `semi`'s `(column, keys,
+/// comment)` as the `WHERE` filter `column IN (keys)` when given
+/// ([`compile_semi_body`]):
 /// emitted as one [`Opcode::InList`] where the `WHERE` filter goes, never
 /// as the `OR` chain the parser lowers an `IN` list to, which nests as
 /// deep as the list is long.
@@ -1983,7 +1984,7 @@ fn compile_filtered(
     select: &Select,
     int_columns: &[String],
     str_columns: &[String],
-    semi: Option<(String, Vec<Value>)>,
+    semi: Option<(String, Vec<Value>, String)>,
 ) -> Result<Program> {
     if select.scope.is_some() {
         return Err(PlanError::ScopeClauseUnsupported);
@@ -2056,7 +2057,7 @@ fn compile_filtered(
     if let Some(where_clause) = &select.where_clause {
         collect_expr_columns(where_clause, &mut where_columns);
     }
-    if let Some((column, _)) = &semi {
+    if let Some((column, ..)) = &semi {
         where_columns.push(column.clone());
     }
 
@@ -2167,10 +2168,9 @@ fn compile_filtered(
             format!("WHERE {}", expr_to_string(where_clause)),
         );
     }
-    if let Some((column, keys)) = semi {
+    if let Some((column, keys, comment)) = semi {
         let src = ctx.load_column(&column);
         let predicate = ctx.alloc();
-        let comment = format!("WHERE {column} IN ({} subquery keys)", keys.len());
         ctx.push(Opcode::InList {
             dst: predicate,
             src,
@@ -3170,9 +3170,14 @@ fn semi_join_parts(select: &Select) -> Result<(String, &Select)> {
 /// and an integer key matches a float `5.0` -- as one [`Opcode::InList`].
 pub fn compile_semi_body(select: &Select, keys: Vec<Value>) -> Result<Program> {
     let (key_column, _) = semi_join_parts(select)?;
+    let comment = select
+        .where_clause
+        .as_ref()
+        .map(|w| format!("WHERE {}", expr_to_string(w)))
+        .unwrap_or_default();
     let mut stripped = select.clone();
     stripped.where_clause = None;
-    compile_filtered(&stripped, &[], &[], Some((key_column, keys)))
+    compile_filtered(&stripped, &[], &[], Some((key_column, keys, comment)))
 }
 
 /// Plan a query whose `SELECT` list contains one or more window functions
@@ -3524,14 +3529,12 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
     let from_name = from.map(table_name).transpose()?.unwrap_or_default();
     let joins = from.map(extract_joins).transpose()?.unwrap_or_default();
 
-    // Semi-joins compile with `where_clause` stripped, mirroring
-    // `compile_semi_join` (the `IN` subquery isn't a VM predicate).
+    // A semi-join's body filters on the subquery's keys, which are only
+    // known once it runs: planned with none, it has that `IN` filter.
     let program = if has_window {
         None
     } else if is_semi_join {
-        let mut stripped = select.clone();
-        stripped.where_clause = None;
-        Some(compile(&stripped)?)
+        Some(compile_semi_body(select, Vec::new())?)
     } else {
         Some(compile(select)?)
     };
@@ -3910,12 +3913,14 @@ pub fn explain_opcodes(select: &Select) -> Result<Vec<OpcodeSection>> {
             .map(table_name)
             .transpose()?
             .unwrap_or_default();
+        // The `InList`'s items are the subquery's keys, filled in when it
+        // runs; planned here with none.
         Ok(vec![OpcodeSection {
             label: format!(
-                "SEMI JOIN body ({} IN (SELECT ... FROM {}))",
+                "SEMI JOIN body ({} IN (SELECT ... FROM {}), keys at run time)",
                 semi.key_column, sub_from
             ),
-            rows: render_program(&semi.body),
+            rows: render_program(&compile_semi_body(select, Vec::new())?),
         }])
     } else if select.from.as_ref().is_some_and(|f| !f.joins.is_empty()) {
         let join = compile_join(select, BuildSourceKind::InMemory)?;
@@ -5358,9 +5363,10 @@ mod tests {
         .unwrap();
         let nodes = explain(&query, stats).unwrap();
         assert!(details(&nodes).contains(&"SEMI JOIN: region_key IN (SELECT rkey FROM regions)"));
-        assert!(details(&nodes).contains(&"LOAD COLUMNS: id, region_key"));
+        // The key loads first: the body filters on it (tools#90).
+        assert!(details(&nodes).contains(&"LOAD COLUMNS: region_key, id"));
         assert!(details(&nodes).contains(&"LOAD COLUMNS: rkey"));
-        assert!(!details(&nodes).iter().any(|d| d.starts_with("FILTER")));
+        assert!(details(&nodes).contains(&"FILTER: region_key IN (SELECT ... FROM regions)"));
 
         let query = sql::parse(
             "SELECT id, region_key, ROW_NUMBER() OVER (PARTITION BY region_key ORDER BY id) \
@@ -5490,7 +5496,7 @@ mod tests {
         let query =
             sql::parse("SELECT id FROM orders WHERE region_key IN (SELECT rkey FROM regions)")
                 .unwrap();
-        let semi = compile_semi_join(&query).unwrap();
+        let body = compile_semi_body(&query, Vec::new()).unwrap();
         let sections = explain_opcodes(&query).unwrap();
 
         assert_eq!(sections.len(), 1);
@@ -5499,8 +5505,9 @@ mod tests {
         assert!(sections[0].label.contains("regions"));
         assert_eq!(
             opcodes(&sections[0].rows),
-            semi.body.opcodes().map(Opcode::name).collect::<Vec<_>>()
+            body.opcodes().map(Opcode::name).collect::<Vec<_>>()
         );
+        assert!(opcodes(&sections[0].rows).contains(&"InList"));
     }
 
     #[test]
