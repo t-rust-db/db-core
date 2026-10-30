@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.210.0] - 2026-10-30
+
+### Added
+
+- `ParquetFile::open_file`: opens a `VfsFile`, reading the footer and then one column chunk at a time. Where `open` over a mapping keeps every page it touched resident, a scan peaks at the chunks in flight (#841). `FileError::Io` reports a failed read.
+
+### Changed
+
+- `PosixFile::read_at` is a positioned read with no lock, so concurrent readers no longer serialize.
+- `BatchEngine::open` reads through `open_file`. On the 10M-row parity file `SUM(amount)` peaks at 45 MB (was 93) and `GROUP BY region` at 50 MB (was 99), DuckDB 47-59 MB, with no change in time. column-rs gets the same by calling `open_file` instead of `mmap()` and `open`.
+
 ## [0.209.0] - 2026-10-30
 
 ### Changed
