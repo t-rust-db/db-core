@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bench-events test-full check-row-functions-oracle check-row-keys-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help bench-events test-full check-row-functions-oracle check-row-keys-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci pre-push perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -431,6 +431,19 @@ ci: ## Run every CI gate locally, same order as .github/workflows/ci.yml
 	$(MAKE) test
 	$(MAKE) check-coverage
 	@echo "all CI gates passed"
+
+# #880: the gates whose failure only ever showed up after a push, each one a
+# whole extra CI round (a stale public API snapshot or MC/DC snapshot, a
+# feature that does not build alone). Not the tests or coverage (about 2.5
+# minutes in CI), nor the seconds-long deny and charter profile gates, which
+# CI still runs; `make ci` runs them all.
+pre-push: ## The fast CI gates (lint, features, MC/DC and public API snapshots, mvl-limit) -- run before pushing
+	$(MAKE) lint
+	$(MAKE) check-features
+	$(MAKE) check-mcdc-fresh
+	$(MAKE) check-mvl-limit
+	$(MAKE) check-public-api-fresh
+	@echo "pre-push gates passed (make ci also runs the tests and coverage)"
 
 # === Performance ===
 
