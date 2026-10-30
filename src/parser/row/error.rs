@@ -58,16 +58,19 @@ pub(super) type PResult<T> = Result<T, ParseFail>;
 /// grammar `.openspec/grammar/sqlite.ebnf` V2 block). Never panics —
 /// any input produces one of the three [`ParseOutcome`] variants.
 pub fn parse_select(src: &str) -> ParseOutcome<Select> {
-    parse_select_tokens(Tokenizer::tokenize(src))
+    parse_select_tokens(Tokenizer::tokenize(src), false)
 }
 
 /// [`parse_select`] in the column dialect: `m['k']` is a subscript (#621).
 pub fn parse_select_with_subscripts(src: &str) -> ParseOutcome<Select> {
-    parse_select_tokens(Tokenizer::tokenize_with_subscripts(src))
+    parse_select_tokens(Tokenizer::tokenize_with_subscripts(src), true)
 }
 
-fn parse_select_tokens(tokens: Vec<super::tokenizer::Token>) -> ParseOutcome<Select> {
+fn parse_select_tokens(tokens: Vec<super::tokenizer::Token>, column: bool) -> ParseOutcome<Select> {
     let mut parser = Parser::new(tokens);
+    if column {
+        parser = parser.column_dialect();
+    }
     match parser.parse_select_stmt() {
         Ok(select) => match parser.expect_end() {
             Ok(()) => ParseOutcome::Accepted(Box::new(select)),

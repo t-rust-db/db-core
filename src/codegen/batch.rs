@@ -293,7 +293,13 @@ fn expr_column_name(expr: &AstExpr) -> Option<String> {
 fn is_known_scalar_function(name: &str, arity: usize) -> bool {
     matches!(
         (name.to_ascii_lowercase().as_str(), arity),
-        ("json_extract", 2) | ("logfmt_extract", 2) | ("regexp_extract", 3) | ("ilike", 2)
+        ("json_extract" | "json_extract_string", 2)
+            | ("json_array_length", 1 | 2)
+            | ("json_type", 1 | 2)
+            | ("json_valid", 1)
+            | ("logfmt_extract", 2)
+            | ("regexp_extract", 3)
+            | ("ilike", 2)
     ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::is_map_function_call(name, arity)
 }
@@ -6563,7 +6569,7 @@ mod tests {
     /// Compiles `name(<arity args>)`, built by renaming/resizing a parsed
     /// two-argument call (the row parser itself rejects `ilike(...)`).
     fn compile_call(name: &str, arity: usize) -> Vec<Instruction> {
-        let mut select = sql::parse("SELECT json_extract(a, 'x') FROM t").unwrap();
+        let mut select = sql::parse("SELECT json_extract(a, '$.x') FROM t").unwrap();
         let ResultColumn::Expr { expr, .. } = &mut select.columns[0] else {
             panic!("expected an expression column");
         };
