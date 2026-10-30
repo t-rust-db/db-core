@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.214.1] - 2026-10-30
+
+### Fixed
+
+- `Table::flush` (#864): with a background flusher (`flush_queue > 0`) it no longer holds the table lock while it waits for the queue to drain, so appends, snapshots and syncs on other clones go on during the wait. Files returned and commit order are unchanged. `flush_queue` still defaults to `0`; the doc now says why and when to set it.
+
 ## [0.214.0] - 2026-10-30
 
 ### Performance
