@@ -887,3 +887,150 @@ fn mcdc__storage_ingest_table_seal_head_23579351__v3_bytes_over_spill_bytes_alon
     w.seal_head().unwrap();
     assert_eq!(w.manifest().files.len(), 1);
 }
+
+fn background(queue: usize) -> TableOptions {
+    TableOptions {
+        flush_queue: queue,
+        ..options(tier())
+    }
+}
+
+#[test]
+fn a_background_flush_hands_over_a_closed_hour_and_every_row_stays_visible() {
+    let t = TempTable::new();
+    set_clock(0, 0, 0);
+    let mut w = TableWriter::open(&t.0, background(2)).unwrap();
+    let mut lines = Vec::new();
+    for hour in 0..6 {
+        set_clock(0, hour, 0);
+        let from = lines.len();
+        lines.extend(append(&mut w, from..from + 20));
+        // Whether the closed hours are still queued, being written or
+        // committed, a snapshot holds each row once.
+        w.flush().unwrap();
+        assert_eq!(all_rows(&w), sorted(lines.clone()), "hour {hour}");
+        assert!(w.flush_status().queued_jobs <= 2);
+    }
+    let added = w.drain().unwrap();
+    assert!(!added.is_empty() || w.manifest().files.len() == 5);
+    assert_eq!(w.flush_status().queued_jobs, 0);
+    assert_eq!(w.flush_status().queued_rows, 0);
+    w.manifest().check().unwrap();
+    assert_eq!(all_rows(&w), sorted(lines.clone()));
+    // Closed hours in live/ in order; the sixth is still in pages.
+    let live: Vec<_> = w
+        .manifest()
+        .files
+        .iter()
+        .filter(|f| f.area == Area::Live)
+        .map(|f| f.lsn_lo)
+        .collect();
+    assert_eq!(live.len(), 5);
+    assert!(live.windows(2).all(|p| p[0] < p[1]));
+    w.close().unwrap();
+
+    let w = TableWriter::open(&t.0, options(tier())).unwrap();
+    assert_eq!(all_rows(&w), sorted(lines));
+}
+
+#[test]
+fn a_background_spill_and_close_leave_one_file_per_hour() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut spilling = tier();
+    spilling.spill_rows = 4;
+    let options = TableOptions {
+        flush_queue: 1,
+        ..options(spilling)
+    };
+    let mut w = TableWriter::open(&t.0, options).unwrap();
+    let mut lines = Vec::new();
+    for i in 0..40 {
+        lines.push(line(i));
+        w.append(line(i).as_bytes(), Ack::Memory).unwrap();
+        if i % 5 == 4 {
+            w.seal_head().unwrap();
+        }
+    }
+    set_clock(0, 11, 0);
+    lines.extend(append(&mut w, 40..42));
+    w.flush().unwrap();
+    w.drain().unwrap();
+    assert_eq!(all_rows(&w), sorted(lines));
+    let live = w
+        .manifest()
+        .files
+        .iter()
+        .filter(|f| f.area == Area::Live)
+        .count();
+    assert_eq!(live, 1);
+    assert!(w.manifest().files.iter().all(|f| f.area != Area::Staging));
+    w.manifest().check().unwrap();
+}
+
+#[test]
+fn a_background_compaction_runs_after_the_queued_hours() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(&t.0, background(4)).unwrap();
+    let mut lines = append(&mut w, 0..4);
+    set_clock(0, 11, 0);
+    lines.extend(append(&mut w, 4..6));
+    set_clock(1, 0, 0);
+    lines.extend(append(&mut w, 6..7));
+    w.compact().unwrap();
+    w.drain().unwrap();
+    assert!(w.manifest().files.iter().any(|f| f.area == Area::Archive));
+    assert!(w.manifest().files.iter().all(|f| f.area != Area::Live));
+    assert_eq!(all_rows(&w), sorted(lines));
+    w.manifest().check().unwrap();
+}
+
+#[test]
+fn a_crash_with_hours_queued_recovers_every_record_once() {
+    for step in [1u8, 2, 3, 5] {
+        let t = TempTable::new();
+        set_clock(0, 10, 0);
+        let mut w = TableWriter::open(&t.0, background(4)).unwrap();
+        let mut lines = append(&mut w, 0..4);
+        set_clock(0, 11, 0);
+        lines.extend(append(&mut w, 4..6));
+        set_clock(0, 12, 0);
+        lines.extend(append(&mut w, 6..8));
+        w.crash_after = Some(step);
+        w.flush().unwrap();
+        let err = w.drain().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("after flush step {step}")),
+            "{err}"
+        );
+        // The stop is sticky: nothing more is accepted, nothing is lost.
+        w.append(line(9).as_bytes(), Ack::Durable).unwrap_err();
+        drop(w);
+
+        let mut w = open(&t);
+        assert_eq!(all_rows(&w), sorted(lines.clone()), "step {step}");
+        assert_eq!(files_on_disk(&t), listed(&w), "step {step}: strays left");
+        assert!(!t.0.join(TMP_DIR).exists());
+        w.manifest().check().unwrap();
+        w.flush().unwrap();
+        assert_eq!(all_rows(&w), sorted(lines), "step {step}");
+    }
+}
+
+#[test]
+fn closing_waits_for_the_queued_jobs() {
+    let t = TempTable::new();
+    set_clock(0, 10, 0);
+    let mut w = TableWriter::open(&t.0, background(4)).unwrap();
+    let mut lines = append(&mut w, 0..4);
+    set_clock(0, 11, 0);
+    lines.extend(append(&mut w, 4..6));
+    w.flush().unwrap();
+    w.close().unwrap();
+    let w = open(&t);
+    assert_eq!(w.manifest().files.len(), 1, "hour 10 was committed");
+    assert_eq!(w.manifest().files[0].area, Area::Live);
+    assert_eq!(all_rows(&w), sorted(lines));
+}

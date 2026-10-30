@@ -50,7 +50,7 @@ pub use page::{Page, PageBody};
 pub use record::{RecordValue, RowPage};
 pub use snapshot::{ReaderStats, Snapshot, TableReader};
 #[cfg(feature = "ingest")]
-pub use table::{TableOptions, TableWriter, DATA_DIR, TMP_DIR};
+pub use table::{FlushStatus, TableOptions, TableWriter, DATA_DIR, TMP_DIR};
 #[cfg(feature = "ingest")]
 pub use wal::Wal;
 pub use wal::{Ack, Record, WalError, WalOptions, Watermarks, WAL_DIR};

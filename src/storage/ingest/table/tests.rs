@@ -2,6 +2,7 @@ use super::*;
 use crate::storage::ingest::manifest::ManifestError;
 use crate::storage::parquet::writer::WriteError;
 use crate::storage::parquet::ParquetFile;
+use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 struct TempTable(PathBuf);
@@ -146,7 +147,7 @@ fn successive_flushes_keep_the_manifest_contiguous() {
     assert_eq!(all_rows(&w), lines);
     drop(w);
     let w = open(&t);
-    assert_eq!(w.manifest(), &m);
+    assert_eq!(w.manifest(), m);
     assert_eq!(all_rows(&w), lines);
     // The WAL keeps nothing that is flushed.
     let wal_files = fs::read_dir(t.0.join("wal")).unwrap().count();

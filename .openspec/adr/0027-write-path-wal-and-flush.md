@@ -492,3 +492,12 @@ pages). The first read costs about the same either way.
 When a flush takes everything the reader held, a rebuild is cheap too, since
 little is left to parse: a refresh then costs the time to free the dropped
 pages (21 ms for 1M rows, against 8 ms for a fresh open).
+
+## As built (#855)
+
+Steps 1-5 of a flush run on the writer's thread by default. With
+`TableOptions::flush_queue` above zero a flusher thread runs them for a
+closed hour, a spill and a day merge, so the append path no longer waits for
+the write; it stays the only writer of the manifest and commits in order.
+See ADR 0028, "As built (#855)".
+

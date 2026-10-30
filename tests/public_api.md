@@ -4266,8 +4266,24 @@ impl core::fmt::Debug for db_core::storage::ingest::error::IngestError
 pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for db_core::storage::ingest::error::IngestError
 pub fn db_core::storage::ingest::error::IngestError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::table::FlushStatus
+pub db_core::storage::ingest::table::FlushStatus::queued_jobs: usize
+pub db_core::storage::ingest::table::FlushStatus::queued_rows: usize
+pub db_core::storage::ingest::table::FlushStatus::stalled: core::time::Duration
+impl core::clone::Clone for db_core::storage::ingest::table::FlushStatus
+pub fn db_core::storage::ingest::table::FlushStatus::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::table::FlushStatus
+impl core::cmp::PartialEq for db_core::storage::ingest::table::FlushStatus
+pub fn db_core::storage::ingest::table::FlushStatus::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::ingest::table::FlushStatus
+pub fn db_core::storage::ingest::table::FlushStatus::default() -> Self
+impl core::fmt::Debug for db_core::storage::ingest::table::FlushStatus
+pub fn db_core::storage::ingest::table::FlushStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::ingest::table::FlushStatus
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::table::FlushStatus
 pub struct db_core::storage::ingest::table::TableOptions
 pub db_core::storage::ingest::table::TableOptions::clock: fn() -> i64
+pub db_core::storage::ingest::table::TableOptions::flush_queue: usize
 pub db_core::storage::ingest::table::TableOptions::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::table::TableOptions::layout: db_core::storage::ingest::layout::Layout
 pub db_core::storage::ingest::table::TableOptions::parquet: db_core::storage::parquet::writer::WriterOptions
@@ -4286,12 +4302,14 @@ pub fn db_core::storage::ingest::table::TableWriter::append_row(&mut self, alloc
 pub fn db_core::storage::ingest::table::TableWriter::close(self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::compact(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::dir(&self) -> &std::path::Path
+pub fn db_core::storage::ingest::table::TableWriter::drain(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::flush(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::flush_all(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::flush_status(&self) -> db_core::storage::ingest::table::FlushStatus
 pub fn db_core::storage::ingest::table::TableWriter::head_page(&self) -> core::option::Option<db_core::storage::ingest::page::Page>
-pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
+pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::error::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> impl core::iter::traits::iterator::Iterator<Item = &std::path::Path>
+pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> impl core::iter::traits::iterator::Iterator<Item = std::path::PathBuf>
 pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
 pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
@@ -4568,6 +4586,21 @@ pub fn db_core::storage::ingest::manifest::FileEntry::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::ingest::manifest::FileEntry
 pub fn db_core::storage::ingest::manifest::FileEntry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::manifest::FileEntry
+pub struct db_core::storage::ingest::FlushStatus
+pub db_core::storage::ingest::FlushStatus::queued_jobs: usize
+pub db_core::storage::ingest::FlushStatus::queued_rows: usize
+pub db_core::storage::ingest::FlushStatus::stalled: core::time::Duration
+impl core::clone::Clone for db_core::storage::ingest::table::FlushStatus
+pub fn db_core::storage::ingest::table::FlushStatus::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::ingest::table::FlushStatus
+impl core::cmp::PartialEq for db_core::storage::ingest::table::FlushStatus
+pub fn db_core::storage::ingest::table::FlushStatus::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::storage::ingest::table::FlushStatus
+pub fn db_core::storage::ingest::table::FlushStatus::default() -> Self
+impl core::fmt::Debug for db_core::storage::ingest::table::FlushStatus
+pub fn db_core::storage::ingest::table::FlushStatus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::ingest::table::FlushStatus
+impl core::marker::StructuralPartialEq for db_core::storage::ingest::table::FlushStatus
 pub struct db_core::storage::ingest::KeyRange
 pub db_core::storage::ingest::KeyRange::column: alloc::string::String
 pub db_core::storage::ingest::KeyRange::max: db_core::storage::ingest::manifest::KeyBound
@@ -4699,6 +4732,7 @@ impl core::fmt::Debug for db_core::storage::ingest::lock::TableLock
 pub fn db_core::storage::ingest::lock::TableLock::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::TableOptions
 pub db_core::storage::ingest::TableOptions::clock: fn() -> i64
+pub db_core::storage::ingest::TableOptions::flush_queue: usize
 pub db_core::storage::ingest::TableOptions::format: db_core::storage::stream::detect::Format
 pub db_core::storage::ingest::TableOptions::layout: db_core::storage::ingest::layout::Layout
 pub db_core::storage::ingest::TableOptions::parquet: db_core::storage::parquet::writer::WriterOptions
@@ -4725,12 +4759,14 @@ pub fn db_core::storage::ingest::table::TableWriter::append_row(&mut self, alloc
 pub fn db_core::storage::ingest::table::TableWriter::close(self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::compact(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::dir(&self) -> &std::path::Path
+pub fn db_core::storage::ingest::table::TableWriter::drain(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::flush(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::flush_all(&mut self) -> core::result::Result<alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::flush_status(&self) -> db_core::storage::ingest::table::FlushStatus
 pub fn db_core::storage::ingest::table::TableWriter::head_page(&self) -> core::option::Option<db_core::storage::ingest::page::Page>
-pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
+pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::error::IngestError>
-pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> impl core::iter::traits::iterator::Iterator<Item = &std::path::Path>
+pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> impl core::iter::traits::iterator::Iterator<Item = std::path::PathBuf>
 pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
 pub fn db_core::storage::ingest::table::TableWriter::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
