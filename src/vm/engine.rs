@@ -2020,6 +2020,33 @@ mod preaggregation_tests {
         assert!(total < num_segments * groups as usize / 2 || threads * 2 > num_segments);
     }
 
+    /// The shared combiner's partial, last of `run_parallel_preaggregate`'s.
+    fn spilled_groups(groups: i64) -> usize {
+        let segs = segments(40, groups);
+        let program = group_sum_program();
+        let (body, ..) = program.split_finalize();
+        run_parallel_preaggregate(&segs, &body, &[AggPart::GroupKey, AggPart::Sum], 1)
+            .unwrap()
+            .last()
+            .map_or(0, super::Partial::len)
+    }
+
+    // vm_engine_run_parallel_preaggregate_b7b1b7ef
+    // (`run_parallel_preaggregate`): `combiner.groups() > SPILL_GROUPS`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_parallel_preaggregate_b7b1b7ef__v1_few_groups_stay_in_the_worker() {
+        assert_eq!(spilled_groups(500), 0);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_engine_run_parallel_preaggregate_b7b1b7ef__v2_many_groups_spill_to_the_shared_combiner(
+    ) {
+        let groups = i64::try_from(super::SPILL_GROUPS).unwrap() + 900;
+        assert!(spilled_groups(groups) > 0);
+    }
+
     /// More groups than `SPILL_GROUPS` per worker: the spill into the shared
     /// combiner must not change the answer or the group order (#643).
     #[test]
