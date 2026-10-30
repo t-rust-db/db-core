@@ -6729,15 +6729,20 @@ impl Vm {
     /// [`Self::hash_probe`], by the row each element came from.
     fn unnest(&mut self, opcode: &'static str, src: usize, dst: usize) -> Result<()> {
         self.resolve_selection(opcode)?;
+        // #846: the list itself is dead once it is unnested unless a later
+        // opcode reads it, and repeating it once per element is a copy of
+        // the whole list.
+        let mut src_dead = false;
         if let Some(live) = self.unnest_live.take() {
+            src_dead = !live.contains(&src);
             self.registers.retain(|r, _| *r == src || live.contains(r));
             self.typed_registers
                 .retain(|r, _| *r == src || live.contains(r));
         }
         // #809: a flat list column unnests from its own offsets and
         // dictionary, with no `Value` per row or element.
-        if let Some((rows, elements)) = self.flat_list(src) {
-            return self.finish_unnest(opcode, src, dst, rows, elements);
+        if let Some((rows, elements, num_rows)) = self.flat_list(src, src_dead) {
+            return self.finish_unnest(opcode, src, dst, rows, elements, num_rows, src_dead);
         }
         self.ensure_materialized(src);
         let mut rows: Vec<usize> = Vec::new();
@@ -6777,29 +6782,60 @@ impl Vm {
             data: text,
             valid: crate::vm::column::Bitmap::from_bools(present.into_iter()),
         };
-        self.finish_unnest(opcode, src, dst, rows, elements)
+        let num_rows = self.reg(src, opcode)?.len();
+        self.finish_unnest(opcode, src, dst, rows, elements, num_rows, src_dead)
     }
 
-    /// The rows and elements of `src` when it is a flat list column held
-    /// only as a typed register (#809): one element per row it repeats,
-    /// and the list's own element column. `None` for any other register.
-    fn flat_list(&self, src: usize) -> Option<(Vec<usize>, Column)> {
+    /// The rows, elements and row count of `src` when it is a flat list
+    /// column held only as a typed register (#809): one element per row it
+    /// repeats, and the list's own element column. `None` for any other
+    /// register. A `dead` list is moved out of its register rather than
+    /// cloned (#846).
+    fn flat_list(&mut self, src: usize, dead: bool) -> Option<(Vec<usize>, Column, usize)> {
         if self.registers.contains_key(&src) {
             return None;
         }
-        match self.typed_registers.get(&src)?.as_ref() {
-            Column::List {
+        if !matches!(
+            self.typed_registers.get(&src)?.as_ref(),
+            Column::List { .. }
+        ) {
+            return None;
+        }
+        let column = if dead {
+            self.typed_registers.remove(&src)?
+        } else {
+            Arc::clone(self.typed_registers.get(&src)?)
+        };
+        let num_rows = column.len();
+        match Arc::try_unwrap(column) {
+            Ok(Column::List {
                 offsets,
                 elements,
                 valid,
-            } => Some((flat_unnest_rows(offsets, valid), elements.as_ref().clone())),
-            _ => None,
+            }) => Some((flat_unnest_rows(&offsets, &valid), *elements, num_rows)),
+            Err(shared) => match shared.as_ref() {
+                Column::List {
+                    offsets,
+                    elements,
+                    valid,
+                } => Some((
+                    flat_unnest_rows(offsets, valid),
+                    elements.as_ref().clone(),
+                    num_rows,
+                )),
+                _ => None,
+            },
+            Ok(_) => None,
         }
     }
 
     /// The reshape half of [`Self::unnest`]: every live register repeated
     /// by `rows` (a typed one gathered, #815), then `elements` as register
-    /// `dst`.
+    /// `dst`. A `src_dead` register is dropped rather than repeated.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the opcode's own fields plus the rows and elements `unnest` or `flat_list` derived from `src`"
+    )]
     fn finish_unnest(
         &mut self,
         opcode: &'static str,
@@ -6807,11 +6843,13 @@ impl Vm {
         dst: usize,
         rows: Vec<usize>,
         elements: Column,
+        num_rows: usize,
+        src_dead: bool,
     ) -> Result<()> {
-        let num_rows = match self.typed_registers.get(&src) {
-            Some(column) if !self.registers.contains_key(&src) => column.len(),
-            _ => self.reg(src, opcode)?.len(),
-        };
+        if src_dead {
+            self.registers.remove(&src);
+            self.typed_registers.remove(&src);
+        }
         let typed: Vec<usize> = self.typed_registers.keys().copied().collect();
         let mut gathered: HashMap<usize, Arc<Column>> = HashMap::new();
         for r in typed {
@@ -8758,6 +8796,59 @@ mod tests {
         assert_eq!(a.register(0).unwrap(), b.register(0).unwrap());
         assert_eq!(a.register(2).unwrap(), b.register(2).unwrap());
         assert!(a.typed_register(2).is_some());
+    }
+
+    /// #846: a list nothing reads after `UNNEST` is dropped, not repeated per
+    /// element; one a later `Emit` still reads is repeated as before. Both
+    /// emit what the `Value::List` form does.
+    #[test]
+    fn unnest_drops_a_dead_flat_list_and_keeps_a_live_one() {
+        // [a, NULL], [], NULL, [b, a]
+        let flat = Column::List {
+            offsets: vec![0, 2, 2, 2, 4],
+            elements: Box::new(Column::Dict {
+                dict: vec![Arc::from("a"), Arc::from("b")],
+                indices: vec![0, 0, 1, 0],
+                valid: Bitmap::from_bools([true, false, true, true].into_iter()),
+            }),
+            valid: Bitmap::from_bools([true, true, false, true].into_iter()),
+        };
+        let ids = || vec![Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)];
+        let typed = Batch::new(4)
+            .with_column("id", ids())
+            .with_typed_column("labels", flat.clone());
+        let values = Batch::new(4)
+            .with_column("id", ids())
+            .with_column("labels", (0..4).map(|i| flat.get(i)).collect());
+        for emitted in [&[0usize, 2][..], &[0, 1, 2][..]] {
+            let ops = [
+                Opcode::LoadColumn {
+                    reg: 0,
+                    column: "id".into(),
+                },
+                Opcode::LoadColumn {
+                    reg: 1,
+                    column: "labels".into(),
+                },
+                Opcode::Unnest { src: 1, dst: 2 },
+                Opcode::Emit {
+                    registers: Cow::Owned(emitted.to_vec()),
+                },
+            ];
+            let (mut a, mut b) = (Vm::new(), Vm::new());
+            a.execute(&typed, &ops).unwrap();
+            b.execute(&values, &ops).unwrap();
+            let rows = |vm: &mut Vm| vm.take_output().rows().collect::<Vec<_>>();
+            let rows_a = rows(&mut a);
+            assert_eq!(rows_a.len(), 4, "{emitted:?}");
+            assert_eq!(rows_a, rows(&mut b), "{emitted:?}");
+            // The list is held only when something still reads it.
+            assert_eq!(
+                a.typed_register(1).is_some(),
+                emitted.contains(&1),
+                "{emitted:?}"
+            );
+        }
     }
 
     /// #809: a pending selection compacts a flat list column, which then
