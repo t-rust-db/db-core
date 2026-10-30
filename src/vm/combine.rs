@@ -546,7 +546,7 @@ pub(crate) fn combine_partials(
     // By value: each worker's partial is dropped as soon as it is merged,
     // not held until the last one is (#643).
     for partial in partials {
-        combiner.push_partial(&partial)?;
+        combiner.push_partial(&partial, 0..partial.len())?;
     }
     combiner.finish()
 }
@@ -573,6 +573,35 @@ impl Partial {
     /// How many groups it holds.
     pub(crate) fn len(&self) -> usize {
         self.columns.first().map_or(0, AccColumn::len)
+    }
+
+    /// Its groups' row numbers split into `partitions` lists by key hash,
+    /// so a key always lands in the same list whichever worker's partial
+    /// it is in (#863).
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "`columns[..num_group_keys]`: a partial's width is checked against `num_group_keys` when merged; `lists[p]`: `p < partitions` by the remainder"
+    )]
+    pub(crate) fn partition_rows(
+        &self,
+        num_group_keys: usize,
+        partitions: usize,
+    ) -> Vec<Vec<usize>> {
+        let mut lists = vec![Vec::new(); partitions];
+        let Some(keys) = self.columns.get(..num_group_keys) else {
+            return lists;
+        };
+        for r in 0..self.len() {
+            let hash = acc_key_hash(keys, r);
+            // The hash's high bits, so the partition does not correlate
+            // with the low bits the key tables slot by.
+            let p = usize::try_from(hash >> 32)
+                .unwrap_or(0)
+                .checked_rem(partitions)
+                .unwrap_or(0);
+            lists[p].push(r);
+        }
+        lists
     }
 }
 
@@ -802,10 +831,11 @@ impl Combiner {
         self.first_seen.len()
     }
 
-    /// Merges `partial` in ([`run_parallel_preaggregate`]'s spill of a
-    /// worker's groups into the shared combiner, #643).
-    pub(crate) fn merge_partial(&mut self, partial: &Partial) -> Result<()> {
-        self.push_partial(partial)
+    /// Merges the groups of `partial` at `rows` in -- one
+    /// [`Partial::partition_rows`] list, [`run_parallel_preaggregate`]'s spill
+    /// of a worker's groups into the shared combiner (#643, #863).
+    pub(crate) fn merge_partial_rows(&mut self, partial: &Partial, rows: &[usize]) -> Result<()> {
+        self.push_partial(partial, rows.iter().copied())
     }
 
     /// Sizes the accumulators for `groups` groups up front, for a merge
@@ -1036,10 +1066,11 @@ impl Combiner {
                         }
                     })
                     .collect();
-                merge.push_partial(&Partial {
+                let partial = Partial {
                     columns,
                     first_seen: first_seen.clone(),
-                })?;
+                };
+                merge.push_partial(&partial, 0..partial.len())?;
             }
             passes.push(merge.finish_distinct()?.into_columns());
         }
@@ -1124,10 +1155,11 @@ impl Combiner {
                     nulls: vec![false; n],
                 };
             }
-            regroup.push_partial(&Partial {
+            let partial = Partial {
                 columns,
                 first_seen,
-            })?;
+            };
+            regroup.push_partial(&partial, 0..partial.len())?;
         }
         if keys > 0 || regroup.num_slots.is_some() {
             return regroup.finish();
@@ -1160,11 +1192,13 @@ impl Combiner {
     /// Merges a partial in ([`combine_partials`], `COUNT(DISTINCT)`'s
     /// regrouping): as [`Self::push_chunk`], but key to key -- typed
     /// columns compare and copy typed, so no `Value` is built per group.
+    /// `rows` are the partial's groups to merge: all of them
+    /// (`0..partial.len()`), or one [`Partial::partition_rows`] list (#863).
     #[allow(
         clippy::indexing_slicing,
-        reason = "`columns[c]`/`acc[c]`: `c < num_slots`, both have exactly `num_slots` columns (checked); `first_seen[g]`: `g` was pushed before being recorded"
+        reason = "`columns[c]`/`acc[c]`: `c < num_slots`, both have exactly `num_slots` columns (checked); `first_seen[g]`: `g` was pushed before being recorded; `first_seen[r]`/`value(r)`: `r` is a row of the partial, whose lengths are checked"
     )]
-    fn push_partial(&mut self, partial: &Partial) -> Result<()> {
+    fn push_partial(&mut self, partial: &Partial, rows: impl Iterator<Item = usize>) -> Result<()> {
         if partial.columns.is_empty() {
             return Ok(());
         }
@@ -1187,7 +1221,7 @@ impl Combiner {
             });
         }
         let keys = &partial.columns[..self.num_group_keys];
-        for r in 0..n {
+        for r in rows {
             let order = partial.first_seen[r];
             let found = match (&mut self.index, keys.first()) {
                 (KeyIndex::Int(table), Some(AccColumn::Ints { data, nulls })) => {

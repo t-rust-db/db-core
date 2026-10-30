@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.215.0] - 2026-10-30
+
+### Changed
+
+- Many-group `GROUP BY` (e.g. 100K-1M distinct keys) merges worker partials through 32 key-hash partitions, each under its own lock, and a worker keeps up to 131,072 groups between segments before spilling; `join_many_groups` 249 -> ~183 ms, 1M distinct groups 0.68 -> ~0.35 s at about +175 MB peak RSS. Partial fix for #863; the single-hash follow-up is #894.
+
 ## [0.214.2] - 2026-10-30
 
 ### Fixed
