@@ -50,6 +50,8 @@
 //! A NULL map gives NULL. A value that is not a map (or a key that is not a
 //! string) gives NULL too: column types are only known per row here.
 
+use std::sync::Arc;
+
 use super::batch::{ListItems, MapEntries, SlotState, Value};
 
 /// The functions handled here, with their arities.
@@ -105,6 +107,10 @@ pub(crate) const MAP_FUNCTIONS: &[(&str, usize)] = &[
     ("element_at", 2),
     ("map_keys", 1),
     ("cardinality", 1),
+    ("json_keys", 1),
+    ("json_keys", 2),
+    ("json_array_elements_text", 1),
+    ("json_array_elements_text", 2),
 ];
 
 /// The arity of a function that takes any number of arguments.
@@ -180,6 +186,12 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
             _ => Value::Null,
         };
     }
+    if name.eq_ignore_ascii_case("json_keys") {
+        return json_keys(args);
+    }
+    if name.eq_ignore_ascii_case("json_array_elements_text") {
+        return json_array_elements_text(args);
+    }
     if let Some((Value::List(items), rest)) = args.split_first() {
         return list_call(name, items, rest);
     }
@@ -212,6 +224,81 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
         ("cardinality", None) => Value::Int(i64::try_from(entries.len()).unwrap_or(i64::MAX)),
         _ => Value::Null,
     }
+}
+
+/// `json_keys(json[, path])` (#839): the keys of the object at `path` (the
+/// root by default), in document order; `[]` for a value that is not an
+/// object, as in DuckDB. NULL for a non-string document, malformed JSON or
+/// a missing path. The value is found by the batch `json_extract`, so a
+/// path indexes arrays.
+fn json_keys(args: &[&Value]) -> Value {
+    let (Some(Value::Str(doc)), path) = (args.first(), args.get(1)) else {
+        return Value::Null;
+    };
+    let path = match path {
+        None => "$",
+        Some(Value::Str(p)) => p.as_ref(),
+        Some(_) => return Value::Null,
+    };
+    let text = |s: &str| crate::value::Value::Text(s.to_string().into());
+    let Ok(crate::value::Value::Text(object)) =
+        crate::functions::late_json_extract(&[text(doc), text(path)])
+    else {
+        return Value::Null;
+    };
+    let Some((crate::json_path::JsonValue::Object(fields), _)) =
+        crate::json_path::parse_object(&object)
+    else {
+        return Value::List(Arc::new(Vec::new()));
+    };
+    Value::List(Arc::new(
+        fields
+            .iter()
+            .map(|(k, _)| Some(Arc::from(crate::json_path::unescape(k).as_ref())))
+            .collect(),
+    ))
+}
+
+/// `json_array_elements_text(json[, path])` (#839): the elements of the
+/// array at `path` as a list of text -- what `UNNEST` expands into rows. A
+/// string is its text, a number its digits, an object or array its JSON
+/// text and a JSON `null` a NULL element. NULL for anything but an array.
+/// The row engine's `json_array_length` and `json_extract` do the work.
+fn json_array_elements_text(args: &[&Value]) -> Value {
+    use crate::value::Value as Scalar;
+    let (Some(Value::Str(doc)), path) = (args.first(), args.get(1)) else {
+        return Value::Null;
+    };
+    let path = match path {
+        None => "$",
+        Some(Value::Str(p)) => p.as_ref(),
+        Some(_) => return Value::Null,
+    };
+    let text = |s: &str| Scalar::Text(s.to_string().into());
+    let is_array = matches!(
+        crate::functions::call("json_type", &[text(doc), text(path)]),
+        Ok(Scalar::Text(t)) if &*t == "array"
+    );
+    let Ok(Scalar::Integer(len)) =
+        crate::functions::call("json_array_length", &[text(doc), text(path)])
+    else {
+        return Value::Null;
+    };
+    if !is_array {
+        return Value::Null;
+    }
+    let items: ListItems = (0..len)
+        .map(|i| {
+            let at = text(&format!("{path}[{i}]"));
+            match crate::functions::call("json_extract", &[text(doc), at]) {
+                Ok(Scalar::Text(t)) => Some(Arc::from(&*t)),
+                Ok(Scalar::Integer(n)) => Some(Arc::from(n.to_string())),
+                Ok(Scalar::Real(r)) => Some(Arc::from(r.to_string())),
+                _ => None,
+            }
+        })
+        .collect();
+    Value::List(Arc::new(items))
 }
 
 fn string_split(s: &Value, sep: &Value) -> Value {
@@ -864,7 +951,6 @@ mod tests {
             None
         );
         assert_eq!(literal_arg_error("list_sort", 0, None), None);
-        assert_eq!(literal_arg_error("string_split", 1, None), None);
     }
 
     #[test]

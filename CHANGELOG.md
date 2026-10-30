@@ -4,6 +4,27 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.206.0] - 2026-10-30
+
+### Changed
+
+- A dictionary-encoded `LIST<VARCHAR>` leaf read for `UNNEST` alone now keeps its page codes: the flat read walks each page's levels and RLE indices straight into offsets plus a dictionary column, instead of building an `Arc<str>` per element and hashing it (#840). On the 10M-row parity file `UNNEST ... GROUP BY` drops from about 2.1x / 1.6x DuckDB (8 / 1,000 distinct) to about 0.85x / 0.9x, with half the user and sys time and about 30% less RSS. A leaf with a plain fallback page reads as before.
+
+## [0.205.0] - 2026-10-30
+
+### Added
+
+- Column dialect: `->`, `->>`, `json_extract_string`, `json_array_length`, `json_type`, `json_valid`, `json_keys` and `json_array_elements_text` (#839).
+
+### Changed
+
+- **Breaking:** the column dialect's `json_extract` returns JSON text as DuckDB does (a string is quoted: `"a"`); use `json_extract_string` or `->>` for the unquoted value (#839).
+- The column dialect's `json_extract` indexes arrays (`$.a[0]`, `$.a[#-1]`) and accepts a bare key (#839).
+
+### Fixed
+
+- The zstd encoder is built only with `storage-column-write`: with `storage-column` alone it was dead code and `make check-features` failed.
+
 ## [0.204.0] - 2026-10-30
 
 ### Changed

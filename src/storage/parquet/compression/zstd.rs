@@ -20,12 +20,14 @@
 mod bits;
 #[cfg(test)]
 mod decoder_tests;
+#[cfg(any(feature = "storage-column-write", test))]
 mod encoder;
 mod frame;
 mod fse;
 mod huffman;
 mod xxhash;
 
+#[cfg(any(feature = "storage-column-write", test))]
 pub(crate) use encoder::compress;
 
 use std::fmt;
