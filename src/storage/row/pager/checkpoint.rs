@@ -96,7 +96,18 @@ pub fn checkpoint_passive(
         path: wal_path.display().to_string(),
         source,
     };
-    let header = WalHeader::parse(&wal_bytes).map_err(to_pager_error)?;
+    let header = match WalHeader::parse(&wal_bytes) {
+        Ok(header) => header,
+        // Unusable header: SQLite recovers no frames, so nothing to backfill.
+        Err(source) if source.is_unusable_header() => {
+            return Ok(CheckpointResult {
+                backfilled_frames: 0,
+                total_frames: 0,
+                checkpoint_complete: true,
+            });
+        }
+        Err(source) => return Err(to_pager_error(source)),
+    };
     if header.page_size != expected_page_size {
         return Err(to_pager_error(wal::WalError::InvalidPageSize {
             page_size: header.page_size,
@@ -252,6 +263,33 @@ mod tests {
         //! follow-up).
 
         use super::*;
+
+        // storage_row_pager_checkpoint_checkpoint_passive_aef700eb: `source.is_unusable_header()`
+        #[test]
+        fn mcdc__storage_row_pager_checkpoint_checkpoint_passive_aef700eb__v1_unusable_header_checkpoints_nothing(
+        ) {
+            let (vfs, db_path) = setup(512);
+            let wal_path = companion_path(&db_path, "-wal");
+            let file = vfs.create_or_open_write(&wal_path).unwrap();
+            file.write_at(&[0u8; 64], 0).unwrap();
+
+            let result = checkpoint_passive(&vfs, &db_path, 512).unwrap();
+            assert_eq!(result.backfilled_frames, 0);
+            assert!(result.checkpoint_complete);
+        }
+
+        #[test]
+        fn mcdc__storage_row_pager_checkpoint_checkpoint_passive_aef700eb__v2_page_size_mismatch_still_errors(
+        ) {
+            let (vfs, db_path) = setup(512);
+            let wal_path = companion_path(&db_path, "-wal");
+            let header = WalHeader::new(true, 4096, 1, 2, 1);
+            let mut writer = WalWriter::create(&vfs, &wal_path, header).unwrap();
+            writer.append_frame(1, &vec![0u8; 4096], 1).unwrap();
+            writer.sync().unwrap();
+
+            assert!(checkpoint_passive(&vfs, &db_path, 512).is_err());
+        }
 
         // storage_row_pager_checkpoint_checkpoint_passive_2a432e1c: `*page_num == 0 || *page_num > max_page`
         #[test]

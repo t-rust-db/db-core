@@ -6235,6 +6235,8 @@ pub db_core::storage::row::pager::wal::WalError::InvalidMagic::magic: u32
 pub db_core::storage::row::pager::wal::WalError::InvalidPageSize
 pub db_core::storage::row::pager::wal::WalError::InvalidPageSize::page_size: u32
 pub db_core::storage::row::pager::wal::WalError::Vfs(db_core::storage::row::vfs::VfsError)
+impl db_core::storage::row::pager::wal::WalError
+pub fn db_core::storage::row::pager::wal::WalError::is_unusable_header(&self) -> bool
 impl core::convert::From<db_core::storage::row::vfs::VfsError> for db_core::storage::row::pager::wal::WalError
 pub fn db_core::storage::row::pager::wal::WalError::from(db_core::storage::row::vfs::VfsError) -> Self
 impl core::error::Error for db_core::storage::row::pager::wal::WalError
