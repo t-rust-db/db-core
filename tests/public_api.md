@@ -6199,6 +6199,9 @@ impl core::marker::StructuralPartialEq for db_core::storage::row::pager::checkpo
 pub fn db_core::storage::row::pager::checkpoint::checkpoint_passive(&db_core::storage::row::vfs::AnyVfs, &std::path::Path, u32) -> core::result::Result<db_core::storage::row::pager::checkpoint::CheckpointResult, db_core::storage::row::pager::PagerError>
 pub mod db_core::storage::row::pager::freelist
 pub enum db_core::storage::row::pager::freelist::FreelistError
+pub db_core::storage::row::pager::freelist::FreelistError::PageOutOfRange
+pub db_core::storage::row::pager::freelist::FreelistError::PageOutOfRange::page: u32
+pub db_core::storage::row::pager::freelist::FreelistError::PageOutOfRange::page_count: u32
 pub db_core::storage::row::pager::freelist::FreelistError::PageTooShort
 pub db_core::storage::row::pager::freelist::FreelistError::PageTooShort::len: usize
 pub db_core::storage::row::pager::freelist::FreelistError::PageTooShort::offset: usize
@@ -6332,6 +6335,7 @@ pub const db_core::storage::row::pager::wal::HEADER_LEN: usize
 pub fn db_core::storage::row::pager::wal::committed_pages(&db_core::storage::row::pager::wal::WalHeader, &[u8]) -> (std::collections::hash::map::HashMap<u32, alloc::vec::Vec<u8>>, u32)
 pub enum db_core::storage::row::pager::PagerError
 pub db_core::storage::row::pager::PagerError::CheckpointIncomplete
+pub db_core::storage::row::pager::PagerError::DatabaseFull
 pub db_core::storage::row::pager::PagerError::Freelist(db_core::storage::row::pager::freelist::FreelistError)
 pub db_core::storage::row::pager::PagerError::HotJournal
 pub db_core::storage::row::pager::PagerError::HotJournal::path: alloc::string::String

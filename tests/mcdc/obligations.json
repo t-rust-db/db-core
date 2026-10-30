@@ -47912,8 +47912,18 @@
   {
     "id": "storage_row_pager_allocate_page_73febef4",
     "file": "src/storage/row/pager.rs",
-    "line": 1314,
+    "line": 1317,
     "decision": "let Some(leaf) = trunk.leaves.pop()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_allocate_page_3edc073d",
+    "file": "src/storage/row/pager.rs",
+    "line": 1323,
+    "decision": "trunk.next_trunk != 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -47922,7 +47932,7 @@
   {
     "id": "storage_row_pager_deallocate_page_710edeb7",
     "file": "src/storage/row/pager.rs",
-    "line": 1342,
+    "line": 1353,
     "decision": "freelist_trunk_page != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -47932,7 +47942,7 @@
   {
     "id": "storage_row_pager_deallocate_page_385c8b82",
     "file": "src/storage/row/pager.rs",
-    "line": 1345,
+    "line": 1357,
     "decision": "trunk.leaves.len() < max_leaves",
     "conditions": 1,
     "vectors_required": 2,
@@ -47942,7 +47952,7 @@
   {
     "id": "storage_row_pager_journal_mode_from_page1_a519b359",
     "file": "src/storage/row/pager.rs",
-    "line": 1388,
+    "line": 1400,
     "decision": "page1.get(18..20) == Some(&[2u8, 2u8][..])",
     "conditions": 1,
     "vectors_required": 2,
@@ -47952,7 +47962,7 @@
   {
     "id": "storage_row_pager_journal_to_pager_error_c62c1a86",
     "file": "src/storage/row/pager.rs",
-    "line": 1416,
+    "line": 1428,
     "decision": "match err {\n        JournalError::Vfs(source) => PagerError::Vfs(source),\n        other => PagerError::Journal(other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -47962,7 +47972,7 @@
   {
     "id": "storage_row_pager_read_page_56a766cb",
     "file": "src/storage/row/pager.rs",
-    "line": 1473,
+    "line": 1485,
     "decision": "let Some(page) = wal_pages.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -47972,7 +47982,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_9109a25d",
     "file": "src/storage/row/pager.rs",
-    "line": 1490,
+    "line": 1502,
     "decision": "!vfs.exists(&wal_path)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -47982,7 +47992,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_1aec0f46",
     "file": "src/storage/row/pager.rs",
-    "line": 1496,
+    "line": 1508,
     "decision": "size < wal::HEADER_LEN as u64",
     "conditions": 1,
     "vectors_required": 2,
@@ -47992,7 +48002,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_f18f30e8",
     "file": "src/storage/row/pager.rs",
-    "line": 1503,
+    "line": 1515,
     "decision": "bytes.len() < wal::HEADER_LEN",
     "conditions": 1,
     "vectors_required": 2,
@@ -48002,7 +48012,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_eb643e28",
     "file": "src/storage/row/pager.rs",
-    "line": 1514,
+    "line": 1526,
     "decision": "match wal::WalHeader::parse(&bytes) {\n        Ok(header) => header,\n        Err(source) if source.is_unusable_header() => return Ok(HashMap::new()),\n        Err(source) => return Err(to_pager_error(source)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48012,7 +48022,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_aef700eb",
     "file": "src/storage/row/pager.rs",
-    "line": 1516,
+    "line": 1528,
     "decision": "source.is_unusable_header()",
     "conditions": 1,
     "vectors_required": 2,
@@ -48022,7 +48032,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_ac0a9810",
     "file": "src/storage/row/pager.rs",
-    "line": 1519,
+    "line": 1531,
     "decision": "header.page_size != page_size",
     "conditions": 1,
     "vectors_required": 2,
@@ -48032,7 +48042,7 @@
   {
     "id": "storage_row_pager_read_page_b203daed",
     "file": "src/storage/row/pager.rs",
-    "line": 1534,
+    "line": 1546,
     "decision": "let Some(page) = self.dirty.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48042,7 +48052,7 @@
   {
     "id": "storage_row_pager_read_page_d1cd7f35",
     "file": "src/storage/row/pager.rs",
-    "line": 1537,
+    "line": 1549,
     "decision": "let Some(page) = self.wal_pages.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48052,7 +48062,7 @@
   {
     "id": "storage_row_pager_read_page_dfb3161d",
     "file": "src/storage/row/pager.rs",
-    "line": 1540,
+    "line": 1552,
     "decision": "let Some(cached) = self.page_cache.borrow_mut().get(page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48062,7 +48072,7 @@
   {
     "id": "storage_row_pager_read_page_b3860812",
     "file": "src/storage/row/pager.rs",
-    "line": 1551,
+    "line": 1563,
     "decision": "match victim {\n            Some(mut recycled) => match Rc::get_mut(&mut recycled) {\n                Some(buf) => {\n                    self.source.read_page_into(page_num, buf)?;\n                    recycled\n                }\n                None => self.source.read_page(page_num)?,\n            },\n            None => self.source.read_page(page_num)?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48072,7 +48082,7 @@
   {
     "id": "storage_row_pager_read_page_6c6dd3f8",
     "file": "src/storage/row/pager.rs",
-    "line": 1552,
+    "line": 1564,
     "decision": "match Rc::get_mut(&mut recycled) {\n                Some(buf) => {\n                    self.source.read_page_into(page_num, buf)?;\n                    recycled\n                }\n                None => self.source.read_page(page_num)?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48082,7 +48092,7 @@
   {
     "id": "storage_row_pager_db_with_journal_22a86bc9",
     "file": "src/storage/row/pager.rs",
-    "line": 1601,
+    "line": 1613,
     "decision": "let Some(bytes) = journal_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -48092,7 +48102,7 @@
   {
     "id": "storage_row_pager_hot_journal_open_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1732,
+    "line": 1744,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48102,11 +48112,21 @@
   {
     "id": "storage_row_pager_flush_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1779,
+    "line": 1791,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_pager_with_freelist_2fbc1de0",
+    "file": "src/storage/row/pager.rs",
+    "line": 2850,
+    "decision": "(2..=4).contains(&trunk)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
     "wildcard_risk": false
   },
   {
@@ -48220,29 +48240,39 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_error_fmt_3537708d",
+    "id": "storage_row_pager_error_fmt_7ba28294",
     "file": "src/storage/row/pager/error.rs",
-    "line": 48,
-    "decision": "match self {\n            PagerError::HotJournal { path } => write!(\n                f,\n                \"hot rollback journal present at {path}: database was not cleanly closed and its main \\\n                 file may not reflect committed data; refusing to open read-only rather than risk \\\n                 serving pre-rollback pages as committed\"\n            ),\n            PagerError::Journal(source) => write!(f, \"rollback journal is corrupt: {source}\"),\n            PagerError::Wal { path, source } => write!(f, \"reading WAL at {path}: {source}\"),\n            PagerError::Page(source) => write!(f, \"{source}\"),\n            PagerError::Vfs(source) => write!(f, \"{source}\"),\n            PagerError::Freelist(source) => write!(f, \"{source}\"),\n            PagerError::PendingTransaction => {\n                write!(f, \"cannot change journal_mode with a pending transaction\")\n            }\n            PagerError::CheckpointIncomplete => write!(\n                f,\n                \"checkpoint did not fully back-fill the WAL while switching journal_mode out of WAL\"\n            ),\n        }",
+    "line": 52,
+    "decision": "match self {\n            PagerError::HotJournal { path } => write!(\n                f,\n                \"hot rollback journal present at {path}: database was not cleanly closed and its main \\\n                 file may not reflect committed data; refusing to open read-only rather than risk \\\n                 serving pre-rollback pages as committed\"\n            ),\n            PagerError::Journal(source) => write!(f, \"rollback journal is corrupt: {source}\"),\n            PagerError::Wal { path, source } => write!(f, \"reading WAL at {path}: {source}\"),\n            PagerError::Page(source) => write!(f, \"{source}\"),\n            PagerError::Vfs(source) => write!(f, \"{source}\"),\n            PagerError::Freelist(source) => write!(f, \"{source}\"),\n            PagerError::PendingTransaction => {\n                write!(f, \"cannot change journal_mode with a pending transaction\")\n            }\n            PagerError::CheckpointIncomplete => write!(\n                f,\n                \"checkpoint did not fully back-fill the WAL while switching journal_mode out of WAL\"\n            ),\n            PagerError::DatabaseFull => write!(f, \"database or disk is full\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_freelist_fmt_a2e10e44",
+    "id": "storage_row_pager_freelist_fmt_4daff0c3",
     "file": "src/storage/row/pager/freelist.rs",
-    "line": 29,
-    "decision": "match self {\n            FreelistError::PageTooShort { offset, len } => write!(\n                f,\n                \"freelist trunk page is {len} bytes, too short to read a field at offset {offset}\"\n            ),\n        }",
+    "line": 39,
+    "decision": "match self {\n            FreelistError::PageTooShort { offset, len } => write!(\n                f,\n                \"freelist trunk page is {len} bytes, too short to read a field at offset {offset}\"\n            ),\n            FreelistError::PageOutOfRange { page, page_count } => write!(\n                f,\n                \"freelist names page {page}, outside 2..={page_count}: database disk image is malformed\"\n            ),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_freelist_check_page_ea1b5e66",
+    "file": "src/storage/row/pager/freelist.rs",
+    "line": 57,
+    "decision": "page < 2 || page > page_count",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "storage_row_pager_freelist_write_e68389e4",
     "file": "src/storage/row/pager/freelist.rs",
-    "line": 116,
+    "line": 139,
     "decision": "let Some(tail) = buf.get_mut(tail_start..)",
     "conditions": 1,
     "vectors_required": 2,
