@@ -56,11 +56,12 @@ parser-column, storage-column, engine-column
 ```
 
 Unlike the SQLite and stream profiles, this one is **not** first-party-only
-by design: `storage-column = ["dep:memmap2", "dep:ruzstd"]` are the crate's
-only third-party dependencies, accepted because hand-rolling a
-cross-platform mmap wrapper or a from-scratch zstd decoder is not worth the
-risk of getting page-fault/lifetime or decompression edge cases wrong for a
-mode with no oracle-parity invariant (f) obligation. Invariant (a) (first-
+by design: `storage-column = ["dep:memmap2"]` is the crate's only
+third-party dependency, accepted because hand-rolling a cross-platform mmap
+wrapper is not worth the risk of getting page-fault/lifetime edge cases
+wrong for a mode with no oracle-parity invariant (f) obligation. (`ruzstd`
+was a second one until the ZSTD decoder (#700) and encoder (#692) became
+our own; both are checked against libzstd.) Invariant (a) (first-
 party dependency closure) therefore does not apply to this profile; invariant
 (b) does, with its own carve-out below. `tools/check_sqlite_profile.py
 column` checks (b) only.

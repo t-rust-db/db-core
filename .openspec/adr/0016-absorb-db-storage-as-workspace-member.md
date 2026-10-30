@@ -16,8 +16,9 @@ No `db-storage` crate, workspace member, or git dependency exists.
   (`storage::stream` planned, ADR 0006).
 - `storage` depends on `crate::value` and `crate::schema` only.
   `parser`/`vm`/`codegen` never import `storage`.
-- Features: `storage-row`, `storage-column` (= `dep:memmap2`,
-  `dep:ruzstd` — the crate's only third-party dependencies, optional),
+- Features: `storage-row`, `storage-column` (= `dep:memmap2`
+  — the crate's only third-party dependency, optional; `dep:ruzstd` was a
+  second until #700/#692),
   `storage-test-support`. `storage-row` and `storage-column` are in
   `default`.
 - `[[bin]] lock_probe` (`src/storage/row/vfs/bin/lock_probe.rs`,

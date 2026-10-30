@@ -307,10 +307,8 @@ required-features = [
 
 [dependencies]
 # Storage backends (ADR 0016: db-storage absorbed as the `storage` module).
-# Both optional, pulled in only by storage-column (the only consumer of
-# either today).
+# Optional, pulled in only by storage-column (the only consumer today).
 memmap2 = { version = "0.9.11", optional = true }
-ruzstd = { version = "0.9.1", optional = true }
 
 [dev-dependencies]
 # Self-dependency so a bare `cargo test` (what `cargo-mvl-mcdc harvest`
@@ -479,7 +477,7 @@ emit-batch = ["codegen-batch"]
 # this as `db-core = { features = ["parser-row"] }` and the merge dropped it
 # (0.78.0 did not compile with `storage-row` alone).
 storage-row = ["parser-row"]
-storage-column = ["dep:memmap2", "dep:ruzstd"]
+storage-column = ["dep:memmap2"]
 # Parquet writer (#566, ADR 0029): `storage::parquet::writer`. No extra
 # dependency; Snappy is hand-rolled, like the reader's decompressor.
 storage-column-write = ["storage-column"]

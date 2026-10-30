@@ -1,6 +1,6 @@
 //! ZSTD page compression (#692): an encoder of our own, the mirror of
-//! [`super::decompress`], replacing `ruzstd`'s `Fastest` level, which
-//! wrote 1.6x libzstd level 1.
+//! [`super::decompress`], replacing the `ruzstd` crate's `Fastest` level,
+//! which wrote 1.6x libzstd level 1.
 //!
 //! One single-segment frame (window = page, so a match reaches back across
 //! block borders), one block per 128 KiB. A block is raw literals plus

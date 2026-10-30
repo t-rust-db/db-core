@@ -4,13 +4,13 @@
 //! A page is one frame whose decompressed size the page header gives, so
 //! the decoder writes straight into an output buffer of that size (plus a
 //! little slack for 16-byte wild copies) instead of streaming through a
-//! window, as `ruzstd`'s decoder did. Spike #697 measured it at 1.8-2.5x
-//! `ruzstd`'s speed on real pages, about libzstd's. The writer's encoder
-//! (#692) is `encoder.rs`; `ruzstd` is only a test reference now.
+//! window, as the `ruzstd` crate's decoder did. Spike #697 measured it at
+//! 1.8-2.5x that crate's speed on real pages, about libzstd's. The
+//! writer's encoder (#692) is `encoder.rs`; the crate is no longer used.
 //!
 //! The first hand-written decoder (#47) foundered on FSE/Huffman bit order
 //! with nothing to diff against; this one is checked byte for byte against
-//! `ruzstd`'s decoder, and pages written by DuckDB (libzstd) and pyarrow.
+//! libzstd (the `zstd` CLI), and pages written by DuckDB and pyarrow.
 //!
 //! Supported: raw, RLE and compressed blocks; Huffman literals (1 or 4
 //! streams, direct or FSE-coded weights, treeless); predefined, RLE,

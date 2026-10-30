@@ -1,11 +1,10 @@
-//! Spike for db-core#697: a zstd decoder of our own, measured against
-//! `ruzstd`. No production code changes: the prototype lives in
+//! Spike for db-core#697: a zstd decoder of our own. (It was timed against
+//! the `ruzstd` crate, since removed; see the README.) No production code changes: the prototype lives in
 //! `prototype.rs` next to this file, and #700 shipped the decoder that grew
 //! out of it (`src/storage/parquet/compression/zstd.rs`).
 //!
 //! `frames_decode_to_their_input` checks the prototype against frames from
-//! the `zstd` CLI (libzstd) at several levels; `decode_speed` (ignored,
-//! release) times it against `ruzstd` on the same frames.
+//! the `zstd` CLI (libzstd) at several levels.
 
 #![allow(
     clippy::arithmetic_side_effects,
@@ -13,14 +12,12 @@
     clippy::cast_precision_loss,
     clippy::expect_used,
     clippy::indexing_slicing,
-    clippy::print_stdout,
     clippy::unwrap_used
 )]
 
 mod prototype;
 
-use std::io::{Read, Write};
-use std::time::Instant;
+use std::io::Write;
 
 const PAGE: usize = 64 * 1024;
 
@@ -68,15 +65,6 @@ fn cli(data: &[u8], level: &str) -> Vec<u8> {
     output.stdout
 }
 
-fn ruzstd_decode(frame: &[u8], size: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(size);
-    ruzstd::decoding::StreamingDecoder::new(frame)
-        .unwrap()
-        .read_to_end(&mut out)
-        .unwrap();
-    out
-}
-
 fn frames() -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut all = Vec::new();
     for level in ["-1", "-3", "-9", "-19"] {
@@ -93,30 +81,4 @@ fn frames_decode_to_their_input() {
     for (frame, data) in frames() {
         assert_eq!(prototype::decompress(&frame, data.len()).unwrap(), data);
     }
-}
-
-#[test]
-#[ignore = "perf spike: run with `make run`"]
-fn decode_speed() {
-    let frames = frames();
-    let bytes: usize = frames.iter().map(|(_, d)| d.len()).sum();
-    let best = |f: &dyn Fn(&[u8], usize) -> Vec<u8>| {
-        (0..20)
-            .map(|_| {
-                let start = Instant::now();
-                for (frame, data) in &frames {
-                    assert_eq!(f(frame, data.len()).len(), data.len());
-                }
-                start.elapsed().as_secs_f64()
-            })
-            .fold(f64::MAX, f64::min)
-    };
-    let ruzstd = best(&ruzstd_decode);
-    let spike = best(&|frame, size| prototype::decompress(frame, size).unwrap());
-    println!("ruzstd: {:.0} MB/s", bytes as f64 / ruzstd / 1e6);
-    println!(
-        "spike:  {:.0} MB/s ({:.2}x)",
-        bytes as f64 / spike / 1e6,
-        ruzstd / spike
-    );
 }

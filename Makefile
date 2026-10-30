@@ -219,7 +219,7 @@ check-stream-profile: ## Charter gate: the stream profile is dependency-free and
 	@python3 tools/check_sqlite_profile.py stream
 
 # The column profile: the Parquet analytics mode (db-core#405). ADR 0000
-# §The column profile: not first-party-only by design (memmap2/ruzstd),
+# §The column profile: not first-party-only by design (memmap2),
 # so only invariant (b) -- the unsafe carve-out -- is checked here.
 check-column-profile: ## Charter gate: the column profile carries exactly its named unsafe carve-out (tools/check_sqlite_profile.py)
 	@python3 tools/check_sqlite_profile.py column

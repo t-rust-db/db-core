@@ -74,8 +74,8 @@ PROFILES = {
     },
     # db-core#405: the Parquet analytics mode. Unlike the SQLite/stream
     # profiles, this one is not first-party-only by design (ADR 0000 §The
-    # column profile) -- memmap2/ruzstd are accepted third-party
-    # dependencies, so invariant (a) is not checked here. Only (b) is.
+    # column profile) -- memmap2 is an accepted third-party
+    # dependency, so invariant (a) is not checked here. Only (b) is.
     "column": {
         "features": ["parser-column", "storage-column", "engine-column"],
         "allowed_unsafe": {

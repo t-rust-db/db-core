@@ -21,7 +21,7 @@ code." Measured against ADR-0000's invariant table on current main:
 
 | | invariant | gate scope today | batch/stream status |
 |---|---|---|---|
-| (a) | first-party-only dependency closure | profile | **already met** outside `storage-column`: `vm-batch`, `codegen-batch`, `vm-stream`, `codegen-stream`, `storage-stream`, `engine-stream` pull nothing. The crate's only third-party deps are `memmap2`/`ruzstd`, both `storage-column`-only |
+| (a) | first-party-only dependency closure | profile | **already met** outside `storage-column`: `vm-batch`, `codegen-batch`, `vm-stream`, `codegen-stream`, `storage-stream`, `engine-stream` pull nothing. The crate's only third-party dep is `memmap2`, `storage-column`-only |
 | (b) | `unsafe` confined to named carve-outs | profile | **already met** outside `storage-column`: zero `unsafe` in `vm/batch.rs`, `vm/stream.rs`, `vm/engine.rs`, `codegen/batch.rs`, `storage/stream/`, `engine/`. Two sites in `storage/column/mmap.rs`, not yet named in (b)'s table |
 | (c) | mode isolation, both directions | crate-wide | met, gated |
 | (d) | every feature builds standalone | crate-wide | met, gated |
