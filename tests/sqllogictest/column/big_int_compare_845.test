@@ -1,0 +1,86 @@
+# #845: Int64 comparisons above 2^53 are exact, not widened to f64. Table
+# big_ints: ids 0..3, big = 2^62 + id, big2 = big + (id % 2).
+# Expected results come from DuckDB (make refresh-column-sqllogictest).
+
+query I nosort
+SELECT id FROM big_ints WHERE big = 4611686018427387905 ORDER BY id
+----
+1
+
+query I nosort
+SELECT id FROM big_ints WHERE big <> 4611686018427387905 ORDER BY id
+----
+0
+2
+3
+
+query I nosort
+SELECT id FROM big_ints WHERE big < 4611686018427387905 ORDER BY id
+----
+0
+
+query I nosort
+SELECT id FROM big_ints WHERE big <= 4611686018427387905 ORDER BY id
+----
+0
+1
+
+query I nosort
+SELECT id FROM big_ints WHERE big > 4611686018427387905 ORDER BY id
+----
+2
+3
+
+query I nosort
+SELECT id FROM big_ints WHERE big >= 4611686018427387905 ORDER BY id
+----
+1
+2
+3
+
+query I nosort
+SELECT id FROM big_ints WHERE big = big2 ORDER BY id
+----
+0
+2
+
+query I nosort
+SELECT id FROM big_ints WHERE big <> big2 ORDER BY id
+----
+1
+3
+
+query I nosort
+SELECT id FROM big_ints WHERE big < big2 ORDER BY id
+----
+1
+3
+
+query I nosort
+SELECT id FROM big_ints WHERE big <= big2 ORDER BY id
+----
+0
+1
+2
+3
+
+query I nosort
+SELECT id FROM big_ints WHERE big > big2 ORDER BY id
+----
+
+query I nosort
+SELECT id FROM big_ints WHERE big >= big2 ORDER BY id
+----
+0
+2
+
+query I nosort
+SELECT id FROM big_ints WHERE big BETWEEN 4611686018427387905 AND 4611686018427387906 ORDER BY id
+----
+1
+2
+
+query I nosort
+SELECT count(*) FROM big_ints WHERE 4611686018427387905 = big
+----
+1
