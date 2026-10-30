@@ -5488,6 +5488,9 @@ impl Vm {
     /// answers. `None` otherwise; the caller then takes the general path.
     fn typed_in_list(&self, src: usize, list: &[Value], negated: bool) -> Option<Column> {
         let column = self.typed_registers.get(&src)?;
+        if let Column::Int { data, valid } = column.as_ref() {
+            return int_in_list(data, valid, list, negated);
+        }
         if !matches!(column.as_ref(), Column::Str { .. } | Column::Dict { .. }) {
             return None;
         }
@@ -7700,10 +7703,43 @@ fn merge_branches(
     Ok(result)
 }
 
-/// `a op b` for one row. Arithmetic follows DuckDB (#635): exact and
-/// overflow-checked for integers and decimals, a float if either operand
-/// is one, and `/` always a float. Returns
-/// [`VmError::IntegerOverflow`] when an exact result leaves its type.
+/// [`Opcode::InList`] over a typed [`Column::Int`] when every item is an
+/// integer or NULL (tools#90: a semi-join's key list can hold thousands):
+/// the items go into one hash set, probed once per row. An integer equals
+/// an integer only when the two are the same number, so the set gives the
+/// comparison chain's answers. `None` for any other item; the caller then
+/// takes the general path, which converts a float or string item.
+fn int_in_list(data: &[i64], valid: &Bitmap, list: &[Value], negated: bool) -> Option<Column> {
+    // Murmur, not SipHash: every row probes (see [`SlotState`]).
+    let mut set = std::collections::HashSet::with_capacity_and_hasher(list.len(), SlotState);
+    let mut has_null = false;
+    for item in list {
+        match item {
+            Value::Int(n) => {
+                set.insert(*n);
+            }
+            Value::Null => has_null = true,
+            _ => return None,
+        }
+    }
+    // As `typed_in_list`: a miss is NULL when the list holds a NULL.
+    let mut out = Vec::with_capacity(data.len());
+    let mut out_valid = Bitmap::new(data.len(), true);
+    for (i, n) in data.iter().enumerate() {
+        let hit = set.contains(n);
+        if !valid.get(i) || (!hit && has_null) {
+            out.push(false);
+            out_valid.set(i, false);
+        } else {
+            out.push(hit != negated);
+        }
+    }
+    Some(Column::Bool {
+        data: out,
+        valid: out_valid,
+    })
+}
+
 /// [`Opcode::InList`] over plain values: each row compared with every item
 /// and the answers folded with three-valued `OR` (`<>` and `AND` when
 /// `negated`), the comparison chain's own steps in one pass. It never stops
@@ -7731,6 +7767,10 @@ fn in_list_values(values: &[Value], list: &[Value], negated: bool) -> Result<Vec
         .collect()
 }
 
+/// `a op b` for one row. Arithmetic follows DuckDB (#635): exact and
+/// overflow-checked for integers and decimals, a float if either operand
+/// is one, and `/` always a float. Returns
+/// [`VmError::IntegerOverflow`] when an exact result leaves its type.
 pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     // `IsNull`/`IsNotNull` must observe a `Null` operand, so they run
     // before the null-propagation rule below.
@@ -15678,6 +15718,94 @@ mod tests {
             probe.unwrap(),
             [
                 Value::Bool(true),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Bool(true),
+                Value::Null
+            ]
+        );
+    }
+
+    /// `int_in_list`'s one row over `n` (`None`: a NULL row) against `list`.
+    fn int_in_list_row(n: Option<i64>, list: &[Value]) -> Option<bool> {
+        let valid = crate::vm::column::Bitmap::from_bools([n.is_some()].into_iter());
+        let Some(Column::Bool { data, valid }) =
+            int_in_list(&[n.unwrap_or(0)], &valid, list, false)
+        else {
+            panic!("an integer list takes the hash set");
+        };
+        valid.get(0).then(|| data[0])
+    }
+
+    // vm_batch_int_in_list_bb76c592: `!valid.get(i) || (!hit && has_null)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_int_in_list_bb76c592__v1_null_row_is_null() {
+        assert_eq!(int_in_list_row(None, &[Value::Int(0)]), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_int_in_list_bb76c592__v2_hit_is_true_despite_a_null_item() {
+        assert_eq!(
+            int_in_list_row(Some(3), &[Value::Int(3), Value::Null]),
+            Some(true)
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_int_in_list_bb76c592__v3_miss_with_a_null_item_is_null() {
+        assert_eq!(
+            int_in_list_row(Some(4), &[Value::Int(3), Value::Null]),
+            None
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_int_in_list_bb76c592__v4_miss_without_a_null_item_is_false() {
+        assert_eq!(int_in_list_row(Some(4), &[Value::Int(3)]), Some(false));
+    }
+
+    /// tools#90: an integer list over a typed `Int` column is one hash
+    /// set, which gives the chain's answers and leaves the column typed.
+    #[test]
+    fn in_list_of_integers_over_an_int_column_answers_as_the_comparison_chain() {
+        let ints = vec![
+            Value::Int(1),
+            Value::Int(-7),
+            Value::Null,
+            Value::Int(4),
+            Value::Int(i64::MAX),
+        ];
+        let typed = Batch::new(5).with_typed_column("c", Column::from(ints.clone()));
+        let plain = Batch::new(5).with_column("c", ints);
+        let lists = [
+            vec![Value::Int(4), Value::Int(-7)],
+            vec![Value::Int(i64::MAX), Value::Null],
+            vec![Value::Int(99)],
+            vec![Value::Null],
+            (0..1000).map(Value::Int).collect(),
+        ];
+        for (batch, typed) in [(&typed, true), (&plain, false)] {
+            for list in &lists {
+                for negated in [false, true] {
+                    let (probe, reference, materialized) = in_list_both_ways(batch, list, negated);
+                    assert_eq!(
+                        probe.unwrap(),
+                        reference.unwrap(),
+                        "{list:?} negated={negated}"
+                    );
+                    assert_eq!(!materialized, typed, "the typed column stays typed");
+                }
+            }
+        }
+        let (probe, ..) = in_list_both_ways(&typed, &[Value::Int(4), Value::Null], false);
+        assert_eq!(
+            probe.unwrap(),
+            [
                 Value::Null,
                 Value::Null,
                 Value::Null,

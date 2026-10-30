@@ -18,7 +18,7 @@
 //! `HashBuild`/`HashProbe` driver: the build side is named by a
 //! [`super::batch::ScanSource`] (ADR 0024, #382) rather than always being
 //! an already-materialized table, resolved via [`ScanSourceResolver`] when
-//! it isn't. And [`semi_filter`].
+//! it isn't.
 
 use super::batch::{
     chunk_len, compare_rows_for_order, execute_in_slices, hash_group_key, run_morsels,
@@ -1011,33 +1011,6 @@ impl<S: Segment> Segment for MultiJoinedSegment<S> {
     }
 }
 
-/// Keep only the rows of `batch` whose `key_column` value (stringified)
-/// appears in `allowed` -- the `WHERE col IN (SELECT ...)` semi-join
-/// filter, applied before the flat body runs over the survivors.
-#[allow(
-    clippy::indexing_slicing,
-    reason = "every column in a `Batch` holds `num_rows` values and `keep` was drawn from `0..num_rows`"
-)]
-pub fn semi_filter(batch: &Batch, key_column: &str, allowed: &HashSet<String>) -> Result<Batch> {
-    let key = batch
-        .columns
-        .get(key_column)
-        .ok_or_else(|| VmError::UnknownColumn {
-            opcode: "SemiFilter",
-            column: key_column.to_string(),
-        })?;
-    let keep: Vec<usize> = (0..batch.num_rows)
-        .filter(|&i| key.get(i).is_some_and(|v| allowed.contains(&v.to_string())))
-        .collect();
-
-    let mut filtered = Batch::new(keep.len());
-    for (name, column) in &batch.columns {
-        let values: Vec<Value> = keep.iter().map(|&i| column[i].clone()).collect();
-        filtered.columns.insert(name.clone(), Arc::new(values));
-    }
-    Ok(filtered)
-}
-
 #[cfg(test)]
 mod tests {
     /// A `Select` into register 3, `Emit`ted as column 0 next to a plain
@@ -1770,21 +1743,6 @@ mod tests {
         )
         .unwrap();
         assert!(vm.take_output().is_empty());
-    }
-
-    #[test]
-    fn semi_filter_keeps_only_allowed_keys() {
-        let batch = Batch::new(3)
-            .with_column("k", vec![Value::Int(1), Value::Int(2), Value::Int(3)])
-            .with_column("v", vec![Value::Int(10), Value::Int(20), Value::Int(30)]);
-        let allowed: HashSet<String> = ["1", "3"].iter().map(|s| s.to_string()).collect();
-        let out = semi_filter(&batch, "k", &allowed).unwrap();
-        assert_eq!(out.num_rows, 2);
-        assert_eq!(
-            out.columns["v"].as_slice(),
-            &[Value::Int(10), Value::Int(30)]
-        );
-        assert!(semi_filter(&batch, "nope", &allowed).is_err());
     }
 
     fn combine(distinct: bool) -> Opcode {
