@@ -234,6 +234,59 @@ impl ColumnValues {
         self.len() == 0
     }
 
+    /// Estimated bytes these values hold in memory: the inline value and
+    /// its `Option` tag per entry, plus the heap bytes of strings, binaries,
+    /// map entries and list items (#854). An estimate, not an allocator's
+    /// count, for sizing row groups and spills.
+    pub(crate) fn byte_size(&self) -> usize {
+        use std::mem::size_of;
+        fn fixed<T>(v: &[Option<T>]) -> usize {
+            v.len().saturating_mul(size_of::<Option<T>>())
+        }
+        fn heap(s: &Option<std::sync::Arc<str>>) -> usize {
+            s.as_ref().map_or(0, |s| s.len())
+        }
+        fn bytes(v: &[Option<Vec<u8>>]) -> usize {
+            fixed(v).saturating_add(v.iter().flatten().map(Vec::len).sum::<usize>())
+        }
+        match self {
+            ColumnValues::Boolean(v) => fixed(v),
+            ColumnValues::Int32(v) => fixed(v),
+            ColumnValues::Int64(v)
+            | ColumnValues::TimestampMicros(v)
+            | ColumnValues::TimestampNanos(v) => fixed(v),
+            ColumnValues::Float(v) => fixed(v),
+            ColumnValues::Double(v) => fixed(v),
+            ColumnValues::Utf8(v) => {
+                fixed(v).saturating_add(v.iter().flatten().map(String::len).sum::<usize>())
+            }
+            ColumnValues::Binary(v) | ColumnValues::FixedLenByteArray(v) => bytes(v),
+            ColumnValues::UInt8(v) => fixed(v),
+            ColumnValues::UInt16(v) => fixed(v),
+            ColumnValues::UInt32(v) => fixed(v),
+            ColumnValues::UInt64(v) => fixed(v),
+            ColumnValues::Decimal(v) => fixed(v),
+            ColumnValues::Map(v) => fixed(v).saturating_add(
+                v.iter()
+                    .flatten()
+                    .flatten()
+                    .map(|(k, val)| {
+                        size_of::<(std::sync::Arc<str>, Option<std::sync::Arc<str>>)>()
+                            .saturating_add(k.len())
+                            .saturating_add(heap(val))
+                    })
+                    .sum::<usize>(),
+            ),
+            ColumnValues::List(v) => fixed(v).saturating_add(
+                v.iter()
+                    .flatten()
+                    .flatten()
+                    .map(|item| size_of::<Option<std::sync::Arc<str>>>().saturating_add(heap(item)))
+                    .sum::<usize>(),
+            ),
+        }
+    }
+
     /// Validity per value: `true` where the value is not null.
     #[cfg(feature = "storage-column-write")]
     pub(crate) fn validity(&self) -> Vec<bool> {

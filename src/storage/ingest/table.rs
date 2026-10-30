@@ -341,13 +341,16 @@ impl TableWriter {
 
     /// Seals the head into a page (nothing if empty) and starts a new WAL
     /// segment, so WAL files line up with pages. A tiered table with more
-    /// than `spill_rows` rows sealed then closes its closed hours and
+    /// than `spill_rows` rows (or `spill_bytes` bytes) sealed then closes its closed hours and
     /// spills the open one to `staging/`.
     pub fn seal_head(&mut self) -> Result<(), IngestError> {
         self.seal()?;
         if let Layout::Tiered(tier) = &self.options.layout {
             let sealed: usize = self.sealed.iter().map(Page::len).sum();
-            if sealed > tier.spill_rows {
+            let over_bytes = tier.spill_bytes.is_some_and(|limit| {
+                self.sealed.iter().map(Page::byte_size).sum::<usize>() > limit
+            });
+            if sealed > tier.spill_rows || over_bytes {
                 self.flush_hours()?;
                 self.spill()?;
             }
@@ -585,19 +588,23 @@ impl TableWriter {
         };
         self.wal.sync()?;
         let id = format!("{lsn_lo:020}-{lsn_hi:020}");
-        let maps = runs
+        // Read a chunk at a time, not mapped: a mapping keeps every page the
+        // merge touched resident until it ends (#854).
+        let files = runs
             .iter()
-            .map(|e| PosixVfs.open(&self.dir.join(&e.path))?.mmap())
+            .map(|e| PosixVfs.open(&self.dir.join(&e.path)))
             .collect::<io::Result<Vec<_>>>()?;
-        let run_bytes: Vec<(&FileEntry, &[u8])> =
-            runs.iter().zip(maps.iter().map(|m| &**m)).collect();
+        let run_files: Vec<(&FileEntry, &dyn VfsFile)> = runs
+            .iter()
+            .zip(files.iter().map(|f| f as &dyn VfsFile))
+            .collect();
 
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);
         fs::create_dir_all(&tmp)?;
         let outputs = tier::close_hour(
             &tmp,
-            &run_bytes,
+            &run_files,
             pages,
             self.options.format,
             self.manifest.schema.as_deref(),
@@ -722,19 +729,23 @@ impl TableWriter {
             return Ok(Vec::new());
         };
         let id = format!("{:020}-{:020}", first.lsn_lo, last.lsn_hi);
-        let maps = inputs
+        // Read a chunk at a time, not mapped: a mapping would keep the whole
+        // day resident until the merge ends (#854).
+        let files = inputs
             .iter()
-            .map(|e| PosixVfs.open(&self.dir.join(&e.path))?.mmap())
+            .map(|e| PosixVfs.open(&self.dir.join(&e.path)))
             .collect::<io::Result<Vec<_>>>()?;
-        let input_bytes: Vec<(&FileEntry, &[u8])> =
-            inputs.iter().zip(maps.iter().map(|m| &**m)).collect();
+        let input_files: Vec<(&FileEntry, &dyn VfsFile)> = inputs
+            .iter()
+            .zip(files.iter().map(|f| f as &dyn VfsFile))
+            .collect();
 
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);
         fs::create_dir_all(&tmp)?;
         let outputs = tier::merge_day(
             &tmp,
-            &input_bytes,
+            &input_files,
             self.manifest.schema.as_deref(),
             tier_options,
             &self.options.parquet,

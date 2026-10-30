@@ -71,6 +71,8 @@ fn flat() -> TableOptions {
 fn tiered() -> TableOptions {
     TableOptions {
         layout: Layout::Tiered(TierOptions {
+            row_group_max_bytes: None,
+            spill_bytes: None,
             sort_key: vec!["kind".to_string(), "session_id".to_string()],
             row_group_max_rows: 3,
             max_file_size: 1 << 30,

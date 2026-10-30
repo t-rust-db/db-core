@@ -4017,9 +4017,11 @@ pub struct db_core::storage::ingest::layout::TierOptions
 pub db_core::storage::ingest::layout::TierOptions::delete_grace_ns: i64
 pub db_core::storage::ingest::layout::TierOptions::max_file_size: u64
 pub db_core::storage::ingest::layout::TierOptions::retention_days: core::option::Option<u32>
+pub db_core::storage::ingest::layout::TierOptions::row_group_max_bytes: core::option::Option<usize>
 pub db_core::storage::ingest::layout::TierOptions::row_group_max_rows: usize
 pub db_core::storage::ingest::layout::TierOptions::session_key: core::option::Option<db_core::storage::ingest::layout::SessionKey>
 pub db_core::storage::ingest::layout::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
+pub db_core::storage::ingest::layout::TierOptions::spill_bytes: core::option::Option<usize>
 pub db_core::storage::ingest::layout::TierOptions::spill_rows: usize
 pub db_core::storage::ingest::layout::TierOptions::stat_columns: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for db_core::storage::ingest::layout::TierOptions
@@ -4155,6 +4157,7 @@ pub db_core::storage::ingest::page::Page::body: db_core::storage::ingest::page::
 pub db_core::storage::ingest::page::Page::lsn_hi: u64
 pub db_core::storage::ingest::page::Page::lsn_lo: u64
 impl db_core::storage::ingest::page::Page
+pub fn db_core::storage::ingest::page::Page::byte_size(&self) -> usize
 pub fn db_core::storage::ingest::page::Page::first_observed(&self) -> core::option::Option<i64>
 pub fn db_core::storage::ingest::page::Page::is_empty(&self) -> bool
 pub fn db_core::storage::ingest::page::Page::len(&self) -> usize
@@ -4610,6 +4613,7 @@ pub db_core::storage::ingest::Page::body: db_core::storage::ingest::page::PageBo
 pub db_core::storage::ingest::Page::lsn_hi: u64
 pub db_core::storage::ingest::Page::lsn_lo: u64
 impl db_core::storage::ingest::page::Page
+pub fn db_core::storage::ingest::page::Page::byte_size(&self) -> usize
 pub fn db_core::storage::ingest::page::Page::first_observed(&self) -> core::option::Option<i64>
 pub fn db_core::storage::ingest::page::Page::is_empty(&self) -> bool
 pub fn db_core::storage::ingest::page::Page::len(&self) -> usize
@@ -4738,9 +4742,11 @@ pub struct db_core::storage::ingest::TierOptions
 pub db_core::storage::ingest::TierOptions::delete_grace_ns: i64
 pub db_core::storage::ingest::TierOptions::max_file_size: u64
 pub db_core::storage::ingest::TierOptions::retention_days: core::option::Option<u32>
+pub db_core::storage::ingest::TierOptions::row_group_max_bytes: core::option::Option<usize>
 pub db_core::storage::ingest::TierOptions::row_group_max_rows: usize
 pub db_core::storage::ingest::TierOptions::session_key: core::option::Option<db_core::storage::ingest::layout::SessionKey>
 pub db_core::storage::ingest::TierOptions::sort_key: alloc::vec::Vec<alloc::string::String>
+pub db_core::storage::ingest::TierOptions::spill_bytes: core::option::Option<usize>
 pub db_core::storage::ingest::TierOptions::spill_rows: usize
 pub db_core::storage::ingest::TierOptions::stat_columns: alloc::vec::Vec<alloc::string::String>
 impl core::clone::Clone for db_core::storage::ingest::layout::TierOptions

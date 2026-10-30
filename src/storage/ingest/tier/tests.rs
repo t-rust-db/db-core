@@ -1,4 +1,6 @@
 use super::*;
+use crate::storage::column::memory::MemoryFile;
+use crate::storage::column::{MemoryVfs, Vfs};
 use crate::storage::ingest::layout::Area;
 use crate::storage::parquet::writer::ColumnType;
 use crate::storage::stream::detect::{DetectedParser, Format};
@@ -9,6 +11,13 @@ fn temp_dir(name: &str) -> PathBuf {
     fs::remove_dir_all(&dir).ok();
     fs::create_dir_all(&dir).unwrap();
     dir
+}
+
+/// `bytes` as a file to read from.
+fn mem(bytes: &[u8]) -> MemoryFile {
+    let vfs = MemoryVfs::new();
+    vfs.insert("f", bytes.to_vec());
+    vfs.open(Path::new("f")).unwrap()
 }
 
 fn page(lsn_lo: u64, lines: &[&str]) -> Page {
@@ -144,7 +153,7 @@ fn a_day_merge_refuses_inputs_that_do_not_match_the_manifest() {
     let out = temp_dir("day");
     let err = merge_day(
         &out,
-        &[(&entry, &bytes)],
+        &[(&entry, &mem(&bytes))],
         None,
         &TierOptions::default(),
         &WriterOptions::default(),
@@ -155,7 +164,7 @@ fn a_day_merge_refuses_inputs_that_do_not_match_the_manifest() {
         .contains("holds LSNs up to 2, the manifest says 3"));
     let err = merge_day(
         &out,
-        &[(&entry, b"not parquet")],
+        &[(&entry, &mem(b"not parquet"))],
         None,
         &TierOptions::default(),
         &WriterOptions::default(),
@@ -267,7 +276,7 @@ fn an_hour_closes_by_merging_its_runs_and_pages_under_a_widened_schema() {
     };
     let outputs = close_hour(
         &out,
-        &[(&first.0, &first.1), (&second.0, &second.1)],
+        &[(&first.0, &mem(&first.1)), (&second.0, &mem(&second.1))],
         &pages,
         Format::Jsonl,
         None,
@@ -352,7 +361,7 @@ fn close_one_run(name: &str, run_lines: &[&str], run_rows: usize, pages: &[Page]
     fs::create_dir_all(&out).unwrap();
     let merged = close_hour(
         &out,
-        &[(&entry, &bytes)],
+        &[(&entry, &mem(&bytes))],
         pages,
         Format::Jsonl,
         None,

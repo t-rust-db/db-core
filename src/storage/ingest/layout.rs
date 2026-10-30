@@ -12,7 +12,7 @@
 //!   hours into `archive/date=D/`, which is final. Every output is built
 //!   under `tmp/` and published with one directory rename, so a directory
 //!   listing sees an hour or a day whole or not at all. An open hour with
-//!   more than `spill_rows` rows in sealed pages spills them to
+//!   more than `spill_rows` rows (or `spill_bytes` bytes) in sealed pages spills them to
 //!   `staging/date=D/hour=H/` as sorted runs, which its close merges.
 //!
 //! Because `observed_ts` and the LSN only grow together, every hour and
@@ -38,6 +38,11 @@ pub struct TierOptions {
     pub sort_key: Vec<String>,
     /// Most rows in a row group. Row groups never span an hour.
     pub row_group_max_rows: usize,
+    /// Most estimated in-memory bytes in a row group (#854), so one setting
+    /// fits narrow and wide rows: a row group holds at most this many bytes
+    /// at the rows' average size, and at most `row_group_max_rows` rows,
+    /// whichever is fewer rows. `None` (the default) counts rows only.
+    pub row_group_max_bytes: Option<usize>,
     /// A day merge starts a new file once a file reaches this size, at an
     /// hour boundary, so a file can exceed it by one hour. A closed hour
     /// is always one file.
@@ -47,9 +52,13 @@ pub struct TierOptions {
     pub delete_grace_ns: i64,
     /// Most rows the open hour keeps in sealed pages: past it, they spill
     /// to `staging/` as a sorted run (the head, at most one page, stays).
-    /// The memory budget of a tiered table, in rows rather than bytes,
-    /// since that is what is counted exactly.
+    /// The memory budget of a tiered table in rows, which are counted
+    /// exactly; `spill_bytes` bounds it in bytes for wide rows.
     pub spill_rows: usize,
+    /// Most estimated bytes the open hour keeps in sealed pages (#854):
+    /// past it, or past `spill_rows`, whichever comes first, they spill.
+    /// `None` (the default) counts rows only.
+    pub spill_bytes: Option<usize>,
     /// Closed days kept in `archive/`: `TableWriter::compact`
     /// drops older ones, whole, in one commit, and deletes their files after
     /// the grace period. `None` (the default) keeps everything.
@@ -91,9 +100,11 @@ impl Default for TierOptions {
         TierOptions {
             sort_key: Vec::new(),
             row_group_max_rows: 1_000_000,
+            row_group_max_bytes: None,
             max_file_size: 1 << 30,
             delete_grace_ns: 600_000_000_000,
             spill_rows: 1_000_000,
+            spill_bytes: None,
             retention_days: None,
             session_key: None,
             stat_columns: Vec::new(),

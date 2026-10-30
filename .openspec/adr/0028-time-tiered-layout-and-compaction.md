@@ -333,6 +333,27 @@ flush (write under `tmp/`, rename, commit, release the WAL and the
 pages), so its rows leave memory and the WAL. The head, at most one page,
 stays.
 
+**Byte budgets (#854).** Rows are the wrong unit for a wide table: a
+~1 KB request row (MAPs, bodies) makes a 1M-row budget hundreds of MB.
+`TierOptions.spill_bytes` and `row_group_max_bytes` (both `None` by
+default) bound the sealed pages and a row group by `Page::byte_size`, an
+estimate of the in-memory bytes (inline values plus heap bytes of strings,
+binaries, map entries and list items). A byte limit applies together with
+its row limit; the row group's row count is the byte limit over the rows'
+average size, capped by `row_group_max_rows`. The hour close and the day
+merge read their inputs a chunk at a time (`ParquetFile::open_file`)
+instead of mapping them, so a merge holds one row group per input, not
+every page it touched.
+
+Measured (`make bench-events`, the `wide` workload: 1M requests of 24
+columns, four MAPs and two BINARYs, ~0.8 KB a row, over 6 hours, zstd):
+with the row-count defaults the process peaks at 1.8 GB (open hour 1.6 GB,
+day merge 1.7 GB); with `spill_bytes` 16 MB and `row_group_max_bytes`
+4 MB it peaks at 211 MB, about 195 MB in each of the open hour, the hour
+flush and the day merge, at 1.8x the ingest time (the spills). The bound
+for such a table is about a dozen times `spill_bytes`'s estimate, set by
+the decoded size of the maps (an `Arc<str>` per entry).
+
 **The manifest lists runs.** A staging entry has area `staging`; a
 tiered manifest is `archive/`, then `live/`, then `staging/` (only the
 open hour spills). A reader that predates part b refuses the area. Runs

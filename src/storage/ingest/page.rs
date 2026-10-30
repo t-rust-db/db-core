@@ -53,6 +53,15 @@ impl Page {
         self.len() == 0
     }
 
+    /// Estimated bytes the page holds in memory (#854), for the byte
+    /// budgets of a tiered table.
+    pub fn byte_size(&self) -> usize {
+        match &self.body {
+            PageBody::Lines(segment) => segment.byte_len(),
+            PageBody::Rows(rows) => rows.byte_size(),
+        }
+    }
+
     /// The parsed segment of a lines table's page.
     pub fn lines(&self) -> Option<&Arc<Segment>> {
         match &self.body {

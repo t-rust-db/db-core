@@ -496,6 +496,8 @@ fn flush_timing_invariance(kind: Kind) {
         let tiered = rng.below(2) == 0;
         let layout = if tiered {
             Layout::Tiered(TierOptions {
+                row_group_max_bytes: None,
+                spill_bytes: None,
                 sort_key: sort_keys[rng.below(3) as usize]
                     .iter()
                     .map(|k| k.to_string())
@@ -1718,6 +1720,8 @@ fn ranked_row(event: &(u64, &str, &str, i64, Option<&str>)) -> Vec<RecordValue> 
 fn ranked_options() -> TableOptions {
     TableOptions {
         layout: Layout::Tiered(TierOptions {
+            row_group_max_bytes: None,
+            spill_bytes: None,
             sort_key: Vec::new(),
             row_group_max_rows: 3,
             max_file_size: 1 << 30,
@@ -1911,6 +1915,8 @@ fn distinct_counts_of_integer_columns_agree_with_a_model_in_every_state() {
     ];
     let options = || TableOptions {
         layout: Layout::Tiered(TierOptions {
+            row_group_max_bytes: None,
+            spill_bytes: None,
             sort_key: Vec::new(),
             row_group_max_rows: 7,
             max_file_size: 1 << 30,
@@ -2091,6 +2097,8 @@ fn distinct_counts_of_string_columns_agree_with_a_model_in_every_state() {
     ];
     let options = || TableOptions {
         layout: Layout::Tiered(TierOptions {
+            row_group_max_bytes: None,
+            spill_bytes: None,
             sort_key: Vec::new(),
             row_group_max_rows: 7,
             max_file_size: 1 << 30,

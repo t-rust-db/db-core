@@ -12,6 +12,8 @@
 # Usage: tools/bench_events.sh   (EVENTS=10000000 DAYS=7 SEED=42
 # SYNC_EVERY=10000 CODEC=snappy by default; EVENTS=200000 for a quick
 # run; CODEC=zstd or uncompressed for the page codec, #622;
+# ROW_GROUP_MAX_BYTES / SPILL_BYTES set the byte budgets, #854; REQUESTS=300000
+# sizes the request-shaped wide workload;
 # STAT_COLUMNS=day by default, empty for none; SESSION_KEY_SECS=14400 turns
 # on session_key with timestamped session ids, #599)
 set -euo pipefail
@@ -72,6 +74,9 @@ timed ingest_dbcore "$BIN" ingest "$TABLE"
 "$BIN" storage "$TABLE" >"$OUT/storage_dbcore.out"
 FILES="$("$BIN" files "$TABLE" | sed "s/.*/'&'/" | paste -sd, -)"
 DUCK_VIEW="CREATE VIEW events AS SELECT * FROM read_parquet([$FILES]);"
+
+echo "db-core: ingest ${REQUESTS:-300000} wide requests (24 columns, 4 MAPs, 2 BINARYs)..."
+timed ingest_wide "$BIN" wide "$OUT/wide"
 
 echo "SQLite: load the same events and build three indexes..."
 "$BIN" csv "$CSV"
@@ -153,6 +158,7 @@ report = {
     "seed": int(os.environ["SEED"]),
     "ingest": {
         "dbcore": {**{k: float(v) for k, v in ingest.items()}, **res["ingest_dbcore"]},
+        "dbcore_wide": {**{k: float(v) for k, v in kv(f"{out}/ingest_wide.out").items()}, **res["ingest_wide"]},
         "sqlite_bulk_load_and_index": res["ingest_sqlite"],
     },
     "storage_bytes_per_event": {
@@ -179,6 +185,7 @@ report["build_side"] = {
 report["tail_reader"] = {k: float(v) for k, v in kv(f"{out}/tail.out").items()}
 json.dump(report, open(json_path, "w"), indent=2)
 
+w = report["ingest"]["dbcore_wide"]
 i, d = report["ingest"]["dbcore"], report["ingest"]["sqlite_bulk_load_and_index"]
 s = report["storage_bytes_per_event"]
 lines = [
@@ -193,6 +200,13 @@ lines = [
     f"| db-core: day merge (compact) | {i['day_compact_s']:.2f} | | |",
     f"| db-core: whole process | {i['wall_s']:.2f} | | {i['peak_rss_mb']:.0f} |",
     f"| SQLite: bulk CSV import + 3 indexes | {d['wall_s']:.2f} | {events / d['wall_s']:,.0f} | {d['peak_rss_mb']:.0f} |",
+    "",
+    "## Peak memory per phase, MB (#854)",
+    "",
+    "| workload | open hour (append) | hour flush | day merge | whole process |",
+    "|---|---:|---:|---:|---:|",
+    f"| events ({events:,}, 7 columns) | {i['peak_append_mb']:.0f} | {i['peak_flush_mb']:.0f} | {i['peak_merge_mb']:.0f} | {i['peak_rss_mb']:.0f} |",
+    f"| requests ({w['events']:,.0f}, 24 columns, 4 MAPs + 2 BINARYs) | {w['peak_append_mb']:.0f} | {w['peak_flush_mb']:.0f} | {w['peak_merge_mb']:.0f} | {w['peak_rss_mb']:.0f} |",
     "",
     "## Storage",
     "",
