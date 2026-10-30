@@ -8310,6 +8310,10 @@ pub fn db_core::vm::batch::AggPart::fmt(&self, &mut core::fmt::Formatter<'_>) ->
 impl core::marker::Copy for db_core::vm::batch::AggPart
 impl core::marker::StructuralPartialEq for db_core::vm::batch::AggPart
 pub enum db_core::vm::batch::Column
+pub db_core::vm::batch::Column::Blob
+pub db_core::vm::batch::Column::Blob::data: alloc::vec::Vec<u8>
+pub db_core::vm::batch::Column::Blob::offsets: alloc::vec::Vec<u32>
+pub db_core::vm::batch::Column::Blob::valid: db_core::vm::column::Bitmap
 pub db_core::vm::batch::Column::Bool
 pub db_core::vm::batch::Column::Bool::data: alloc::vec::Vec<bool>
 pub db_core::vm::batch::Column::Bool::valid: db_core::vm::column::Bitmap
