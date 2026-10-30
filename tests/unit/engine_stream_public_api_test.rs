@@ -613,3 +613,39 @@ fn json_keys_lists_object_keys() {
         ]
     );
 }
+
+/// #839: a JSON path literal without its `$` is refused at plan time
+/// instead of giving NULL on every row.
+#[test]
+fn a_json_path_without_a_dollar_is_refused() {
+    let mut e = open_json();
+    let err = e
+        .run_query("SELECT json_extract(message, 'status') FROM log")
+        .map(|_| ())
+        .expect_err("refused");
+    assert!(err.to_string().contains("json_extract"), "{err}");
+}
+
+/// #839: `json_array_elements_text` lists a JSON array's elements as text,
+/// the list `UNNEST` expands into rows.
+#[test]
+fn json_array_elements_text_lists_a_json_array() {
+    let mut e = open_json();
+    let doc = r#"'{"tags":["x","y",null,3],"items":[{"v":1}]}'"#;
+    let sql = format!(
+        "SELECT json_array_elements_text({doc}, '$.tags'), \
+         json_array_elements_text({doc}, '$.items'), json_array_elements_text({doc}), \
+         json_array_elements_text('[]') FROM log LIMIT 1"
+    );
+    let row = rows(&mut e, &sql).remove(0);
+    let text = |s: &str| Cell::Text(s.to_string());
+    assert_eq!(
+        row,
+        vec![
+            text(r#"["x","y",null,"3"]"#),
+            text(r#"["{\"v\":1}"]"#),
+            Cell::Null,
+            text("[]"),
+        ]
+    );
+}

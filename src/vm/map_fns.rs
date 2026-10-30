@@ -109,6 +109,8 @@ pub(crate) const MAP_FUNCTIONS: &[(&str, usize)] = &[
     ("cardinality", 1),
     ("json_keys", 1),
     ("json_keys", 2),
+    ("json_array_elements_text", 1),
+    ("json_array_elements_text", 2),
 ];
 
 /// The arity of a function that takes any number of arguments.
@@ -187,6 +189,9 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
     if name.eq_ignore_ascii_case("json_keys") {
         return json_keys(args);
     }
+    if name.eq_ignore_ascii_case("json_array_elements_text") {
+        return json_array_elements_text(args);
+    }
     if let Some((Value::List(items), rest)) = args.split_first() {
         return list_call(name, items, rest);
     }
@@ -251,6 +256,48 @@ fn json_keys(args: &[&Value]) -> Value {
             .map(|(k, _)| Some(Arc::from(crate::json_path::unescape(k).as_ref())))
             .collect(),
     ))
+}
+
+/// `json_array_elements_text(json[, path])` (#839): the elements of the
+/// array at `path` as a list of text -- what `UNNEST` expands into rows. A
+/// string is its text, a number its digits, an object or array its JSON
+/// text and a JSON `null` a NULL element. NULL for anything but an array.
+/// The row engine's `json_array_length` and `json_extract` do the work.
+fn json_array_elements_text(args: &[&Value]) -> Value {
+    use crate::value::Value as Scalar;
+    let (Some(Value::Str(doc)), path) = (args.first(), args.get(1)) else {
+        return Value::Null;
+    };
+    let path = match path {
+        None => "$",
+        Some(Value::Str(p)) => p.as_ref(),
+        Some(_) => return Value::Null,
+    };
+    let text = |s: &str| Scalar::Text(s.to_string().into());
+    let is_array = matches!(
+        crate::functions::call("json_type", &[text(doc), text(path)]),
+        Ok(Scalar::Text(t)) if &*t == "array"
+    );
+    let Ok(Scalar::Integer(len)) =
+        crate::functions::call("json_array_length", &[text(doc), text(path)])
+    else {
+        return Value::Null;
+    };
+    if !is_array {
+        return Value::Null;
+    }
+    let items: ListItems = (0..len)
+        .map(|i| {
+            let at = text(&format!("{path}[{i}]"));
+            match crate::functions::call("json_extract", &[text(doc), at]) {
+                Ok(Scalar::Text(t)) => Some(Arc::from(&*t)),
+                Ok(Scalar::Integer(n)) => Some(Arc::from(n.to_string())),
+                Ok(Scalar::Real(r)) => Some(Arc::from(r.to_string())),
+                _ => None,
+            }
+        })
+        .collect();
+    Value::List(Arc::new(items))
 }
 
 fn string_split(s: &Value, sep: &Value) -> Value {
@@ -455,13 +502,34 @@ fn slice(items: &ListItems, begin: i64, end: i64) -> Value {
 /// Why literal argument `position` of `name` is not usable, for the
 /// plan-time check (#828): `list_aggr`'s aggregate and `list_sort`'s
 /// order must be string literals DuckDB accepts here. `value` is the
-/// argument when it is a string literal.
+/// argument when it is a string literal. The path of a JSON function
+/// (#839) is checked by the row engine's own path parser, and only when it
+/// is a literal. Like sqlite3's it reads the path as far as the document
+/// goes, so against `{}` it refuses a path that does not start with `$`
+/// and leaves a malformed tail (`$.a[`) to give NULL.
 #[cfg(feature = "parser-column")]
 pub(crate) fn literal_arg_error(
     name: &str,
     position: usize,
     value: Option<&str>,
 ) -> Option<String> {
+    if position == 1
+        && matches!(
+            name.to_ascii_lowercase().as_str(),
+            "json_extract"
+                | "json_extract_string"
+                | "json_array_length"
+                | "json_type"
+                | "json_keys"
+        )
+    {
+        let doc = crate::value::Value::Text("{}".into());
+        let path = crate::value::Value::Text(value?.into());
+        return match crate::functions::call("json_extract", &[doc, path]) {
+            Err(crate::functions::FunctionError::Sql(why)) => Some(format!("{name}: {why}")),
+            _ => None,
+        };
+    }
     let allowed: &[&str] = match (name.to_ascii_lowercase().as_str(), position) {
         ("list_aggr" | "list_aggregate", 1) => {
             &["string_agg", "count", "min", "max", "first", "last"]
@@ -903,6 +971,12 @@ mod tests {
             None
         );
         assert_eq!(literal_arg_error("list_sort", 0, None), None);
+        // #839: a JSON path literal is checked, a computed one is not.
+        assert_eq!(literal_arg_error("json_extract", 1, Some("$.a[0]")), None);
+        assert_eq!(literal_arg_error("json_keys", 1, Some("$.a[#-1]")), None);
+        assert!(literal_arg_error("json_type", 1, Some("a.b")).is_some());
+        assert!(literal_arg_error("json_extract", 1, Some("")).is_some());
+        assert_eq!(literal_arg_error("json_extract", 1, None), None);
         assert_eq!(literal_arg_error("string_split", 1, None), None);
     }
 

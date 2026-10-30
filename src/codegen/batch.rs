@@ -6570,7 +6570,7 @@ mod tests {
     /// Compiles `name(<arity args>)`, built by renaming/resizing a parsed
     /// two-argument call (the row parser itself rejects `ilike(...)`).
     fn compile_call(name: &str, arity: usize) -> Vec<Instruction> {
-        let mut select = sql::parse("SELECT json_extract(a, 'x') FROM t").unwrap();
+        let mut select = sql::parse("SELECT json_extract(a, '$.x') FROM t").unwrap();
         let ResultColumn::Expr { expr, .. } = &mut select.columns[0] else {
             panic!("expected an expression column");
         };
