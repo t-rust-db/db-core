@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.212.0] - 2026-10-30
+
+### Changed
+
+- `UNNEST` over a dictionary-encoded string list reads each page's levels and codes a window at a time instead of decoding them into vectors; peak RSS drops about 25 MB (93 -> 68 MB on the 10M-row benchmark) with no change in time (#856).
+
 ## [0.211.0] - 2026-10-30
 
 ### Added
