@@ -2493,18 +2493,25 @@ pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Or
         (false, true) => Ordering::Less,
         (false, false) => {
             let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });
-            let ord = match (a.as_f64(), b.as_f64()) {
-                // A decimal compares exactly (#632), never through f64 or
-                // as text.
-                (Some(_), Some(_)) if decimal => numeric_cmp(a, b).unwrap_or(Ordering::Equal),
-                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-                // #266: compare `Str`/`Str` directly -- `Value`'s `Display`
-                // prints a `Str`'s contents verbatim (no quoting), so this
-                // is byte-identical to the `to_string()` fallback below
-                // without the two allocations.
-                _ => match (a, b) {
-                    (Value::Str(x), Value::Str(y)) => x.cmp(y),
-                    _ => a.to_string().cmp(&b.to_string()),
+            let ord = match (a, b) {
+                // Two integers compare exactly (#890, as `compare_values`
+                // does since #845): through f64, values past 2^53 that
+                // differ compared equal and top-N kept the wrong rows.
+                (Value::Int(x), Value::Int(y)) => x.cmp(y),
+                _ => match (a.as_f64(), b.as_f64()) {
+                    // A decimal compares exactly (#632), never through f64
+                    // or as text.
+                    (Some(_), Some(_)) if decimal => numeric_cmp(a, b).unwrap_or(Ordering::Equal),
+                    (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+                    // #266: compare `Str`/`Str` directly -- `Value`'s
+                    // `Display` prints a `Str`'s contents verbatim (no
+                    // quoting), so this is byte-identical to the
+                    // `to_string()` fallback below without the two
+                    // allocations.
+                    _ => match (a, b) {
+                        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+                        _ => a.to_string().cmp(&b.to_string()),
+                    },
                 },
             };
             // ORDER BY direction flips the comparison, not the sort itself.

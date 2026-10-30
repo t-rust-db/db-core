@@ -1,0 +1,34 @@
+# #890: top-N (ORDER BY ... LIMIT) compared integers through f64, so values
+# past 2^53 that differ tied and the wrong rows were kept.
+
+query II nosort
+SELECT id, big FROM big_ints ORDER BY big DESC LIMIT 3
+----
+3
+4611686018427387907
+2
+4611686018427387906
+1
+4611686018427387905
+
+query II nosort
+SELECT id, big FROM big_ints ORDER BY big LIMIT 3
+----
+0
+4611686018427387904
+1
+4611686018427387905
+2
+4611686018427387906
+
+query I nosort
+SELECT big2 FROM big_ints GROUP BY big2 ORDER BY big2 DESC LIMIT 2
+----
+4611686018427387908
+4611686018427387906
+
+query I nosort
+SELECT big2 FROM big_ints GROUP BY big2 ORDER BY big2 LIMIT 2
+----
+4611686018427387904
+4611686018427387906
