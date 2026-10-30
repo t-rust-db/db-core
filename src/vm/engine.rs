@@ -1014,6 +1014,11 @@ impl<S: Segment> Segment for MultiJoinedSegment<S> {
 /// Keep only the rows of `batch` whose `key_column` value (stringified)
 /// appears in `allowed` -- the `WHERE col IN (SELECT ...)` semi-join
 /// filter, applied before the flat body runs over the survivors.
+///
+/// Superseded by [`crate::codegen::batch::compile_semi_body`] (tools#90):
+/// comparing text, a NULL key matches a NULL in `allowed`, `5` never
+/// matches `5.0` and `5` matches `'5'`, where a literal `IN` list does not.
+/// Kept until column-rs no longer calls it.
 #[allow(
     clippy::indexing_slicing,
     reason = "every column in a `Batch` holds `num_rows` values and `keep` was drawn from `0..num_rows`"

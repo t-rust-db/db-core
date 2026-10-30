@@ -4,6 +4,20 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.207.0] - 2026-10-30
+
+### Added
+
+- `codegen::batch::compile_semi_body`: compile a `col IN (SELECT ...)` query's body with the subquery's values as an `IN` list filter, run over the main table's segments (tools#90).
+
+### Changed
+
+- `IN` lists of integers over an integer column probe one hash set instead of comparing every item (tools#90).
+
+### Deprecated
+
+- `vm::engine::semi_filter`: it compares stringified values, giving wrong semi-join answers for NULL, float and string keys. Use `compile_semi_body`; it stays until column-rs moves off it.
+
 ## [0.206.0] - 2026-10-30
 
 ### Changed
