@@ -6,9 +6,10 @@
 //! opcode per pragma, operands carrying whatever the executor needs.
 
 use crate::codegen::row::Emitter;
-use crate::parser::ast::{Pragma, PragmaJournalMode, PragmaSynchronous};
+use crate::parser::ast::{Pragma, PragmaCheckpointMode, PragmaJournalMode, PragmaSynchronous};
 use crate::vm::row::{
-    Instruction, Opcode, Program, JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, SYNCHRONOUS_FULL,
+    Instruction, Opcode, Program, CHECKPOINT_FULL, CHECKPOINT_PASSIVE, CHECKPOINT_RESTART,
+    CHECKPOINT_TRUNCATE, JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, SYNCHRONOUS_FULL,
     SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF, SYNCHRONOUS_QUERY,
 };
 
@@ -51,6 +52,22 @@ pub fn compile_pragma(pragma: &Pragma) -> Program {
                 Some(PragmaSynchronous::Full) => SYNCHRONOUS_FULL,
             };
             em.emit(Instruction::new(Opcode::Synchronous, p1, 0, 0));
+        }
+        Pragma::WalAutocheckpoint { frames, .. } => {
+            let (p1, p2) = match frames {
+                None => (0, 0),
+                Some(n) => (*n, 1),
+            };
+            em.emit(Instruction::new(Opcode::WalAutocheckpoint, p1, p2, 0));
+        }
+        Pragma::WalCheckpoint { mode, .. } => {
+            let p1 = match mode {
+                PragmaCheckpointMode::Passive => CHECKPOINT_PASSIVE,
+                PragmaCheckpointMode::Full => CHECKPOINT_FULL,
+                PragmaCheckpointMode::Restart => CHECKPOINT_RESTART,
+                PragmaCheckpointMode::Truncate => CHECKPOINT_TRUNCATE,
+            };
+            em.emit(Instruction::new(Opcode::Checkpoint, p1, 0, 0));
         }
     }
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));

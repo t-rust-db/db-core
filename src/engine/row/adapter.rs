@@ -14,13 +14,14 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::rc::Rc;
 
+use crate::storage::row::pager::checkpoint::CheckpointMode;
 use crate::value::Collation;
 use crate::vm::row::cursor_factory::{CursorFactory, CursorFactoryError};
 use crate::vm::row::schema_storage::{SchemaStorage, SchemaStorageError};
 use crate::vm::row::transaction::{Transaction, TransactionError};
 use crate::vm::row::{
-    compare, AnalyzeTarget, Cursor, SortKeyColumn, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL,
-    SYNCHRONOUS_OFF,
+    compare, AnalyzeTarget, Cursor, SortKeyColumn, CHECKPOINT_FULL, CHECKPOINT_RESTART,
+    CHECKPOINT_TRUNCATE, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF,
 };
 
 use crate::storage::row::btree::{self, IndexCursor, IndexRow, Payload, TableCursor};
@@ -769,6 +770,38 @@ impl Transaction for PagerTransaction {
             writer.borrow_mut().set_synchronous(mode);
         }
         Ok(())
+    }
+
+    fn wal_autocheckpoint(&mut self, frames: Option<i32>) -> Result<Option<i32>, TransactionError> {
+        let Some(writer) = self.writer.as_ref() else {
+            return Ok(None);
+        };
+        let mut pager = writer.borrow_mut();
+        if let Some(frames) = frames {
+            pager.set_wal_autocheckpoint(frames);
+        }
+        Ok(Some(pager.wal_autocheckpoint()))
+    }
+
+    fn wal_checkpoint(&mut self, mode: i32) -> Result<Option<(i64, i64, i64)>, TransactionError> {
+        let Some(writer) = self.writer.as_ref() else {
+            return Ok(None);
+        };
+        let mode = match mode {
+            CHECKPOINT_FULL => CheckpointMode::Full,
+            CHECKPOINT_RESTART => CheckpointMode::Restart,
+            CHECKPOINT_TRUNCATE => CheckpointMode::Truncate,
+            _ => CheckpointMode::Passive,
+        };
+        let outcome = writer
+            .borrow_mut()
+            .checkpoint_wal(mode)
+            .map_err(|e| TransactionError(storage_err(e)))?;
+        Ok(Some((
+            i64::from(outcome.busy),
+            outcome.log,
+            outcome.checkpointed,
+        )))
     }
 
     fn integrity_check(&mut self, quick: bool) -> Option<Result<Vec<String>, TransactionError>> {

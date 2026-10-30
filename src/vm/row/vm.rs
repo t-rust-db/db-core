@@ -38,7 +38,8 @@ use super::cursor::{Cursor, EphemeralTableCursor, HashAggCursor, PseudoCursor, S
 use super::cursor_factory::{CursorFactory, CursorFactoryError};
 use super::functions;
 use super::program::{
-    Instruction, Opcode, Program, JOURNAL_MODE_WAL, P4, SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY,
+    Instruction, Opcode, Program, DEFAULT_WAL_AUTOCHECKPOINT, JOURNAL_MODE_WAL, P4,
+    SYNCHRONOUS_FULL, SYNCHRONOUS_QUERY,
 };
 use super::record::{decode_column_with, decode_record, encode_record, parse_header};
 use super::schema_storage::{SchemaStorage, SchemaStorageError};
@@ -141,6 +142,8 @@ pub enum ExecError {
     /// SQLite refuses with "Safety level may not be changed inside a
     /// transaction" (#563).
     SynchronousChangeDuringTransaction,
+    /// `Checkpoint` ran while a transaction was open (#896).
+    CheckpointDuringTransaction,
     /// A function would build a string or blob past
     /// [`crate::functions::MAX_LENGTH`]; sqlite3's "string or blob too
     /// big" (#659).
@@ -228,6 +231,9 @@ impl std::fmt::Display for ExecError {
             ExecError::TooBig => write!(f, "string or blob too big"),
             ExecError::SynchronousChangeDuringTransaction => {
                 write!(f, "Safety level may not be changed inside a transaction")
+            }
+            ExecError::CheckpointDuringTransaction => {
+                write!(f, "database table is locked")
             }
             ExecError::TransactionAlreadyActive => {
                 write!(f, "cannot start a transaction within a transaction")
@@ -1218,6 +1224,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         | Opcode::AutoCommit
         | Opcode::SetJournalMode
         | Opcode::Synchronous
+        | Opcode::Checkpoint
+        | Opcode::WalAutocheckpoint
         | Opcode::IntegrityCheck
         | Opcode::CreateTable
         | Opcode::CreateView
@@ -3387,6 +3395,54 @@ mod tests {
                 vec![Value::Integer(i64::from(SYNCHRONOUS_OFF))],
                 vec![Value::Text("ok quick=true".into())],
             ]
+        );
+    }
+
+    /// #896: with no pager attached, `PRAGMA wal_checkpoint` answers the
+    /// not-in-WAL-mode row and `PRAGMA wal_autocheckpoint` the default.
+    #[test]
+    fn wal_pragmas_answer_without_a_pager() {
+        use super::super::program::CHECKPOINT_TRUNCATE;
+        let mut vm = Vm::new();
+        let checkpoint = Instruction::new(Opcode::Checkpoint, CHECKPOINT_TRUNCATE, 0, 0);
+        assert_eq!(step(&mut vm, 0, &checkpoint).unwrap(), Step::Next);
+        assert_eq!(
+            vm.rows(),
+            &[vec![
+                Value::Integer(0),
+                Value::Integer(-1),
+                Value::Integer(-1),
+            ]]
+        );
+
+        let mut vm = Vm::new();
+        let query = Instruction::new(Opcode::WalAutocheckpoint, 0, 0, 0);
+        assert_eq!(step(&mut vm, 0, &query).unwrap(), Step::Next);
+        let set = Instruction::new(Opcode::WalAutocheckpoint, 20, 1, 0);
+        assert_eq!(step(&mut vm, 0, &set).unwrap(), Step::Next);
+        assert_eq!(
+            vm.rows(),
+            &[
+                vec![Value::Integer(i64::from(DEFAULT_WAL_AUTOCHECKPOINT))],
+                vec![Value::Integer(i64::from(DEFAULT_WAL_AUTOCHECKPOINT))],
+            ]
+        );
+    }
+
+    /// #896: a checkpoint inside an open transaction is refused, as in SQLite.
+    #[test]
+    fn checkpoint_errors_when_a_transaction_is_open() {
+        use super::super::program::CHECKPOINT_PASSIVE;
+        let mut vm = Vm::new();
+        vm.autocommit = false;
+        let checkpoint = Instruction::new(Opcode::Checkpoint, CHECKPOINT_PASSIVE, 0, 0);
+        assert!(matches!(
+            step(&mut vm, 0, &checkpoint),
+            Err(ExecError::CheckpointDuringTransaction)
+        ));
+        assert_eq!(
+            ExecError::CheckpointDuringTransaction.to_string(),
+            "database table is locked"
         );
     }
 

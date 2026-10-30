@@ -726,6 +726,20 @@ impl WalWriter {
         }
     }
 
+    /// The header a restarted WAL (#896) starts with: the next checkpoint
+    /// generation, `salt1` bumped and `salt2` replaced, as SQLite's
+    /// `walRestartHdr` does -- every frame of the old generation fails the
+    /// salt check against it.
+    pub fn restarted_header(&self, new_salt2: u32) -> WalHeader {
+        WalHeader::new(
+            self.header.native_checksum,
+            self.header.page_size,
+            self.header.salt1.wrapping_add(1),
+            new_salt2,
+            self.header.checkpoint_seq.wrapping_add(1),
+        )
+    }
+
     /// Total frames now in the WAL, including any written before this
     /// writer was opened (#389's `mxFrame`). `self.offset` is always
     /// `HEADER_LEN + frame_count * frame_size` by construction: `create`

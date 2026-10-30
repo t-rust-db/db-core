@@ -863,6 +863,8 @@ pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> c
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::synchronous(&self) -> core::option::Option<i32>
+pub fn db_core::engine::row::adapter::PagerTransaction::wal_autocheckpoint(&mut self, core::option::Option<i32>) -> core::result::Result<core::option::Option<i32>, db_core::vm::row::transaction::TransactionError>
+pub fn db_core::engine::row::adapter::PagerTransaction::wal_checkpoint(&mut self, i32) -> core::result::Result<core::option::Option<(i64, i64, i64)>, db_core::vm::row::transaction::TransactionError>
 pub struct db_core::engine::row::adapter::StorageFactory
 impl db_core::engine::row::adapter::StorageFactory
 pub fn db_core::engine::row::adapter::StorageFactory::read_only<P: db_core::storage::row::vfs::PageSource + ?core::marker::Sized + 'static>(alloc::rcs::rc::Rc<P>, db_core::storage::row::header::DatabaseHeader) -> Self
@@ -1586,6 +1588,12 @@ pub db_core::parser::ast::Pragma::JournalMode::span: db_core::parser::Span
 pub db_core::parser::ast::Pragma::Synchronous
 pub db_core::parser::ast::Pragma::Synchronous::level: core::option::Option<db_core::parser::ast::PragmaSynchronous>
 pub db_core::parser::ast::Pragma::Synchronous::span: db_core::parser::Span
+pub db_core::parser::ast::Pragma::WalAutocheckpoint
+pub db_core::parser::ast::Pragma::WalAutocheckpoint::frames: core::option::Option<i32>
+pub db_core::parser::ast::Pragma::WalAutocheckpoint::span: db_core::parser::Span
+pub db_core::parser::ast::Pragma::WalCheckpoint
+pub db_core::parser::ast::Pragma::WalCheckpoint::mode: db_core::parser::ast::PragmaCheckpointMode
+pub db_core::parser::ast::Pragma::WalCheckpoint::span: db_core::parser::Span
 impl db_core::parser::ast::Pragma
 pub fn db_core::parser::ast::Pragma::span(&self) -> db_core::parser::Span
 impl core::clone::Clone for db_core::parser::ast::Pragma
@@ -1595,6 +1603,20 @@ pub fn db_core::parser::ast::Pragma::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Pragma
 pub fn db_core::parser::ast::Pragma::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Pragma
+pub enum db_core::parser::ast::PragmaCheckpointMode
+pub db_core::parser::ast::PragmaCheckpointMode::Full
+pub db_core::parser::ast::PragmaCheckpointMode::Passive
+pub db_core::parser::ast::PragmaCheckpointMode::Restart
+pub db_core::parser::ast::PragmaCheckpointMode::Truncate
+impl core::clone::Clone for db_core::parser::ast::PragmaCheckpointMode
+pub fn db_core::parser::ast::PragmaCheckpointMode::clone(&self) -> Self
+impl core::cmp::Eq for db_core::parser::ast::PragmaCheckpointMode
+impl core::cmp::PartialEq for db_core::parser::ast::PragmaCheckpointMode
+pub fn db_core::parser::ast::PragmaCheckpointMode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::parser::ast::PragmaCheckpointMode
+pub fn db_core::parser::ast::PragmaCheckpointMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::parser::ast::PragmaCheckpointMode
+impl core::marker::StructuralPartialEq for db_core::parser::ast::PragmaCheckpointMode
 pub enum db_core::parser::ast::PragmaJournalMode
 pub db_core::parser::ast::PragmaJournalMode::Delete
 pub db_core::parser::ast::PragmaJournalMode::Wal
@@ -6134,6 +6156,20 @@ pub mod db_core::storage::row::integrity
 pub fn db_core::storage::row::integrity::run_integrity_check<P: db_core::storage::row::vfs::PageSource + core::clone::Clone>(P, &db_core::storage::row::header::DatabaseHeader, bool) -> alloc::vec::Vec<alloc::string::String>
 pub mod db_core::storage::row::pager
 pub mod db_core::storage::row::pager::checkpoint
+pub enum db_core::storage::row::pager::checkpoint::CheckpointMode
+pub db_core::storage::row::pager::checkpoint::CheckpointMode::Full
+pub db_core::storage::row::pager::checkpoint::CheckpointMode::Passive
+pub db_core::storage::row::pager::checkpoint::CheckpointMode::Restart
+pub db_core::storage::row::pager::checkpoint::CheckpointMode::Truncate
+impl core::clone::Clone for db_core::storage::row::pager::checkpoint::CheckpointMode
+pub fn db_core::storage::row::pager::checkpoint::CheckpointMode::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::row::pager::checkpoint::CheckpointMode
+impl core::cmp::PartialEq for db_core::storage::row::pager::checkpoint::CheckpointMode
+pub fn db_core::storage::row::pager::checkpoint::CheckpointMode::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::row::pager::checkpoint::CheckpointMode
+pub fn db_core::storage::row::pager::checkpoint::CheckpointMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::row::pager::checkpoint::CheckpointMode
+impl core::marker::StructuralPartialEq for db_core::storage::row::pager::checkpoint::CheckpointMode
 pub struct db_core::storage::row::pager::checkpoint::CheckpointResult
 pub db_core::storage::row::pager::checkpoint::CheckpointResult::backfilled_frames: u32
 pub db_core::storage::row::pager::checkpoint::CheckpointResult::checkpoint_complete: bool
@@ -6147,6 +6183,19 @@ impl core::fmt::Debug for db_core::storage::row::pager::checkpoint::CheckpointRe
 pub fn db_core::storage::row::pager::checkpoint::CheckpointResult::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::row::pager::checkpoint::CheckpointResult
 impl core::marker::StructuralPartialEq for db_core::storage::row::pager::checkpoint::CheckpointResult
+pub struct db_core::storage::row::pager::checkpoint::WalCheckpoint
+pub db_core::storage::row::pager::checkpoint::WalCheckpoint::busy: bool
+pub db_core::storage::row::pager::checkpoint::WalCheckpoint::checkpointed: i64
+pub db_core::storage::row::pager::checkpoint::WalCheckpoint::log: i64
+impl core::clone::Clone for db_core::storage::row::pager::checkpoint::WalCheckpoint
+pub fn db_core::storage::row::pager::checkpoint::WalCheckpoint::clone(&self) -> Self
+impl core::cmp::Eq for db_core::storage::row::pager::checkpoint::WalCheckpoint
+impl core::cmp::PartialEq for db_core::storage::row::pager::checkpoint::WalCheckpoint
+pub fn db_core::storage::row::pager::checkpoint::WalCheckpoint::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::storage::row::pager::checkpoint::WalCheckpoint
+pub fn db_core::storage::row::pager::checkpoint::WalCheckpoint::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::storage::row::pager::checkpoint::WalCheckpoint
+impl core::marker::StructuralPartialEq for db_core::storage::row::pager::checkpoint::WalCheckpoint
 pub fn db_core::storage::row::pager::checkpoint::checkpoint_passive(&db_core::storage::row::vfs::AnyVfs, &std::path::Path, u32) -> core::result::Result<db_core::storage::row::pager::checkpoint::CheckpointResult, db_core::storage::row::pager::PagerError>
 pub mod db_core::storage::row::pager::freelist
 pub enum db_core::storage::row::pager::freelist::FreelistError
@@ -6275,6 +6324,7 @@ pub fn db_core::storage::row::pager::wal::WalWriter::create(&db_core::storage::r
 pub fn db_core::storage::row::pager::wal::WalWriter::frame_count(&self) -> u32
 pub fn db_core::storage::row::pager::wal::WalWriter::is_current(&self, &db_core::storage::row::vfs::FileStat) -> bool
 pub fn db_core::storage::row::pager::wal::WalWriter::open_existing(&db_core::storage::row::vfs::AnyVfs, &std::path::Path, u32, core::option::Option<&db_core::storage::row::pager::wal::WalResumeHint>) -> core::result::Result<Self, db_core::storage::row::pager::wal::WalError>
+pub fn db_core::storage::row::pager::wal::WalWriter::restarted_header(&self, u32) -> db_core::storage::row::pager::wal::WalHeader
 pub fn db_core::storage::row::pager::wal::WalWriter::resume_hint(&self) -> db_core::storage::row::pager::wal::WalResumeHint
 pub fn db_core::storage::row::pager::wal::WalWriter::sync(&mut self) -> core::result::Result<(), db_core::storage::row::pager::wal::WalError>
 pub fn db_core::storage::row::pager::wal::WalWriter::write_pending(&mut self) -> core::result::Result<(), db_core::storage::row::pager::wal::WalError>
@@ -6310,6 +6360,7 @@ impl db_core::storage::row::pager::Pager
 pub fn db_core::storage::row::pager::Pager::allocate_page(&mut self) -> core::result::Result<u32, db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::begin_exclusive(&mut self) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::begin_immediate(&mut self) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
+pub fn db_core::storage::row::pager::Pager::checkpoint_wal(&mut self, db_core::storage::row::pager::checkpoint::CheckpointMode) -> core::result::Result<db_core::storage::row::pager::checkpoint::WalCheckpoint, db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::deallocate_page(&mut self, u32) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::flush(&mut self) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::get_page_mut(&mut self, u32) -> core::result::Result<&mut alloc::vec::Vec<u8>, db_core::storage::row::pager::PagerError>
@@ -6317,8 +6368,10 @@ pub fn db_core::storage::row::pager::Pager::open<V: db_core::storage::row::vfs::
 pub fn db_core::storage::row::pager::Pager::rollback(&mut self) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::set_journal_mode(&mut self, db_core::storage::row::header::JournalMode) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::set_synchronous(&mut self, db_core::storage::row::header::SynchronousMode)
+pub fn db_core::storage::row::pager::Pager::set_wal_autocheckpoint(&mut self, i32)
 pub fn db_core::storage::row::pager::Pager::synchronous(&self) -> db_core::storage::row::header::SynchronousMode
 pub fn db_core::storage::row::pager::Pager::tx_lock_level(&self) -> db_core::storage::row::vfs::lock::LockLevel
+pub fn db_core::storage::row::pager::Pager::wal_autocheckpoint(&self) -> i32
 impl db_core::storage::row::vfs::PageSource for db_core::storage::row::pager::Pager
 pub fn db_core::storage::row::pager::Pager::read_page(&self, u32) -> core::result::Result<alloc::rcs::rc::Rc<[u8]>, db_core::storage::row::vfs::PageError>
 pub struct db_core::storage::row::pager::TrunkPage
@@ -6644,6 +6697,7 @@ pub struct db_core::storage::row::vfs::AnyVfs(_)
 impl db_core::storage::row::vfs::AnyVfs
 pub fn db_core::storage::row::vfs::AnyVfs::active_wal_reader_marks(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<alloc::vec::Vec<u32>>
 pub fn db_core::storage::row::vfs::AnyVfs::claim_wal_checkpoint_lock(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileLock>>
+pub fn db_core::storage::row::vfs::AnyVfs::claim_wal_read_lock(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileLock>>
 pub fn db_core::storage::row::vfs::AnyVfs::claim_wal_write_lock(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<core::option::Option<db_core::storage::row::vfs::FileLock>>
 pub fn db_core::storage::row::vfs::AnyVfs::create_or_open_write(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<db_core::storage::row::vfs::AnyVfsFile>
 pub fn db_core::storage::row::vfs::AnyVfs::delete(&self, &std::path::Path) -> db_core::storage::row::vfs::Result<()>
@@ -9865,6 +9919,7 @@ pub db_core::vm::row::program::Opcode::BitNot
 pub db_core::vm::row::program::Opcode::BitOr
 pub db_core::vm::row::program::Opcode::Blob
 pub db_core::vm::row::program::Opcode::Cast
+pub db_core::vm::row::program::Opcode::Checkpoint
 pub db_core::vm::row::program::Opcode::Column
 pub db_core::vm::row::program::Opcode::Concat
 pub db_core::vm::row::program::Opcode::Copy
@@ -9959,6 +10014,7 @@ pub db_core::vm::row::program::Opcode::Synchronous
 pub db_core::vm::row::program::Opcode::Transaction
 pub db_core::vm::row::program::Opcode::Update
 pub db_core::vm::row::program::Opcode::Variable
+pub db_core::vm::row::program::Opcode::WalAutocheckpoint
 impl db_core::vm::row::program::Opcode
 pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 69]
 impl db_core::vm::row::program::Opcode
@@ -10127,6 +10183,11 @@ impl core::fmt::Debug for db_core::vm::row::program::SortKeyColumn
 pub fn db_core::vm::row::program::SortKeyColumn::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::vm::row::program::SortKeyColumn
 impl core::marker::StructuralPartialEq for db_core::vm::row::program::SortKeyColumn
+pub const db_core::vm::row::program::CHECKPOINT_FULL: i32
+pub const db_core::vm::row::program::CHECKPOINT_PASSIVE: i32
+pub const db_core::vm::row::program::CHECKPOINT_RESTART: i32
+pub const db_core::vm::row::program::CHECKPOINT_TRUNCATE: i32
+pub const db_core::vm::row::program::DEFAULT_WAL_AUTOCHECKPOINT: i32
 pub const db_core::vm::row::program::JOURNAL_MODE_DELETE: i32
 pub const db_core::vm::row::program::JOURNAL_MODE_WAL: i32
 pub const db_core::vm::row::program::OPFLAG_LASTROWID: u16
@@ -10222,6 +10283,8 @@ pub fn db_core::vm::row::transaction::Transaction::rollback(&mut self) -> core::
 pub fn db_core::vm::row::transaction::Transaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::synchronous(&self) -> core::option::Option<i32>
+pub fn db_core::vm::row::transaction::Transaction::wal_autocheckpoint(&mut self, core::option::Option<i32>) -> core::result::Result<core::option::Option<i32>, db_core::vm::row::transaction::TransactionError>
+pub fn db_core::vm::row::transaction::Transaction::wal_checkpoint(&mut self, i32) -> core::result::Result<core::option::Option<(i64, i64, i64)>, db_core::vm::row::transaction::TransactionError>
 impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapter::PagerTransaction
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -10230,9 +10293,12 @@ pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> c
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::synchronous(&self) -> core::option::Option<i32>
+pub fn db_core::engine::row::adapter::PagerTransaction::wal_autocheckpoint(&mut self, core::option::Option<i32>) -> core::result::Result<core::option::Option<i32>, db_core::vm::row::transaction::TransactionError>
+pub fn db_core::engine::row::adapter::PagerTransaction::wal_checkpoint(&mut self, i32) -> core::result::Result<core::option::Option<(i64, i64, i64)>, db_core::vm::row::transaction::TransactionError>
 pub mod db_core::vm::row::vm
 pub enum db_core::vm::row::vm::ExecError
 pub db_core::vm::row::vm::ExecError::AttachedDatabasesUnsupported
+pub db_core::vm::row::vm::ExecError::CheckpointDuringTransaction
 pub db_core::vm::row::vm::ExecError::CursorFactoryFailed(db_core::vm::row::cursor_factory::CursorFactoryError)
 pub db_core::vm::row::vm::ExecError::CursorNotOpen
 pub db_core::vm::row::vm::ExecError::CursorNotOpen::slot: i32
@@ -10386,6 +10452,7 @@ pub fn db_core::vm::row::aggregate::AggregateError::fmt(&self, &mut core::fmt::F
 impl core::marker::StructuralPartialEq for db_core::vm::row::aggregate::AggregateError
 pub enum db_core::vm::row::ExecError
 pub db_core::vm::row::ExecError::AttachedDatabasesUnsupported
+pub db_core::vm::row::ExecError::CheckpointDuringTransaction
 pub db_core::vm::row::ExecError::CursorFactoryFailed(db_core::vm::row::cursor_factory::CursorFactoryError)
 pub db_core::vm::row::ExecError::CursorNotOpen
 pub db_core::vm::row::ExecError::CursorNotOpen::slot: i32
@@ -10466,6 +10533,7 @@ pub db_core::vm::row::Opcode::BitNot
 pub db_core::vm::row::Opcode::BitOr
 pub db_core::vm::row::Opcode::Blob
 pub db_core::vm::row::Opcode::Cast
+pub db_core::vm::row::Opcode::Checkpoint
 pub db_core::vm::row::Opcode::Column
 pub db_core::vm::row::Opcode::Concat
 pub db_core::vm::row::Opcode::Copy
@@ -10560,6 +10628,7 @@ pub db_core::vm::row::Opcode::Synchronous
 pub db_core::vm::row::Opcode::Transaction
 pub db_core::vm::row::Opcode::Update
 pub db_core::vm::row::Opcode::Variable
+pub db_core::vm::row::Opcode::WalAutocheckpoint
 impl db_core::vm::row::program::Opcode
 pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 69]
 impl db_core::vm::row::program::Opcode
@@ -11152,6 +11221,11 @@ pub fn db_core::vm::row::vm::Vm::set_transaction_hook(&mut self, alloc::boxed::B
 pub fn db_core::vm::row::vm::Vm::take_rows(&mut self) -> alloc::vec::Vec<alloc::vec::Vec<db_core::value::Value>>
 impl core::default::Default for db_core::vm::row::vm::Vm
 pub fn db_core::vm::row::vm::Vm::default() -> Self
+pub const db_core::vm::row::CHECKPOINT_FULL: i32
+pub const db_core::vm::row::CHECKPOINT_PASSIVE: i32
+pub const db_core::vm::row::CHECKPOINT_RESTART: i32
+pub const db_core::vm::row::CHECKPOINT_TRUNCATE: i32
+pub const db_core::vm::row::DEFAULT_WAL_AUTOCHECKPOINT: i32
 pub const db_core::vm::row::JOURNAL_MODE_DELETE: i32
 pub const db_core::vm::row::JOURNAL_MODE_WAL: i32
 pub const db_core::vm::row::MAX_EPHEMERAL_ROWS: usize
@@ -11587,6 +11661,8 @@ pub fn db_core::vm::row::Transaction::rollback(&mut self) -> core::result::Resul
 pub fn db_core::vm::row::Transaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::synchronous(&self) -> core::option::Option<i32>
+pub fn db_core::vm::row::Transaction::wal_autocheckpoint(&mut self, core::option::Option<i32>) -> core::result::Result<core::option::Option<i32>, db_core::vm::row::transaction::TransactionError>
+pub fn db_core::vm::row::Transaction::wal_checkpoint(&mut self, i32) -> core::result::Result<core::option::Option<(i64, i64, i64)>, db_core::vm::row::transaction::TransactionError>
 impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapter::PagerTransaction
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -11595,6 +11671,8 @@ pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> c
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::synchronous(&self) -> core::option::Option<i32>
+pub fn db_core::engine::row::adapter::PagerTransaction::wal_autocheckpoint(&mut self, core::option::Option<i32>) -> core::result::Result<core::option::Option<i32>, db_core::vm::row::transaction::TransactionError>
+pub fn db_core::engine::row::adapter::PagerTransaction::wal_checkpoint(&mut self, i32) -> core::result::Result<core::option::Option<(i64, i64, i64)>, db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::affinity_of(&str) -> db_core::vm::row::affinity::Affinity
 pub fn db_core::vm::row::apply_affinity(&mut db_core::value::Value, db_core::vm::row::affinity::Affinity)
 pub fn db_core::vm::row::cast_to(&db_core::value::Value, db_core::vm::row::affinity::Affinity) -> db_core::value::Value
