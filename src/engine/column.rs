@@ -2753,6 +2753,35 @@ mod tests {
         );
     }
 
+    /// #889: the top-N heap reserved `LIMIT + OFFSET + 1` candidates up
+    /// front, so `LIMIT i64::MAX` panicked ("capacity overflow") and
+    /// `LIMIT 1e12` aborted the process on the allocation. Covers the
+    /// parallel (3 row groups) and the single-segment path.
+    #[test]
+    fn top_n_with_a_huge_limit_or_offset_returns_rows_instead_of_reserving_them() {
+        for (path, table, key, total) in [
+            (
+                "tests/fixtures/parquet/production.parquet",
+                "production",
+                "id",
+                5000,
+            ),
+            ("tests/fixtures/parquet/events.parquet", "events", "ts", 1),
+        ] {
+            let mut engine = BatchEngine::open(Path::new(path)).unwrap();
+            let mut count = |tail: &str| {
+                let sql = format!("SELECT * FROM {table} ORDER BY {key} DESC {tail}");
+                engine.run_query(&sql).unwrap().rows.len()
+            };
+            let all = count("");
+            assert!(all >= total);
+            assert_eq!(count("LIMIT 9223372036854775807"), all);
+            assert_eq!(count("LIMIT 1000000000000"), all);
+            assert_eq!(count("LIMIT 1 OFFSET 9223372036854775806"), 0);
+            assert_eq!(count("LIMIT 9223372036854775807 OFFSET 1"), all - 1);
+        }
+    }
+
     #[test]
     fn prunes_a_row_group_whose_max_statistic_cannot_satisfy_the_filter() {
         let file_bytes = build_file(&[

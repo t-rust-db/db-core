@@ -2586,7 +2586,7 @@ fn top_n_merge(items: impl IntoIterator<Item = TopNItem>, limit: usize) -> Vec<T
         return Vec::new();
     }
 
-    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(limit.saturating_add(1));
+    let mut heap: BinaryHeap<TopNItem> = top_n_heap(limit);
     for item in items {
         push_bounded(&mut heap, item, limit);
     }
@@ -2616,7 +2616,7 @@ fn top_n_reduce_output(output: &QueryOutput, spec: &TopN) -> Vec<TopNItem> {
         return Vec::new();
     }
 
-    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.saturating_add(1));
+    let mut heap: BinaryHeap<TopNItem> = top_n_heap(spec.limit);
     for chunk in output.chunks() {
         let sort_column = chunk.get(spec.col);
         for r in 0..chunk_len(chunk) {
@@ -2675,6 +2675,18 @@ pub fn run_parallel_top_n<S: Segment>(
     Ok(QueryOutput::from_rows(
         winners.into_iter().map(|item| item.row).collect(),
     ))
+}
+
+/// Most candidates a top-N heap reserves up front (#889). `limit` is SQL
+/// `LIMIT` + `OFFSET`, so reserving `limit + 1` outright let `LIMIT
+/// 9223372036854775807` panic with "capacity overflow" and `LIMIT
+/// 1000000000000` abort on a failed allocation; past this the heap grows
+/// with the rows actually kept, as it would for any `Vec`.
+const TOP_N_RESERVE_CAP: usize = 4096;
+
+/// An empty top-N heap for `limit` candidates (see [`TOP_N_RESERVE_CAP`]).
+fn top_n_heap(limit: usize) -> std::collections::BinaryHeap<TopNItem> {
+    std::collections::BinaryHeap::with_capacity(limit.saturating_add(1).min(TOP_N_RESERVE_CAP))
 }
 
 /// Pushes `item` onto a heap bounded to `limit` candidates, dropping the
@@ -2908,7 +2920,7 @@ fn top_n_reduce_positions(
             reason: format!("top-N key row {ordinal} has no source position"),
         })
     };
-    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.saturating_add(1));
+    let mut heap: BinaryHeap<TopNItem> = top_n_heap(spec.limit);
     let mut ordinal = 0usize;
     for chunk in output.chunks() {
         let sort_column = chunk.get(spec.col);
@@ -2968,8 +2980,7 @@ fn top_n_over_segments<S: Segment>(
         (Some(x), Some(y)) => compare_for_order(x, y, spec.descending),
     });
 
-    let threshold: Mutex<BinaryHeap<TopNItem>> =
-        Mutex::new(BinaryHeap::with_capacity(spec.limit.saturating_add(1)));
+    let threshold: Mutex<BinaryHeap<TopNItem>> = Mutex::new(top_n_heap(spec.limit));
     let skipped = AtomicUsize::new(0);
     let plan = late_plan(program, spec);
 
