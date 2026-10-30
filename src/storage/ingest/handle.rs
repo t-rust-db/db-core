@@ -136,9 +136,12 @@ impl Table {
     }
 
     /// Seals the head and flushes everything that can be; see
-    /// [`TableWriter::flush_all`].
+    /// [`TableWriter::flush_all`]. Waits for a background flusher with the
+    /// table unlocked, so other clones keep appending and reading (#864).
     pub fn flush(&self) -> Result<Vec<FileEntry>, IngestError> {
-        self.with(TableWriter::flush_all)
+        let (mut added, drain) = self.with(|w| Ok((w.flush_submit()?, w.drain_handle())))?;
+        added.extend(drain.wait()?);
+        Ok(added)
     }
 
     /// Closes hours and merges days; see [`TableWriter::compact`].

@@ -442,6 +442,45 @@ fn mcdc__storage_ingest_table_push_bc95699f__v3_flat_ignores_hours() {
     assert_eq!(sealed_after_two_records(Layout::Flat, 11), 0);
 }
 
+fn idle_flusher() -> Arc<Shared> {
+    Arc::new(Shared::new(Manifest::new(Format::Jsonl, LayoutKind::Flat)))
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_flusher_drain_522d47e9__v1_a_busy_flusher_is_waited_for() {
+    let shared = idle_flusher();
+    shared.lock().queued = 1;
+    let waiter = std::thread::spawn({
+        let shared = Arc::clone(&shared);
+        move || shared.drain()
+    });
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!waiter.is_finished());
+    shared.lock().queued = 0;
+    shared.changed.notify_all();
+    assert!(waiter.join().unwrap().unwrap().is_empty());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_flusher_drain_522d47e9__v2_an_idle_flusher_returns_at_once() {
+    assert!(idle_flusher().drain().unwrap().is_empty());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_table_flusher_drain_522d47e9__v3_a_failed_flusher_is_not_waited_for() {
+    let shared = idle_flusher();
+    {
+        let mut view = shared.lock();
+        view.queued = 1;
+        view.failed = Some("disk full".to_string());
+    }
+    let err = shared.drain().unwrap_err();
+    assert!(err.to_string().contains("disk full"));
+}
+
 /// A table directory with `area/a/b/file`, the file already deleted.
 fn nested(t: &TempTable) -> PathBuf {
     let file = t.0.join("live/a/b/file");

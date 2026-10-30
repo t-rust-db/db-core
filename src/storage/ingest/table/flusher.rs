@@ -110,6 +110,38 @@ impl Shared {
     pub fn lock(&self) -> MutexGuard<'_, View> {
         self.view.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// Waits until every submitted job is committed or the flusher
+    /// stopped; returns the files committed since the last call.
+    pub fn drain(&self) -> Result<Vec<FileEntry>, IngestError> {
+        let mut view = self.lock();
+        while view.failed.is_none() && view.queued > 0 {
+            view = self
+                .changed
+                .wait(view)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        if let Some(why) = &view.failed {
+            return Err(failure(why));
+        }
+        Ok(std::mem::take(&mut view.done))
+    }
+}
+
+/// Waits for the queued jobs without the writer, so a shared handle can
+/// release its lock first (#864).
+#[derive(Debug, Clone)]
+pub(crate) struct Drain(Arc<Shared>);
+
+impl Drain {
+    pub(super) fn new(shared: &Arc<Shared>) -> Drain {
+        Drain(Arc::clone(shared))
+    }
+
+    /// See [`TableWriter::drain`](super::TableWriter::drain).
+    pub(crate) fn wait(&self) -> Result<Vec<FileEntry>, IngestError> {
+        self.0.drain()
+    }
 }
 
 /// The error a stopped background flusher leaves for the writer.

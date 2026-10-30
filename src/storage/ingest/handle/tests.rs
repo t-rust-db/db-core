@@ -325,6 +325,48 @@ fn state_stem(name: &str) -> String {
 }
 
 #[test]
+fn a_flush_waiting_for_the_flusher_leaves_the_table_unlocked() {
+    use std::sync::mpsc;
+    let t = TempDir::new();
+    let options = TableOptions {
+        flush_queue: 2,
+        ..TableOptions::default()
+    };
+    let table = Table::open(t.table(), options).unwrap();
+    table.append(b"one", Ack::Memory).unwrap();
+    table
+        .with(|w| {
+            w.hold_queue(1);
+            Ok(())
+        })
+        .unwrap();
+
+    let flusher = table.clone();
+    let flushing = std::thread::spawn(move || flusher.flush());
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Appends and reads go on while that flush waits for the queue.
+    let (tx, rx) = mpsc::channel();
+    let other = table.clone();
+    std::thread::spawn(move || {
+        let done = other
+            .append(b"two", Ack::Memory)
+            .and_then(|_| other.snapshot().map(|_| ()));
+        tx.send(done.is_ok()).ok();
+    });
+    assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
+    assert!(!flushing.is_finished());
+
+    table
+        .with(|w| {
+            w.hold_queue(0);
+            Ok(())
+        })
+        .unwrap();
+    flushing.join().unwrap().unwrap();
+}
+
+#[test]
 #[allow(non_snake_case)]
 fn mcdc__storage_ingest_handle_state_name_8a402fee__v1_an_alphanumeric_is_kept() {
     assert_eq!(state_stem("a1"), "a1");
