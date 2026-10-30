@@ -168,6 +168,11 @@ path = "tests/unit/engine_column_public_api_test.rs"
 required-features = ["engine-column"]
 
 [[test]]
+name = "unit_column_long_in_list"
+path = "tests/unit/column_long_in_list_test.rs"
+required-features = ["engine-column", "storage-column-write"]
+
+[[test]]
 name = "unit_column_wrong_answers"
 path = "tests/unit/column_wrong_answers_test.rs"
 required-features = ["engine-column"]
