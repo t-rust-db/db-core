@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.204.0] - 2026-10-30
+
+### Changed
+
+- Parquet writer: ZSTD pages come from an encoder of our own: about half the size of `ruzstd`'s `Fastest` on the `parquet-codecs` table and faster to write; output stays valid ZSTD for every reader (#692).
+
 ## [0.203.0] - 2026-10-30
 
 ### Changed
