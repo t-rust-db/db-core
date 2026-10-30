@@ -111,6 +111,32 @@ impl std::fmt::Display for WalError {
 
 impl std::error::Error for WalError {}
 
+impl WalError {
+    /// True when the error says the `-wal` header itself is unusable (too
+    /// short, bad magic, bad page size, bad checksum). Stock SQLite's
+    /// `walIndexRecover` treats such a WAL as empty rather than failing, so
+    /// callers use this to fall back to "no frames" (reads) or a restarted
+    /// WAL (writes) instead of surfacing the error.
+    pub fn is_unusable_header(&self) -> bool {
+        match self {
+            WalError::HeaderTooShort { .. }
+            | WalError::InvalidMagic { .. }
+            | WalError::HeaderChecksumMismatch { .. } => true,
+            // A well-formed page size that merely disagrees with the
+            // database's is a real mismatch, not a corrupt header.
+            WalError::InvalidPageSize { page_size } => !valid_page_size(*page_size),
+            WalError::Vfs(_) => false,
+        }
+    }
+}
+
+fn valid_page_size(page_size: u32) -> bool {
+    matches!(
+        page_size,
+        512 | 1024 | 2048 | 4096 | 8192 | 16384 | 32768 | 65536
+    )
+}
+
 impl From<VfsError> for WalError {
     fn from(source: VfsError) -> Self {
         WalError::Vfs(source)
@@ -501,6 +527,9 @@ impl WalWriter {
     pub fn create(vfs: &AnyVfs, path: &Path, header: WalHeader) -> Result<Self, WalError> {
         let file = vfs.create_or_open_write(path)?;
         file.write_at(&header.serialize(), 0)?;
+        // Drop any stale tail when restarting over an existing file, so the
+        // file length matches the writer's offset.
+        file.truncate(HEADER_LEN as u64)?;
         let identity = file_identity(vfs, path)?;
         Ok(WalWriter {
             file,
@@ -801,6 +830,32 @@ mod tests {
             let text = String::from_utf8_lossy(page);
             assert!(!text.contains("STALE-FRAME-MUST-NOT-APPEAR"));
         }
+    }
+
+    /// #895: frames after a valid header but with a bad frame checksum are
+    /// ignored from the first bad frame on; earlier frames still count.
+    #[test]
+    fn frames_from_the_first_bad_checksum_on_are_ignored() {
+        use crate::storage::row::vfs::{AnyVfs, MemoryVfs};
+
+        let vfs = AnyVfs::new(MemoryVfs::new());
+        let path = Path::new("/bad-frame.db-wal");
+        let header = WalHeader::new(true, 512, 1, 2, 0);
+        let mut writer = WalWriter::create(&vfs, path, header).unwrap();
+        writer.append_frame(1, &[0x11u8; 512], 1).unwrap();
+        writer.append_frame(2, &[0x22u8; 512], 2).unwrap();
+        writer.sync().unwrap();
+
+        let file = vfs.open_read(path).unwrap();
+        let mut bytes = vec![0u8; usize::try_from(file.size().unwrap()).unwrap()];
+        file.read_at(&mut bytes, 0).unwrap();
+        let second_frame_data = HEADER_LEN + FRAME_HEADER_LEN + 512 + FRAME_HEADER_LEN;
+        bytes[second_frame_data] ^= 0xFF;
+
+        let (pages, db_size) = committed_pages(&header, &bytes);
+        assert_eq!(db_size, 1);
+        assert!(pages.contains_key(&1));
+        assert!(!pages.contains_key(&2));
     }
 
     #[test]

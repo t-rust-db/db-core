@@ -751,6 +751,10 @@ impl Pager {
                     Err(wal::WalError::Vfs(VfsError::NotFound { .. })) => {
                         self.recreate_wal_locked()?
                     }
+                    // An unusable header (0-byte, zeroed, bad checksum) means
+                    // SQLite would recover no frames; its next write restarts
+                    // the WAL with a fresh header, so do the same.
+                    Err(source) if source.is_unusable_header() => self.recreate_wal_locked()?,
                     Err(source) => return Err(to_pager_error(source)),
                 },
             };
@@ -1254,7 +1258,13 @@ fn read_wal_pages<V: Vfs>(
         source,
     };
 
-    let header = wal::WalHeader::parse(&bytes).map_err(to_pager_error)?;
+    // An unusable header means no recoverable frames (SQLite's
+    // `walIndexRecover`): the database file alone is the truth.
+    let header = match wal::WalHeader::parse(&bytes) {
+        Ok(header) => header,
+        Err(source) if source.is_unusable_header() => return Ok(HashMap::new()),
+        Err(source) => return Err(to_pager_error(source)),
+    };
     if header.page_size != page_size {
         return Err(to_pager_error(wal::WalError::InvalidPageSize {
             page_size: header.page_size,
@@ -1553,13 +1563,40 @@ mod tests {
         // handed to WalHeader::parse, not treated as "too short to hold a
         // header" — pins read_wal_pages's two `size < HEADER_LEN` checks
         // against mutation to `==`/`<=`, which would wrongly skip this
-        // length instead of parsing it. All-zero bytes make an invalid
-        // magic, so a real parse attempt surfaces as PagerError::Wal
-        // rather than the Ok(empty-overlay) that skipping would produce.
+        // length instead of parsing it. A valid header with a page size
+        // that disagrees with the database's is a real mismatch (unlike a
+        // corrupt header, which reads as empty), so a real parse attempt
+        // surfaces as PagerError::Wal rather than the Ok(empty-overlay)
+        // that skipping would produce.
         let (mut vfs, path) = db_with_journal(None);
-        vfs.insert("/test.db-wal", vec![0u8; 32]);
+        let header = wal::WalHeader::new(true, 4096, 1, 2, 1);
+        vfs.insert("/test.db-wal", header.serialize().to_vec());
         let result = Pager::open(&vfs, &path, 512);
         assert!(matches!(result, Err(PagerError::Wal { .. })));
+    }
+
+    /// #895: a `-wal` whose header is unusable (0-byte, zeroed, wrong
+    /// magic, bad page size, bad checksum) contributes no frames, as in
+    /// SQLite's `walIndexRecover`; the database opens from its main file.
+    #[test]
+    fn open_treats_unusable_wal_header_as_empty() {
+        let valid = wal::WalHeader::new(true, 512, 1, 2, 1).serialize().to_vec();
+        let mut bad_checksum = valid.clone();
+        bad_checksum[20] ^= 0xFF;
+        let mut bad_page_size = valid.clone();
+        bad_page_size[8..12].copy_from_slice(&600u32.to_be_bytes());
+        for wal_bytes in [
+            vec![],
+            vec![0u8; 10],
+            vec![0u8; 32],
+            bad_checksum,
+            bad_page_size,
+        ] {
+            let (mut vfs, path) = db_with_journal(None);
+            vfs.insert("/test.db-wal", wal_bytes);
+            let pager = Pager::open(&vfs, &path, 512).unwrap();
+            assert!(pager.wal_pages.is_empty());
+        }
     }
 
     /// 001-architecture Req-4's "Reader takes a SHARED lock before
@@ -1916,6 +1953,56 @@ mod tests {
 
         use super::*;
 
+        // storage_row_pager_read_wal_pages_aef700eb: `source.is_unusable_header()`
+        #[test]
+        fn mcdc__storage_row_pager_read_wal_pages_aef700eb__v1_unusable_header_reads_as_empty() {
+            let (mut vfs, path) = db_with_journal(None);
+            vfs.insert("/test.db-wal", vec![0u8; 64]);
+            let pager = Pager::open(&vfs, &path, 512).unwrap();
+            assert!(pager.wal_pages.is_empty());
+        }
+
+        #[test]
+        fn mcdc__storage_row_pager_read_wal_pages_aef700eb__v2_page_size_mismatch_still_errors() {
+            let (mut vfs, path) = db_with_journal(None);
+            let header = wal::WalHeader::new(true, 4096, 1, 2, 1);
+            let mut bytes = header.serialize().to_vec();
+            bytes.extend(vec![0u8; 32]);
+            vfs.insert("/test.db-wal", bytes);
+            assert!(matches!(
+                Pager::open(&vfs, &path, 512),
+                Err(PagerError::Wal { .. })
+            ));
+        }
+
+        // storage_row_pager_flush_wal_locked_aef700eb: `source.is_unusable_header()`
+        #[test]
+        fn mcdc__storage_row_pager_flush_wal_locked_aef700eb__v1_unusable_header_restarts_wal() {
+            let mut vfs = MemoryVfs::new();
+            vfs.insert("/test.db", vec![1u8; 512]);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            pager.set_journal_mode(JournalMode::Wal).unwrap();
+            vfs.insert("/test.db-wal", vec![]);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            pager.get_page_mut(1).unwrap().fill(7u8);
+            assert!(pager.flush().is_ok());
+        }
+
+        #[test]
+        fn mcdc__storage_row_pager_flush_wal_locked_aef700eb__v2_page_size_mismatch_still_errors() {
+            let mut vfs = MemoryVfs::new();
+            vfs.insert("/test.db", vec![1u8; 512]);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            pager.set_journal_mode(JournalMode::Wal).unwrap();
+            vfs.insert("/test.db-wal", vec![]);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            // Swapped in after open, so only the write path sees it.
+            let header = wal::WalHeader::new(true, 4096, 1, 2, 1);
+            vfs.insert("/test.db-wal", header.serialize().to_vec());
+            pager.get_page_mut(1).unwrap().fill(7u8);
+            assert!(matches!(pager.flush(), Err(PagerError::Wal { .. })));
+        }
+
         // storage_row_pager_set_journal_mode_dce82034: `!self.dirty.is_empty() || self.tx_lock_level > LockLevel::Shared`
         #[test]
         fn mcdc__storage_row_pager_set_journal_mode_dce82034__v1_both_false_switch_is_allowed() {
@@ -2096,6 +2183,40 @@ mod tests {
         let (pages, db_size) = wal::committed_pages(&header, &wal_bytes);
         assert_eq!(db_size, 2);
         assert_eq!(pages.get(&2), Some(&vec![9u8; 512]));
+    }
+
+    /// #895: a WAL-mode write over a `-wal` whose header is unusable
+    /// restarts the WAL with a fresh header (as SQLite does) instead of
+    /// failing, and the committed page is readable from the new WAL.
+    #[test]
+    fn flush_in_wal_mode_restarts_wal_with_unusable_header() {
+        let mut stale_tail = vec![0u8; 32];
+        stale_tail.extend(vec![0xABu8; 600]);
+        for bad in [vec![], vec![0u8; 32], stale_tail] {
+            let mut vfs = MemoryVfs::new();
+            let mut contents = vec![1u8; 512];
+            write_be_u32(&mut contents, PAGE_COUNT_OFFSET, 2).unwrap();
+            contents.extend(vec![2u8; 512]);
+            vfs.insert("/test.db", contents);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            pager.set_journal_mode(JournalMode::Wal).unwrap();
+
+            // Overwrite the fresh `-wal` with the unusable one (a fresh
+            // pager has no cached writer or resume hint to short-circuit).
+            vfs.insert("/test.db-wal", bad);
+            let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+            pager.get_page_mut(2).unwrap().fill(9u8);
+            pager.flush().unwrap();
+
+            let wal_file = vfs.open_read(Path::new("/test.db-wal")).unwrap();
+            let size = wal_file.size().unwrap();
+            let mut wal_bytes = vec![0u8; size as usize];
+            wal_file.read_at(&mut wal_bytes, 0).unwrap();
+            let header = wal::WalHeader::parse(&wal_bytes).unwrap();
+            let (pages, _) = wal::committed_pages(&header, &wal_bytes);
+            assert_eq!(pages.get(&2), Some(&vec![9u8; 512]));
+            assert_eq!(wal_bytes.len(), 32 + 24 + 512);
+        }
     }
 
     /// ADR-0027: two consecutive commits from the same `Pager` must both
