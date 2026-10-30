@@ -3,7 +3,7 @@
 //! Black-box tests for `codegen::batch`'s public entry points -- the
 //! default-feature columnar planner -- which had zero `tests/unit`
 //! references before this (db-core#223): `compile`, `compile_join`,
-//! `compile_semi_join`, `compile_window`, `explain`, `explain_opcodes`,
+//! `compile_semi_join`, `compile_semi_body`, `compile_window`, `explain`, `explain_opcodes`,
 //! `output_column_names`, `expand_star`, `split_qualified`,
 //! `WindowFunc`, `PlanError`.
 
@@ -17,12 +17,12 @@
 )]
 
 use db_core::codegen::batch::{
-    compile, compile_join, compile_semi_join, compile_window, expand_star, explain,
-    explain_opcodes, output_column_names, resolve_join_columns, split_qualified, BuildSourceKind,
-    JoinColumnsError, PlanError, TableStats, WindowFunc,
+    compile, compile_join, compile_semi_body, compile_semi_join, compile_window, expand_star,
+    explain, explain_opcodes, output_column_names, resolve_join_columns, split_qualified,
+    BuildSourceKind, JoinColumnsError, PlanError, TableStats, WindowFunc,
 };
 use db_core::parser::column::parse;
-use db_core::vm::batch::{JoinKind, MapOp, Opcode};
+use db_core::vm::batch::{JoinKind, MapOp, Opcode, Value};
 
 fn select(sql: &str) -> db_core::parser::ast::Select {
     parse(sql).unwrap()
@@ -101,6 +101,25 @@ fn compile_semi_join_plans_a_bare_in_subquery_where_clause() {
 #[test]
 fn compile_semi_join_rejects_a_non_semi_join_where_clause() {
     let err = compile_semi_join(&select("SELECT x FROM a WHERE x > 1")).unwrap_err();
+    assert!(matches!(err, PlanError::UnsupportedSemiJoin(_)));
+}
+
+#[test]
+fn compile_semi_body_filters_the_key_column_on_the_given_keys() {
+    let keys = vec![Value::Int(1), Value::Null];
+    let program = compile_semi_body(
+        &select("SELECT x FROM a WHERE id IN (SELECT id FROM b)"),
+        keys.clone(),
+    )
+    .unwrap();
+    assert!(program.columns_to_load().contains(&"id".to_string()));
+    assert!(program.opcodes().any(
+        |op| matches!(op, Opcode::InList { list, negated: false, .. } if list.as_ref() == keys.as_slice())
+    ));
+    assert!(program
+        .opcodes()
+        .any(|op| matches!(op, Opcode::Filter { .. })));
+    let err = compile_semi_body(&select("SELECT x FROM a WHERE x > 1"), keys).unwrap_err();
     assert!(matches!(err, PlanError::UnsupportedSemiJoin(_)));
 }
 

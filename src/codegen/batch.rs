@@ -1971,6 +1971,20 @@ pub fn compile_with_distinct_columns(
     int_columns: &[String],
     str_columns: &[String],
 ) -> Result<Program> {
+    compile_filtered(select, int_columns, str_columns, None)
+}
+
+/// [`compile_with_distinct_columns`], with `semi`'s `(column, keys)` as the
+/// `WHERE` filter `column IN (keys)` when given ([`compile_semi_body`]):
+/// emitted as one [`Opcode::InList`] where the `WHERE` filter goes, never
+/// as the `OR` chain the parser lowers an `IN` list to, which nests as
+/// deep as the list is long.
+fn compile_filtered(
+    select: &Select,
+    int_columns: &[String],
+    str_columns: &[String],
+    semi: Option<(String, Vec<Value>)>,
+) -> Result<Program> {
     if select.scope.is_some() {
         return Err(PlanError::ScopeClauseUnsupported);
     }
@@ -2041,6 +2055,9 @@ pub fn compile_with_distinct_columns(
     let mut where_columns: Vec<String> = Vec::new();
     if let Some(where_clause) = &select.where_clause {
         collect_expr_columns(where_clause, &mut where_columns);
+    }
+    if let Some((column, _)) = &semi {
+        where_columns.push(column.clone());
     }
 
     // One entry per source register an `Item::Agg`/`Item::AggExpr` needs:
@@ -2149,6 +2166,18 @@ pub fn compile_with_distinct_columns(
             Opcode::Filter { predicate },
             format!("WHERE {}", expr_to_string(where_clause)),
         );
+    }
+    if let Some((column, keys)) = semi {
+        let src = ctx.load_column(&column);
+        let predicate = ctx.alloc();
+        let comment = format!("WHERE {column} IN ({} subquery keys)", keys.len());
+        ctx.push(Opcode::InList {
+            dst: predicate,
+            src,
+            list: keys.into(),
+            negated: false,
+        });
+        ctx.push_commented(Opcode::Filter { predicate }, comment);
     }
 
     let mut agg_parts = Vec::new();
@@ -3078,11 +3107,10 @@ pub fn compile_cross_mode_multi_join(
 }
 
 /// A planned `WHERE col IN (SELECT ...)` semi-join: the caller plans and
-/// runs `subquery` via [`compile`] on its own table, collects the allowed
-/// key set, filters the main table on `key_column` (see
-/// [`crate::vm::engine::semi_filter`]), and runs `body` over the survivors.
-/// `body` is the main query compiled with the `IN` clause stripped -- the
-/// subquery isn't a VM predicate.
+/// runs `subquery` via [`compile`] on its own table, then compiles the
+/// main query with the subquery's values as its filter
+/// ([`compile_semi_body`]). `body` is the main query compiled with the
+/// `IN` clause stripped -- the subquery isn't a VM predicate.
 /// Owns `subquery` (cloned out of the `IN` clause's already-boxed
 /// `Select`) rather than borrowing it -- this codebase's qualified
 /// subset (`make check-mvl-limit`) forbids the explicit lifetime a
@@ -3101,6 +3129,19 @@ pub struct SemiJoinProgram {
 /// Combining the `IN` clause with other conditions via `AND`/`OR` isn't
 /// supported -- the semi-join must be the whole `WHERE` clause.
 pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram> {
+    let (key_column, subquery) = semi_join_parts(select)?;
+    let mut stripped = select.clone();
+    stripped.where_clause = None;
+    Ok(SemiJoinProgram {
+        key_column,
+        subquery: Box::new(subquery.clone()),
+        body: compile(&stripped)?,
+    })
+}
+
+/// The key column and subquery of a `WHERE` that is exactly
+/// `col IN (SELECT ...)`.
+fn semi_join_parts(select: &Select) -> Result<(String, &Select)> {
     let Some(AstExpr {
         kind:
             ExprKind::InSubquery {
@@ -3118,14 +3159,20 @@ pub fn compile_semi_join(select: &Select) -> Result<SemiJoinProgram> {
     let key_column = expr_column_name(expr).ok_or_else(|| {
         PlanError::UnsupportedSemiJoin("IN's left-hand side must be a bare column".to_string())
     })?;
+    Ok((key_column, subquery))
+}
 
+/// The main query of a semi-join ([`compile_semi_join`]'s `select`),
+/// compiled with its `col IN (SELECT ...)` replaced by `col IN (keys)`:
+/// `keys` are the subquery's values, which the caller ran (tools#90). The
+/// program runs over the main table's segments like any [`compile`]d one,
+/// and `IN` takes a literal list's answers -- a NULL key never matches,
+/// and an integer key matches a float `5.0` -- as one [`Opcode::InList`].
+pub fn compile_semi_body(select: &Select, keys: Vec<Value>) -> Result<Program> {
+    let (key_column, _) = semi_join_parts(select)?;
     let mut stripped = select.clone();
     stripped.where_clause = None;
-    Ok(SemiJoinProgram {
-        key_column,
-        subquery: subquery.clone(),
-        body: compile(&stripped)?,
-    })
+    compile_filtered(&stripped, &[], &[], Some((key_column, keys)))
 }
 
 /// Plan a query whose `SELECT` list contains one or more window functions
@@ -4717,8 +4764,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_ce9ae325__v1_agg_without_group_by_emits_reduce(
-    ) {
+    fn mcdc__codegen_batch_compile_filtered_ce9ae325__v1_agg_without_group_by_emits_reduce() {
         // #452: a bare aggregate is a global `Reduce`, never a keyless
         // `GroupReduce` (which emits no row over zero surviving rows).
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
@@ -4732,8 +4778,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_ce9ae325__v2_group_by_without_agg_emits_group_reduce(
-    ) {
+    fn mcdc__codegen_batch_compile_filtered_ce9ae325__v2_group_by_without_agg_emits_group_reduce() {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -4744,8 +4789,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_ce9ae325__v3_no_agg_no_group_by_omits_group_reduce(
-    ) {
+    fn mcdc__codegen_batch_compile_filtered_ce9ae325__v3_no_agg_no_group_by_omits_group_reduce() {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
         let (body, ..) = program.split_finalize();
@@ -4758,7 +4802,7 @@ mod tests {
     /// `group_by_present || has_agg`): leaf A true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_3755607c__v1_group_by_without_agg_column_merges_partial_aggregates(
+    fn mcdc__codegen_batch_compile_filtered_3755607c__v1_group_by_without_agg_column_merges_partial_aggregates(
     ) {
         let query = sql::parse("SELECT region FROM t GROUP BY region").unwrap();
         let program = compile(&query).unwrap();
@@ -4769,7 +4813,7 @@ mod tests {
     /// MC/DC vector (obligation `batch_1127`): leaf B (`has_agg`) true alone.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_3755607c__v2_agg_column_without_group_by_merges_partial_aggregates(
+    fn mcdc__codegen_batch_compile_filtered_3755607c__v2_agg_column_without_group_by_merges_partial_aggregates(
     ) {
         let query = sql::parse("SELECT SUM(amount) FROM t").unwrap();
         let program = compile(&query).unwrap();
@@ -4781,7 +4825,7 @@ mod tests {
     /// the plain concatenation comment.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_3755607c__v3_no_group_by_no_agg_column_concatenates_segments(
+    fn mcdc__codegen_batch_compile_filtered_3755607c__v3_no_group_by_no_agg_column_concatenates_segments(
     ) {
         let query = sql::parse("SELECT id FROM t").unwrap();
         let program = compile(&query).unwrap();
@@ -4801,12 +4845,11 @@ mod tests {
         })
     }
 
-    /// MC/DC vector (obligation `codegen_batch_compile_with_distinct_columns_9c98f3ed`, `*distinct
+    /// MC/DC vector (obligation `codegen_batch_compile_filtered_9c98f3ed`, `*distinct
     /// && ctx.post_unnest`, #802): a distinct key after an `UNNEST` is a copy.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_9c98f3ed__v1_distinct_after_unnest_copies_the_key(
-    ) {
+    fn mcdc__codegen_batch_compile_filtered_9c98f3ed__v1_distinct_after_unnest_copies_the_key() {
         let query = sql::parse(
             "SELECT label, COUNT(DISTINCT id) FROM t, UNNEST(labels) AS l(label) GROUP BY label",
         )
@@ -4817,8 +4860,7 @@ mod tests {
     /// Leaf `post_unnest` false: the key is loaded as before.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_9c98f3ed__v2_distinct_without_unnest_loads_the_key(
-    ) {
+    fn mcdc__codegen_batch_compile_filtered_9c98f3ed__v2_distinct_without_unnest_loads_the_key() {
         let query = sql::parse("SELECT region, COUNT(DISTINCT id) FROM t GROUP BY region").unwrap();
         assert!(!copies_a_distinct_key(&compile(&query).unwrap()));
     }
@@ -4826,7 +4868,7 @@ mod tests {
     /// Leaf `distinct` false: a plain aggregate after an `UNNEST` copies nothing.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_batch_compile_with_distinct_columns_9c98f3ed__v3_plain_aggregate_after_unnest_copies_nothing(
+    fn mcdc__codegen_batch_compile_filtered_9c98f3ed__v3_plain_aggregate_after_unnest_copies_nothing(
     ) {
         let query =
             sql::parse("SELECT label, COUNT(id) FROM t, UNNEST(labels) AS l(label) GROUP BY label")
@@ -5158,6 +5200,46 @@ mod tests {
         let plain = sql::parse("SELECT id FROM orders WHERE id > 1").unwrap();
         assert!(matches!(
             compile_semi_join(&plain),
+            Err(PlanError::UnsupportedSemiJoin(_))
+        ));
+    }
+
+    /// tools#90: the subquery's keys filter the body as a literal `IN`
+    /// list would -- a NULL key matches no row, an integer `3` matches a
+    /// float `3.0` -- under a projection and under a `GROUP BY`.
+    #[test]
+    fn compile_semi_body_filters_on_the_subquery_keys() {
+        let rows = |q: &str, keys: Vec<Value>| {
+            run_program(&compile_semi_body(&sql::parse(q).unwrap(), keys).unwrap())
+        };
+        let flat = "SELECT region, amount FROM t WHERE amount IN (SELECT k FROM s)";
+        assert_eq!(
+            rows(flat, vec![Value::Int(20), Value::Null, Value::Int(7)]),
+            [vec![Value::Str("a".into()), Value::Int(20)]]
+        );
+        assert_eq!(
+            rows(flat, vec![Value::Float(3.0), Value::Int(30)]),
+            [
+                vec![Value::Str("b".into()), Value::Int(3)],
+                vec![Value::Str("b".into()), Value::Int(30)],
+            ]
+        );
+        assert!(rows(flat, Vec::new()).is_empty());
+        let mut grouped = rows(
+            "SELECT region, SUM(amount) FROM t WHERE amount IN (SELECT k FROM s) GROUP BY region",
+            vec![Value::Int(5), Value::Int(20), Value::Int(30)],
+        );
+        grouped.sort_by_key(|r| r[0].to_string());
+        assert_eq!(
+            grouped,
+            [
+                vec![Value::Str("a".into()), Value::Int(25)],
+                vec![Value::Str("b".into()), Value::Int(30)],
+            ]
+        );
+        let plain = sql::parse("SELECT id FROM orders WHERE id > 1").unwrap();
+        assert!(matches!(
+            compile_semi_body(&plain, Vec::new()),
             Err(PlanError::UnsupportedSemiJoin(_))
         ));
     }
