@@ -233,13 +233,33 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@v4
+      # #880: a push that only bumps the release version and CHANGELOG
+      # (`/merge`'s release commit) cannot change this job's result, and the
+      # same job already passed on the previous head: skip the rest, still
+      # reporting green (the merge queue waits on this check). Fails open;
+      # merge_group and push always run in full. See the script's header.
+      - name: Skip if this push only bumps the release version
+        id: release
+        run: tools/ci_release_only.sh ci "Test"
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.release.outputs.skip != 'true'
       - uses: Swatinem/rust-cache@v2
+        if: steps.release.outputs.skip != 'true'
         with:
           shared-key: test
       - run: make test
+        if: steps.release.outputs.skip != 'true'
 
   # Compile-level guard for the AOT emitter (db-core#447). The source
   # `codegen::batch::emit` generates calls the *consumer's*
@@ -259,20 +279,44 @@ jobs:
   emit-compile-guard:
     name: Emit compile guard (column-rs codegen_e2e)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@v4
         with:
           path: db-core
           fetch-depth: 0
+      # #880: a push that only bumps the release version and CHANGELOG
+      # (`/merge`'s release commit) cannot change this job's result, and the
+      # same job already passed on the previous head: skip the rest, still
+      # reporting green (the merge queue waits on this check). Fails open;
+      # merge_group and push always run in full. See the script's header.
+      - name: Skip if this push only bumps the release version
+        id: release
+        working-directory: db-core
+        run: tools/ci_release_only.sh ci "Emit compile guard (column-rs codegen_e2e)"
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
       - name: Decide whether the emitter or query-output surface changed
         id: relevant
         working-directory: db-core
         env:
+          RELEASE_SKIP: ${{ steps.release.outputs.skip }}
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
+          # A release-only push (#880): the guard passed on the previous head.
+          if [ "$RELEASE_SKIP" = "true" ]; then
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+            echo "release-only push; skipping"; exit 0
+          fi
           # A breaking change to the query-output surface needs a companion
           # tools branch to compile against; the PR body names it with a
           # line `tools-ref: <branch-or-sha>`. Default: tools main.
@@ -350,15 +394,36 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@v4
+      # #880: a push that only bumps the release version and CHANGELOG
+      # (`/merge`'s release commit) cannot change this job's result, and the
+      # same job already passed on the previous head: skip the rest, still
+      # reporting green (the merge queue waits on this check). Fails open;
+      # merge_group and push always run in full. See the script's header.
+      - name: Skip if this push only bumps the release version
+        id: release
+        run: tools/ci_release_only.sh ci "Coverage"
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.release.outputs.skip != 'true'
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+        if: steps.release.outputs.skip != 'true'
         with:
           shared-key: coverage
       - uses: taiki-e/install-action@v2
+        if: steps.release.outputs.skip != 'true'
         with:
           tool: cargo-llvm-cov
       - run: make check-coverage
+        if: steps.release.outputs.skip != 'true'
