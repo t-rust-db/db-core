@@ -527,6 +527,7 @@ pub fn compile_statement(
                         let resolved_views = resolve_views(views);
                         let cte_expanded = expand_with_clause(select)?;
                         let expanded = cte_expanded.expand_views(&resolved_views)?;
+                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;
 
                         let Some(from) = &expanded.from else {
                             return Err(DispatchError::NoFromClause);
@@ -604,6 +605,7 @@ fn rewrite_select(select: &Select, views: &[ViewSchema]) -> Result<Select, Dispa
     let cte_expanded = expand_with_clause(select)?;
     let resolved_views = resolve_views(views);
     let expanded = cte_expanded.expand_views(&resolved_views)?;
+    super::subquery::reject_unparsable_view_refs(&expanded, views)?;
     let mut expanded = expanded.into_owned();
     flatten_from_subqueries(&mut expanded);
     push_down_where_predicates(&mut expanded);

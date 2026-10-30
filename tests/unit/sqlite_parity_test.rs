@@ -117,6 +117,17 @@ fn result_column_names_match_sqlite3() {
         ),
         ("SELECT s.abc FROM (SELECT abc+1 AS abc FROM t) s", &["abc"]),
         ("WITH c AS (SELECT abc FROM t) SELECT * FROM c", &["abc"]),
+        // #887: flattening `(SELECT abc AS v FROM t) x` into the middle
+        // level kept its output column named `v`, not `abc`.
+        (
+            "SELECT * FROM (SELECT v FROM (SELECT abc AS v FROM t) x) s",
+            &["v"],
+        ),
+        (
+            "SELECT * FROM (SELECT x.v FROM (SELECT abc AS v FROM t) x) s",
+            &["v"],
+        ),
+        ("SELECT v FROM (SELECT abc AS v FROM t) x", &["v"]),
         ("WITH c(z) AS (SELECT abc FROM t) SELECT * FROM c", &["z"]),
         ("SELECT k, upper(k) FROM t GROUP BY k", &["k", "upper(k)"]),
         ("SELECT * FROM vv", &["a", "id+1"]),
@@ -1260,4 +1271,40 @@ fn zeroblob_past_max_length_is_too_big() {
     assert!(err.ends_with("string or blob too big"), "{err}");
     let rows = e.run_query("SELECT length(zeroblob(5))").unwrap().rows;
     assert_eq!(rows, vec![vec![Cell::Int(5)]]);
+}
+
+/// #887: `count(*)` over a FROM-subquery took the bare-table `Count`
+/// fast path and failed with "invalid root page (0)"; sqlite3 counts the
+/// subquery's rows. A plain table still counts through the fast path.
+#[test]
+fn count_star_over_a_derived_table_counts_its_rows() {
+    let db = TempDb::new("count-derived");
+    let mut e = engine(&db);
+    e.run_query("CREATE TABLE n(a INT)").unwrap();
+    e.run_query("INSERT INTO n VALUES (1), (2), (3), (4), (5)")
+        .unwrap();
+    for (sql, want) in [
+        ("SELECT count(*) FROM n", 5),
+        ("SELECT count(*) FROM (SELECT a FROM n)", 5),
+        ("SELECT count(*) FROM (SELECT a FROM n WHERE a > 2)", 3),
+        ("SELECT count(*) FROM (SELECT a FROM n) AS s WHERE a = 2", 1),
+        // #887: two levels of derived table whose inner one renames a
+        // column (`a AS v`); flattening renamed the middle's output to `a`.
+        ("SELECT count(*) FROM (SELECT v FROM (SELECT a AS v FROM n) x) s WHERE s.v > 3", 2),
+        (
+            "SELECT count(*) FROM (SELECT x.v FROM (SELECT a AS v FROM n) x, (SELECT a AS w FROM n) y) s",
+            25,
+        ),
+        (
+            "WITH c0 AS (SELECT a FROM n), c1 AS (SELECT x.a FROM c0 x WHERE x.a > 1) \
+             SELECT count(*) FROM c1",
+            4,
+        ),
+    ] {
+        let rows = e
+            .run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"))
+            .rows;
+        assert_eq!(rows, vec![vec![Cell::Int(want)]], "{sql}");
+    }
 }

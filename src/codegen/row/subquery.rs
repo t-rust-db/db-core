@@ -56,6 +56,7 @@ pub use cte::expand_with_clause;
 pub use flatten::flatten_from_subqueries;
 pub use from_clause::resolve_from_table_schema;
 pub use pushdown::push_down_where_predicates;
+pub(crate) use views::reject_unparsable_view_refs;
 pub use views::{resolve_views, ExpandViews, ResolvedView};
 
 pub(crate) use correlation::{

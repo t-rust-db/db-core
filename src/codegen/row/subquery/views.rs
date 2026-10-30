@@ -96,28 +96,59 @@ impl ExpandViews for Select {
 /// [`expand_views`] can never disagree with what the rewrite itself
 /// would have found.
 fn select_references_any_view(select: &Select, views: &[ResolvedView]) -> bool {
-    let from_has_view = |from: &crate::parser::ast::FromClause| {
-        table_ref_references_view(&from.first, views)
+    select_references_table(select, &|name: &str| {
+        views.iter().any(|v| v.name.eq_ignore_ascii_case(name))
+    })
+}
+
+/// Whether any `FROM`/`JOIN` table of `select` (main query, compound arms,
+/// nested `FROM`-subqueries) is named `is_target`.
+fn select_references_table(select: &Select, is_target: &impl Fn(&str) -> bool) -> bool {
+    let from_has_target = |from: &crate::parser::ast::FromClause| {
+        table_ref_references_table(&from.first, is_target)
             || from
                 .joins
                 .iter()
-                .any(|j| table_ref_references_view(&j.table, views))
+                .any(|j| table_ref_references_table(&j.table, is_target))
     };
-    if select.from.as_ref().is_some_and(from_has_view) {
+    if select.from.as_ref().is_some_and(from_has_target) {
         return true;
     }
     select
         .compound
         .iter()
-        .any(|arm| arm.from.as_ref().is_some_and(from_has_view))
+        .any(|arm| arm.from.as_ref().is_some_and(from_has_target))
 }
 
-fn table_ref_references_view(table_ref: &TableRef, views: &[ResolvedView]) -> bool {
+fn table_ref_references_table(table_ref: &TableRef, is_target: &impl Fn(&str) -> bool) -> bool {
     match &table_ref.kind {
-        TableRefKind::Name(name) => views.iter().any(|v| v.name.eq_ignore_ascii_case(name)),
-        TableRefKind::Subquery(inner) => select_references_any_view(inner, views),
+        TableRefKind::Name(name) => is_target(name),
+        TableRefKind::Subquery(inner) => select_references_table(inner, is_target),
         TableRefKind::Unnest { .. } => false,
     }
+}
+
+/// [`resolve_views`] leaves out a view whose stored `CREATE VIEW` doesn't
+/// parse, so unrelated statements still run. A statement that still names
+/// one after expansion -- directly or through another view -- reports that
+/// view's parse error instead of a misleading "no such table" (#887).
+pub(crate) fn reject_unparsable_view_refs(
+    expanded: &Select,
+    views: &[crate::codegen::row::ViewSchema],
+) -> Result<(), CodegenError> {
+    for view in views {
+        if !select_references_table(expanded, &|name: &str| view.name.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        if let ParseOutcome::Unsupported { message, .. } | ParseOutcome::Invalid { message, .. } =
+            crate::parser::row::parse_create_view(&view.sql)
+        {
+            return Err(CodegenError::Unsupported {
+                reason: format!("view {} cannot be used: {message}", view.name),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn expand_views_in_select(
@@ -213,6 +244,38 @@ mod mcdc_vectors {
         match parse_select(sql) {
             ParseOutcome::Accepted(select) => *select,
             other => panic!("{sql:?} must parse, got {other:?}"),
+        }
+    }
+
+    /// #887: a view whose stored definition doesn't parse was dropped,
+    /// so using it -- directly or through another view -- reported "no
+    /// such table". Unrelated statements still run.
+    #[test]
+    fn using_a_view_that_does_not_parse_reports_why() {
+        let views = vec![
+            ViewSchema {
+                name: "bad".to_string(),
+                sql: "CREATE VIEW bad AS WITH RECURSIVE r(n) AS (SELECT 1) SELECT n FROM r"
+                    .to_string(),
+            },
+            ViewSchema {
+                name: "good".to_string(),
+                sql: "CREATE VIEW good AS SELECT n FROM bad".to_string(),
+            },
+        ];
+        let resolved = resolve_views(&views);
+        let check = |sql: &str| {
+            let select = sel(sql);
+            let expanded = select.expand_views(&resolved).unwrap();
+            super::reject_unparsable_view_refs(&expanded, &views)
+        };
+        assert!(check("SELECT a FROM t").is_ok());
+        for sql in ["SELECT n FROM bad", "SELECT n FROM good"] {
+            let err = check(sql).unwrap_err().to_string();
+            assert!(
+                err.contains("view bad cannot be used: WITH RECURSIVE"),
+                "{sql}: {err}"
+            );
         }
     }
 
