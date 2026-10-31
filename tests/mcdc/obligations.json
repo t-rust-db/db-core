@@ -4340,10 +4340,10 @@
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_expr_cond_compile_cond_6b94697a",
+    "id": "codegen_row_expr_cond_compile_cond_98472291",
     "file": "src/codegen/row/expr/cond.rs",
     "line": 118,
-    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => compile_cond(em, reg, scope, inner, targets),\n\n        // Swapping the targets is right — it is what SQLite's own\n        // `sqlite3ExprIfTrue`/`sqlite3ExprIfFalse` pair does for\n        // `TK_NOT` — but only once `on_null` comes along for the\n        // ride. Flipping it keeps the unknown outcome on the same\n        // address across the swap; without that (the #134 bug) NULL\n        // silently inherited whichever target had just become \"false\",\n        // i.e. the keep-the-row one, and `WHERE NOT (x = 5)` returned\n        // rows where `x IS NULL`.\n        ExprKind::Unary {\n            op: UnaryOp::Not,\n            expr: inner,\n        } => compile_cond(em, reg, scope, inner, targets.negate()),\n\n        ExprKind::Binary {\n            op: BinaryOp::And,\n            lhs,\n            rhs,\n        } => {\n            // `on_false` must be a real label before `lhs` compiles\n            // — if it were left as `Fallthrough`, \"fall through\" would\n            // wrongly mean \"continue into rhs's test code\" (the next\n            // thing physically emitted) rather than the AND's actual\n            // false continuation, which only exists after `rhs` compiles.\n            //\n            // `on_null` passes to both operands unchanged, and that\n            // is exactly three-valued AND, both ways round. With\n            // `NullTarget::False`: an unknown `lhs` goes straight to\n            // the false continuation, which is right because every\n            // completion of `unknown AND rhs` (false, or unknown) lands\n            // there too. With `NullTarget::True`: an unknown `lhs`\n            // falls through into `rhs`'s test, which is also right —\n            // `unknown AND false` is false and reaches `false_label`\n            // via `rhs`, while `unknown AND true`/`unknown AND unknown`\n            // are unknown and reach `on_true`, where NULL belongs\n            // under this setting.\n            //\n            // #581: AND is commutative under three-valued logic, so\n            // whichever operand is cheaper (by [`cost_class`]) compiles\n            // first — the eagerly-evaluated slot — letting the pricier\n            // operand's evaluation be skipped whenever the cheap one\n            // already resolves the jump.\n            let (first, second) = if rhs_is_cheaper(lhs, rhs) {\n                (rhs, lhs)\n            } else {\n                (lhs, rhs)\n            };\n            let (false_label, is_new) = ensure_label(em, targets.on_false);\n            let operand = targets.with_false(Target::Jump(false_label));\n            compile_cond(\n                em,\n                reg,\n                scope,\n                first,\n                operand.with_true(Target::Fallthrough),\n            )?;\n            compile_cond(em, reg, scope, second, operand)?;\n            if is_new {\n                em.place(false_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Binary {\n            op: BinaryOp::Or,\n            lhs,\n            rhs,\n        } => {\n            // Symmetric to `And` above: `on_true` must be a real\n            // label before `lhs` compiles, or a `Fallthrough` true\n            // would wrongly land in `rhs`'s test code instead of OR's\n            // actual true continuation. `on_null` threads through\n            // unchanged for the mirror-image reason: under\n            // `NullTarget::True` an unknown `lhs` jumps straight to\n            // `true_label` (every completion of `unknown OR rhs` is\n            // true or unknown, and both belong there), and under\n            // `NullTarget::False` it falls into `rhs`, which decides\n            // between true and the false/unknown continuation.\n            //\n            // #581: same cheapest-first reordering as AND above — OR\n            // is equally commutative under three-valued logic.\n            let (first, second) = if rhs_is_cheaper(lhs, rhs) {\n                (rhs, lhs)\n            } else {\n                (lhs, rhs)\n            };\n            let (true_label, is_new) = ensure_label(em, targets.on_true);\n            let operand = targets.with_true(Target::Jump(true_label));\n            compile_cond(\n                em,\n                reg,\n                scope,\n                first,\n                operand.with_false(Target::Fallthrough),\n            )?;\n            compile_cond(em, reg, scope, second, operand)?;\n            if is_new {\n                em.place(true_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Binary { op, lhs, rhs }\n            if matches!(\n                op,\n                BinaryOp::Eq\n                    | BinaryOp::Ne\n                    | BinaryOp::Lt\n                    | BinaryOp::Le\n                    | BinaryOp::Gt\n                    | BinaryOp::Ge\n            ) =>\n        {\n            let collation = collation_of(lhs)\n                .or_else(|| collation_of(rhs))\n                .or_else(|| expr_collation(scope, lhs))\n                .or_else(|| expr_collation(scope, rhs));\n            let affinity =\n                comparison_affinity(expr_affinity(scope, lhs), expr_affinity(scope, rhs));\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            emit_compare_false_jump(em, *op, l, r, collation, affinity, targets)\n        }\n\n        ExprKind::Is { lhs, rhs, negated } => {\n            // `a IS b`: true when both NULL, or both non-NULL and\n            // equal — unlike `=`, never propagates NULL to \"unknown\".\n            // No single opcode expresses this; compute it into a\n            // 0/1 register first, then test truthiness like any other\n            // value-mode boolean (LIKE/GLOB take the same shape).\n            // `on_null` is deliberately ignored here and in the\n            // `IsNull` arm below: these two are the only conditions in\n            // SQL that are always definitely true or definitely false,\n            // so they have no unknown outcome to route, and swapping\n            // the targets for `negated` is sound without flipping it.\n            let (t, f) = if *negated {\n                (targets.on_false, targets.on_true)\n            } else {\n                (targets.on_true, targets.on_false)\n            };\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            let result = reg.alloc();\n            let both_null = em.new_label();\n            let done = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));\n            em.patch_p2(addr, both_null);\n\n            let eq_true = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::Eq, l, 0, r));\n            em.patch_p2(addr, eq_true);\n            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));\n            em.goto(done);\n            em.place(eq_true);\n            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));\n            em.goto(done);\n\n            em.place(both_null);\n            let r_null = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n            em.patch_p2(addr, r_null);\n            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));\n            em.goto(done);\n            em.place(r_null);\n            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));\n\n            em.place(done);\n            finish_bool(em, t, f, |em, false_label| {\n                let addr = em.emit(Instruction::new(Opcode::IfNot, result, 0, 1));\n                em.patch_p2(addr, false_label);\n            });\n            Ok(())\n        }\n\n        ExprKind::IsNull {\n            expr: inner,\n            negated,\n        } => {\n            let r = compile_value(em, reg, scope, inner)?;\n            // negated=false is `IS NULL` (condition true when NULL);\n            // negated=true is `IS NOT NULL` (condition true when not\n            // NULL). Emit the opcode matching \"jump when condition is\n            // false\" so `finish_bool` sees a uniform false-jump\n            // primitive.\n            // negated=false (IS NULL): condition true iff NULL, so its\n            // false-jump primitive fires when NOT null -> `NotNull`.\n            // negated=true (IS NOT NULL): condition true iff not NULL,\n            // so its false-jump primitive fires when NULL -> `IsNull`.\n            let false_jump_op = if *negated {\n                Opcode::IsNull\n            } else {\n                Opcode::NotNull\n            };\n            finish_bool(em, targets.on_true, targets.on_false, |em, false_label| {\n                let addr = em.emit(Instruction::new(false_jump_op, r, 0, 0));\n                em.patch_p2(addr, false_label);\n            });\n            Ok(())\n        }\n\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            negated,\n        } => {\n            // Lowered per SQLite's own rule: `x BETWEEN lo AND hi` is\n            // `x >= lo AND x <= hi`, and `x NOT BETWEEN lo AND hi` is\n            // `x < lo OR x > hi` — NOT the same shape with true/false\n            // swapped. Swapping targets would make a NULL `x` (where\n            // neither comparison jumps at all, per\n            // `emit_compare_false_jump`'s three-valued contract) come\n            // out *true* for `NOT BETWEEN`, when the honest answer is\n            // \"unknown\", which WHERE excludes just like false.\n            let cmp = |op, rhs: &Expr| Expr {\n                kind: ExprKind::Binary {\n                    op,\n                    lhs: inner.clone(),\n                    rhs: Box::new(rhs.clone()),\n                },\n                span: expr.span,\n            };\n\n            if *negated {\n                let lt_lo = cmp(BinaryOp::Lt, lo);\n                let gt_hi = cmp(BinaryOp::Gt, hi);\n                let (t_label, t_is_new) = ensure_label(em, targets.on_true);\n                let arm = targets.with_true(Target::Jump(t_label));\n                compile_cond(em, reg, scope, &lt_lo, arm.with_false(Target::Fallthrough))?;\n                compile_cond(em, reg, scope, &gt_hi, arm)?;\n                if t_is_new {\n                    em.place(t_label);\n                }\n            } else {\n                let ge_lo = cmp(BinaryOp::Ge, lo);\n                let le_hi = cmp(BinaryOp::Le, hi);\n                let (f_label, f_is_new) = ensure_label(em, targets.on_false);\n                let arm = targets.with_false(Target::Jump(f_label));\n                compile_cond(em, reg, scope, &ge_lo, arm.with_true(Target::Fallthrough))?;\n                compile_cond(em, reg, scope, &le_hi, arm)?;\n                if f_is_new {\n                    em.place(f_label);\n                }\n            }\n            Ok(())\n        }\n\n        ExprKind::In {\n            expr: inner,\n            list,\n            negated,\n        } => {\n            if list.is_empty() {\n                // `x IN ()` is always false, even for a NULL `x` — an\n                // empty list leaves nothing to be uncertain against.\n                let (t, f) = if *negated {\n                    (targets.on_false, targets.on_true)\n                } else {\n                    (targets.on_true, targets.on_false)\n                };\n                return compile_always_false(em, t, f);\n            }\n\n            // `IN`'s three outcomes — a definite match, a definite\n            // non-match, or \"unknown\" (no match found, but `inner` or\n            // some list item was NULL along the way) — don't collapse\n            // to a single true/false jump the way other comparisons\n            // do: `NOT IN`'s definite-non-match and unknown outcomes\n            // diverge (`NOT FALSE` = true, `NOT NULL` = still NULL),\n            // so a per-item comparison can't just swap targets like\n            // `emit_compare_false_jump` does. `saw_null` is a small\n            // exception to this module's \"never an intermediate\n            // boolean register\" rule (shared with the `Is`/`IsNot`\n            // handling above), needed to remember that exception past\n            // the loop that discovers it.\n            let l = compile_value(em, reg, scope, inner)?;\n            let saw_null = reg.alloc();\n            em.emit(Instruction::new(Opcode::Integer, 0, saw_null, 0));\n\n            let (true_label, true_is_new) = ensure_label(em, targets.on_true);\n            let (false_label, false_is_new) = ensure_label(em, targets.on_false);\n            // A match found means IN is true; exhausting the list\n            // without one means IN is false — `negated` (`NOT IN`)\n            // swaps which final label each of those routes to. An\n            // unknown outcome, below, always routes to `false_label`\n            // regardless of `negated`: NULL is never true.\n            let (found_label, unmatched_label) = if *negated {\n                (false_label, true_label)\n            } else {\n                (true_label, false_label)\n            };\n            // `negated` does not move the unknown outcome — `NOT\n            // unknown` is still unknown — so it routes by `on_null`\n            // alone, exactly like every other arm (#134). Before that\n            // ticket this was hardcoded to `false_label`, which was\n            // right only because `WHERE` was the sole caller.\n            let null_label = match targets.on_null {\n                NullTarget::True => true_label,\n                NullTarget::False => false_label,\n            };\n\n            let inner_null_addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));\n            em.patch_p2(inner_null_addr, null_label);\n\n            for item in list.iter() {\n                let collation = collation_of(inner)\n                    .or_else(|| collation_of(item))\n                    .or_else(|| expr_collation(scope, inner))\n                    .or_else(|| expr_collation(scope, item));\n                let affinity =\n                    comparison_affinity(expr_affinity(scope, inner), expr_affinity(scope, item));\n                let p4 = p4_coll_seq(collation.unwrap_or(Collation::Binary), affinity);\n                let r = compile_value(em, reg, scope, item)?;\n\n                let item_null_label = em.new_label();\n                let skip_label = em.new_label();\n                let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n                em.patch_p2(addr, item_null_label);\n                let addr = em.emit(Instruction::with_p4(Opcode::Eq, l, 0, r, p4));\n                em.patch_p2(addr, found_label);\n                em.goto(skip_label);\n\n                em.place(item_null_label);\n                em.emit(Instruction::new(Opcode::Integer, 1, saw_null, 0));\n                em.place(skip_label);\n            }\n\n            // Exhausted the list without a match: route to\n            // `unmatched_label` only if every comparison was a clean\n            // non-match (`saw_null` still 0); otherwise at least one\n            // comparison was against NULL, so the honest answer is\n            // \"unknown\", which goes wherever `on_null` says.\n            let addr = em.emit(Instruction::new(Opcode::IfNot, saw_null, 0, 0));\n            em.patch_p2(addr, unmatched_label);\n            em.goto(null_label);\n\n            if false_is_new {\n                em.place(false_label);\n            }\n            if true_is_new {\n                em.place(true_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Like { .. } => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n\n        // #238: EXISTS/NOT EXISTS never has an unknown outcome (see\n        // `subquery::compile_exists`'s doc comment), so `targets` is\n        // handed through as-is rather than materialized via\n        // `compile_bool_to_value`.\n        ExprKind::Exists { subquery, negated } => crate::codegen::row::subquery::compile_exists(\n            em, reg, scope, subquery, *negated, targets,\n        ),\n\n        ExprKind::InSubquery {\n            expr: inner,\n            subquery,\n            negated,\n        } => crate::codegen::row::subquery::compile_in_subquery(\n            em, reg, scope, inner, subquery, *negated, targets,\n        ),\n\n        ExprKind::InSubqueryMulti {\n            exprs,\n            subquery,\n            negated,\n        } => crate::codegen::row::subquery::compile_in_subquery_multi(\n            em, reg, scope, exprs, subquery, *negated, targets,\n        ),\n\n        // A scalar subquery used directly as a boolean condition (e.g.\n        // `WHERE (SELECT x FROM t)`): compute its value, then test\n        // truthiness like any other value-mode boolean.\n        ExprKind::Subquery(_) => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n\n        // Any other expression used in boolean context (a bare column,\n        // a function call, CASE, etc.): evaluate to a value and test\n        // truthiness the same way as LIKE above.\n        _ => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n    }",
+    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => compile_cond(em, reg, scope, inner, targets),\n\n        // Swapping the targets is right — it is what SQLite's own\n        // `sqlite3ExprIfTrue`/`sqlite3ExprIfFalse` pair does for\n        // `TK_NOT` — but only once `on_null` comes along for the\n        // ride. Flipping it keeps the unknown outcome on the same\n        // address across the swap; without that (the #134 bug) NULL\n        // silently inherited whichever target had just become \"false\",\n        // i.e. the keep-the-row one, and `WHERE NOT (x = 5)` returned\n        // rows where `x IS NULL`.\n        ExprKind::Unary {\n            op: UnaryOp::Not,\n            expr: inner,\n        } => compile_cond(em, reg, scope, inner, targets.negate()),\n\n        ExprKind::Binary {\n            op: BinaryOp::And,\n            lhs,\n            rhs,\n        } => {\n            // `on_false` must be a real label before `lhs` compiles\n            // — if it were left as `Fallthrough`, \"fall through\" would\n            // wrongly mean \"continue into rhs's test code\" (the next\n            // thing physically emitted) rather than the AND's actual\n            // false continuation, which only exists after `rhs` compiles.\n            //\n            // `on_null` passes to both operands unchanged, and that\n            // is exactly three-valued AND, both ways round. With\n            // `NullTarget::False`: an unknown `lhs` goes straight to\n            // the false continuation, which is right because every\n            // completion of `unknown AND rhs` (false, or unknown) lands\n            // there too. With `NullTarget::True`: an unknown `lhs`\n            // falls through into `rhs`'s test, which is also right —\n            // `unknown AND false` is false and reaches `false_label`\n            // via `rhs`, while `unknown AND true`/`unknown AND unknown`\n            // are unknown and reach `on_true`, where NULL belongs\n            // under this setting.\n            //\n            // #581: AND is commutative under three-valued logic, so\n            // whichever operand is cheaper (by [`cost_class`]) compiles\n            // first — the eagerly-evaluated slot — letting the pricier\n            // operand's evaluation be skipped whenever the cheap one\n            // already resolves the jump.\n            let (first, second) = if rhs_is_cheaper(lhs, rhs) {\n                (rhs, lhs)\n            } else {\n                (lhs, rhs)\n            };\n            let (false_label, is_new) = ensure_label(em, targets.on_false);\n            let operand = targets.with_false(Target::Jump(false_label));\n            compile_cond(\n                em,\n                reg,\n                scope,\n                first,\n                operand.with_true(Target::Fallthrough),\n            )?;\n            compile_cond(em, reg, scope, second, operand)?;\n            if is_new {\n                em.place(false_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Binary {\n            op: BinaryOp::Or,\n            lhs,\n            rhs,\n        } => {\n            // Symmetric to `And` above: `on_true` must be a real\n            // label before `lhs` compiles, or a `Fallthrough` true\n            // would wrongly land in `rhs`'s test code instead of OR's\n            // actual true continuation. `on_null` threads through\n            // unchanged for the mirror-image reason: under\n            // `NullTarget::True` an unknown `lhs` jumps straight to\n            // `true_label` (every completion of `unknown OR rhs` is\n            // true or unknown, and both belong there), and under\n            // `NullTarget::False` it falls into `rhs`, which decides\n            // between true and the false/unknown continuation.\n            //\n            // #581: same cheapest-first reordering as AND above — OR\n            // is equally commutative under three-valued logic.\n            let (first, second) = if rhs_is_cheaper(lhs, rhs) {\n                (rhs, lhs)\n            } else {\n                (lhs, rhs)\n            };\n            let (true_label, is_new) = ensure_label(em, targets.on_true);\n            let operand = targets.with_true(Target::Jump(true_label));\n            compile_cond(\n                em,\n                reg,\n                scope,\n                first,\n                operand.with_false(Target::Fallthrough),\n            )?;\n            compile_cond(em, reg, scope, second, operand)?;\n            if is_new {\n                em.place(true_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Binary { op, lhs, rhs }\n            if matches!(\n                op,\n                BinaryOp::Eq\n                    | BinaryOp::Ne\n                    | BinaryOp::Lt\n                    | BinaryOp::Le\n                    | BinaryOp::Gt\n                    | BinaryOp::Ge\n            ) =>\n        {\n            let collation = collation_of(lhs)\n                .or_else(|| collation_of(rhs))\n                .or_else(|| expr_collation(scope, lhs))\n                .or_else(|| expr_collation(scope, rhs));\n            let affinity =\n                comparison_affinity(expr_affinity(scope, lhs), expr_affinity(scope, rhs));\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            emit_compare_false_jump(em, *op, l, r, collation, affinity, targets)\n        }\n\n        ExprKind::Is { lhs, rhs, negated } => {\n            // `a IS b`: true when both NULL, or both non-NULL and\n            // equal — unlike `=`, never propagates NULL to \"unknown\".\n            // No single opcode expresses this; compute it into a\n            // 0/1 register first, then test truthiness like any other\n            // value-mode boolean (LIKE/GLOB take the same shape).\n            // `on_null` is deliberately ignored here and in the\n            // `IsNull` arm below: these two are the only conditions in\n            // SQL that are always definitely true or definitely false,\n            // so they have no unknown outcome to route, and swapping\n            // the targets for `negated` is sound without flipping it.\n            let (t, f) = if *negated {\n                (targets.on_false, targets.on_true)\n            } else {\n                (targets.on_true, targets.on_false)\n            };\n            let l = compile_value(em, reg, scope, lhs)?;\n            let r = compile_value(em, reg, scope, rhs)?;\n            let result = reg.alloc();\n            let both_null = em.new_label();\n            let done = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));\n            em.patch_p2(addr, both_null);\n\n            let eq_true = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::Eq, l, 0, r));\n            em.patch_p2(addr, eq_true);\n            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));\n            em.goto(done);\n            em.place(eq_true);\n            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));\n            em.goto(done);\n\n            em.place(both_null);\n            let r_null = em.new_label();\n            let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n            em.patch_p2(addr, r_null);\n            em.emit(Instruction::new(Opcode::Integer, 0, result, 0));\n            em.goto(done);\n            em.place(r_null);\n            em.emit(Instruction::new(Opcode::Integer, 1, result, 0));\n\n            em.place(done);\n            finish_bool(em, t, f, |em, false_label| {\n                let addr = em.emit(Instruction::new(Opcode::IfNot, result, 0, 1));\n                em.patch_p2(addr, false_label);\n            });\n            Ok(())\n        }\n\n        ExprKind::IsNull {\n            expr: inner,\n            negated,\n        } => {\n            let r = compile_value(em, reg, scope, inner)?;\n            // negated=false is `IS NULL` (condition true when NULL);\n            // negated=true is `IS NOT NULL` (condition true when not\n            // NULL). Emit the opcode matching \"jump when condition is\n            // false\" so `finish_bool` sees a uniform false-jump\n            // primitive.\n            // negated=false (IS NULL): condition true iff NULL, so its\n            // false-jump primitive fires when NOT null -> `NotNull`.\n            // negated=true (IS NOT NULL): condition true iff not NULL,\n            // so its false-jump primitive fires when NULL -> `IsNull`.\n            let false_jump_op = if *negated {\n                Opcode::IsNull\n            } else {\n                Opcode::NotNull\n            };\n            finish_bool(em, targets.on_true, targets.on_false, |em, false_label| {\n                let addr = em.emit(Instruction::new(false_jump_op, r, 0, 0));\n                em.patch_p2(addr, false_label);\n            });\n            Ok(())\n        }\n\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            negated,\n        } => {\n            // Lowered per SQLite's own rule: `x BETWEEN lo AND hi` is\n            // `x >= lo AND x <= hi`, and `x NOT BETWEEN lo AND hi` is\n            // `x < lo OR x > hi` — NOT the same shape with true/false\n            // swapped. Swapping targets would make a NULL `x` (where\n            // neither comparison jumps at all, per\n            // `emit_compare_false_jump`'s three-valued contract) come\n            // out *true* for `NOT BETWEEN`, when the honest answer is\n            // \"unknown\", which WHERE excludes just like false.\n            let cmp = |op, rhs: &Expr| Expr {\n                kind: ExprKind::Binary {\n                    op,\n                    lhs: inner.clone(),\n                    rhs: Box::new(rhs.clone()),\n                },\n                span: expr.span,\n            };\n\n            if *negated {\n                let lt_lo = cmp(BinaryOp::Lt, lo);\n                let gt_hi = cmp(BinaryOp::Gt, hi);\n                let (t_label, t_is_new) = ensure_label(em, targets.on_true);\n                let arm = targets.with_true(Target::Jump(t_label));\n                compile_cond(em, reg, scope, &lt_lo, arm.with_false(Target::Fallthrough))?;\n                compile_cond(em, reg, scope, &gt_hi, arm)?;\n                if t_is_new {\n                    em.place(t_label);\n                }\n            } else {\n                let ge_lo = cmp(BinaryOp::Ge, lo);\n                let le_hi = cmp(BinaryOp::Le, hi);\n                let (f_label, f_is_new) = ensure_label(em, targets.on_false);\n                let arm = targets.with_false(Target::Jump(f_label));\n                compile_cond(em, reg, scope, &ge_lo, arm.with_true(Target::Fallthrough))?;\n                compile_cond(em, reg, scope, &le_hi, arm)?;\n                if f_is_new {\n                    em.place(f_label);\n                }\n            }\n            Ok(())\n        }\n\n        ExprKind::In {\n            expr: inner,\n            list,\n            negated,\n        } => {\n            if list.is_empty() {\n                // `x IN ()` is always false, even for a NULL `x` — an\n                // empty list leaves nothing to be uncertain against.\n                // sqlite3 still prepares `x`, so an unknown function in it\n                // is an error (#650): compile it into a scratch emitter.\n                compile_value(&mut Emitter::new(), &mut RegAlloc::new(), scope, inner)?;\n                let (t, f) = if *negated {\n                    (targets.on_false, targets.on_true)\n                } else {\n                    (targets.on_true, targets.on_false)\n                };\n                return compile_always_false(em, t, f);\n            }\n\n            // `IN`'s three outcomes — a definite match, a definite\n            // non-match, or \"unknown\" (no match found, but `inner` or\n            // some list item was NULL along the way) — don't collapse\n            // to a single true/false jump the way other comparisons\n            // do: `NOT IN`'s definite-non-match and unknown outcomes\n            // diverge (`NOT FALSE` = true, `NOT NULL` = still NULL),\n            // so a per-item comparison can't just swap targets like\n            // `emit_compare_false_jump` does. `saw_null` is a small\n            // exception to this module's \"never an intermediate\n            // boolean register\" rule (shared with the `Is`/`IsNot`\n            // handling above), needed to remember that exception past\n            // the loop that discovers it.\n            let l = compile_value(em, reg, scope, inner)?;\n            let saw_null = reg.alloc();\n            em.emit(Instruction::new(Opcode::Integer, 0, saw_null, 0));\n\n            let (true_label, true_is_new) = ensure_label(em, targets.on_true);\n            let (false_label, false_is_new) = ensure_label(em, targets.on_false);\n            // A match found means IN is true; exhausting the list\n            // without one means IN is false — `negated` (`NOT IN`)\n            // swaps which final label each of those routes to. An\n            // unknown outcome, below, always routes to `false_label`\n            // regardless of `negated`: NULL is never true.\n            let (found_label, unmatched_label) = if *negated {\n                (false_label, true_label)\n            } else {\n                (true_label, false_label)\n            };\n            // `negated` does not move the unknown outcome — `NOT\n            // unknown` is still unknown — so it routes by `on_null`\n            // alone, exactly like every other arm (#134). Before that\n            // ticket this was hardcoded to `false_label`, which was\n            // right only because `WHERE` was the sole caller.\n            let null_label = match targets.on_null {\n                NullTarget::True => true_label,\n                NullTarget::False => false_label,\n            };\n\n            let inner_null_addr = em.emit(Instruction::new(Opcode::IsNull, l, 0, 0));\n            em.patch_p2(inner_null_addr, null_label);\n\n            for item in list.iter() {\n                let collation = collation_of(inner)\n                    .or_else(|| collation_of(item))\n                    .or_else(|| expr_collation(scope, inner))\n                    .or_else(|| expr_collation(scope, item));\n                let affinity =\n                    comparison_affinity(expr_affinity(scope, inner), expr_affinity(scope, item));\n                let p4 = p4_coll_seq(collation.unwrap_or(Collation::Binary), affinity);\n                let r = compile_value(em, reg, scope, item)?;\n\n                let item_null_label = em.new_label();\n                let skip_label = em.new_label();\n                let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n                em.patch_p2(addr, item_null_label);\n                let addr = em.emit(Instruction::with_p4(Opcode::Eq, l, 0, r, p4));\n                em.patch_p2(addr, found_label);\n                em.goto(skip_label);\n\n                em.place(item_null_label);\n                em.emit(Instruction::new(Opcode::Integer, 1, saw_null, 0));\n                em.place(skip_label);\n            }\n\n            // Exhausted the list without a match: route to\n            // `unmatched_label` only if every comparison was a clean\n            // non-match (`saw_null` still 0); otherwise at least one\n            // comparison was against NULL, so the honest answer is\n            // \"unknown\", which goes wherever `on_null` says.\n            let addr = em.emit(Instruction::new(Opcode::IfNot, saw_null, 0, 0));\n            em.patch_p2(addr, unmatched_label);\n            em.goto(null_label);\n\n            if false_is_new {\n                em.place(false_label);\n            }\n            if true_is_new {\n                em.place(true_label);\n            }\n            Ok(())\n        }\n\n        ExprKind::Like { .. } => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n\n        // #238: EXISTS/NOT EXISTS never has an unknown outcome (see\n        // `subquery::compile_exists`'s doc comment), so `targets` is\n        // handed through as-is rather than materialized via\n        // `compile_bool_to_value`.\n        ExprKind::Exists { subquery, negated } => crate::codegen::row::subquery::compile_exists(\n            em, reg, scope, subquery, *negated, targets,\n        ),\n\n        ExprKind::InSubquery {\n            expr: inner,\n            subquery,\n            negated,\n        } => crate::codegen::row::subquery::compile_in_subquery(\n            em, reg, scope, inner, subquery, *negated, targets,\n        ),\n\n        ExprKind::InSubqueryMulti {\n            exprs,\n            subquery,\n            negated,\n        } => crate::codegen::row::subquery::compile_in_subquery_multi(\n            em, reg, scope, exprs, subquery, *negated, targets,\n        ),\n\n        // A scalar subquery used directly as a boolean condition (e.g.\n        // `WHERE (SELECT x FROM t)`): compute its value, then test\n        // truthiness like any other value-mode boolean.\n        ExprKind::Subquery(_) => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n\n        // Any other expression used in boolean context (a bare column,\n        // a function call, CASE, etc.): evaluate to a value and test\n        // truthiness the same way as LIKE above.\n        _ => {\n            let r = compile_value(em, reg, scope, expr)?;\n            finish_truthy(em, r, targets);\n            Ok(())\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -4462,7 +4462,7 @@
   {
     "id": "codegen_row_expr_cond_compile_cond_f798da58_4",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 375,
+    "line": 378,
     "decision": "*negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -4472,7 +4472,7 @@
   {
     "id": "codegen_row_expr_cond_compile_cond_f798da58_5",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 406,
+    "line": 409,
     "decision": "*negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -4482,7 +4482,7 @@
   {
     "id": "codegen_row_expr_cond_compile_cond_ce924704",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 416,
+    "line": 419,
     "decision": "match targets.on_null {\n                NullTarget::True => true_label,\n                NullTarget::False => false_label,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4492,7 +4492,7 @@
   {
     "id": "codegen_row_expr_cond_compile_cond_5456fdc6",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 456,
+    "line": 459,
     "decision": "false_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -4502,7 +4502,7 @@
   {
     "id": "codegen_row_expr_cond_compile_cond_7d177ee8",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 459,
+    "line": 462,
     "decision": "true_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -4512,7 +4512,7 @@
   {
     "id": "codegen_row_expr_cond_finish_truthy_108ab37f",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 521,
+    "line": 524,
     "decision": "match targets.on_null {\n        NullTarget::False => {\n            finish_bool(em, targets.on_true, targets.on_false, |em, false_label| {\n                let addr = em.emit(Instruction::new(Opcode::IfNot, r, 0, 1));\n                em.patch_p2(addr, false_label);\n            });\n        }\n        NullTarget::True => {\n            let (t_label, t_is_new) = ensure_label(em, targets.on_true);\n            let addr = em.emit(Instruction::new(Opcode::IsNull, r, 0, 0));\n            em.patch_p2(addr, t_label);\n            // NULL is already gone, so `IfNot`'s P3 stays 0 and the\n            // remaining test is the plain two-valued one.\n            finish_bool(\n                em,\n                Target::Jump(t_label),\n                targets.on_false,\n                |em, false_label| {\n                    let addr = em.emit(Instruction::new(Opcode::IfNot, r, 0, 0));\n                    em.patch_p2(addr, false_label);\n                },\n            );\n            if t_is_new {\n                em.place(t_label);\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4522,7 +4522,7 @@
   {
     "id": "codegen_row_expr_cond_finish_truthy_ebd65e7f",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 543,
+    "line": 546,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -4532,7 +4532,7 @@
   {
     "id": "codegen_row_expr_cond_compile_always_false_a614e805",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 558,
+    "line": 561,
     "decision": "let Target::Jump(label) = false_target",
     "conditions": 1,
     "vectors_required": 2,
@@ -4542,7 +4542,7 @@
   {
     "id": "codegen_row_expr_cond_finish_bool_56f46b98",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 574,
+    "line": 577,
     "decision": "match (true_target, false_target) {\n        (Target::Fallthrough, Target::Jump(f)) => emit_false_jump(em, f),\n        (Target::Jump(t), Target::Fallthrough) => {\n            let synth = em.new_label();\n            emit_false_jump(em, synth);\n            em.goto(t);\n            em.place(synth);\n        }\n        (Target::Jump(t), Target::Jump(f)) => {\n            emit_false_jump(em, f);\n            em.goto(t);\n        }\n        (Target::Fallthrough, Target::Fallthrough) => {\n            // Both branches continue at the same point — the condition\n            // was evaluated only for a side effect (never emitted by\n            // this module), so give false-jump a label that resolves to\n            // \"here\" too.\n            let synth = em.new_label();\n            emit_false_jump(em, synth);\n            em.place(synth);\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4552,7 +4552,7 @@
   {
     "id": "codegen_row_expr_cond_ensure_label_c969a596",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 607,
+    "line": 610,
     "decision": "match target {\n        Target::Jump(l) => (l, false),\n        Target::Fallthrough => (em.new_label(), true),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4562,7 +4562,7 @@
   {
     "id": "codegen_row_expr_cond_emit_compare_false_jump_089ff114",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 644,
+    "line": 647,
     "decision": "match op {\n        BinaryOp::Ne => Some((Opcode::Eq, targets.negate())),\n        BinaryOp::Eq => Some((Opcode::Eq, targets)),\n        BinaryOp::Lt => Some((Opcode::Lt, targets)),\n        BinaryOp::Le => Some((Opcode::Le, targets)),\n        BinaryOp::Gt => Some((Opcode::Gt, targets)),\n        BinaryOp::Ge => Some((Opcode::Ge, targets)),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4572,7 +4572,7 @@
   {
     "id": "codegen_row_expr_cond_emit_compare_false_jump_3aa11c2b",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 664,
+    "line": 667,
     "decision": "targets.on_null == NullTarget::True",
     "conditions": 1,
     "vectors_required": 2,
@@ -4582,7 +4582,7 @@
   {
     "id": "codegen_row_expr_cond_emit_compare_false_jump_8285dc99",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 672,
+    "line": 675,
     "decision": "let Target::Jump(fl) = targets.on_false",
     "conditions": 1,
     "vectors_required": 2,
@@ -4592,7 +4592,7 @@
   {
     "id": "codegen_row_expr_cond_emit_compare_false_jump_ebd65e7f",
     "file": "src/codegen/row/expr/cond.rs",
-    "line": 675,
+    "line": 678,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -7442,7 +7442,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_with_catalog_and_stats_f41f6383",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 94,
+    "line": 95,
     "decision": "match &from.first.kind {\n        TableRefKind::Name(_) => {\n            let root_page = valid_table_root_page(schema)?;\n            em.emit(Instruction::new(\n                Opcode::OpenRead,\n                cursors.table,\n                root_page,\n                0,\n            ));\n        }\n        TableRefKind::Unnest { .. } => {\n            return Err(CodegenError::Unsupported {\n                reason: \"UNNEST is only available in the column dialect\".into(),\n            })\n        }\n        TableRefKind::Subquery(subquery) => {\n            crate::codegen::row::subquery::materialize_from_subquery(\n                &mut em,\n                &mut reg,\n                subquery,\n                catalog,\n                cursors.table,\n            )?;\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7450,9 +7450,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_select_entry_check_table_star_qualifiers_80505791",
+    "file": "src/codegen/row/select/entry.rs",
+    "line": 146,
+    "decision": "let ResultColumn::TableStar { table } = col",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_entry_check_table_star_qualifiers_8b25f7e1",
+    "file": "src/codegen/row/select/entry.rs",
+    "line": 147,
+    "decision": "!table.eq_ignore_ascii_case(qualifier)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_select_entry_compile_select_no_from_b912fd96",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 150,
+    "line": 167,
     "decision": "select.where_clause.is_some()\n        || !select.group_by.is_empty()\n        || select.having.is_some()\n        || !select.order_by.is_empty()\n        || select.limit.is_some()\n        || select.distinct.is_some()\n        || !select.compound.is_empty()",
     "conditions": 7,
     "vectors_required": 8,
@@ -7462,7 +7482,7 @@
   {
     "id": "codegen_row_select_entry_scan_dispatch_a57a2585",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 252,
+    "line": 269,
     "decision": "!select.group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7472,7 +7492,7 @@
   {
     "id": "codegen_row_select_entry_scan_dispatch_f8746217",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 254,
+    "line": 271,
     "decision": "select_has_aggregate(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7482,7 +7502,7 @@
   {
     "id": "codegen_row_select_entry_scan_dispatch_a7c98f27",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 256,
+    "line": 273,
     "decision": "select.order_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7492,7 +7512,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_a972d8ef",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 291,
+    "line": 308,
     "decision": "match select\n        .from\n        .as_ref()\n        .map(|f| (&f.first.kind, &f.first.alias))\n    {\n        Some((TableRefKind::Name(_), Some(alias))) if !alias.eq_ignore_ascii_case(&schema.name) => {\n            aliased = Rc::new(TableSchema {\n                name: alias.clone(),\n                ..(**schema).clone()\n            });\n            &aliased\n        }\n        _ => schema,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7502,7 +7522,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_68be126b",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 296,
+    "line": 313,
     "decision": "!alias.eq_ignore_ascii_case(&schema.name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7512,7 +7532,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_827ff87d",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 308,
+    "line": 325,
     "decision": "match resolve_single_table_group_terms(select, schema)? {\n        Some(select) => {\n            resolved = select;\n            &resolved\n        }\n        None => select,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7522,7 +7542,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_4273c6d2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 317,
+    "line": 334,
     "decision": "super::post_group::needs_post_group(select, schema)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7532,7 +7552,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_a57a2585",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 346,
+    "line": 363,
     "decision": "!select.group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7542,7 +7562,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_04396f46",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 347,
+    "line": 364,
     "decision": "try_compile_index_ordered_group_by(\n            em, reg, select, schema, cursors, end_label, catalog, false, sink,\n        )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7552,7 +7572,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_f8746217",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 370,
+    "line": 387,
     "decision": "select_has_aggregate(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7562,7 +7582,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_3c22ca8f",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 371,
+    "line": 388,
     "decision": "super::aggregate::try_compile_index_only_count(\n            em, reg, select, schema, cursors, catalog, sink,\n        )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7572,7 +7592,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_a9fa286a",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 376,
+    "line": 393,
     "decision": "super::aggregate::try_compile_index_only_sum(em, reg, select, schema, cursors, sink)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7582,7 +7602,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_0b496d30",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 379,
+    "line": 396,
     "decision": "super::aggregate::try_compile_direct_agg_scan(\n            em, reg, select, schema, cursors, end_label, catalog, stats, sink,\n        )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7592,7 +7612,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_5f78b46d",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 388,
+    "line": 405,
     "decision": "select.having.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7602,7 +7622,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_0a51686a",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 395,
+    "line": 412,
     "decision": "order_by_plans.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7612,7 +7632,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_e6060a43",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 400,
+    "line": 417,
     "decision": "try_compile_index_ordered_scan(\n        em,\n        reg,\n        select,\n        schema,\n        &order_by_plans,\n        cursors,\n        end_label,\n        catalog,\n        sink,\n    )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7622,7 +7642,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_8d36ce4d",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 413,
+    "line": 430,
     "decision": "try_compile_partial_sorted_index_scan(\n        em,\n        reg,\n        select,\n        schema,\n        &order_by_plans,\n        cursors,\n        end_label,\n        catalog,\n        sink,\n    )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7632,7 +7652,7 @@
   {
     "id": "codegen_row_select_entry_select_result_column_count_joined_de8c9192",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 468,
+    "line": 485,
     "decision": "match col {\n            ResultColumn::Star => {\n                count = count.saturating_add(schemas.iter().map(|s| s.columns.len()).sum());\n            }\n            ResultColumn::TableStar { table } => {\n                let idx = table_refs\n                    .iter()\n                    .position(|t| {\n                        t.alias\n                            .as_deref()\n                            .or(t.name())\n                            .unwrap_or(\"\")\n                            .eq_ignore_ascii_case(table)\n                    })\n                    .ok_or_else(|| CodegenError::UnknownColumn {\n                        name: format!(\"{table}.*\"),\n                    })?;\n                // `idx` was just found in `table_refs`, which `schemas`\n                // mirrors one-to-one; a miss here is a planner bug (#232).\n                let n = schemas.get(idx).map(|s| s.columns.len()).ok_or_else(|| {\n                    CodegenError::Internal {\n                        reason: format!(\"no schema for FROM item {idx} ({table}.*)\"),\n                    }\n                })?;\n                count = count.saturating_add(n);\n            }\n            ResultColumn::Expr { .. } => count = count.saturating_add(1),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7642,7 +7662,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_3cedc988",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 557,
+    "line": 574,
     "decision": "first\n        .from\n        .as_ref()\n        .is_some_and(|from| !from.joins.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -7652,7 +7672,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_4cace95b",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 566,
+    "line": 583,
     "decision": "first.compound.len() != arm_schemas.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7662,7 +7682,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_84517b44",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 600,
+    "line": 617,
     "decision": "order_by_plans\n        .iter()\n        .any(|plan| matches!(plan.target, OrderByTarget::Expr(_)))",
     "conditions": 1,
     "vectors_required": 2,
@@ -7672,7 +7692,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_fa52c75b",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 613,
+    "line": 630,
     "decision": "arm.from.as_ref().is_some_and(|from| !from.joins.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -7682,7 +7702,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_5960c2d2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 620,
+    "line": 637,
     "decision": "found != expected",
     "conditions": 1,
     "vectors_required": 2,
@@ -7692,7 +7712,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_d2aa294d",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 645,
+    "line": 662,
     "decision": "has_union",
     "conditions": 1,
     "vectors_required": 2,
@@ -7702,7 +7722,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_be56a1fd",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 649,
+    "line": 666,
     "decision": "match &first.limit {\n        Some(_) => compile_limit_setup(\n            &mut em,\n            &mut reg,\n            &Scope::single(&output_schema, pseudo_cursor),\n            first,\n        )?,\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7712,7 +7732,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_eab8fb93",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 665,
+    "line": 682,
     "decision": "needs_sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -7722,7 +7742,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_eab8fb93_2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 675,
+    "line": 692,
     "decision": "needs_sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -7732,7 +7752,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_e48311df",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 681,
+    "line": 698,
     "decision": "let (false, Some(addr)) = (sort_keys_patched, sorter_open_addr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7742,7 +7762,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_8a231f40",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 688,
+    "line": 705,
     "decision": "match &plan.target {\n                                OrderByTarget::Column(index) => *index,\n                                OrderByTarget::Expr(_) => 0,\n                            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7752,7 +7772,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_197bdeb6",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 716,
+    "line": 733,
     "decision": "let Some(limit) = &limit_state",
     "conditions": 1,
     "vectors_required": 2,
@@ -7762,7 +7782,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_d2aa294d_2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 728,
+    "line": 745,
     "decision": "has_union",
     "conditions": 1,
     "vectors_required": 2,
@@ -7772,7 +7792,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_d7aaf9ed",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 752,
+    "line": 769,
     "decision": "match select.from.as_ref().map(|from| &from.first.kind) {\n            Some(TableRefKind::Subquery(subquery)) => {\n                crate::codegen::row::subquery::materialize_from_subquery(\n                    em,\n                    reg,\n                    subquery,\n                    catalog,\n                    cursors.table,\n                )?;\n            }\n            _ => {\n                let root_page = valid_table_root_page(schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    cursors.table,\n                    root_page,\n                    0,\n                ));\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7782,7 +7802,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_eab8fb93_3",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 809,
+    "line": 826,
     "decision": "needs_sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -7792,7 +7812,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_197bdeb6_2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 830,
+    "line": 847,
     "decision": "let Some(limit) = &limit_state",
     "conditions": 1,
     "vectors_required": 2,
@@ -7802,7 +7822,7 @@
   {
     "id": "codegen_row_select_entry_parsed_dff52814",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 878,
+    "line": 895,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12922,7 +12942,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_3633baaa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 86,
+    "line": 83,
     "decision": "schema.without_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -12932,7 +12952,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_b410d928",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 115,
+    "line": 111,
     "decision": "let Some(slot) = assigned.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12942,7 +12962,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_b5ba86aa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 158,
+    "line": 155,
     "decision": "is_rowid_reference(schema, lhs)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12952,7 +12972,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_4ccc9dd6",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 160,
+    "line": 157,
     "decision": "is_rowid_reference(schema, rhs)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12962,7 +12982,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_87d7bd20",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 179,
+    "line": 176,
     "decision": "let Some(operand) = rowid_seek_operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -12972,7 +12992,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_10a1f5f2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 255,
+    "line": 252,
     "decision": "let Some(where_expr) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -12982,7 +13002,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_4baed9e2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 256,
+    "line": 253,
     "decision": "range_seek_touches_scanned_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -12992,7 +13012,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_8d819a73",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 368,
+    "line": 365,
     "decision": "used_range_seek && range_seek_touches_scanned_index",
     "conditions": 2,
     "vectors_required": 3,
@@ -13002,7 +13022,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_1128723f",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 405,
+    "line": 402,
     "decision": "!used_range_seek",
     "conditions": 1,
     "vectors_required": 2,
@@ -13012,7 +13032,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_with_catalog_10a1f5f2_2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 412,
+    "line": 409,
     "decision": "let Some(where_expr) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -13022,7 +13042,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_without_rowid_6e6d248f",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 464,
+    "line": 461,
     "decision": "let Some(plan) = plans.get_mut(column)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13032,7 +13052,7 @@
   {
     "id": "codegen_row_stmt_update_compile_update_without_rowid_b410d928",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 483,
+    "line": 479,
     "decision": "let Some(slot) = assigned.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13040,20 +13060,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_update_refuse_unknown_functions_5ce8b048",
+    "id": "codegen_row_stmt_update_check_overridden_assignments_c7b85ee6",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 544,
-    "decision": "match args {\n                FunctionArgs::Star => 0,\n                FunctionArgs::List(list) => list.len(),\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_stmt_update_refuse_unknown_functions_7b72c790",
-    "file": "src/codegen/row/stmt/update.rs",
-    "line": 551,
-    "decision": "let Some(message) = problem",
+    "line": 542,
+    "decision": "assigned\n            .iter()\n            .flatten()\n            .any(|kept| std::ptr::eq(*kept, &assignment.value))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -13062,7 +13072,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_69baca6f",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 611,
+    "line": 612,
     "decision": "without_rowid_key.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13072,7 +13082,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_c1433547",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 617,
+    "line": 618,
     "decision": "match rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten()) {\n            Some(expr) => compile_value(em, reg, scope, expr)?,\n            None => {\n                let r = reg.alloc();\n                em.emit(Instruction::new(Opcode::Rowid, TABLE_CURSOR, r, 0));\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13082,7 +13092,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_14ca918f",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 628,
+    "line": 629,
     "decision": "match without_rowid_key {\n        Some(key)\n            if key\n                .iter()\n                .any(|&column| assigned.get(column).is_some_and(Option::is_some)) =>\n        {\n            let mut regs = Vec::with_capacity(key.len());\n            for &column in key {\n                let r = reg.alloc();\n                emit_column_read(em, schema, TABLE_CURSOR, column, r)?;\n                regs.push(r);\n            }\n            regs\n        }\n        _ => Vec::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13092,7 +13102,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_0b812552",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 630,
+    "line": 631,
     "decision": "key\n                .iter()\n                .any(|&column| assigned.get(column).is_some_and(Option::is_some))",
     "conditions": 1,
     "vectors_required": 2,
@@ -13102,7 +13112,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_c861879c",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 647,
+    "line": 648,
     "decision": "Some(idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -13112,7 +13122,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1812a01d",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 653,
+    "line": 654,
     "decision": "match expr {\n            Some(expr) => compile_value(em, reg, scope, expr)?,\n            None => {\n                let r = reg.alloc();\n                emit_column_read(em, schema, TABLE_CURSOR, idx, r)?;\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13122,7 +13132,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_3c6999fa",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 687,
+    "line": 688,
     "decision": "!plan.not_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -13132,7 +13142,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_d93931f7",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 721,
+    "line": 722,
     "decision": "has_checks",
     "conditions": 1,
     "vectors_required": 2,
@@ -13142,7 +13152,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_72346b4e",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 772,
+    "line": 773,
     "decision": "!index.unique",
     "conditions": 1,
     "vectors_required": 2,
@@ -13152,7 +13162,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_b3e8a94c",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 775,
+    "line": 776,
     "decision": "index_touched.get(position) != Some(&true)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13162,7 +13172,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_4b0b7f56",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 808,
+    "line": 809,
     "decision": "let Some(key) = without_rowid_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -13172,7 +13182,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_6fe685c0",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 835,
+    "line": 836,
     "decision": "rowid_reassigned",
     "conditions": 1,
     "vectors_required": 2,
@@ -13182,7 +13192,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_row_body_1af88378",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 854,
+    "line": 855,
     "decision": "!schema.indexes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13192,7 +13202,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_unique_check_d46bb603",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 891,
+    "line": 892,
     "decision": "matches!(action, ConflictAction::Replace)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13202,7 +13212,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_unique_check_b7b491d5",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 902,
+    "line": 903,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -13212,7 +13222,7 @@
   {
     "id": "codegen_row_stmt_update_emit_update_unique_check_31c19786",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 918,
+    "line": 919,
     "decision": "Some(col_idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -13222,7 +13232,7 @@
   {
     "id": "codegen_row_stmt_update_update_program_36cf9018",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 1036,
+    "line": 1037,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13232,7 +13242,7 @@
   {
     "id": "codegen_row_stmt_update_compile_36cf9018",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 1104,
+    "line": 1105,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13242,7 +13252,7 @@
   {
     "id": "codegen_row_stmt_update_compile_36cf9018_2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 1190,
+    "line": 1191,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31500,9 +31510,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "parser_row_grammar_unnest_ref_d9e96fdf",
+    "file": "src/parser/row/grammar.rs",
+    "line": 2012,
+    "decision": "!self.column",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "parser_row_grammar_unnest_ref_41472221",
     "file": "src/parser/row/grammar.rs",
-    "line": 2013,
+    "line": 2017,
     "decision": "matches!(self.peek().kind, TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31512,7 +31532,7 @@
   {
     "id": "parser_row_grammar_ordering_term_4c01fddf",
     "file": "src/parser/row/grammar.rs",
-    "line": 2034,
+    "line": 2038,
     "decision": "self.eat_kw(Keyword::ASC)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31522,7 +31542,7 @@
   {
     "id": "parser_row_grammar_ordering_term_761732f3",
     "file": "src/parser/row/grammar.rs",
-    "line": 2036,
+    "line": 2040,
     "decision": "self.eat_kw(Keyword::DESC)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31532,7 +31552,7 @@
   {
     "id": "parser_row_grammar_ordering_term_ac34efe0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2041,
+    "line": 2045,
     "decision": "self.eat_kw(Keyword::NULLS)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31542,7 +31562,7 @@
   {
     "id": "parser_row_grammar_ordering_term_55c168f3",
     "file": "src/parser/row/grammar.rs",
-    "line": 2042,
+    "line": 2046,
     "decision": "self.eat_kw(Keyword::FIRST)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31552,7 +31572,7 @@
   {
     "id": "parser_row_grammar_ordering_term_8c70a702",
     "file": "src/parser/row/grammar.rs",
-    "line": 2044,
+    "line": 2048,
     "decision": "self.eat_kw(Keyword::LAST)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31562,7 +31582,7 @@
   {
     "id": "parser_row_grammar_bool_expr_56d55d9f",
     "file": "src/parser/row/grammar.rs",
-    "line": 2079,
+    "line": 2083,
     "decision": "self.at_kw(Keyword::AND)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31572,7 +31592,7 @@
   {
     "id": "parser_row_grammar_bool_expr_b82160ce",
     "file": "src/parser/row/grammar.rs",
-    "line": 2080,
+    "line": 2084,
     "decision": "min_prec > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -31582,7 +31602,7 @@
   {
     "id": "parser_row_grammar_bool_expr_a1d3e530",
     "file": "src/parser/row/grammar.rs",
-    "line": 2085,
+    "line": 2089,
     "decision": "self.at_kw(Keyword::OR)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31592,7 +31612,7 @@
   {
     "id": "parser_row_grammar_bool_expr_b821619d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2086,
+    "line": 2090,
     "decision": "min_prec > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31602,7 +31622,7 @@
   {
     "id": "parser_row_grammar_cap_chain_266c6e69",
     "file": "src/parser/row/grammar.rs",
-    "line": 2115,
+    "line": 2119,
     "decision": "!self.too_tall",
     "conditions": 1,
     "vectors_required": 2,
@@ -31612,7 +31632,7 @@
   {
     "id": "parser_row_grammar_cap_chain_09ea65a2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2117,
+    "line": 2121,
     "decision": "match (*height, children.split_first()) {\n                (0, _) | (_, None) => expr_height(node),\n                (known, Some((_, rest))) => rest\n                    .iter()\n                    .map(|c| expr_height(c))\n                    .fold(known, usize::max)\n                    .saturating_add(1),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31622,7 +31642,7 @@
   {
     "id": "parser_row_grammar_cap_chain_e9c3c5f7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2128,
+    "line": 2132,
     "decision": "self.too_tall",
     "conditions": 1,
     "vectors_required": 2,
@@ -31632,7 +31652,7 @@
   {
     "id": "parser_row_grammar_not_expr_aeca0d40",
     "file": "src/parser/row/grammar.rs",
-    "line": 2136,
+    "line": 2140,
     "decision": "this.at_kw(Keyword::NOT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31642,7 +31662,7 @@
   {
     "id": "parser_row_grammar_not_expr_028d44e2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2138,
+    "line": 2142,
     "decision": "this.at_kw(Keyword::EXISTS)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31652,7 +31672,7 @@
   {
     "id": "parser_row_grammar_equality_expr_9fd175c2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2157,
+    "line": 2161,
     "decision": "let Some(multi_in) = self.try_tuple_in_subquery()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -31662,7 +31682,7 @@
   {
     "id": "parser_row_grammar_equality_expr_cc16bafb",
     "file": "src/parser/row/grammar.rs",
-    "line": 2163,
+    "line": 2167,
     "decision": "match self.peek().kind.clone() {\n                TokenKind::Eq => {\n                    self.advance();\n                    let rhs = self.binary_expr(1)?;\n                    bin(BinaryOp::Eq, lhs, rhs)\n                }\n                TokenKind::Ne => {\n                    self.advance();\n                    let rhs = self.binary_expr(1)?;\n                    bin(BinaryOp::Ne, lhs, rhs)\n                }\n                TokenKind::Keyword(Keyword::IS) => {\n                    self.advance();\n                    let negated = self.eat_kw(Keyword::NOT);\n                    let rhs = self.binary_expr(1)?;\n                    let span = join_span(lhs.span, rhs.span);\n                    Expr {\n                        kind: ExprKind::Is {\n                            lhs: Box::new(lhs),\n                            rhs: Box::new(rhs),\n                            negated,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::ISNULL) => {\n                    let end = self.advance_span();\n                    let span = join_span(lhs.span, end);\n                    Expr {\n                        kind: ExprKind::IsNull {\n                            expr: Box::new(lhs),\n                            negated: false,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::NOTNULL) => {\n                    let end = self.advance_span();\n                    let span = join_span(lhs.span, end);\n                    Expr {\n                        kind: ExprKind::IsNull {\n                            expr: Box::new(lhs),\n                            negated: true,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::BETWEEN) => {\n                    self.advance();\n                    let (lo, hi) = self.between_tail()?;\n                    let span = join_span(lhs.span, hi.span);\n                    Expr {\n                        kind: ExprKind::Between {\n                            expr: Box::new(lhs),\n                            lo: Box::new(lo),\n                            hi: Box::new(hi),\n                            negated: false,\n                        },\n                        span,\n                    }\n                }\n                TokenKind::Keyword(Keyword::IN) => {\n                    self.advance();\n                    self.in_tail(lhs, false)?\n                }\n                TokenKind::Keyword(Keyword::LIKE)\n                | TokenKind::Keyword(Keyword::GLOB)\n                | TokenKind::Ilike => self.like_op(lhs, false)?,\n                TokenKind::Keyword(Keyword::NOT) => match self.peek_at(1).kind.clone() {\n                    TokenKind::Null => {\n                        self.advance();\n                        let end = self.advance_span();\n                        let span = join_span(lhs.span, end);\n                        Expr {\n                            kind: ExprKind::IsNull {\n                                expr: Box::new(lhs),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::BETWEEN) => {\n                        self.advance();\n                        self.advance();\n                        let (lo, hi) = self.between_tail()?;\n                        let span = join_span(lhs.span, hi.span);\n                        Expr {\n                            kind: ExprKind::Between {\n                                expr: Box::new(lhs),\n                                lo: Box::new(lo),\n                                hi: Box::new(hi),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::IN) => {\n                        self.advance();\n                        self.advance();\n                        self.in_tail(lhs, true)?\n                    }\n                    TokenKind::Keyword(Keyword::LIKE)\n                    | TokenKind::Keyword(Keyword::GLOB)\n                    | TokenKind::Ilike => {\n                        self.advance();\n                        self.like_op(lhs, true)?\n                    }\n                    _ => break,\n                },\n                _ => break,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31672,7 +31692,7 @@
   {
     "id": "parser_row_grammar_equality_expr_6b4f98ca",
     "file": "src/parser/row/grammar.rs",
-    "line": 2231,
+    "line": 2235,
     "decision": "match self.peek_at(1).kind.clone() {\n                    TokenKind::Null => {\n                        self.advance();\n                        let end = self.advance_span();\n                        let span = join_span(lhs.span, end);\n                        Expr {\n                            kind: ExprKind::IsNull {\n                                expr: Box::new(lhs),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::BETWEEN) => {\n                        self.advance();\n                        self.advance();\n                        let (lo, hi) = self.between_tail()?;\n                        let span = join_span(lhs.span, hi.span);\n                        Expr {\n                            kind: ExprKind::Between {\n                                expr: Box::new(lhs),\n                                lo: Box::new(lo),\n                                hi: Box::new(hi),\n                                negated: true,\n                            },\n                            span,\n                        }\n                    }\n                    TokenKind::Keyword(Keyword::IN) => {\n                        self.advance();\n                        self.advance();\n                        self.in_tail(lhs, true)?\n                    }\n                    TokenKind::Keyword(Keyword::LIKE)\n                    | TokenKind::Keyword(Keyword::GLOB)\n                    | TokenKind::Ilike => {\n                        self.advance();\n                        self.like_op(lhs, true)?\n                    }\n                    _ => break,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31682,7 +31702,7 @@
   {
     "id": "parser_row_grammar_exists_tail_5c17547d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2293,
+    "line": 2297,
     "decision": "!self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31692,7 +31712,7 @@
   {
     "id": "parser_row_grammar_exists_tail_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2297,
+    "line": 2301,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::UNION)\n                | TokenKind::Keyword(Keyword::INTERSECT)\n                | TokenKind::Keyword(Keyword::EXCEPT)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -31702,7 +31722,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_48731267",
     "file": "src/parser/row/grammar.rs",
-    "line": 2332,
+    "line": 2336,
     "decision": "match self.tokens.get(idx) {\n                Some(t) => &t.kind,\n                None => return false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31712,7 +31732,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_b688b62b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2336,
+    "line": 2340,
     "decision": "match kind {\n                TokenKind::Eof => return false,\n                TokenKind::LParen => depth = depth.saturating_add(1),\n                TokenKind::RParen => {\n                    if depth == 0 {\n                        let after_in = matches!(\n                            self.tokens.get(idx.saturating_add(1)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::IN))\n                        );\n                        let after_not_in = matches!(\n                            self.tokens.get(idx.saturating_add(1)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::NOT))\n                        ) && matches!(\n                            self.tokens.get(idx.saturating_add(2)).map(|t| &t.kind),\n                            Some(TokenKind::Keyword(Keyword::IN))\n                        );\n                        return saw_top_comma && (after_in || after_not_in);\n                    }\n                    depth = depth.saturating_sub(1);\n                }\n                TokenKind::Comma if depth == 0 => saw_top_comma = true,\n                _ => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31722,7 +31742,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_42bcd25d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2356,
+    "line": 2360,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31732,7 +31752,7 @@
   {
     "id": "parser_row_grammar_looks_like_tuple_in_42bcd25d_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 2340,
+    "line": 2344,
     "decision": "depth == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -31742,7 +31762,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_517114c6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2375,
+    "line": 2379,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen) || !self.looks_like_tuple_in()",
     "conditions": 2,
     "vectors_required": 3,
@@ -31752,7 +31772,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_91decef1",
     "file": "src/parser/row/grammar.rs",
-    "line": 2381,
+    "line": 2385,
     "decision": "match self.expr_list() {\n            Ok(list) => list,\n            Err(_) => {\n                self.pos = start_pos;\n                return Ok(None);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31762,7 +31782,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_2e7a8ba6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2388,
+    "line": 2392,
     "decision": "self.expect_punct(TokenKind::RParen, \"')'\").is_err()",
     "conditions": 1,
     "vectors_required": 2,
@@ -31772,7 +31792,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_989c1966",
     "file": "src/parser/row/grammar.rs",
-    "line": 2392,
+    "line": 2396,
     "decision": "self.at_kw(Keyword::IN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31782,7 +31802,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_90cc7e65",
     "file": "src/parser/row/grammar.rs",
-    "line": 2395,
+    "line": 2399,
     "decision": "self.at_kw(Keyword::NOT)\n            && matches!(self.peek_at(1).kind, TokenKind::Keyword(Keyword::IN))",
     "conditions": 2,
     "vectors_required": 3,
@@ -31792,7 +31812,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_7a03b6fa",
     "file": "src/parser/row/grammar.rs",
-    "line": 2405,
+    "line": 2409,
     "decision": "list.len() < 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -31802,7 +31822,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_5c17547d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2410,
+    "line": 2414,
     "decision": "!self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31812,7 +31832,7 @@
   {
     "id": "parser_row_grammar_try_tuple_in_subquery_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2415,
+    "line": 2419,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::UNION)\n                | TokenKind::Keyword(Keyword::INTERSECT)\n                | TokenKind::Keyword(Keyword::EXCEPT)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -31822,7 +31842,7 @@
   {
     "id": "parser_row_grammar_in_tail_849b6473",
     "file": "src/parser/row/grammar.rs",
-    "line": 2436,
+    "line": 2440,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31832,7 +31852,7 @@
   {
     "id": "parser_row_grammar_in_tail_2a50be6e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2440,
+    "line": 2444,
     "decision": "self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31842,7 +31862,7 @@
   {
     "id": "parser_row_grammar_in_tail_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2442,
+    "line": 2446,
     "decision": "matches!(\n                self.peek().kind,\n                TokenKind::Keyword(Keyword::UNION)\n                    | TokenKind::Keyword(Keyword::INTERSECT)\n                    | TokenKind::Keyword(Keyword::EXCEPT)\n            )",
     "conditions": 1,
     "vectors_required": 2,
@@ -31852,7 +31872,7 @@
   {
     "id": "parser_row_grammar_in_tail_2629d5b7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2462,
+    "line": 2466,
     "decision": "matches!(self.peek().kind, TokenKind::RParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31862,7 +31882,7 @@
   {
     "id": "parser_row_grammar_like_op_a1ba6010",
     "file": "src/parser/row/grammar.rs",
-    "line": 2486,
+    "line": 2490,
     "decision": "match op {\n            TokenKind::Ilike => self.ilike_tail(lhs, negated),\n            _ => self.like_tail(lhs, op == TokenKind::Keyword(Keyword::GLOB), negated),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31872,7 +31892,7 @@
   {
     "id": "parser_row_grammar_ilike_tail_22554140",
     "file": "src/parser/row/grammar.rs",
-    "line": 2497,
+    "line": 2501,
     "decision": "self.at_kw(Keyword::ESCAPE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31882,7 +31902,7 @@
   {
     "id": "parser_row_grammar_ilike_tail_5f337291",
     "file": "src/parser/row/grammar.rs",
-    "line": 2510,
+    "line": 2514,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -31892,7 +31912,7 @@
   {
     "id": "parser_row_grammar_like_tail_fe8c0a5a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2526,
+    "line": 2530,
     "decision": "self.eat_kw(Keyword::ESCAPE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31902,7 +31922,7 @@
   {
     "id": "parser_row_grammar_binary_expr_4bd4b69d",
     "file": "src/parser/row/grammar.rs",
-    "line": 2562,
+    "line": 2566,
     "decision": "let Some((op, prec)) = Self::binary_op(&self.peek().kind)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31912,7 +31932,7 @@
   {
     "id": "parser_row_grammar_binary_expr_41e08d0e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2563,
+    "line": 2567,
     "decision": "prec < min_prec",
     "conditions": 1,
     "vectors_required": 2,
@@ -31922,7 +31942,7 @@
   {
     "id": "parser_row_grammar_binary_op_628a1458",
     "file": "src/parser/row/grammar.rs",
-    "line": 2575,
+    "line": 2579,
     "decision": "match kind {\n            TokenKind::Lt => (BinaryOp::Lt, 1),\n            TokenKind::Le => (BinaryOp::Le, 1),\n            TokenKind::Gt => (BinaryOp::Gt, 1),\n            TokenKind::Ge => (BinaryOp::Ge, 1),\n            TokenKind::BitAnd => (BinaryOp::BitAnd, 2),\n            TokenKind::BitOr => (BinaryOp::BitOr, 2),\n            TokenKind::Shl => (BinaryOp::Shl, 2),\n            TokenKind::Shr => (BinaryOp::Shr, 2),\n            TokenKind::Plus => (BinaryOp::Add, 3),\n            TokenKind::Minus => (BinaryOp::Sub, 3),\n            TokenKind::Star => (BinaryOp::Mul, 4),\n            TokenKind::Slash => (BinaryOp::Div, 4),\n            TokenKind::Percent => (BinaryOp::Mod, 4),\n            TokenKind::Concat => (BinaryOp::Concat, 5),\n            _ => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -31932,7 +31952,7 @@
   {
     "id": "parser_row_grammar_arrow_expr_505e4cbe",
     "file": "src/parser/row/grammar.rs",
-    "line": 2601,
+    "line": 2605,
     "decision": "matches!(self.peek().kind, TokenKind::Arrow | TokenKind::ArrowArrow)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31942,7 +31962,7 @@
   {
     "id": "parser_row_grammar_arrow_expr_d9e96fdf",
     "file": "src/parser/row/grammar.rs",
-    "line": 2602,
+    "line": 2606,
     "decision": "!self.column",
     "conditions": 1,
     "vectors_required": 2,
@@ -31952,7 +31972,7 @@
   {
     "id": "parser_row_grammar_arrow_chain_cb8c9bf9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2616,
+    "line": 2620,
     "decision": "let TokenKind::Arrow | TokenKind::ArrowArrow = self.peek().kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -31962,7 +31982,7 @@
   {
     "id": "parser_row_grammar_arrow_chain_5ada558e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2620,
+    "line": 2624,
     "decision": "let ExprKind::Literal(Literal::Integer(n)) = &path.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -31972,7 +31992,7 @@
   {
     "id": "parser_row_grammar_arrow_chain_2a2e6783",
     "file": "src/parser/row/grammar.rs",
-    "line": 2624,
+    "line": 2628,
     "decision": "as_text",
     "conditions": 1,
     "vectors_required": 2,
@@ -31982,7 +32002,7 @@
   {
     "id": "parser_row_grammar_collate_expr_4a6546b9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2646,
+    "line": 2650,
     "decision": "self.eat_kw(Keyword::COLLATE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -31992,7 +32012,7 @@
   {
     "id": "parser_row_grammar_unary_expr_284bde8c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2663,
+    "line": 2667,
     "decision": "match this.peek().kind {\n                TokenKind::Plus => Some(UnaryOp::Plus),\n                TokenKind::Minus => Some(UnaryOp::Minus),\n                TokenKind::BitNot => Some(UnaryOp::BitNot),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32002,7 +32022,7 @@
   {
     "id": "parser_row_grammar_unary_expr_00220ef9",
     "file": "src/parser/row/grammar.rs",
-    "line": 2669,
+    "line": 2673,
     "decision": "let Some(op) = op",
     "conditions": 1,
     "vectors_required": 2,
@@ -32012,7 +32032,7 @@
   {
     "id": "parser_row_grammar_unary_expr_97843e2a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2678,
+    "line": 2682,
     "decision": "matches!(op, UnaryOp::Minus)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32022,7 +32042,7 @@
   {
     "id": "parser_row_grammar_unary_expr_6cf76295",
     "file": "src/parser/row/grammar.rs",
-    "line": 2679,
+    "line": 2683,
     "decision": "let ExprKind::Literal(Literal::Float(f)) = inner.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -32032,7 +32052,7 @@
   {
     "id": "parser_row_grammar_unary_expr_77230782",
     "file": "src/parser/row/grammar.rs",
-    "line": 2680,
+    "line": 2684,
     "decision": "f == 9_223_372_036_854_775_808.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -32042,7 +32062,7 @@
   {
     "id": "parser_row_grammar_postfix_expr_2ba03a81",
     "file": "src/parser/row/grammar.rs",
-    "line": 2707,
+    "line": 2711,
     "decision": "matches!(self.peek().kind, TokenKind::LBracket)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32052,7 +32072,7 @@
   {
     "id": "parser_row_grammar_primary_expr_bf421180",
     "file": "src/parser/row/grammar.rs",
-    "line": 2739,
+    "line": 2743,
     "decision": "match &self.peek().kind {\n            TokenKind::Integer(v) => {\n                let v = *v;\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Integer(v)),\n                    span,\n                })\n            }\n            TokenKind::Float(v) => {\n                let v = *v;\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Float(v)),\n                    span,\n                })\n            }\n            TokenKind::String(s) => {\n                let s = s.clone();\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Str(s)),\n                    span,\n                })\n            }\n            TokenKind::Blob(b) => {\n                let b = (**b).clone();\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Blob(b)),\n                    span,\n                })\n            }\n            TokenKind::Null => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::Null),\n                    span,\n                })\n            }\n            TokenKind::True => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::True),\n                    span,\n                })\n            }\n            TokenKind::False => {\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Literal(Literal::False),\n                    span,\n                })\n            }\n            TokenKind::Param(p) => {\n                let kind = match p.as_ref() {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(*n),\n                    Param::Colon(s) => ParamKind::Colon(s.clone()),\n                    Param::At(s) => ParamKind::At(s.clone()),\n                    Param::Dollar(s) => ParamKind::Dollar(s.clone()),\n                };\n                let span = self.advance_span();\n                Ok(Expr {\n                    kind: ExprKind::Param(kind),\n                    span,\n                })\n            }\n            TokenKind::Keyword(Keyword::CURRENT_TIME)\n            | TokenKind::Keyword(Keyword::CURRENT_DATE)\n            | TokenKind::Keyword(Keyword::CURRENT_TIMESTAMP) => {\n                self.unsupported(\"CURRENT_TIME/CURRENT_DATE/CURRENT_TIMESTAMP not yet supported\")\n            }\n            TokenKind::Keyword(Keyword::CASE) => self.case_expr(),\n            TokenKind::Keyword(Keyword::CAST) => self.cast_expr(),\n            TokenKind::Keyword(Keyword::EXISTS) => {\n                let start = self.advance_span();\n                self.exists_tail(start, false)\n            }\n            TokenKind::Identifier(name) => {\n                let name = name.clone();\n                let start = self.advance_span();\n                if matches!(self.peek().kind, TokenKind::LParen) {\n                    return self.function_call(name, start);\n                }\n                let mut parts = vec![name];\n                while matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3 {\n                    self.advance();\n                    let (part, _) = self.identifier()?;\n                    parts.push(part);\n                }\n                let end = self\n                    .tokens\n                    .get(self.pos.saturating_sub(1))\n                    .map_or(start, |t| t.span);\n                let span = join_span(start, end);\n                // Exactly one, two or three parts (db-core#232): the old\n                // wildcard arm also matched `a.b.c.d`, silently dropping\n                // the trailing parts, and `unwrap_or_default()` could\n                // mint an empty identifier. Moved out of `parts` by\n                // value (db-core#486: `parts.as_slice()` forced a\n                // `.clone()` of every identifier `String` here -- a\n                // second heap copy on top of the one `self.identifier()`/\n                // the `Identifier(name)` match already produced --\n                // instead of just moving the `String`s `parts` already\n                // owns.\n                let len = parts.len();\n                let mut parts = parts.into_iter();\n                let kind = match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                };\n                Ok(Expr { kind, span })\n            }\n            // SQLite treats most keywords as usable function names when\n            // followed by `(` (e.g. `replace(...)`, `glob(...)`) — only\n            // the handful matched above (CASE/CAST/EXISTS/CURRENT_*)\n            // are true reserved words in expression position.\n            TokenKind::Keyword(kw) if matches!(self.peek_at(1).kind, TokenKind::LParen) => {\n                let kw = *kw;\n                let span = self.advance_span();\n                self.function_call(format!(\"{kw:?}\"), span)\n            }\n            TokenKind::LParen => {\n                let start = self.advance_span();\n                if self.at_kw(Keyword::SELECT) {\n                    let subquery = self.parse_select_stmt()?;\n                    if matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    ) {\n                        return self.unsupported(\n                            \"compound SELECT (UNION/INTERSECT/EXCEPT) not yet supported\",\n                        );\n                    }\n                    let end = self.expect_punct(TokenKind::RParen, \"')' to close subquery\")?;\n                    let span = join_span(start, end);\n                    return Ok(Expr {\n                        kind: ExprKind::Subquery(Box::new(subquery)),\n                        span,\n                    });\n                }\n                let inner = self.expr()?;\n                let end = self.expect_punct(TokenKind::RParen, \"')' to close expression\")?;\n                let span = join_span(start, end);\n                Ok(Expr {\n                    kind: ExprKind::Paren(Box::new(inner)),\n                    span,\n                })\n            }\n            TokenKind::LBracket => self.list_literal(),\n            other => Err(ParseFail::Invalid {\n                message: format!(\"expected column or expression, found {other:?}\"),\n                span: self.peek().span,\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32062,7 +32082,7 @@
   {
     "id": "parser_row_grammar_primary_expr_d95902fa",
     "file": "src/parser/row/grammar.rs",
-    "line": 2869,
+    "line": 2873,
     "decision": "matches!(self.peek_at(1).kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32072,7 +32092,7 @@
   {
     "id": "parser_row_grammar_primary_expr_218f77c8",
     "file": "src/parser/row/grammar.rs",
-    "line": 2794,
+    "line": 2798,
     "decision": "match p.as_ref() {\n                    Param::Anonymous => ParamKind::Anonymous,\n                    Param::Numbered(n) => ParamKind::Numbered(*n),\n                    Param::Colon(s) => ParamKind::Colon(s.clone()),\n                    Param::At(s) => ParamKind::At(s.clone()),\n                    Param::Dollar(s) => ParamKind::Dollar(s.clone()),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32082,7 +32102,7 @@
   {
     "id": "parser_row_grammar_primary_expr_dbaa03a3",
     "file": "src/parser/row/grammar.rs",
-    "line": 2821,
+    "line": 2825,
     "decision": "matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32092,7 +32112,7 @@
   {
     "id": "parser_row_grammar_primary_expr_c99e92d7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2825,
+    "line": 2829,
     "decision": "matches!(self.peek().kind, TokenKind::Dot) && parts.len() < 3",
     "conditions": 2,
     "vectors_required": 3,
@@ -32102,7 +32122,7 @@
   {
     "id": "parser_row_grammar_primary_expr_cca4606b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2847,
+    "line": 2851,
     "decision": "match len {\n                    1..=3 => {\n                        let catalog = if len == 3 { parts.next() } else { None };\n                        let table = if len >= 2 { parts.next() } else { None };\n                        let Some(name) = parts.next() else {\n                            return self\n                                .invalid(\"a column reference has at most three dotted parts\");\n                        };\n                        ExprKind::Column {\n                            catalog,\n                            table,\n                            name,\n                        }\n                    }\n                    _ => return self.invalid(\"a column reference has at most three dotted parts\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32112,7 +32132,7 @@
   {
     "id": "parser_row_grammar_primary_expr_c2cb254b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2849,
+    "line": 2853,
     "decision": "len == 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -32122,7 +32142,7 @@
   {
     "id": "parser_row_grammar_primary_expr_1511b2a6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2850,
+    "line": 2854,
     "decision": "len >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -32132,7 +32152,7 @@
   {
     "id": "parser_row_grammar_primary_expr_2a50be6e",
     "file": "src/parser/row/grammar.rs",
-    "line": 2876,
+    "line": 2880,
     "decision": "self.at_kw(Keyword::SELECT)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32142,7 +32162,7 @@
   {
     "id": "parser_row_grammar_primary_expr_6ef96ec0",
     "file": "src/parser/row/grammar.rs",
-    "line": 2878,
+    "line": 2882,
     "decision": "matches!(\n                        self.peek().kind,\n                        TokenKind::Keyword(Keyword::UNION)\n                            | TokenKind::Keyword(Keyword::INTERSECT)\n                            | TokenKind::Keyword(Keyword::EXCEPT)\n                    )",
     "conditions": 1,
     "vectors_required": 2,
@@ -32152,7 +32172,7 @@
   {
     "id": "parser_row_grammar_list_literal_ad3c638b",
     "file": "src/parser/row/grammar.rs",
-    "line": 2919,
+    "line": 2923,
     "decision": "matches!(self.peek().kind, TokenKind::RBracket)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32162,7 +32182,7 @@
   {
     "id": "parser_row_grammar_function_call_9105415c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2939,
+    "line": 2943,
     "decision": "self.eat_punct(&TokenKind::Star)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32172,7 +32192,7 @@
   {
     "id": "parser_row_grammar_function_call_2629d5b7",
     "file": "src/parser/row/grammar.rs",
-    "line": 2941,
+    "line": 2945,
     "decision": "matches!(self.peek().kind, TokenKind::RParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32182,7 +32202,7 @@
   {
     "id": "parser_row_grammar_function_tail_3403c85a",
     "file": "src/parser/row/grammar.rs",
-    "line": 2984,
+    "line": 2988,
     "decision": "self.eat_kw(Keyword::RANGE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32192,7 +32212,7 @@
   {
     "id": "parser_row_grammar_function_tail_f75851c6",
     "file": "src/parser/row/grammar.rs",
-    "line": 2989,
+    "line": 2993,
     "decision": "let Some(r) = &range",
     "conditions": 1,
     "vectors_required": 2,
@@ -32202,7 +32222,7 @@
   {
     "id": "parser_row_grammar_function_tail_2258eb7c",
     "file": "src/parser/row/grammar.rs",
-    "line": 2992,
+    "line": 2996,
     "decision": "self.eat_kw(Keyword::FILTER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32212,7 +32232,7 @@
   {
     "id": "parser_row_grammar_function_tail_87133733",
     "file": "src/parser/row/grammar.rs",
-    "line": 3001,
+    "line": 3005,
     "decision": "self.eat_kw(Keyword::OVER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32222,7 +32242,7 @@
   {
     "id": "parser_row_grammar_function_tail_b001c5a8",
     "file": "src/parser/row/grammar.rs",
-    "line": 3008,
+    "line": 3012,
     "decision": "filter.is_none() && over.is_none() && range.is_none()",
     "conditions": 3,
     "vectors_required": 4,
@@ -32232,7 +32252,7 @@
   {
     "id": "parser_row_grammar_window_def_849b6473",
     "file": "src/parser/row/grammar.rs",
-    "line": 3025,
+    "line": 3029,
     "decision": "!matches!(self.peek().kind, TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32242,7 +32262,7 @@
   {
     "id": "parser_row_grammar_window_def_c4d1976d",
     "file": "src/parser/row/grammar.rs",
-    "line": 3033,
+    "line": 3037,
     "decision": "self.eat_kw(Keyword::PARTITION)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32252,7 +32272,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 3036,
+    "line": 3040,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32262,7 +32282,7 @@
   {
     "id": "parser_row_grammar_window_def_980f2400",
     "file": "src/parser/row/grammar.rs",
-    "line": 3042,
+    "line": 3046,
     "decision": "self.eat_kw(Keyword::ORDER)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32272,7 +32292,7 @@
   {
     "id": "parser_row_grammar_window_def_e9025c84_2",
     "file": "src/parser/row/grammar.rs",
-    "line": 3045,
+    "line": 3049,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32282,7 +32302,7 @@
   {
     "id": "parser_row_grammar_window_def_6907c266",
     "file": "src/parser/row/grammar.rs",
-    "line": 3050,
+    "line": 3054,
     "decision": "matches!(\n            self.peek().kind,\n            TokenKind::Keyword(Keyword::ROWS)\n                | TokenKind::Keyword(Keyword::RANGE)\n                | TokenKind::Keyword(Keyword::GROUPS)\n        )",
     "conditions": 1,
     "vectors_required": 2,
@@ -32292,7 +32312,7 @@
   {
     "id": "parser_row_grammar_case_expr_d359b45c",
     "file": "src/parser/row/grammar.rs",
-    "line": 3071,
+    "line": 3075,
     "decision": "self.at_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32302,7 +32322,7 @@
   {
     "id": "parser_row_grammar_case_expr_47ae9dae",
     "file": "src/parser/row/grammar.rs",
-    "line": 3077,
+    "line": 3081,
     "decision": "self.eat_kw(Keyword::WHEN)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32312,7 +32332,7 @@
   {
     "id": "parser_row_grammar_case_expr_2c73542b",
     "file": "src/parser/row/grammar.rs",
-    "line": 3083,
+    "line": 3087,
     "decision": "whens.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32322,7 +32342,7 @@
   {
     "id": "parser_row_grammar_case_expr_9ca297d5",
     "file": "src/parser/row/grammar.rs",
-    "line": 3086,
+    "line": 3090,
     "decision": "self.eat_kw(Keyword::ELSE)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32332,7 +32352,7 @@
   {
     "id": "parser_row_grammar_type_name_ac37c31a",
     "file": "src/parser/row/grammar.rs",
-    "line": 3122,
+    "line": 3126,
     "decision": "let TokenKind::Identifier(_) = self.peek().kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -32342,7 +32362,7 @@
   {
     "id": "parser_row_grammar_type_name_bffb0a0b",
     "file": "src/parser/row/grammar.rs",
-    "line": 3127,
+    "line": 3131,
     "decision": "self.eat_punct(&TokenKind::LParen)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32352,7 +32372,7 @@
   {
     "id": "parser_row_grammar_type_name_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 3131,
+    "line": 3135,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32362,7 +32382,7 @@
   {
     "id": "parser_row_grammar_number_literal_84884d30",
     "file": "src/parser/row/grammar.rs",
-    "line": 3143,
+    "line": 3147,
     "decision": "match self.peek().kind.clone() {\n            TokenKind::Integer(v) => {\n                self.advance();\n                Ok(v.to_string())\n            }\n            other => {\n                let span = self.peek().span;\n                Err(ParseFail::Invalid {\n                    message: format!(\"expected number, found {other:?}\"),\n                    span,\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32372,7 +32392,7 @@
   {
     "id": "parser_row_grammar_expr_list_e9025c84",
     "file": "src/parser/row/grammar.rs",
-    "line": 3160,
+    "line": 3164,
     "decision": "self.eat_punct(&TokenKind::Comma)",
     "conditions": 1,
     "vectors_required": 2,
@@ -32382,7 +32402,7 @@
   {
     "id": "parser_row_grammar_expr_height_8db688f6",
     "file": "src/parser/row/grammar.rs",
-    "line": 3185,
+    "line": 3189,
     "decision": "let Some((e, h)) = stack.pop()",
     "conditions": 1,
     "vectors_required": 2,
@@ -32392,7 +32412,7 @@
   {
     "id": "parser_row_grammar_expr_height_66b87bd9",
     "file": "src/parser/row/grammar.rs",
-    "line": 3188,
+    "line": 3192,
     "decision": "matches!(e.kind, ExprKind::Paren(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -32402,7 +32422,7 @@
   {
     "id": "parser_row_grammar_children_8a8586eb",
     "file": "src/parser/row/grammar.rs",
-    "line": 3200,
+    "line": 3204,
     "decision": "match &e.kind {\n        ExprKind::Unary { expr, .. }\n        | ExprKind::IsNull { expr, .. }\n        | ExprKind::Cast { expr, .. }\n        | ExprKind::Collate { expr, .. }\n        | ExprKind::Paren(expr)\n        | ExprKind::InSubquery { expr, .. } => vec![expr],\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => vec![lhs, rhs],\n        ExprKind::Between { expr, lo, hi, .. } => vec![expr, lo, hi],\n        ExprKind::In { expr, list, .. } => std::iter::once(&**expr).chain(list).collect(),\n        ExprKind::Like {\n            expr,\n            pattern,\n            escape,\n            ..\n        } => [Some(&**expr), Some(&**pattern), escape.as_deref()]\n            .into_iter()\n            .flatten()\n            .collect(),\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => operand\n            .as_deref()\n            .into_iter()\n            .chain(whens.iter().flat_map(|(w, t)| [w, t]))\n            .chain(else_.as_deref())\n            .collect(),\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        }\n        | ExprKind::InSubqueryMulti { exprs: list, .. } => list.iter().collect(),\n        _ => Vec::new(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32412,7 +32432,7 @@
   {
     "id": "parser_row_grammar_operator_chains_are_capped_at_sqlite3s_expression_height_acbcd3da",
     "file": "src/parser/row/grammar.rs",
-    "line": 4090,
+    "line": 4120,
     "decision": "match parse(&over) {\n                    crate::parser::row::ParseOutcome::Invalid { message, .. } => assert!(\n                        message.contains(\"Expression tree is too large (maximum depth 1000)\"),\n                        \"{message}\"\n                    ),\n                    other => panic!(\"{term}{op} x {n}: {other:?}\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32422,7 +32442,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_e4a5bc85",
     "file": "src/parser/row/grammar.rs",
-    "line": 4145,
+    "line": 4175,
     "decision": "match crate::parser::row::parse_select(sql) {\n            crate::parser::row::ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32432,7 +32452,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_20abd9ee",
     "file": "src/parser/row/grammar.rs",
-    "line": 4149,
+    "line": 4179,
     "decision": "match &select.columns[0] {\n            ResultColumn::Expr { expr, .. } => match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            },\n            other => panic!(\"expected an expression column, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32442,7 +32462,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_0bdb902e",
     "file": "src/parser/row/grammar.rs",
-    "line": 4150,
+    "line": 4180,
     "decision": "match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -32452,7 +32472,7 @@
   {
     "id": "parser_row_grammar_parse_select_stmt_aa58f6cd",
     "file": "src/parser/row/grammar.rs",
-    "line": 4214,
+    "line": 4244,
     "decision": "self.depth > MAX_EXPR_DEPTH",
     "conditions": 1,
     "vectors_required": 2,

@@ -1147,6 +1147,10 @@ mod already_exists_tests {
             ("UPDATE t SET a = b()", "no such function: b"),
             // #650: overridden by the later assignment, never compiled.
             ("UPDATE t SET a = b(), a = 1", "no such function: b"),
+            // #650: an empty IN list drops its left operand from the program.
+            ("DELETE FROM t WHERE s() IN ()", "no such function: s"),
+            ("DELETE FROM t WHERE s() NOT IN ()", "no such function: s"),
+            ("SELECT s() IN () FROM t", "no such function: s"),
             (
                 "INSERT INTO t(a) SELECT a FROM t GROUP BY nosuch(1)",
                 "no such function: nosuch",
@@ -1168,6 +1172,77 @@ mod already_exists_tests {
         assert!(compile_statement("SELECT upper(a) FROM t", &schemas(), &views()).is_ok());
         // An sqlite3 built-in not implemented yet is left to run time.
         assert!(compile_statement("SELECT random() FROM t WHERE 0", &schemas(), &views()).is_ok());
+    }
+
+    /// #650: `tbl.*` must name the FROM item, by its alias when it has one;
+    /// sqlite3 says `no such table: <qualifier>` for anything else.
+    // codegen_row_select_entry_check_table_star_qualifiers_8b25f7e1: `!table.eq_ignore_ascii_case(qualifier)`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_entry_check_table_star_qualifiers_8b25f7e1__v1_a_qualifier_that_is_not_the_from_item_is_refused(
+    ) {
+        for (sql, table) in [
+            ("SELECT t.* FROM t AS b", "t"),
+            ("SELECT zzz.* FROM t", "zzz"),
+            ("SELECT t.* FROM (SELECT a FROM t) AS b", "t"),
+            ("SELECT a, t.* FROM t AS b WHERE a > 1 ORDER BY 1", "t"),
+        ] {
+            let err = compile_statement(sql, &schemas(), &views()).unwrap_err();
+            assert_eq!(err.to_string(), format!("no such table: {table}"), "{sql}");
+        }
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_entry_check_table_star_qualifiers_8b25f7e1__v2_the_name_or_the_alias_resolves(
+    ) {
+        for sql in [
+            "SELECT t.* FROM t",
+            "SELECT T.* FROM t",
+            "SELECT b.* FROM t AS b",
+            "SELECT B.* FROM t AS b",
+            "SELECT b.* FROM (SELECT a FROM t) AS b",
+        ] {
+            assert!(
+                compile_statement(sql, &schemas(), &views()).is_ok(),
+                "{sql}"
+            );
+        }
+    }
+    // codegen_row_select_entry_check_table_star_qualifiers_80505791: `let ResultColumn::TableStar { table } = col`
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_entry_check_table_star_qualifiers_80505791__v1_a_table_star_is_checked(
+    ) {
+        assert!(compile_statement("SELECT zzz.* FROM t", &schemas(), &views()).is_err());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_entry_check_table_star_qualifiers_80505791__v2_other_result_columns_are_not(
+    ) {
+        for sql in [
+            "SELECT * FROM t AS b",
+            "SELECT a FROM t AS b",
+            "SELECT b.a FROM t AS b",
+        ] {
+            assert!(
+                compile_statement(sql, &schemas(), &views()).is_ok(),
+                "{sql}"
+            );
+        }
+    }
+
+    /// #650: sqlite3 has no column list after a table alias, so the row
+    /// dialect refuses `UNNEST(x) AS t(r)` (a column-dialect form) even in
+    /// a view body, which is stored without being compiled.
+    #[test]
+    fn create_view_refuses_unnest_alias_column_list() {
+        let err = compile_statement(
+            "CREATE VIEW nv AS SELECT * FROM UNNEST(1) AS t(r)",
+            &schemas(),
+            &views(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("syntax error"), "{err}");
     }
 
     /// #650: a view has no bind step, so every parameter form is refused.

@@ -372,6 +372,9 @@ pub(crate) fn compile_cond(
             if list.is_empty() {
                 // `x IN ()` is always false, even for a NULL `x` — an
                 // empty list leaves nothing to be uncertain against.
+                // sqlite3 still prepares `x`, so an unknown function in it
+                // is an error (#650): compile it into a scratch emitter.
+                compile_value(&mut Emitter::new(), &mut RegAlloc::new(), scope, inner)?;
                 let (t, f) = if *negated {
                     (targets.on_false, targets.on_true)
                 } else {

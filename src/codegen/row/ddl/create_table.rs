@@ -247,7 +247,7 @@ fn is_subquery(e: &Expr) -> bool {
 
 /// Whether `pred` holds for `expr` or any expression under it (not
 /// descending into subqueries, which `pred` sees whole).
-pub(crate) fn any_node(expr: &Expr, pred: &mut impl FnMut(&Expr) -> bool) -> bool {
+fn any_node(expr: &Expr, pred: &mut impl FnMut(&Expr) -> bool) -> bool {
     if pred(expr) {
         return true;
     }
