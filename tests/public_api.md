@@ -2977,6 +2977,7 @@ impl core::fmt::Debug for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::SchemaElement
 pub struct db_core::storage::column::parquet::footer::Statistics
+pub db_core::storage::column::parquet::footer::Statistics::bytes_ordered: bool
 pub db_core::storage::column::parquet::footer::Statistics::distinct_count: core::option::Option<i64>
 pub db_core::storage::column::parquet::footer::Statistics::max: core::option::Option<alloc::vec::Vec<u8>>
 pub db_core::storage::column::parquet::footer::Statistics::min: core::option::Option<alloc::vec::Vec<u8>>
@@ -5160,6 +5161,7 @@ impl core::fmt::Debug for db_core::storage::parquet::footer::SchemaElement
 pub fn db_core::storage::parquet::footer::SchemaElement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::parquet::footer::SchemaElement
 pub struct db_core::storage::parquet::footer::Statistics
+pub db_core::storage::parquet::footer::Statistics::bytes_ordered: bool
 pub db_core::storage::parquet::footer::Statistics::distinct_count: core::option::Option<i64>
 pub db_core::storage::parquet::footer::Statistics::max: core::option::Option<alloc::vec::Vec<u8>>
 pub db_core::storage::parquet::footer::Statistics::min: core::option::Option<alloc::vec::Vec<u8>>

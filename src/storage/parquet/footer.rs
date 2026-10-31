@@ -305,6 +305,11 @@ pub struct Statistics {
     pub null_count: Option<i64>,
     /// Number of distinct values (field 4).
     pub distinct_count: Option<i64>,
+    /// Whether `min` and `max` came from `min_value` / `max_value`, whose
+    /// BYTE_ARRAY order is defined as unsigned lexicographic. The
+    /// deprecated `min` / `max` were compared signed by some writers, so a
+    /// blob bound from them is not trusted for pruning (#868).
+    pub bytes_ordered: bool,
 }
 
 /// `parquet.thrift` `ColumnChunk`: one column of one row group.
@@ -586,6 +591,7 @@ fn parse_statistics(v: &Value) -> Statistics {
         max,
         null_count,
         distinct_count,
+        bytes_ordered: v.field(6).is_some() && v.field(5).is_some(),
     }
 }
 
@@ -895,6 +901,7 @@ mod tests {
         assert_eq!(statistics.max, Some(9999.85f64.to_le_bytes().to_vec()));
         assert_eq!(statistics.null_count, Some(0));
         assert_eq!(statistics.distinct_count, Some(42));
+        assert!(statistics.bytes_ordered);
     }
 
     #[test]
@@ -917,6 +924,7 @@ mod tests {
         let statistics = meta.statistics.as_ref().unwrap();
         assert_eq!(statistics.min, Some(b"east".to_vec()));
         assert_eq!(statistics.max, Some(b"west".to_vec()));
+        assert!(!statistics.bytes_ordered);
         assert_eq!(statistics.null_count, None);
         assert_eq!(statistics.distinct_count, None);
     }

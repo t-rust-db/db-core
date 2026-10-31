@@ -109,4 +109,19 @@ duckdb -c "COPY (SELECT i AS id, 4611686018427387904 + i AS big, 461168601842738
   FROM range(0, 4) t(i) ORDER BY id)
   TO '$DIR/big_ints.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet, $DIR/big_ints.parquet"
+# #868: BLOB columns -- a 16-byte key from a small set (some repeated), a
+# 32-byte digest NULL on every third row, and an empty blob; three row groups
+# (DuckDB writes whole 2048-row vectors) so a blob min/max differs per group.
+# seq is a 4-byte big-endian id from 0xFFFF0000, first byte above 0x7F, so
+# its row groups hold disjoint ranges and a signed byte compare would misorder
+# them. Values are a function of id.
+duckdb -c "COPY (SELECT
+    i AS id,
+    CASE WHEN i % 20 = 0 THEN ''::BLOB
+         ELSE unhex(repeat(printf('%02X', (i % 5) * 51), 16)) END AS k,
+    CASE WHEN i % 3 = 0 THEN NULL ELSE unhex(repeat(printf('%02X', i % 256), 32)) END AS d,
+    unhex(printf('%08X', i + 4294901760)) AS seq
+  FROM range(0, 5000) t(i) ORDER BY id)
+  TO '$DIR/blobs.parquet' (FORMAT PARQUET, COMPRESSION 'snappy', ROW_GROUP_SIZE 2048);"
+
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet, $DIR/big_ints.parquet, $DIR/blobs.parquet"

@@ -132,3 +132,7 @@ CREATE VIEW v650d AS SELECT * FROM UNNEST(1) AS t(r)
 CREATE VIEW v650e AS SELECT * FROM UNNEST(1) t(r)
 CREATE VIEW v650f AS SELECT * FROM (SELECT * FROM UNNEST(1) AS t(r))
 CREATE VIEW v650g AS SELECT 1
+-- blobs in hex (#868)
+SELECT hex(unhex('abC1')), typeof(unhex('abC1')), hex(unhex('')), typeof(unhex('')), unhex('abc'), unhex('zz'), unhex(NULL)
+SELECT hex(x'00ff'), hex(x''), hex(unhex('00FF')), unhex('0'), unhex('0g'), unhex(' 00'), hex(unhex('4142')) = '4142'
+SELECT unhex('41 42'), unhex(123), hex(unhex('3132')), hex(unhex(x'4142')), unhex(1.5), unhex('é')

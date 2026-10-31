@@ -725,6 +725,10 @@ impl Segment for RowGroupSegment<'_, '_> {
         let (index, physical_type) = self.order_leaf?;
         let rg = self.file.row_group(self.row_group_index)?;
         let stats = rg.column_statistics(index).ok()??;
+        let annotation = annotation(&rg, index);
+        if annotation == Annotation::Bytes && !stats.bytes_ordered {
+            return None;
+        }
         let bytes = if descending {
             stats.max.as_deref()
         } else {
@@ -733,8 +737,7 @@ impl Segment for RowGroupSegment<'_, '_> {
         if rg.nested_field_at(index).is_some() {
             return None;
         }
-        prune::decode_stat_bytes(bytes, physical_type, annotation(&rg, index))
-            .map(prune::into_value)
+        prune::decode_stat_bytes(bytes, physical_type, annotation).map(prune::into_value)
     }
 
     /// #513: only the named leaves, every row, eagerly -- the
@@ -1417,6 +1420,8 @@ mod prune {
         Int(i64),
         Float(f64),
         Str(String),
+        /// A blob bound or literal, compared as unsigned bytes (#868).
+        Bytes(Vec<u8>),
     }
 
     /// The VM-side [`Value`] of a decoded statistic, so a top-N bound
@@ -1427,6 +1432,7 @@ mod prune {
             StatValue::Int(i) => Value::Int(i),
             StatValue::Float(f) => Value::Float(f),
             StatValue::Str(s) => Value::Str(s.into()),
+            StatValue::Bytes(b) => Value::Blob(b.into()),
         }
     }
 
@@ -1437,6 +1443,7 @@ mod prune {
             (StatValue::Int(x), StatValue::Float(y)) => (*x as f64).partial_cmp(y),
             (StatValue::Float(x), StatValue::Int(y)) => x.partial_cmp(&(*y as f64)),
             (StatValue::Str(x), StatValue::Str(y)) => Some(x.cmp(y)),
+            (StatValue::Bytes(x), StatValue::Bytes(y)) => Some(x.cmp(y)),
             _ => None,
         }
     }
@@ -1464,7 +1471,8 @@ mod prune {
                     .ok()
                     .map(StatValue::Int);
             }
-            Annotation::Decimal | Annotation::Bytes => return None,
+            Annotation::Bytes => return Some(StatValue::Bytes(bytes.to_vec())),
+            Annotation::Decimal => return None,
         }
         match physical_type {
             PhysicalType::Int32 => {
@@ -1506,6 +1514,9 @@ mod prune {
                 Some(StatValue::Float(*f))
             }
             (Literal::Str(s), PhysicalType::ByteArray) => Some(StatValue::Str(s.clone())),
+            (Literal::Blob(b), PhysicalType::ByteArray | PhysicalType::FixedLenByteArray) => {
+                Some(StatValue::Bytes(b.clone()))
+            }
             _ => None,
         }
     }
@@ -1573,7 +1584,13 @@ mod prune {
                 return None;
             }
             let annotation = annotation(self.rg, index);
-            let statistics = self.rg.column_statistics(index).ok().flatten();
+            // A blob's order is only defined for `min_value` / `max_value`.
+            let statistics = self
+                .rg
+                .column_statistics(index)
+                .ok()
+                .flatten()
+                .filter(|s| annotation != Annotation::Bytes || s.bytes_ordered);
             let decode = |b: &Option<Vec<u8>>| {
                 b.as_deref()
                     .and_then(|b| decode_stat_bytes(b, physical_type, annotation))
@@ -2438,6 +2455,121 @@ mod tests {
         );
     }
 
+    /// A one-row-group file of an unannotated BYTE_ARRAY column `b` (a
+    /// blob), with `stats_bytes` as its footer statistics.
+    fn build_blob_file(values: &[&[u8]], stats_bytes: Vec<u8>) -> Vec<u8> {
+        let mut file = Vec::new();
+        file.extend_from_slice(b"PAR1");
+        let base_offset = file.len() as i64;
+
+        let mut body = Vec::new();
+        for v in values {
+            body.extend_from_slice(&(v.len() as u32).to_le_bytes());
+            body.extend_from_slice(v);
+        }
+        let mut page_bytes = build_page_header(values.len() as i32, body.len() as i32);
+        page_bytes.extend_from_slice(&body);
+        file.extend_from_slice(&page_bytes);
+
+        let mut meta = StructWriter::new();
+        meta.i32_field(1, 6); // BYTE_ARRAY
+        meta.field_header(3, 0x09);
+        meta.buf.push((1u8 << 4) | 0x08);
+        meta.write_varint(1);
+        meta.buf.extend_from_slice(b"b");
+        meta.i64_field(5, values.len() as i64);
+        meta.i64_field(6, page_bytes.len() as i64);
+        meta.i64_field(7, page_bytes.len() as i64);
+        meta.i64_field(9, base_offset);
+        meta.struct_field(12, stats_bytes);
+        let mut chunk = StructWriter::new();
+        chunk.i64_field(2, base_offset);
+        chunk.struct_field(3, meta.finish());
+        let mut rg = StructWriter::new();
+        rg.list_of_structs_field(1, vec![chunk.finish()]);
+        rg.i64_field(2, page_bytes.len() as i64);
+        rg.i64_field(3, values.len() as i64);
+
+        let mut root = StructWriter::new();
+        root.string_field(4, "schema");
+        root.i32_field(5, 1);
+        let mut col = StructWriter::new();
+        col.i32_field(1, 6); // BYTE_ARRAY, no converted type
+        col.i32_field(3, 0); // REQUIRED
+        col.string_field(4, "b");
+        let mut fmd = StructWriter::new();
+        fmd.i32_field(1, 1);
+        fmd.list_of_structs_field(2, vec![root.finish(), col.finish()]);
+        fmd.i64_field(3, values.len() as i64);
+        fmd.list_of_structs_field(4, vec![rg.finish()]);
+        fmd.string_field(6, "test");
+        let metadata = fmd.finish();
+        file.extend_from_slice(&metadata);
+        file.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"PAR1");
+        file
+    }
+
+    /// The first segment's `ORDER BY` bound on a one-row-group file whose
+    /// ordered column is leaf 0 of `physical_type`.
+    fn bound_of_only_group(
+        file_bytes: &[u8],
+        name: &str,
+        physical_type: PhysicalType,
+        descending: bool,
+    ) -> Option<Value> {
+        let file = ParquetFile::open(file_bytes).unwrap();
+        let leaves: Vec<Leaf> = vec![(name.to_string(), 0, physical_type)];
+        let program = Program::new(Vec::new());
+        let mut segments = row_group_segments(&file, &leaves, &leaves, None, &program, &[]);
+        segments[0].order_leaf = Some((0, physical_type));
+        segments[0].order_key_bound(descending)
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_order_key_bound_0e87dc95__v1_a_plain_column_keeps_its_bound() {
+        let stats = build_statistics(&1.0f64.to_le_bytes(), &5.0f64.to_le_bytes());
+        let file_bytes = build_file(&[(&[1.0, 5.0], Some(stats))]);
+        assert_eq!(
+            bound_of_only_group(&file_bytes, "amount", PhysicalType::Double, true),
+            Some(Value::Float(5.0))
+        );
+    }
+
+    /// #868: a blob's bound reads only from `min_value` / `max_value`
+    /// (unsigned bytes); the deprecated `min` / `max` were signed in some
+    /// writers.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_order_key_bound_0e87dc95__v2_a_blob_with_ordered_statistics_keeps_its_bound(
+    ) {
+        let stats = build_statistics(&[0x01], &[0xFF, 0x00]);
+        let file_bytes = build_blob_file(&[&[0x01], &[0xFF, 0x00]], stats);
+        let bound =
+            |descending| bound_of_only_group(&file_bytes, "b", PhysicalType::ByteArray, descending);
+        assert_eq!(bound(true), Some(Value::Blob(vec![0xFF, 0x00].into())));
+        assert_eq!(bound(false), Some(Value::Blob(vec![0x01].into())));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_order_key_bound_0e87dc95__v3_a_blob_with_deprecated_statistics_has_no_bound(
+    ) {
+        let mut w = StructWriter::new();
+        w.binary_field(1, &[0xFF, 0x00]);
+        w.binary_field(2, &[0x01]);
+        let file_bytes = build_blob_file(&[&[0x01], &[0xFF, 0x00]], w.finish());
+        assert_eq!(
+            bound_of_only_group(&file_bytes, "b", PhysicalType::ByteArray, true),
+            None
+        );
+        assert_eq!(
+            bound_of_only_group(&file_bytes, "b", PhysicalType::ByteArray, false),
+            None
+        );
+    }
+
     #[test]
     fn a_projection_only_column_is_not_read_when_no_row_survives() {
         // #704: `ghost` names a column chunk the file does not have, so
@@ -2875,6 +3007,48 @@ mod tests {
             vec![0],
             "malformed statistics bytes must fall back to no pruning, never a wrong skip"
         );
+    }
+
+    /// #868: a blob column's footer min/max prune row groups by unsigned
+    /// bytes. `blobs.parquet`'s `seq` holds three disjoint ranges whose first
+    /// byte is above 0x7F (a signed compare would misorder them).
+    #[test]
+    fn blob_statistics_prune_row_groups_by_unsigned_bytes() {
+        let file_bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/parquet/blobs.parquet"
+        ))
+        .unwrap();
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let leaves: Vec<Leaf> = vec![("seq".to_string(), 3, PhysicalType::ByteArray)];
+        let program = Program::new(Vec::new());
+        let kept = |predicate: &str| -> Vec<usize> {
+            let select = crate::parser::parse(&format!("SELECT seq FROM t WHERE {predicate}"))
+                .expect("valid SQL");
+            row_group_segments(
+                &file,
+                &leaves,
+                &leaves,
+                select.where_clause.as_ref(),
+                &program,
+                &[],
+            )
+            .iter()
+            .map(|s| s.row_group_index)
+            .collect()
+        };
+        assert_eq!(kept("seq = x'FFFF0900'"), vec![1]);
+        assert_eq!(kept("seq = x'FFFF0000'"), vec![0]);
+        assert_eq!(kept("seq > x'FFFF1000'"), vec![2]);
+        assert_eq!(kept("seq < x'FFFF0800'"), vec![0]);
+        assert_eq!(kept("seq BETWEEN x'FFFF0700' AND x'FFFF0900'"), vec![0, 1]);
+        assert_eq!(kept("seq IN (x'FFFF0000', x'FFFF1000')"), vec![0, 2]);
+        assert_eq!(kept("seq > x'FFFFFFFF'"), Vec::<usize>::new());
+        assert_eq!(kept("seq < x'00'"), Vec::<usize>::new());
+        // x'7F' sorts below every bound by bytes; as signed it sorts above them.
+        assert_eq!(kept("seq > x'7F'"), vec![0, 1, 2]);
+        // A blob is never text: no bound, nothing proven, every group read.
+        assert_eq!(kept("seq = 'FFFF0900'"), vec![0, 1, 2]);
     }
 
     #[test]
