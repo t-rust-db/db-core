@@ -27,7 +27,6 @@ fn result(rows: Vec<Vec<Cell>>) -> QueryResult {
     QueryResult {
         columns: vec![],
         rows,
-        ..Default::default()
     }
 }
 
