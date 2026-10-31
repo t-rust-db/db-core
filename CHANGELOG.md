@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.220.0] - 2026-10-31
+
+### Added
+
+- Row engine: `rowid IN (…)` seeks each member, including in aggregates; long integer `IN` lists are probed as a set instead of one comparison per member (#915)
+- Row engine: `RowEngine::create` makes a new database file in WAL or rollback-journal mode (#915)
+- Row engine: `RowEngine::run_query_with` binds `?`/`?N` parameters; bare `?` are numbered in source order (#915)
+
+### Fixed
+
+- Column engine: single-key `ORDER BY … LIMIT` no longer returns NULL for selected columns that are also filtered (#914)
+
 ## [0.219.0] - 2026-10-31
 
 ### Changed
