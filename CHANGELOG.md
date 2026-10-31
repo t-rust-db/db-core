@@ -4,6 +4,25 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.219.0] - 2026-10-31
+
+### Changed
+
+- Breaking, pre-1.0: `ExecError::AggregateFailed` and `ExecError::FunctionFailed` replace "malformed instruction" for aggregate and scalar function errors; `AggState::Sum` gains `overflowed`; `WalError::ShortRead` is new; `JournalError::RecordTruncated` now means a short read.
+- The row dialect refuses more than 64 tables in one FROM clause ("at most 64 tables in a join"), as sqlite3 does (#877).
+- `LogFile::with_max_line`, `DEFAULT_MAX_LINE` (1 MiB) and `REFRESH_BATCH` (8 MiB) are new (#883).
+
+### Fixed
+
+- Column engine: crafted keys could make GROUP BY, DISTINCT, joins and IN-lists quadratic (hash flooding); every hash table is now seeded per table (#891).
+- Column engine: list and map functions returned NULL for a value of the wrong type; they now raise DuckDB's conversion error. `len()` of a string is its length; integer text works as a list index or slice bound (#892).
+- Row engine: `sum()` hid an integer overflow in the middle of the sum; it is now sqlite3's `integer overflow` unless a REAL follows (#892).
+- Following a log re-ingested it from the start on any resume-file error; it now restarts only on a missing resume file or a rotated or truncated log (#884).
+- A table whose writer lock was poisoned by a panic kept accepting calls; it now refuses them until reopened (#884).
+- WAL and journal recovery read the whole file into memory before checking its header, and took a short read for a torn tail; they now stream frames after a header check (#875).
+- `printf('%.Nf')` with a huge precision and `length()` of a huge string walked it a character at a time (#877).
+- `LogFile` was quadratic on long lines and buffered whole files; `read_tail` skipped long lines and could loop forever (#883).
+
 ## [0.218.4] - 2026-10-31
 
 ### Fixed
