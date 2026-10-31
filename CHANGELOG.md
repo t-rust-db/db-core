@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.218.3] - 2026-10-31
+
+### Fixed
+
+- Row groups of a `Binary` / `FIXED_LEN_BYTE_ARRAY` column are skipped on their min/max statistics, compared as unsigned bytes (#868). Statistics from the deprecated `min`/`max` fields are not used for blobs. New public field `Statistics::bytes_ordered`.
+
 ## [0.218.2] - 2026-10-31
 
 ### Fixed
