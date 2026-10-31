@@ -52062,7 +52062,7 @@
   {
     "id": "storage_stream_file_open_at_f0a0f7bd",
     "file": "src/storage/stream/file.rs",
-    "line": 126,
+    "line": 142,
     "decision": "meta.len() < offset",
     "conditions": 1,
     "vectors_required": 2,
@@ -52072,7 +52072,7 @@
   {
     "id": "storage_stream_file_rotated_3920298d",
     "file": "src/storage/stream/file.rs",
-    "line": 155,
+    "line": 180,
     "decision": "match FileIdentity::of(&self.path) {\n            Ok(now) => Ok(now != self.identity),\n            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(true),\n            Err(e) => Err(e),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -52082,7 +52082,7 @@
   {
     "id": "storage_stream_file_rotated_20fc5e15",
     "file": "src/storage/stream/file.rs",
-    "line": 157,
+    "line": 182,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -52092,7 +52092,7 @@
   {
     "id": "storage_stream_file_read_tail_c82dd615",
     "file": "src/storage/stream/file.rs",
-    "line": 202,
+    "line": 230,
     "decision": "loaded < min_bytes && self.tail_off > 0",
     "conditions": 2,
     "vectors_required": 3,
@@ -52102,7 +52102,7 @@
   {
     "id": "storage_stream_file_read_tail_51dcfb6b",
     "file": "src/storage/stream/file.rs",
-    "line": 209,
+    "line": 241,
     "decision": "start == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -52110,30 +52110,50 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_file_read_tail_7f414a0e",
+    "id": "storage_stream_file_read_tail_16e116a5",
     "file": "src/storage/stream/file.rs",
-    "line": 212,
-    "decision": "match buf.iter().position(|&b| b == b'\\n') {\n                    Some(i) => i.saturating_add(1),\n                    None => buf.len(), // a line longer than a block: skip it\n                }",
+    "line": 248,
+    "decision": "match first_line {\n                Some(cut) => (\n                    start.saturating_add(cut as u64),\n                    buf.get(cut..).unwrap_or_default().to_vec(),\n                ),\n                None => {\n                    let line = self.line_start(start, end)?;\n                    (line, self.read_range(line, end)?)\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_file_read_tail_2a4716b9",
+    "id": "storage_stream_file_read_tail_16f48842",
     "file": "src/storage/stream/file.rs",
-    "line": 218,
-    "decision": "cut > 0",
+    "line": 259,
+    "decision": "!bytes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_file_read_tail_a6733233",
+    "id": "storage_stream_file_line_start_b013f774",
     "file": "src/storage/stream/file.rs",
-    "line": 222,
-    "decision": "!buf.is_empty()",
+    "line": 277,
+    "decision": "hi > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_line_start_488569fa",
+    "file": "src/storage/stream/file.rs",
+    "line": 280,
+    "decision": "let Some(i) = buf.iter().rposition(|&b| b == b'\\n')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_line_start_18a257b7",
+    "file": "src/storage/stream/file.rs",
+    "line": 283,
+    "decision": "line_end.saturating_sub(lo) > self.max_line as u64",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -52142,7 +52162,7 @@
   {
     "id": "storage_stream_file_refresh_5b0fc89d",
     "file": "src/storage/stream/file.rs",
-    "line": 238,
+    "line": 310,
     "decision": "len < self.head_off",
     "conditions": 1,
     "vectors_required": 2,
@@ -52152,7 +52172,7 @@
   {
     "id": "storage_stream_file_refresh_89e182d2",
     "file": "src/storage/stream/file.rs",
-    "line": 242,
+    "line": 314,
     "decision": "len == self.head_off",
     "conditions": 1,
     "vectors_required": 2,
@@ -52162,7 +52182,7 @@
   {
     "id": "storage_stream_file_refresh_4cfa17b1",
     "file": "src/storage/stream/file.rs",
-    "line": 249,
+    "line": 322,
     "decision": "pos < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -52170,10 +52190,40 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_stream_file_refresh_b959aabf",
+    "id": "storage_stream_file_refresh_a523ce68",
     "file": "src/storage/stream/file.rs",
-    "line": 254,
-    "decision": "let Some(i) = pending.iter().rposition(|&b| b == b'\\n')",
+    "line": 330,
+    "decision": "match chunk.iter().rposition(|&b| b == b'\\n') {\n                Some(i) => {\n                    // The carried partial line ends at the chunk's first\n                    // newline; lines wholly inside a chunk are shorter than\n                    // the maximum, which is at least a block.\n                    let first = chunk.iter().position(|&b| b == b'\\n').unwrap_or(i);\n                    let line = carried.saturating_add(first) as u64;\n                    if line > self.max_line as u64 {\n                        return Err(self.line_too_long(pending_off.saturating_add(line), line));\n                    }\n                    let cut = carried.saturating_add(i).saturating_add(1);\n                    let rest = pending.split_off(cut);\n                    let complete = std::mem::replace(&mut pending, rest);\n                    let block_len = complete.len() as u64;\n                    blocks.push(Block {\n                        file_off: pending_off,\n                        bytes: Arc::from(complete),\n                    });\n                    pending_off = pending_off.saturating_add(block_len);\n                    self.head_off = pending_off;\n                    if pending_off.saturating_sub(started) >= REFRESH_BATCH {\n                        break;\n                    }\n                }\n                // No newline yet: a long line or a partial tail. It stays\n                // pending until its newline arrives, up to the maximum.\n                None if pending.len() > self.max_line => {\n                    return Err(self.line_too_long(pos, pending.len() as u64));\n                }\n                None => {}\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_refresh_9419eabb",
+    "file": "src/storage/stream/file.rs",
+    "line": 356,
+    "decision": "pending.len() > self.max_line",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_refresh_b4c0e922",
+    "file": "src/storage/stream/file.rs",
+    "line": 337,
+    "decision": "line > self.max_line as u64",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_refresh_3d653911",
+    "file": "src/storage/stream/file.rs",
+    "line": 350,
+    "decision": "pending_off.saturating_sub(started) >= REFRESH_BATCH",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -52182,28 +52232,8 @@
   {
     "id": "storage_stream_file_refresh_2616dbdb",
     "file": "src/storage/stream/file.rs",
-    "line": 269,
+    "line": 362,
     "decision": "blocks.is_empty()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_file_reposition_at_end_16cafe42",
-    "file": "src/storage/stream/file.rs",
-    "line": 282,
-    "decision": "match buf.iter().rposition(|&b| b == b'\\n') {\n            Some(i) => start.saturating_add(i as u64).saturating_add(1),\n            None if start == 0 => 0, // no complete line at all\n            None => len,             // a final line longer than a block\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_stream_file_reposition_at_end_51dcfb6b",
-    "file": "src/storage/stream/file.rs",
-    "line": 284,
-    "decision": "start == 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -52212,7 +52242,7 @@
   {
     "id": "storage_stream_file_read_range_efc80517",
     "file": "src/storage/stream/file.rs",
-    "line": 298,
+    "line": 387,
     "decision": "filled < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -52222,7 +52252,7 @@
   {
     "id": "storage_stream_file_read_range_59df551d",
     "file": "src/storage/stream/file.rs",
-    "line": 300,
+    "line": 389,
     "decision": "got == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -52232,7 +52262,7 @@
   {
     "id": "storage_stream_file_lines_bb197296",
     "file": "src/storage/stream/file.rs",
-    "line": 332,
+    "line": 421,
     "decision": "!l.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -52242,7 +52272,7 @@
   {
     "id": "storage_stream_file_refresh_sees_appends_and_holds_partial_lines_b21e0d0b",
     "file": "src/storage/stream/file.rs",
-    "line": 408,
+    "line": 497,
     "decision": "match lf.refresh().unwrap() {\n            Refresh::New(blocks) => assert_eq!(lines(&blocks), vec![\"b\", \"c\"]),\n            other => panic!(\"{other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -52252,8 +52282,28 @@
   {
     "id": "storage_stream_file_refresh_sees_appends_and_holds_partial_lines_1e8fc5b0",
     "file": "src/storage/stream/file.rs",
-    "line": 414,
+    "line": 503,
     "decision": "match lf.refresh().unwrap() {\n            Refresh::New(blocks) => assert_eq!(lines(&blocks), vec![\"partial\"]),\n            other => panic!(\"{other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_refreshed_1eeb4dca",
+    "file": "src/storage/stream/file.rs",
+    "line": 584,
+    "decision": "match lf.refresh().unwrap() {\n            Refresh::New(blocks) => blocks,\n            other => panic!(\"expected lines, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_stream_file_refresh_reads_a_bounded_batch_and_continues_0959311f",
+    "file": "src/storage/stream/file.rs",
+    "line": 665,
+    "decision": "match lf.refresh().unwrap() {\n                Refresh::New(blocks) => {\n                    let bytes: usize = blocks.iter().map(|b| b.bytes.len()).sum();\n                    assert!(bytes as u64 <= REFRESH_BATCH + BLOCK_SIZE as u64);\n                    total += lines(&blocks).len();\n                    refreshes += 1;\n                }\n                Refresh::NoNew => break,\n                Refresh::Truncated => panic!(\"not truncated\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,

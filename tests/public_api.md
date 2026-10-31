@@ -7290,9 +7290,12 @@ pub fn db_core::storage::stream::file::LogFile::read_tail(&mut self, u64) -> cor
 pub fn db_core::storage::stream::file::LogFile::refresh(&mut self) -> core::io::error::Result<db_core::storage::stream::file::Refresh>
 pub fn db_core::storage::stream::file::LogFile::rotated(&self) -> core::io::error::Result<bool>
 pub const fn db_core::storage::stream::file::LogFile::tail_off(&self) -> u64
+pub fn db_core::storage::stream::file::LogFile::with_max_line(self, usize) -> Self
 impl core::fmt::Debug for db_core::storage::stream::file::LogFile
 pub fn db_core::storage::stream::file::LogFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const db_core::storage::stream::file::BLOCK_SIZE: usize
+pub const db_core::storage::stream::file::DEFAULT_MAX_LINE: usize
+pub const db_core::storage::stream::file::REFRESH_BATCH: u64
 pub mod db_core::storage::stream::json
 pub enum db_core::storage::stream::json::JsonValue<'a>
 pub db_core::storage::stream::json::JsonValue::Array(&'a str)
@@ -7803,6 +7806,7 @@ pub fn db_core::storage::stream::file::LogFile::read_tail(&mut self, u64) -> cor
 pub fn db_core::storage::stream::file::LogFile::refresh(&mut self) -> core::io::error::Result<db_core::storage::stream::file::Refresh>
 pub fn db_core::storage::stream::file::LogFile::rotated(&self) -> core::io::error::Result<bool>
 pub const fn db_core::storage::stream::file::LogFile::tail_off(&self) -> u64
+pub fn db_core::storage::stream::file::LogFile::with_max_line(self, usize) -> Self
 impl core::fmt::Debug for db_core::storage::stream::file::LogFile
 pub fn db_core::storage::stream::file::LogFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::LogfmtParser
