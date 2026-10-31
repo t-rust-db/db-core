@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.220.2] - 2026-10-31
+
+### Fixed
+
+- `SELECT *` over a view that projects some of its table's columns is flattened into the table again, so an index on the table is used (#922)
+
 ## [0.220.1] - 2026-10-31
 
 ### Fixed
