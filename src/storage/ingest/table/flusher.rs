@@ -365,7 +365,7 @@ impl Flusher {
 
         // 2. Publish into data/.
         let data_dir = self.dir.join(DATA_DIR);
-        fs::create_dir_all(&data_dir)?;
+        crate::storage::ingest::create_dir_all_synced(&data_dir)?;
         fs::rename(&tmp, data_dir.join(&name))?;
         File::open(&data_dir)?.sync_all()?;
         self.crash_point(2)?;
@@ -431,7 +431,7 @@ impl Flusher {
         // 2. Publish the run into the hour's staging directory.
         let target = staging_dir(hour);
         let target_dir = self.dir.join(&target);
-        fs::create_dir_all(&target_dir)?;
+        crate::storage::ingest::create_dir_all_synced(&target_dir)?;
         for output in &outputs {
             fs::rename(tmp.join(&output.name), target_dir.join(&output.name))?;
         }
