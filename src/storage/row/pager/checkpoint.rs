@@ -19,7 +19,7 @@
 
 use std::path::Path;
 
-use super::wal::{self, WalHeader};
+use super::wal;
 use super::PagerError;
 use crate::storage::row::vfs::{companion_path, AnyVfs};
 
@@ -110,22 +110,12 @@ pub fn checkpoint_passive(
             checkpoint_complete: true,
         });
     }
-    let mut wal_bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
-    let n = wal_file.read_at(&mut wal_bytes, 0)?;
-    wal_bytes.truncate(n);
-    if wal_bytes.len() < wal::HEADER_LEN {
-        return Ok(CheckpointResult {
-            backfilled_frames: 0,
-            total_frames: 0,
-            checkpoint_complete: true,
-        });
-    }
-
     let to_pager_error = |source| PagerError::Wal {
         path: wal_path.display().to_string(),
         source,
     };
-    let header = match WalHeader::parse(&wal_bytes) {
+    // The header, then frames one at a time (#875), never the whole file.
+    let header = match wal::read_header(&wal_file, size) {
         Ok(header) => header,
         // Unusable header: SQLite recovers no frames, so nothing to backfill.
         Err(source) if source.is_unusable_header() => {
@@ -143,14 +133,7 @@ pub fn checkpoint_passive(
         }));
     }
 
-    let frame_size = wal::FRAME_HEADER_LEN.saturating_add(header.page_size as usize);
-    #[allow(
-        clippy::arithmetic_side_effects,
-        reason = "frame_size.max(1) rules out division by zero"
-    )]
-    let total_frames =
-        u32::try_from(wal_bytes.len().saturating_sub(wal::HEADER_LEN) / frame_size.max(1))
-            .unwrap_or(u32::MAX);
+    let total_frames = u32::try_from(wal::whole_frames(size, header.page_size)).unwrap_or(u32::MAX);
     if total_frames == 0 {
         return Ok(CheckpointResult {
             backfilled_frames: 0,
@@ -194,10 +177,11 @@ pub fn checkpoint_passive(
         });
     }
 
-    let boundary_len =
-        wal::HEADER_LEN.saturating_add((safe_frame as usize).saturating_mul(frame_size));
-    let boundary_bytes = wal_bytes.get(..boundary_len).unwrap_or(&wal_bytes);
-    let (pages, db_size) = wal::committed_pages(&header, boundary_bytes);
+    let (pages, db_size) =
+        wal::committed_pages_from(&header, safe_frame as usize, |index, frame| {
+            wal::read_frame(&wal_file, index, frame)
+        })
+        .map_err(to_pager_error)?;
 
     let db_file = vfs.open_write(db_path)?;
     // A frame's page_num is bounded by the WAL's own commit record
@@ -241,7 +225,7 @@ pub fn checkpoint_passive(
     non_snake_case
 )]
 mod tests {
-    use super::wal::WalWriter;
+    use super::wal::{WalHeader, WalWriter};
     use super::*;
     use crate::storage::row::vfs::{AnyVfs, MemoryVfs};
 

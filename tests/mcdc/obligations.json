@@ -48572,7 +48572,7 @@
   {
     "id": "storage_row_pager_read_page_56a766cb",
     "file": "src/storage/row/pager.rs",
-    "line": 1485,
+    "line": 1483,
     "decision": "let Some(page) = wal_pages.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48582,7 +48582,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_9109a25d",
     "file": "src/storage/row/pager.rs",
-    "line": 1502,
+    "line": 1500,
     "decision": "!vfs.exists(&wal_path)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -48592,7 +48592,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_1aec0f46",
     "file": "src/storage/row/pager.rs",
-    "line": 1508,
+    "line": 1506,
     "decision": "size < wal::HEADER_LEN as u64",
     "conditions": 1,
     "vectors_required": 2,
@@ -48600,20 +48600,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_read_wal_pages_f18f30e8",
+    "id": "storage_row_pager_read_wal_pages_15fe8fed",
     "file": "src/storage/row/pager.rs",
-    "line": 1515,
-    "decision": "bytes.len() < wal::HEADER_LEN",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_row_pager_read_wal_pages_eb643e28",
-    "file": "src/storage/row/pager.rs",
-    "line": 1526,
-    "decision": "match wal::WalHeader::parse(&bytes) {\n        Ok(header) => header,\n        Err(source) if source.is_unusable_header() => return Ok(HashMap::new()),\n        Err(source) => return Err(to_pager_error(source)),\n    }",
+    "line": 1520,
+    "decision": "match wal::read_header(&wal_file, size) {\n        Ok(header) => header,\n        Err(source) if source.is_unusable_header() => return Ok(HashMap::new()),\n        Err(source) => return Err(to_pager_error(source)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -48622,7 +48612,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_aef700eb",
     "file": "src/storage/row/pager.rs",
-    "line": 1528,
+    "line": 1522,
     "decision": "source.is_unusable_header()",
     "conditions": 1,
     "vectors_required": 2,
@@ -48632,7 +48622,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_ac0a9810",
     "file": "src/storage/row/pager.rs",
-    "line": 1531,
+    "line": 1525,
     "decision": "header.page_size != page_size",
     "conditions": 1,
     "vectors_required": 2,
@@ -48642,7 +48632,7 @@
   {
     "id": "storage_row_pager_read_page_b203daed",
     "file": "src/storage/row/pager.rs",
-    "line": 1546,
+    "line": 1544,
     "decision": "let Some(page) = self.dirty.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48652,7 +48642,7 @@
   {
     "id": "storage_row_pager_read_page_d1cd7f35",
     "file": "src/storage/row/pager.rs",
-    "line": 1549,
+    "line": 1547,
     "decision": "let Some(page) = self.wal_pages.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48662,7 +48652,7 @@
   {
     "id": "storage_row_pager_read_page_dfb3161d",
     "file": "src/storage/row/pager.rs",
-    "line": 1552,
+    "line": 1550,
     "decision": "let Some(cached) = self.page_cache.borrow_mut().get(page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48672,7 +48662,7 @@
   {
     "id": "storage_row_pager_read_page_b3860812",
     "file": "src/storage/row/pager.rs",
-    "line": 1563,
+    "line": 1561,
     "decision": "match victim {\n            Some(mut recycled) => match Rc::get_mut(&mut recycled) {\n                Some(buf) => {\n                    self.source.read_page_into(page_num, buf)?;\n                    recycled\n                }\n                None => self.source.read_page(page_num)?,\n            },\n            None => self.source.read_page(page_num)?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48682,7 +48672,7 @@
   {
     "id": "storage_row_pager_read_page_6c6dd3f8",
     "file": "src/storage/row/pager.rs",
-    "line": 1564,
+    "line": 1562,
     "decision": "match Rc::get_mut(&mut recycled) {\n                Some(buf) => {\n                    self.source.read_page_into(page_num, buf)?;\n                    recycled\n                }\n                None => self.source.read_page(page_num)?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48692,7 +48682,7 @@
   {
     "id": "storage_row_pager_db_with_journal_22a86bc9",
     "file": "src/storage/row/pager.rs",
-    "line": 1613,
+    "line": 1611,
     "decision": "let Some(bytes) = journal_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -48702,7 +48692,7 @@
   {
     "id": "storage_row_pager_hot_journal_open_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1744,
+    "line": 1742,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48712,7 +48702,7 @@
   {
     "id": "storage_row_pager_flush_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1791,
+    "line": 1789,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48722,7 +48712,7 @@
   {
     "id": "storage_row_pager_pager_with_freelist_2fbc1de0",
     "file": "src/storage/row/pager.rs",
-    "line": 2850,
+    "line": 2848,
     "decision": "(2..=4).contains(&trunk)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48750,20 +48740,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_checkpoint_checkpoint_passive_dd1a9c00",
+    "id": "storage_row_pager_checkpoint_checkpoint_passive_cbc1cbbe",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 116,
-    "decision": "wal_bytes.len() < wal::HEADER_LEN",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_row_pager_checkpoint_checkpoint_passive_6b7f20c9",
-    "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 128,
-    "decision": "match WalHeader::parse(&wal_bytes) {\n        Ok(header) => header,\n        // Unusable header: SQLite recovers no frames, so nothing to backfill.\n        Err(source) if source.is_unusable_header() => {\n            return Ok(CheckpointResult {\n                backfilled_frames: 0,\n                total_frames: 0,\n                checkpoint_complete: true,\n            });\n        }\n        Err(source) => return Err(to_pager_error(source)),\n    }",
+    "line": 118,
+    "decision": "match wal::read_header(&wal_file, size) {\n        Ok(header) => header,\n        // Unusable header: SQLite recovers no frames, so nothing to backfill.\n        Err(source) if source.is_unusable_header() => {\n            return Ok(CheckpointResult {\n                backfilled_frames: 0,\n                total_frames: 0,\n                checkpoint_complete: true,\n            });\n        }\n        Err(source) => return Err(to_pager_error(source)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -48772,7 +48752,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_aef700eb",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 131,
+    "line": 121,
     "decision": "source.is_unusable_header()",
     "conditions": 1,
     "vectors_required": 2,
@@ -48782,7 +48762,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_00b3ae94",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 140,
+    "line": 130,
     "decision": "header.page_size != expected_page_size",
     "conditions": 1,
     "vectors_required": 2,
@@ -48792,7 +48772,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_2135ed49",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 154,
+    "line": 137,
     "decision": "total_frames == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48802,7 +48782,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_9b93ee86",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 176,
+    "line": 159,
     "decision": "safe_frame == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48812,7 +48792,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_6ef346cd",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 189,
+    "line": 172,
     "decision": "safe_frame <= already_backfilled",
     "conditions": 1,
     "vectors_required": 2,
@@ -48822,7 +48802,7 @@
   {
     "id": "storage_row_pager_checkpoint_checkpoint_passive_2a432e1c",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 218,
+    "line": 202,
     "decision": "*page_num == 0 || *page_num > max_page",
     "conditions": 2,
     "vectors_required": 3,
@@ -48832,7 +48812,7 @@
   {
     "id": "storage_row_pager_checkpoint_page_size_mismatch_is_an_error_274b6741",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 473,
+    "line": 457,
     "decision": "match err {\n            PagerError::Wal { source, .. } => {\n                assert!(matches!(\n                    source,\n                    wal::WalError::InvalidPageSize { page_size: 512 }\n                ));\n            }\n            other => panic!(\"expected PagerError::Wal, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48882,7 +48862,7 @@
   {
     "id": "storage_row_pager_journal_fmt_b7ff67bd",
     "file": "src/storage/row/pager/journal.rs",
-    "line": 51,
+    "line": 52,
     "decision": "match self {\n            JournalError::HeaderTooShort(got) => write!(\n                f,\n                \"journal header too short: expected at least {JOURNAL_HEADER_LEN} bytes, got {got}\"\n            ),\n            JournalError::RecordTruncated {\n                index,\n                expected,\n                got,\n            } => write!(\n                f,\n                \"journal record {index} truncated: expected {expected} bytes, got {got}\"\n            ),\n            JournalError::Vfs(source) => std::fmt::Display::fmt(source, f),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48892,7 +48872,7 @@
   {
     "id": "storage_row_pager_journal_page_checksum_247b853d",
     "file": "src/storage/row/pager/journal.rs",
-    "line": 156,
+    "line": 157,
     "decision": "idx > 0 && idx < page.len()",
     "conditions": 2,
     "vectors_required": 3,
@@ -48900,9 +48880,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_journal_recover_f6b1dafd",
+    "id": "storage_row_pager_journal_recover_d05c3f0c",
     "file": "src/storage/row/pager/journal.rs",
-    "line": 304,
+    "line": 283,
+    "decision": "let Some(source) = journal_bytes.get(start..start.saturating_add(record.len()))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_journal_recover_file_e0bde5cc",
+    "file": "src/storage/row/pager/journal.rs",
+    "line": 310,
+    "decision": "got == record.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_journal_recover_from_f6b1dafd",
+    "file": "src/storage/row/pager/journal.rs",
+    "line": 371,
     "decision": "page_checksum(header.nonce, page_data) != checksum",
     "conditions": 1,
     "vectors_required": 2,
@@ -48910,9 +48910,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_pager_journal_a_short_read_inside_the_journal_is_an_error_not_a_torn_tail_09813ce9",
+    "file": "src/storage/row/pager/journal.rs",
+    "line": 414,
+    "decision": "match recover_file(&journal, size, &db) {\n            Err(JournalError::RecordTruncated {\n                index: 3, got: 10, ..\n            }) => {}\n            Err(other) => panic!(\"{other}\"),\n            Ok(_) => panic!(\"a short record read as a torn tail\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_pager_journal_mcdc__storage_row_pager_journal_page_checksum_247b853d__v3_idx_never_reaches_len_7464c2a8",
     "file": "src/storage/row/pager/journal.rs",
-    "line": 403,
+    "line": 501,
     "decision": "idx > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48920,20 +48930,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_wal_fmt_a212f38d",
+    "id": "storage_row_pager_wal_fmt_fe9e81f2",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 85,
-    "decision": "match self {\n            WalError::HeaderTooShort { len } => {\n                write!(f, \"WAL header is {len} bytes, need at least {HEADER_LEN}\")\n            }\n            WalError::InvalidMagic { magic } => {\n                write!(\n                    f,\n                    \"invalid WAL magic {magic:#010x} (must be 0x377f0682 or 0x377f0683)\"\n                )\n            }\n            WalError::InvalidPageSize { page_size } => {\n                write!(\n                    f,\n                    \"invalid WAL page size {page_size} (must be a power of two from 512 to 65536)\"\n                )\n            }\n            WalError::HeaderChecksumMismatch { stored, computed } => {\n                write!(\n                    f,\n                    \"WAL header checksum mismatch: stored {stored:?}, computed {computed:?} — corrupt WAL\"\n                )\n            }\n            WalError::Vfs(source) => std::fmt::Display::fmt(source, f),\n        }",
+    "line": 97,
+    "decision": "match self {\n            WalError::HeaderTooShort { len } => {\n                write!(f, \"WAL header is {len} bytes, need at least {HEADER_LEN}\")\n            }\n            WalError::InvalidMagic { magic } => {\n                write!(\n                    f,\n                    \"invalid WAL magic {magic:#010x} (must be 0x377f0682 or 0x377f0683)\"\n                )\n            }\n            WalError::InvalidPageSize { page_size } => {\n                write!(\n                    f,\n                    \"invalid WAL page size {page_size} (must be a power of two from 512 to 65536)\"\n                )\n            }\n            WalError::HeaderChecksumMismatch { stored, computed } => {\n                write!(\n                    f,\n                    \"WAL header checksum mismatch: stored {stored:?}, computed {computed:?} — corrupt WAL\"\n                )\n            }\n            WalError::ShortRead {\n                offset,\n                expected,\n                got,\n            } => write!(\n                f,\n                \"WAL read at byte {offset} got {got} of {expected} bytes: the file ended early\"\n            ),\n            WalError::Vfs(source) => std::fmt::Display::fmt(source, f),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_wal_is_unusable_header_55cad161",
+    "id": "storage_row_pager_wal_is_unusable_header_47d8dd43",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 121,
-    "decision": "match self {\n            WalError::HeaderTooShort { .. }\n            | WalError::InvalidMagic { .. }\n            | WalError::HeaderChecksumMismatch { .. } => true,\n            // A well-formed page size that merely disagrees with the\n            // database's is a real mismatch, not a corrupt header.\n            WalError::InvalidPageSize { page_size } => !valid_page_size(*page_size),\n            WalError::Vfs(_) => false,\n        }",
+    "line": 141,
+    "decision": "match self {\n            WalError::HeaderTooShort { .. }\n            | WalError::InvalidMagic { .. }\n            | WalError::HeaderChecksumMismatch { .. } => true,\n            // A well-formed page size that merely disagrees with the\n            // database's is a real mismatch, not a corrupt header.\n            WalError::InvalidPageSize { page_size } => !valid_page_size(*page_size),\n            WalError::ShortRead { .. } | WalError::Vfs(_) => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -48942,7 +48952,7 @@
   {
     "id": "storage_row_pager_wal_parse_a696ac0c",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 184,
+    "line": 204,
     "decision": "bytes.len() < HEADER_LEN",
     "conditions": 1,
     "vectors_required": 2,
@@ -48952,7 +48962,7 @@
   {
     "id": "storage_row_pager_wal_parse_eef0de50",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 189,
+    "line": 209,
     "decision": "match magic {\n            0x377f_0682 => true,\n            0x377f_0683 => false,\n            _ => return Err(WalError::InvalidMagic { magic }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48962,7 +48972,7 @@
   {
     "id": "storage_row_pager_wal_parse_a5dd5ce3",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 196,
+    "line": 216,
     "decision": "page_size < 512 || !page_size.is_power_of_two() || page_size > 65536",
     "conditions": 3,
     "vectors_required": 4,
@@ -48972,7 +48982,7 @@
   {
     "id": "storage_row_pager_wal_parse_73d411b4",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 209,
+    "line": 229,
     "decision": "computed != stored",
     "conditions": 1,
     "vectors_required": 2,
@@ -48982,7 +48992,7 @@
   {
     "id": "storage_row_pager_wal_serialize_95d2881c",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 259,
+    "line": 279,
     "decision": "self.native_checksum",
     "conditions": 1,
     "vectors_required": 2,
@@ -48992,7 +49002,7 @@
   {
     "id": "storage_row_pager_wal_read_word_e93626e6",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 300,
+    "line": 320,
     "decision": "native_checksum",
     "conditions": 1,
     "vectors_required": 2,
@@ -49000,19 +49010,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_wal_committed_pages_359e3182",
+    "id": "storage_row_pager_wal_committed_pages_51de0630",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 343,
-    "decision": "offset.saturating_add(frame_size) <= wal_bytes.len()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
+    "line": 352,
+    "decision": "match committed_pages_from(header, frames, |index, frame| {\n        slice_frame(wal_bytes, index, frame)\n    }) {\n        Ok(found) => found,\n        Err(never) => match never {},\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_wal_committed_pages_af50effa",
+    "id": "storage_row_pager_wal_committed_pages_66cb4bff",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 363,
+    "line": 356,
+    "decision": "match never {}",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_wal_committed_pages_from_af50effa",
+    "file": "src/storage/row/pager/wal.rs",
+    "line": 398,
     "decision": "salt1 != header.salt1 || salt2 != header.salt2",
     "conditions": 2,
     "vectors_required": 3,
@@ -49020,9 +49040,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_wal_committed_pages_d35973b3",
+    "id": "storage_row_pager_wal_committed_pages_from_d35973b3",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 378,
+    "line": 408,
     "decision": "after_page != stored_checksum",
     "conditions": 1,
     "vectors_required": 2,
@@ -49030,9 +49050,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_wal_committed_pages_f01553cd",
+    "id": "storage_row_pager_wal_committed_pages_from_f01553cd",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 386,
+    "line": 416,
     "decision": "db_size != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -49040,9 +49060,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_wal_committed_pages_9ff553e1",
+    "id": "storage_row_pager_wal_committed_pages_from_9ff553e1",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 398,
+    "line": 426,
     "decision": "match pre_image {\n            Some(content) => {\n                pages.insert(page_number, content);\n            }\n            None => {\n                pages.remove(&page_number);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -49050,10 +49070,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_pager_wal_last_valid_frame_state_359e3182",
+    "id": "storage_row_pager_wal_slice_frame_e5722aaf",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 433,
-    "decision": "offset.saturating_add(frame_size) <= wal_bytes.len()",
+    "line": 466,
+    "decision": "let Some(source) = wal_bytes.get(start..start.saturating_add(frame.len()))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_wal_read_frame_bca67361",
+    "file": "src/storage/row/pager/wal.rs",
+    "line": 482,
+    "decision": "got == frame.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_wal_read_header_7e03e956",
+    "file": "src/storage/row/pager/wal.rs",
+    "line": 502,
+    "decision": "got < want",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -49062,7 +49102,7 @@
   {
     "id": "storage_row_pager_wal_last_valid_frame_state_af50effa",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 445,
+    "line": 551,
     "decision": "salt1 != header.salt1 || salt2 != header.salt2",
     "conditions": 2,
     "vectors_required": 3,
@@ -49072,7 +49112,7 @@
   {
     "id": "storage_row_pager_wal_last_valid_frame_state_d35973b3",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 460,
+    "line": 561,
     "decision": "after_page != stored_checksum",
     "conditions": 1,
     "vectors_required": 2,
@@ -49082,7 +49122,7 @@
   {
     "id": "storage_row_pager_wal_append_frame_3634f444",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 579,
+    "line": 680,
     "decision": "self.pending_offset.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -49092,7 +49132,7 @@
   {
     "id": "storage_row_pager_wal_write_pending_0d10e602",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 598,
+    "line": 699,
     "decision": "let Some(pending_offset) = self.pending_offset.take()",
     "conditions": 1,
     "vectors_required": 2,
@@ -49102,7 +49142,7 @@
   {
     "id": "storage_row_pager_wal_open_existing_7991a291",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 657,
+    "line": 758,
     "decision": "let Some(hint) = resume_hint",
     "conditions": 1,
     "vectors_required": 2,
@@ -49112,7 +49152,7 @@
   {
     "id": "storage_row_pager_wal_open_existing_2d7dcb1a",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 673,
+    "line": 774,
     "decision": "hint.expected_size == size && read_header == Some(hint.header)",
     "conditions": 2,
     "vectors_required": 3,
@@ -49122,11 +49162,31 @@
   {
     "id": "storage_row_pager_wal_open_existing_ac0a9810",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 692,
+    "line": 791,
     "decision": "header.page_size != page_size",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_wal_last_valid_frame_state_d3a4b5e1",
+    "file": "src/storage/row/pager/wal.rs",
+    "line": 1165,
+    "decision": "match super::super::last_valid_frame_state(header, frames, |index, frame| {\n                slice_frame(bytes, index, frame)\n            }) {\n                Ok(state) => state,\n                Err(never) => match never {},\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_pager_wal_last_valid_frame_state_66cb4bff",
+    "file": "src/storage/row/pager/wal.rs",
+    "line": 1169,
+    "decision": "match never {}",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
     "wildcard_risk": false
   },
   {
@@ -50107,6 +50167,26 @@
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_vfs_read_full_059fabf9",
+    "file": "src/storage/row/vfs.rs",
+    "line": 281,
+    "decision": "let Some(rest) = buf.get_mut(filled..).filter(|rest| !rest.is_empty())",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_vfs_read_full_59df551d",
+    "file": "src/storage/row/vfs.rs",
+    "line": 283,
+    "decision": "got == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
     "wildcard_risk": false
   },
   {

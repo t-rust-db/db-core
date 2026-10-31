@@ -76,6 +76,18 @@ pub enum WalError {
         computed: (u32, u32),
     },
 
+    /// The file ended inside a frame that its size said was whole (#875):
+    /// it shrank under the reader, or a read came up short. Not a torn
+    /// tail, which is decided from the size alone.
+    ShortRead {
+        /// Byte offset of the read.
+        offset: u64,
+        /// Bytes asked for.
+        expected: usize,
+        /// Bytes the file gave.
+        got: usize,
+    },
+
     /// A VFS-level I/O error.
     Vfs(VfsError),
 }
@@ -104,6 +116,14 @@ impl std::fmt::Display for WalError {
                     "WAL header checksum mismatch: stored {stored:?}, computed {computed:?} — corrupt WAL"
                 )
             }
+            WalError::ShortRead {
+                offset,
+                expected,
+                got,
+            } => write!(
+                f,
+                "WAL read at byte {offset} got {got} of {expected} bytes: the file ended early"
+            ),
             WalError::Vfs(source) => std::fmt::Display::fmt(source, f),
         }
     }
@@ -125,7 +145,7 @@ impl WalError {
             // A well-formed page size that merely disagrees with the
             // database's is a real mismatch, not a corrupt header.
             WalError::InvalidPageSize { page_size } => !valid_page_size(*page_size),
-            WalError::Vfs(_) => false,
+            WalError::ShortRead { .. } | WalError::Vfs(_) => false,
         }
     }
 }
@@ -328,8 +348,25 @@ fn read_u32_opt(buf: &[u8], offset: usize) -> Option<u32> {
 /// survives. Never panics on any input, including a `wal_bytes` shorter
 /// than one frame (the loop simply doesn't execute).
 pub fn committed_pages(header: &WalHeader, wal_bytes: &[u8]) -> (HashMap<u32, Vec<u8>>, u32) {
-    let frame_size = FRAME_HEADER_LEN.saturating_add(header.page_size as usize);
-    let mut offset = HEADER_LEN;
+    let frames = whole_frames(wal_bytes.len() as u64, header.page_size);
+    match committed_pages_from(header, frames, |index, frame| {
+        slice_frame(wal_bytes, index, frame)
+    }) {
+        Ok(found) => found,
+        Err(never) => match never {},
+    }
+}
+
+/// [`committed_pages`] over `frames` frames that `read_frame(index,
+/// frame)` fills one at a time (#875): a `-wal` file is streamed frame by
+/// frame instead of read whole, so memory is the page map plus one frame.
+/// A read error stops the walk and is returned.
+pub(crate) fn committed_pages_from<E>(
+    header: &WalHeader,
+    frames: usize,
+    mut read_frame: impl FnMut(usize, &mut [u8]) -> Result<(), E>,
+) -> Result<(HashMap<u32, Vec<u8>>, u32), E> {
+    let mut frame = vec![0u8; FRAME_HEADER_LEN.saturating_add(header.page_size as usize)];
     let mut running = header.header_checksum;
     // One live page map plus an undo log of pre-images for every insert
     // since the last commit frame — a commit just clears the log, and the
@@ -340,11 +377,9 @@ pub fn committed_pages(header: &WalHeader, wal_bytes: &[u8]) -> (HashMap<u32, Ve
     let mut undo: Vec<(u32, Option<Vec<u8>>)> = Vec::new();
     let mut committed_db_size = 0u32;
 
-    while offset.saturating_add(frame_size) <= wal_bytes.len() {
-        // A torn/incomplete tail isn't malformed input in the error sense
-        // (see the module doc) — a bounds miss here just stops the scan
-        // (`break`), the same as the salt/checksum mismatch checks below.
-        let Some(fh) = wal_bytes.get(offset..offset.saturating_add(FRAME_HEADER_LEN)) else {
+    for index in 0..frames {
+        read_frame(index, &mut frame)?;
+        let Some((fh, page_content)) = frame.split_at_checked(FRAME_HEADER_LEN) else {
             break;
         };
         let (Some(page_number), Some(db_size), Some(salt1), Some(salt2)) = (
@@ -364,11 +399,6 @@ pub fn committed_pages(header: &WalHeader, wal_bytes: &[u8]) -> (HashMap<u32, Ve
             break;
         }
 
-        let Some(page_content) = wal_bytes
-            .get(offset.saturating_add(FRAME_HEADER_LEN)..offset.saturating_add(frame_size))
-        else {
-            break;
-        };
         let Some(fh_header_bytes) = fh.get(0..8) else {
             break;
         };
@@ -387,8 +417,6 @@ pub fn committed_pages(header: &WalHeader, wal_bytes: &[u8]) -> (HashMap<u32, Ve
             undo.clear();
             committed_db_size = db_size;
         }
-
-        offset = offset.saturating_add(frame_size);
     }
 
     // Unwind the uncommitted tail in reverse so a page written more than
@@ -405,7 +433,80 @@ pub fn committed_pages(header: &WalHeader, wal_bytes: &[u8]) -> (HashMap<u32, Ve
         }
     }
 
-    (pages, committed_db_size)
+    Ok((pages, committed_db_size))
+}
+
+/// Whole frames after the header of a `-wal` file of `size` bytes with
+/// pages of `page_size`: a partial last frame is a torn tail, not counted.
+pub(crate) fn whole_frames(size: u64, page_size: u32) -> usize {
+    let frame_size = (FRAME_HEADER_LEN as u64).saturating_add(u64::from(page_size));
+    let frames = size
+        .saturating_sub(HEADER_LEN as u64)
+        .checked_div(frame_size)
+        .unwrap_or(0);
+    usize::try_from(frames).unwrap_or(usize::MAX)
+}
+
+/// Where frame `index` starts in a `-wal` file whose frames are
+/// `frame_len` bytes.
+fn frame_offset(index: usize, frame_len: usize) -> u64 {
+    (index as u64)
+        .saturating_mul(frame_len as u64)
+        .saturating_add(HEADER_LEN as u64)
+}
+
+/// Frame `index` of an in-memory `-wal` image, copied into `frame`; the
+/// caller counted it with [`whole_frames`], so it is always there.
+fn slice_frame(
+    wal_bytes: &[u8],
+    index: usize,
+    frame: &mut [u8],
+) -> Result<(), std::convert::Infallible> {
+    let start = usize::try_from(frame_offset(index, frame.len())).unwrap_or(usize::MAX);
+    if let Some(source) = wal_bytes.get(start..start.saturating_add(frame.len())) {
+        frame.copy_from_slice(source);
+    }
+    Ok(())
+}
+
+/// Frame `index` of the `-wal` file `file`, read into `frame` (#875). The
+/// caller counted it with [`whole_frames`] from the file's size, so a
+/// short read is [`WalError::ShortRead`], never a torn tail.
+pub(crate) fn read_frame(
+    file: &AnyVfsFile,
+    index: usize,
+    frame: &mut [u8],
+) -> Result<(), WalError> {
+    let offset = frame_offset(index, frame.len());
+    let got = file.read_full(frame, offset)?;
+    if got == frame.len() {
+        Ok(())
+    } else {
+        Err(WalError::ShortRead {
+            offset,
+            expected: frame.len(),
+            got,
+        })
+    }
+}
+
+/// The header of the `-wal` file `file` of `size` bytes, reading only
+/// those bytes (#875) -- never more than [`HEADER_LEN`], whatever the file's
+/// size. A file shorter than a header parses as
+/// [`WalError::HeaderTooShort`], the same as an in-memory image.
+pub(crate) fn read_header(file: &AnyVfsFile, size: u64) -> Result<WalHeader, WalError> {
+    let mut bytes = [0u8; HEADER_LEN];
+    let want = usize::try_from(size).unwrap_or(HEADER_LEN).min(HEADER_LEN);
+    let buf = bytes.get_mut(..want).unwrap_or(&mut []);
+    let got = file.read_full(buf, 0)?;
+    if got < want {
+        return Err(WalError::ShortRead {
+            offset: 0,
+            expected: want,
+            got,
+        });
+    }
+    WalHeader::parse(bytes.get(..want).unwrap_or(&[]))
 }
 
 /// Walks every valid frame in `wal_bytes` (the same validity rules as
@@ -425,13 +526,18 @@ pub fn committed_pages(header: &WalHeader, wal_bytes: &[u8]) -> (HashMap<u32, Ve
 /// coincide for a WAL this crate produced. A genuinely corrupt tail (bad
 /// checksum, foreign salts) still stops the scan, the same as
 /// `committed_pages`.
-fn last_valid_frame_state(header: &WalHeader, wal_bytes: &[u8]) -> (u64, (u32, u32)) {
-    let frame_size = FRAME_HEADER_LEN.saturating_add(header.page_size as usize);
-    let mut offset = HEADER_LEN;
+fn last_valid_frame_state<E>(
+    header: &WalHeader,
+    frames: usize,
+    mut read_frame: impl FnMut(usize, &mut [u8]) -> Result<(), E>,
+) -> Result<(u64, (u32, u32)), E> {
+    let mut frame = vec![0u8; FRAME_HEADER_LEN.saturating_add(header.page_size as usize)];
     let mut running = header.header_checksum;
+    let mut valid = 0usize;
 
-    while offset.saturating_add(frame_size) <= wal_bytes.len() {
-        let Some(fh) = wal_bytes.get(offset..offset.saturating_add(FRAME_HEADER_LEN)) else {
+    for index in 0..frames {
+        read_frame(index, &mut frame)?;
+        let Some((fh, page_content)) = frame.split_at_checked(FRAME_HEADER_LEN) else {
             break;
         };
         let (Some(salt1), Some(salt2)) = (read_u32_opt(fh, 8), read_u32_opt(fh, 12)) else {
@@ -446,11 +552,6 @@ fn last_valid_frame_state(header: &WalHeader, wal_bytes: &[u8]) -> (u64, (u32, u
             break;
         }
 
-        let Some(page_content) = wal_bytes
-            .get(offset.saturating_add(FRAME_HEADER_LEN)..offset.saturating_add(frame_size))
-        else {
-            break;
-        };
         let Some(fh_header_bytes) = fh.get(0..8) else {
             break;
         };
@@ -461,10 +562,10 @@ fn last_valid_frame_state(header: &WalHeader, wal_bytes: &[u8]) -> (u64, (u32, u
             break;
         }
         running = after_page;
-        offset = offset.saturating_add(frame_size);
+        valid = index.saturating_add(1);
     }
 
-    (offset as u64, running)
+    Ok((frame_offset(valid, frame.len()), running))
 }
 
 /// Appends frames to a `-wal` file: writes the header once on
@@ -684,18 +785,19 @@ impl WalWriter {
             }
         }
 
-        let mut bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
-        let n = file.read_at(&mut bytes, 0)?;
-        bytes.truncate(n);
-
-        let header = WalHeader::parse(&bytes)?;
+        // Header first, then one frame at a time (#875): never a buffer
+        // sized from the file's length.
+        let header = read_header(&file, size)?;
         if header.page_size != page_size {
             return Err(WalError::InvalidPageSize {
                 page_size: header.page_size,
             });
         }
 
-        let (offset, running) = last_valid_frame_state(&header, &bytes);
+        let frames = whole_frames(size, header.page_size);
+        let (offset, running) = last_valid_frame_state(&header, frames, |index, frame| {
+            read_frame(&file, index, frame)
+        })?;
 
         Ok(WalWriter {
             file,
@@ -773,6 +875,41 @@ mod tests {
     fn fixture(name: &str) -> Vec<u8> {
         let path = Path::new("tests/fixtures/journalstates").join(name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("read {path:?}: {e}"))
+    }
+
+    /// #875: a 1 TiB `-wal` with a bad magic used to be read whole into a
+    /// buffer sized from its length; only its 32-byte header is read now.
+    #[test]
+    fn a_huge_wal_with_a_bad_header_reads_only_the_header() {
+        use crate::storage::row::vfs::test_files::sized_file;
+        let size = 1u64 << 40;
+        let (file, read) = sized_file(size, size, vec![0xAB; 64]);
+        let err = read_header(&file, size).unwrap_err();
+        assert!(err.is_unusable_header(), "{err}");
+        assert_eq!(read.get(), HEADER_LEN as u64);
+    }
+
+    /// #875: frames stream one at a time; a frame the file's size says is
+    /// whole but that reads short is an error, not a torn tail.
+    #[test]
+    fn a_short_read_inside_the_wal_is_an_error_not_a_torn_tail() {
+        use crate::storage::row::vfs::test_files::sized_file;
+        let header = WalHeader::new(true, 512, 1, 2, 0);
+        let frame = FRAME_HEADER_LEN + 512;
+        let size = (HEADER_LEN + 3 * frame) as u64;
+        // Readable through the first frame only.
+        let readable = (HEADER_LEN + frame) as u64;
+        let (file, read) = sized_file(size, readable, header.serialize().to_vec());
+        assert_eq!(read_header(&file, size).unwrap(), header);
+        assert_eq!(whole_frames(size, header.page_size), 3);
+        let mut buf = vec![0u8; frame];
+        read_frame(&file, 0, &mut buf).unwrap();
+        let err = read_frame(&file, 1, &mut buf).unwrap_err();
+        assert!(matches!(err, WalError::ShortRead { got: 0, .. }), "{err}");
+        // Reads stay a frame at a time.
+        assert_eq!(read.get(), readable);
+        // A partial last frame is a torn tail: not counted at all.
+        assert_eq!(whole_frames(size + 100, 512), 3);
     }
 
     #[test]
@@ -1021,6 +1158,17 @@ mod tests {
         //! follow-up).
 
         use super::*;
+
+        /// [`super::super::last_valid_frame_state`] over an in-memory image.
+        fn last_valid_frame_state(header: &WalHeader, bytes: &[u8]) -> (u64, (u32, u32)) {
+            let frames = whole_frames(bytes.len() as u64, header.page_size);
+            match super::super::last_valid_frame_state(header, frames, |index, frame| {
+                slice_frame(bytes, index, frame)
+            }) {
+                Ok(state) => state,
+                Err(never) => match never {},
+            }
+        }
         use crate::storage::row::vfs::{AnyVfs, MemoryVfs};
 
         // storage_row_pager_wal_parse_a5dd5ce3: `page_size < 512 || !page_size.is_power_of_two() || page_size > 65536`
@@ -1076,7 +1224,8 @@ mod tests {
         // storage_row_pager_wal_committed_pages_af50effa (committed_pages) / storage_row_pager_wal_last_valid_frame_state_af50effa (last_valid_frame_state):
         // `salt1 != header.salt1 || salt2 != header.salt2`
         #[test]
-        fn mcdc__storage_row_pager_wal_committed_pages_af50effa__v1_both_false_frame_is_valid() {
+        fn mcdc__storage_row_pager_wal_committed_pages_from_af50effa__v1_both_false_frame_is_valid()
+        {
             let (header, bytes) = wal_with_one_frame(0xAAAA, 0xBBBB);
             let (pages, db_size) = committed_pages(&header, &bytes);
             assert_eq!(db_size, 1);
@@ -1084,8 +1233,8 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__storage_row_pager_wal_committed_pages_af50effa__v2_salt1_mismatch_stops_the_scan()
-        {
+        fn mcdc__storage_row_pager_wal_committed_pages_from_af50effa__v2_salt1_mismatch_stops_the_scan(
+        ) {
             let (mut header, bytes) = wal_with_one_frame(0xAAAA, 0xBBBB);
             header.salt1 ^= 1; // frame bytes still carry the original salt1
             let (pages, db_size) = committed_pages(&header, &bytes);
@@ -1094,8 +1243,8 @@ mod tests {
         }
 
         #[test]
-        fn mcdc__storage_row_pager_wal_committed_pages_af50effa__v3_salt2_mismatch_stops_the_scan()
-        {
+        fn mcdc__storage_row_pager_wal_committed_pages_from_af50effa__v3_salt2_mismatch_stops_the_scan(
+        ) {
             let (mut header, bytes) = wal_with_one_frame(0xAAAA, 0xBBBB);
             header.salt2 ^= 1;
             let (pages, db_size) = committed_pages(&header, &bytes);

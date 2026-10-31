@@ -274,6 +274,20 @@ impl AnyVfsFile {
         self.0.size()
     }
 
+    /// Fills `buf` from `offset`, looping over short reads (#875); returns
+    /// how many bytes it got, fewer than `buf.len()` only at end of file.
+    pub(crate) fn read_full(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+        let mut filled = 0usize;
+        while let Some(rest) = buf.get_mut(filled..).filter(|rest| !rest.is_empty()) {
+            let got = self.read_at(rest, offset.saturating_add(filled as u64))?;
+            if got == 0 {
+                break;
+            }
+            filled = filled.saturating_add(got);
+        }
+        Ok(filled)
+    }
+
     /// Writes `buf` at `offset` — see [`VfsFile::write_at`].
     pub fn write_at(&self, buf: &[u8], offset: u64) -> Result<()> {
         self.0.write_at(buf, offset)
@@ -653,5 +667,69 @@ mod tests {
         run_contract(UnixVfs, &present, &absent, &contents);
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// A file for recovery tests (#875) that claims `size` bytes but holds
+/// only `head` followed by `readable - head.len()` zero bytes -- a sparse
+/// multi-GiB `-wal` or journal, or one whose reads stop early -- and
+/// counts the bytes callers read from it.
+#[cfg(test)]
+pub(crate) mod test_files {
+    use super::{AnyVfsFile, FileLock, Result, VfsError, VfsFile};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct SizedFile {
+        size: u64,
+        readable: u64,
+        head: Vec<u8>,
+        read: Rc<Cell<u64>>,
+    }
+
+    impl VfsFile for SizedFile {
+        fn read_at(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
+            let end = self.readable.min(offset.saturating_add(buf.len() as u64));
+            let n = usize::try_from(end.saturating_sub(offset)).unwrap();
+            for (i, byte) in buf.iter_mut().take(n).enumerate() {
+                let at = usize::try_from(offset).unwrap().saturating_add(i);
+                *byte = self.head.get(at).copied().unwrap_or(0);
+            }
+            self.read.set(self.read.get().saturating_add(n as u64));
+            Ok(n)
+        }
+        fn size(&self) -> Result<u64> {
+            Ok(self.size)
+        }
+        fn lock_shared(&self) -> Result<FileLock> {
+            Err(VfsError::Locked {
+                path: "sized".into(),
+            })
+        }
+        fn write_at(&self, _: &[u8], _: u64) -> Result<()> {
+            Ok(())
+        }
+        fn truncate(&self, _: u64) -> Result<()> {
+            Ok(())
+        }
+        fn sync(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The file, and the running count of bytes read from it.
+    pub(crate) fn sized_file(
+        size: u64,
+        readable: u64,
+        head: Vec<u8>,
+    ) -> (AnyVfsFile, Rc<Cell<u64>>) {
+        let read = Rc::new(Cell::new(0));
+        let file = SizedFile {
+            size,
+            readable,
+            head,
+            read: Rc::clone(&read),
+        };
+        (AnyVfsFile::from(Box::new(file) as Box<dyn VfsFile>), read)
     }
 }

@@ -1458,15 +1458,13 @@ fn recover_hot_journal<V: Vfs>(
     db_file: &AnyVfsFile,
     journal_path: &Path,
 ) -> Result<(), PagerError> {
-    let journal_file = vfs.open_read(journal_path)?;
+    let journal_file = AnyVfsFile::from(vfs.open_read(journal_path)?);
     let size = journal_file.size()?;
-    // A file larger than the address space cannot be read into memory;
-    // start empty and let the short read fail the header checks below.
-    let mut journal_bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
-    let n = journal_file.read_at(&mut journal_bytes, 0)?;
-    journal_bytes.truncate(n);
-
-    let recovered = journal::recover(&journal_bytes, db_file).map_err(journal_to_pager_error)?;
+    // Header, then one record at a time (#875): a whole-file read sized
+    // from the length cost memory in proportion to the file, and one
+    // short read past ~2 GiB played back half a journal and deleted it.
+    let recovered =
+        journal::recover_file(&journal_file, size, db_file).map_err(journal_to_pager_error)?;
     db_file.truncate(
         (recovered.initial_page_count as u64).saturating_mul(recovered.page_size as u64),
     )?;
@@ -1503,16 +1501,9 @@ fn read_wal_pages<V: Vfs>(
         return Ok(HashMap::new());
     }
 
-    let wal_file = vfs.open_read(&wal_path)?;
+    let wal_file = AnyVfsFile::from(vfs.open_read(&wal_path)?);
     let size = wal_file.size()?;
     if size < wal::HEADER_LEN as u64 {
-        return Ok(HashMap::new());
-    }
-
-    let mut bytes = vec![0u8; usize::try_from(size).unwrap_or(0)];
-    let n = wal_file.read_at(&mut bytes, 0)?;
-    bytes.truncate(n);
-    if bytes.len() < wal::HEADER_LEN {
         return Ok(HashMap::new());
     }
 
@@ -1521,9 +1512,12 @@ fn read_wal_pages<V: Vfs>(
         source,
     };
 
+    // The header first, then one frame at a time (#875): a buffer sized
+    // from an unvalidated length let a sparse multi-GiB `-wal` with a bad
+    // magic cost gigabytes, and a single short read read as a torn tail.
     // An unusable header means no recoverable frames (SQLite's
     // `walIndexRecover`): the database file alone is the truth.
-    let header = match wal::WalHeader::parse(&bytes) {
+    let header = match wal::read_header(&wal_file, size) {
         Ok(header) => header,
         Err(source) if source.is_unusable_header() => return Ok(HashMap::new()),
         Err(source) => return Err(to_pager_error(source)),
@@ -1534,7 +1528,11 @@ fn read_wal_pages<V: Vfs>(
         }));
     }
 
-    let (pages, _committed_db_size) = wal::committed_pages(&header, &bytes);
+    let frames = wal::whole_frames(size, header.page_size);
+    let (pages, _committed_db_size) = wal::committed_pages_from(&header, frames, |index, frame| {
+        wal::read_frame(&wal_file, index, frame)
+    })
+    .map_err(to_pager_error)?;
     Ok(pages
         .into_iter()
         .map(|(page_num, content)| (page_num, Rc::from(content)))

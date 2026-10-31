@@ -6316,6 +6316,10 @@ pub db_core::storage::row::pager::wal::WalError::InvalidMagic
 pub db_core::storage::row::pager::wal::WalError::InvalidMagic::magic: u32
 pub db_core::storage::row::pager::wal::WalError::InvalidPageSize
 pub db_core::storage::row::pager::wal::WalError::InvalidPageSize::page_size: u32
+pub db_core::storage::row::pager::wal::WalError::ShortRead
+pub db_core::storage::row::pager::wal::WalError::ShortRead::expected: usize
+pub db_core::storage::row::pager::wal::WalError::ShortRead::got: usize
+pub db_core::storage::row::pager::wal::WalError::ShortRead::offset: u64
 pub db_core::storage::row::pager::wal::WalError::Vfs(db_core::storage::row::vfs::VfsError)
 impl db_core::storage::row::pager::wal::WalError
 pub fn db_core::storage::row::pager::wal::WalError::is_unusable_header(&self) -> bool

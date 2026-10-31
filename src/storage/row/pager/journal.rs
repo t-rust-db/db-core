@@ -32,7 +32,8 @@ pub enum JournalError {
     /// The buffer was shorter than [`JOURNAL_HEADER_LEN`].
     HeaderTooShort(usize),
 
-    /// A page record ran past the end of the available journal bytes.
+    /// A record the journal's size says is whole read short (#875): the
+    /// file shrank under recovery, or a read came up short.
     RecordTruncated {
         /// Zero-based index of the truncated record.
         index: u32,
@@ -276,14 +277,80 @@ pub fn recover(
     db_file: &AnyVfsFile,
 ) -> Result<RecoveredJournal, JournalError> {
     let header = JournalHeader::parse(journal_bytes)?;
-    let record_len = record_len(header.page_size);
-    let region_start = header.sector_size as usize;
+    let records = whole_records(journal_bytes.len() as u64, &header);
+    recover_from(&header, records, db_file, |index, record| {
+        let start = usize::try_from(record_offset(&header, index)).unwrap_or(usize::MAX);
+        if let Some(source) = journal_bytes.get(start..start.saturating_add(record.len())) {
+            record.copy_from_slice(source);
+        }
+        Ok(())
+    })
+}
 
-    for index in 0..header.n_rec {
-        let offset = region_start.saturating_add((index as usize).saturating_mul(record_len));
-        let Some(record) = journal_bytes.get(offset..offset.saturating_add(record_len)) else {
-            break;
-        };
+/// [`recover`] reading the journal file `journal` of `size` bytes: its
+/// header, then one record at a time (#875), never a buffer sized from the
+/// file. A record its size says is whole but that reads short is
+/// [`JournalError::RecordTruncated`]; only a partial last record is the
+/// torn tail [`recover`] stops at.
+pub(crate) fn recover_file(
+    journal: &AnyVfsFile,
+    size: u64,
+    db_file: &AnyVfsFile,
+) -> Result<RecoveredJournal, JournalError> {
+    let mut head = [0u8; JOURNAL_HEADER_LEN];
+    let want = usize::try_from(size)
+        .unwrap_or(JOURNAL_HEADER_LEN)
+        .min(JOURNAL_HEADER_LEN);
+    let buf = head.get_mut(..want).unwrap_or(&mut []);
+    let got = journal.read_full(buf, 0)?;
+    let header = JournalHeader::parse(head.get(..got).unwrap_or(&[]))?;
+    let records = whole_records(size, &header);
+    recover_from(&header, records, db_file, |index, record| {
+        let got = journal.read_full(record, record_offset(&header, index))?;
+        if got == record.len() {
+            Ok(())
+        } else {
+            Err(JournalError::RecordTruncated {
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                expected: record.len(),
+                got,
+            })
+        }
+    })
+}
+
+/// How many whole records follow the header region of a journal of `size`
+/// bytes: a partial last one is a torn tail.
+fn whole_records(size: u64, header: &JournalHeader) -> usize {
+    let records = size
+        .saturating_sub(u64::from(header.sector_size))
+        .checked_div(record_len(header.page_size) as u64)
+        .unwrap_or(0);
+    usize::try_from(records).unwrap_or(usize::MAX)
+}
+
+/// Where record `index` starts: after the header's sector.
+fn record_offset(header: &JournalHeader, index: usize) -> u64 {
+    (index as u64)
+        .saturating_mul(record_len(header.page_size) as u64)
+        .saturating_add(u64::from(header.sector_size))
+}
+
+/// Plays back the first `n_rec` of `records` whole records, which
+/// `read_record(index, record)` fills one at a time.
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "all offset arithmetic is saturating_add/saturating_mul/saturating_sub"
+)]
+fn recover_from(
+    header: &JournalHeader,
+    records: usize,
+    db_file: &AnyVfsFile,
+    mut read_record: impl FnMut(usize, &mut [u8]) -> Result<(), JournalError>,
+) -> Result<RecoveredJournal, JournalError> {
+    let mut record = vec![0u8; record_len(header.page_size)];
+    for index in 0..records.min(header.n_rec as usize) {
+        read_record(index, &mut record)?;
         let Some(page_num_bytes) = record.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()) else {
             break;
         };
@@ -323,6 +390,37 @@ mod tests {
     use super::*;
 
     const MAGIC: [u8; 8] = [0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7];
+
+    /// #875: a hot journal is read header first and then one record at a
+    /// time; a record its size says is whole but that reads short is an
+    /// error, so a journal past one `pread`'s reach is never half played
+    /// back (and then deleted) as if its tail were torn.
+    #[test]
+    fn a_short_read_inside_the_journal_is_an_error_not_a_torn_tail() {
+        use crate::storage::row::vfs::test_files::sized_file;
+        // With a zero nonce an all-zero record checksums: records 0..3 play
+        // back, and record 3 is cut short 10 bytes in.
+        let header = JournalHeader {
+            n_rec: 1_000_000,
+            nonce: 0,
+            initial_page_count: 1,
+            sector_size: 512,
+            page_size: 512,
+        };
+        let size = 1u64 << 40;
+        let readable = 512 + 3 * record_len(512) as u64 + 10;
+        let (journal, read) = sized_file(size, readable, header.serialize(MAGIC).to_vec());
+        let (db, _) = sized_file(0, 0, Vec::new());
+        match recover_file(&journal, size, &db) {
+            Err(JournalError::RecordTruncated {
+                index: 3, got: 10, ..
+            }) => {}
+            Err(other) => panic!("{other}"),
+            Ok(_) => panic!("a short record read as a torn tail"),
+        }
+        // A 1 TiB journal cost what was there to read, a record at a time.
+        assert_eq!(read.get(), readable - 512 + JOURNAL_HEADER_LEN as u64);
+    }
 
     #[test]
     fn header_roundtrips() {
