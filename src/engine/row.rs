@@ -47,6 +47,37 @@ use adapter::{BtreeSchemaStorage, PagerTransaction, StorageFactory};
 
 type Catalog = (Vec<TableSchema>, Vec<ViewSchema>);
 
+/// Journal mode of a database file made by [`RowEngine::create`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateJournal {
+    /// Write-ahead log: what `PRAGMA journal_mode=WAL` leaves in the header.
+    Wal,
+    /// Rollback journal, deleted on commit (SQLite's default).
+    Delete,
+}
+
+/// How [`RowEngine::create`] lays out a new database file (#915).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreateOptions {
+    /// Bytes per page: a power of two from 512 to 65536.
+    pub page_size: u32,
+    /// Journal mode written into the header.
+    pub journal: CreateJournal,
+    /// Bytes reserved at the end of every page (header byte 20), below
+    /// `page_size`.
+    pub reserved_bytes: u8,
+}
+
+impl Default for CreateOptions {
+    fn default() -> Self {
+        CreateOptions {
+            page_size: crate::storage::row::header::DEFAULT_PAGE_SIZE,
+            journal: CreateJournal::Delete,
+            reserved_bytes: 0,
+        }
+    }
+}
+
 /// One open SQLite-format file.
 pub struct RowEngine {
     path: PathBuf,
@@ -74,6 +105,85 @@ impl std::fmt::Debug for RowEngine {
 }
 
 impl RowEngine {
+    /// Creates the database file `path` and opens it (#915): an empty
+    /// schema in the layout `options` asks for, then `schema` -- zero or
+    /// more `;`-separated statements, typically `CREATE TABLE`/`CREATE
+    /// INDEX` -- run against it. Fails with [`ErrorKind::Open`], leaving
+    /// the file untouched, when `path` already exists or `options` is not
+    /// a valid layout. When `schema` fails the new file is removed again.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Open`] for an existing file, invalid options or an
+    /// I/O failure; the error of the first `schema` statement that fails.
+    pub fn create(path: &Path, options: CreateOptions, schema: &str) -> Result<Self, EngineError> {
+        let page_size = options.page_size;
+        if !page_size.is_power_of_two() || !(512..=65536).contains(&page_size) {
+            return Err(EngineError::new(
+                ErrorKind::Open,
+                format!("page size {page_size} is not a power of two from 512 to 65536"),
+            ));
+        }
+        if u32::from(options.reserved_bytes) >= page_size {
+            return Err(EngineError::new(
+                ErrorKind::Open,
+                format!(
+                    "{} reserved bytes leave no usable bytes in a {page_size}-byte page",
+                    options.reserved_bytes
+                ),
+            ));
+        }
+        let mut page1 = DatabaseHeader::new_empty_page1(page_size);
+        if let Some(byte) = page1.get_mut(20) {
+            *byte = options.reserved_bytes;
+        }
+        if options.reserved_bytes > 0 {
+            // The empty schema leaf's cell content area ends where the
+            // reserved tail starts, not at the end of the page.
+            let content_start =
+                u16::try_from(page_size.saturating_sub(u32::from(options.reserved_bytes)))
+                    .unwrap_or(0);
+            for (slot, byte) in page1
+                .get_mut(HEADER_LEN + 5..HEADER_LEN + 7)
+                .into_iter()
+                .flatten()
+                .zip(content_start.to_be_bytes())
+            {
+                *slot = byte;
+            }
+        }
+        if options.journal == CreateJournal::Wal {
+            for byte in page1.get_mut(18..20).into_iter().flatten() {
+                *byte = 2;
+            }
+        }
+        // `create_new` fails on an existing file without touching it.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())))?;
+        let written = std::io::Write::write_all(&mut file, &page1)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())));
+        drop(file);
+        let engine = written
+            .and_then(|()| <Self as Engine>::open(path))
+            .and_then(|mut engine| {
+                if schema.trim().is_empty() {
+                    return Ok(engine);
+                }
+                engine.run_query(schema)?;
+                Ok(engine)
+            });
+        if engine.is_err() {
+            std::fs::remove_file(path).ok();
+            for suffix in ["-wal", "-shm", "-journal"] {
+                std::fs::remove_file(format!("{}{suffix}", path.display())).ok();
+            }
+        }
+        engine
+    }
+
     /// The 100-byte header as read at open time. Not refreshed after
     /// writes; `stats()` reports it as-is.
     #[must_use]
@@ -449,5 +559,48 @@ impl Engine for RowEngine {
                     .collect(),
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case, clippy::unwrap_used, clippy::unwrap_in_result)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`).
+
+    use super::{CreateOptions, RowEngine};
+
+    fn create_with_page_size(page_size: u32) -> Result<RowEngine, super::EngineError> {
+        let path = std::env::temp_dir().join(format!(
+            "db-core-create-mcdc-{}-{page_size}.db",
+            std::process::id()
+        ));
+        std::fs::remove_file(&path).ok();
+        let result = RowEngine::create(
+            &path,
+            CreateOptions {
+                page_size,
+                ..CreateOptions::default()
+            },
+            "",
+        );
+        std::fs::remove_file(&path).ok();
+        result
+    }
+
+    #[test]
+    fn mcdc__engine_row_create_4b191083__v1_a_power_of_two_in_range_is_a_valid_page_size() {
+        assert!(create_with_page_size(2048).is_ok());
+    }
+
+    #[test]
+    fn mcdc__engine_row_create_4b191083__v2_a_size_that_is_not_a_power_of_two_is_refused() {
+        assert!(create_with_page_size(1000).is_err());
+    }
+
+    #[test]
+    fn mcdc__engine_row_create_4b191083__v3_a_power_of_two_outside_the_range_is_refused() {
+        assert!(create_with_page_size(256).is_err());
     }
 }

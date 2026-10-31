@@ -18770,9 +18770,79 @@
     "wildcard_risk": true
   },
   {
+    "id": "engine_row_create_4b191083",
+    "file": "src/engine/row.rs",
+    "line": 120,
+    "decision": "!page_size.is_power_of_two() || !(512..=65536).contains(&page_size)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_create_ee35225f",
+    "file": "src/engine/row.rs",
+    "line": 126,
+    "decision": "u32::from(options.reserved_bytes) >= page_size",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_create_cc703ada",
+    "file": "src/engine/row.rs",
+    "line": 136,
+    "decision": "let Some(byte) = page1.get_mut(20)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_create_377476c5",
+    "file": "src/engine/row.rs",
+    "line": 139,
+    "decision": "options.reserved_bytes > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_create_8e5845cc",
+    "file": "src/engine/row.rs",
+    "line": 154,
+    "decision": "options.journal == CreateJournal::Wal",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_create_fa4d4738",
+    "file": "src/engine/row.rs",
+    "line": 172,
+    "decision": "schema.trim().is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_create_9263c9b4",
+    "file": "src/engine/row.rs",
+    "line": 178,
+    "decision": "engine.is_err()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_row_catalog_f1d1388c",
     "file": "src/engine/row.rs",
-    "line": 91,
+    "line": 201,
     "decision": "let Some(c) = self.catalog.borrow().as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -18782,7 +18852,7 @@
   {
     "id": "engine_row_parse_select_or_err_e98b601d",
     "file": "src/engine/row.rs",
-    "line": 110,
+    "line": 220,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => Ok(*select),\n            ParseOutcome::Unsupported { message, span } => Err(EngineError::new(\n                ErrorKind::Unsupported,\n                format!(\n                    \"not yet supported (line {}, column {}): {message}\",\n                    span.line, span.column\n                ),\n            )),\n            ParseOutcome::Invalid { message, span } => Err(EngineError::new(\n                ErrorKind::Parse,\n                format!(\n                    \"syntax error (line {}, column {}): {message}\",\n                    span.line, span.column\n                ),\n            )),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18792,7 +18862,7 @@
   {
     "id": "engine_row_is_select_944c091e",
     "file": "src/engine/row.rs",
-    "line": 133,
+    "line": 243,
     "decision": "match leading_keywords(stmt).first().map(String::as_str) {\n            Some(\"SELECT\") => true,\n            Some(\"WITH\") => matches!(parse_select(stmt), ParseOutcome::Accepted(_)),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18802,7 +18872,7 @@
   {
     "id": "engine_row_run_statement_53d0261b",
     "file": "src/engine/row.rs",
-    "line": 227,
+    "line": 337,
     "decision": "match execute(&mut vm, program) {\n            Ok(rows) => rows,\n            Err(e) => {\n                // A failed statement outside a transaction is undone as a\n                // whole: rows it wrote before the error must not be flushed\n                // by the next statement.\n                if vm.autocommit() {\n                    self.pager.borrow_mut().rollback().map_err(|r| {\n                        EngineError::new(\n                            ErrorKind::Execute,\n                            format!(\"{e}; rollback of the failed statement also failed: {r}\"),\n                        )\n                    })?;\n                }\n                return Err(EngineError::new(ErrorKind::Execute, e));\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18812,7 +18882,7 @@
   {
     "id": "engine_row_run_statement_e2cf0641",
     "file": "src/engine/row.rs",
-    "line": 233,
+    "line": 343,
     "decision": "vm.autocommit()",
     "conditions": 1,
     "vectors_required": 2,
@@ -18822,7 +18892,7 @@
   {
     "id": "engine_row_run_statement_e2cf0641_2",
     "file": "src/engine/row.rs",
-    "line": 244,
+    "line": 354,
     "decision": "vm.autocommit()",
     "conditions": 1,
     "vectors_required": 2,
@@ -18832,7 +18902,7 @@
   {
     "id": "engine_row_table_row_count_b5334247",
     "file": "src/engine/row.rs",
-    "line": 296,
+    "line": 406,
     "decision": "let Some(rows) = analyzed",
     "conditions": 1,
     "vectors_required": 2,
@@ -18842,7 +18912,7 @@
   {
     "id": "engine_row_table_row_count_533cb657",
     "file": "src/engine/row.rs",
-    "line": 301,
+    "line": 411,
     "decision": "match self\n            .run_select(&select, &sql, &catalog)?\n            .rows\n            .first()\n            .and_then(|r| r.first())\n        {\n            Some(Cell::Int(n)) => Ok(*n),\n            other => Err(EngineError::new(\n                ErrorKind::Execute,\n                format!(\"COUNT(*) over `{table}` returned {other:?}, not an integer\"),\n            )),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18852,7 +18922,7 @@
   {
     "id": "engine_row_compile_one_59c7b064",
     "file": "src/engine/row.rs",
-    "line": 326,
+    "line": 436,
     "decision": "Self::is_select(stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18862,7 +18932,7 @@
   {
     "id": "engine_row_run_query_bb8ec835",
     "file": "src/engine/row.rs",
-    "line": 369,
+    "line": 479,
     "decision": "Self::is_select(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18872,7 +18942,7 @@
   {
     "id": "engine_row_run_query_eb834927",
     "file": "src/engine/row.rs",
-    "line": 376,
+    "line": 486,
     "decision": "Self::is_schema_changing(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18882,7 +18952,7 @@
   {
     "id": "engine_row_run_query_73f69e09",
     "file": "src/engine/row.rs",
-    "line": 379,
+    "line": 489,
     "decision": "!result.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -18892,7 +18962,7 @@
   {
     "id": "engine_row_explain_plan_88ef8800",
     "file": "src/engine/row.rs",
-    "line": 388,
+    "line": 498,
     "decision": "!Self::is_select(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
