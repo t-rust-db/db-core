@@ -299,6 +299,9 @@ pub enum TableRefKind {
 pub struct TableRef {
     /// The table itself: a catalog name or a materialized subquery.
     pub kind: TableRefKind,
+    /// The `schema.` a table name is qualified with (#924), if given:
+    /// which attached SQLite file of a cross-mode engine reads it.
+    pub schema: Option<String>,
     /// The `AS alias`, if given.
     pub alias: Option<String>,
     /// The source span covering this entry.

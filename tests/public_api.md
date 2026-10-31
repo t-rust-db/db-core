@@ -763,28 +763,24 @@ pub fn db_core::engine::resolve::ColumnTable::fmt(&self, &mut core::fmt::Formatt
 pub enum db_core::engine::resolve::CrossModeEngine
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::driving: db_core::engine::column::BatchEngine
-pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::lookup: db_core::engine::row::RowEngine
-pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::lookup_path: std::path::PathBuf
+pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::lookups: alloc::vec::Vec<db_core::engine::resolve::SqliteFile>
 pub db_core::engine::resolve::CrossModeEngine::ColumnSqlite::others: alloc::vec::Vec<db_core::engine::column::BatchEngine>
 pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite
 pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::driving: db_core::engine::resolve::ColumnTable
-pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::lookup: db_core::engine::row::RowEngine
-pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::lookup_path: std::path::PathBuf
+pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::lookups: alloc::vec::Vec<db_core::engine::resolve::SqliteFile>
 pub db_core::engine::resolve::CrossModeEngine::ColumnTablesSqlite::others: alloc::vec::Vec<db_core::engine::resolve::ColumnTable>
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite
 pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::driving: db_core::engine::stream::StreamEngine
-pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookup: db_core::engine::row::RowEngine
-pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookup_path: std::path::PathBuf
+pub db_core::engine::resolve::CrossModeEngine::StreamSqlite::lookups: alloc::vec::Vec<db_core::engine::resolve::SqliteFile>
 pub db_core::engine::resolve::CrossModeEngine::StreamStream
 pub db_core::engine::resolve::CrossModeEngine::StreamStream::left: db_core::engine::stream::StreamEngine
-pub db_core::engine::resolve::CrossModeEngine::StreamStream::right: db_core::engine::stream::StreamEngine
+pub db_core::engine::resolve::CrossModeEngine::StreamStream::right: alloc::boxed::Box<db_core::engine::stream::StreamEngine>
 pub db_core::engine::resolve::CrossModeEngine::TableSqlite
 pub db_core::engine::resolve::CrossModeEngine::TableSqlite::driving: alloc::boxed::Box<db_core::engine::column::table::TableEngine>
-pub db_core::engine::resolve::CrossModeEngine::TableSqlite::lookup: db_core::engine::row::RowEngine
-pub db_core::engine::resolve::CrossModeEngine::TableSqlite::lookup_path: std::path::PathBuf
+pub db_core::engine::resolve::CrossModeEngine::TableSqlite::lookups: alloc::vec::Vec<db_core::engine::resolve::SqliteFile>
 impl db_core::engine::resolve::CrossModeEngine
 pub fn db_core::engine::resolve::CrossModeEngine::open_column_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
-pub fn db_core::engine::resolve::CrossModeEngine::open_column_tables_sqlite(&[&std::path::Path], &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+pub fn db_core::engine::resolve::CrossModeEngine::open_column_tables_sqlite(&[&std::path::Path], &[(&str, &std::path::Path)]) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::open_stream_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::open_stream_stream(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::open_table_sqlite(&std::path::Path, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
@@ -799,6 +795,14 @@ pub fn db_core::engine::resolve::CrossModeEngine::open(&std::path::Path) -> core
 pub fn db_core::engine::resolve::CrossModeEngine::run_query(&mut self, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::CrossModeEngine::stats(&self) -> db_core::engine::FileStats
 pub fn db_core::engine::resolve::CrossModeEngine::tables(&self) -> core::result::Result<alloc::vec::Vec<db_core::engine::TableInfo>, db_core::engine::EngineError>
+pub struct db_core::engine::resolve::SqliteFile
+pub db_core::engine::resolve::SqliteFile::engine: db_core::engine::row::RowEngine
+pub db_core::engine::resolve::SqliteFile::name: alloc::string::String
+pub db_core::engine::resolve::SqliteFile::path: std::path::PathBuf
+impl db_core::engine::resolve::SqliteFile
+pub fn db_core::engine::resolve::SqliteFile::open(&str, &std::path::Path) -> core::result::Result<Self, db_core::engine::EngineError>
+impl core::fmt::Debug for db_core::engine::resolve::SqliteFile
+pub fn db_core::engine::resolve::SqliteFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::engine::resolve::explain_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::row::RowEngine, &std::path::Path, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::explain_stream_stream_plan(&db_core::engine::stream::StreamEngine, &db_core::engine::stream::StreamEngine, &str) -> core::result::Result<alloc::vec::Vec<db_core::engine::PlanRow>, db_core::engine::EngineError>
 pub fn db_core::engine::resolve::run_column_query(&db_core::engine::column::BatchEngine, &db_core::engine::row::RowEngine, &str) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
@@ -2141,6 +2145,7 @@ pub fn db_core::parser::ast::Select::expand_views(&self, &[db_core::codegen::row
 pub struct db_core::parser::ast::TableRef
 pub db_core::parser::ast::TableRef::alias: core::option::Option<alloc::string::String>
 pub db_core::parser::ast::TableRef::kind: db_core::parser::ast::TableRefKind
+pub db_core::parser::ast::TableRef::schema: core::option::Option<alloc::string::String>
 pub db_core::parser::ast::TableRef::span: db_core::parser::Span
 impl db_core::parser::ast::TableRef
 pub fn db_core::parser::ast::TableRef::name(&self) -> core::option::Option<&str>

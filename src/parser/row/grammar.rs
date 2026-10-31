@@ -1967,13 +1967,21 @@ impl Parser {
                 .map_or(start, |t| t.span);
             return Ok(TableRef {
                 kind: TableRefKind::Subquery(Box::new(subquery)),
+                schema: None,
                 alias,
                 span: join_span(start, end),
             });
         }
-        let (name, start) = self.identifier()?;
+        let (mut name, start) = self.identifier()?;
+        let mut schema = None;
         if matches!(self.peek().kind, TokenKind::Dot) {
-            return self.unsupported("schema-qualified table names not yet supported");
+            // The column dialect names a cross-mode engine's SQLite file
+            // this way (#924); the row dialect has no ATTACH yet.
+            if !self.column {
+                return self.unsupported("schema-qualified table names not yet supported");
+            }
+            self.advance();
+            schema = Some(std::mem::replace(&mut name, self.identifier()?.0));
         }
         let alias = self.opt_alias()?;
         let end = alias.is_some();
@@ -2005,6 +2013,7 @@ impl Parser {
 
         Ok(TableRef {
             kind: TableRefKind::Name(name),
+            schema,
             alias,
             span,
         })
@@ -2039,6 +2048,7 @@ impl Parser {
                 expr: Box::new(expr),
                 column,
             },
+            schema: None,
             alias,
             span: join_span(start, end),
         })

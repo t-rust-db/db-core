@@ -53,6 +53,13 @@
 //! on a built table prunes the probe's row groups through the same key set
 //! a SQLite lookup filter does (`prune`).
 //!
+//! #924 lets the SQLite side span several files ([`SqliteFile`]):
+//! [`bind_sqlite_tables`] binds each SQLite table a query names to its
+//! file before planning -- bare when one file has the table, `name.table`
+//! otherwise -- and strips the qualifier, so the planner still sees one
+//! bare name per table. Each table then builds from, and `EXPLAIN` labels
+//! it with, its own file.
+//!
 //! [`run_stream_stream_query`]/[`explain_stream_stream_plan`] (ADR-0022,
 //! #372) join two stream sources instead: both are the same table `log`,
 //! so the query is a self-join and must alias both sides
@@ -125,6 +132,199 @@ fn parse(sql: &str) -> Result<Select, EngineError> {
     Ok(select)
 }
 
+/// A SQLite file of a cross-mode engine (#924): a query names its tables
+/// bare when no other file has one of that name, or as `name.table`.
+#[derive(Debug)]
+pub struct SqliteFile {
+    /// What a query qualifies this file's tables with: the file's stem
+    /// unless opened under another name.
+    pub name: String,
+    /// The file's row engine, which the SQLite tables build from.
+    pub engine: RowEngine,
+    /// The file's path, for `EXPLAIN`'s per-side file labels.
+    pub path: PathBuf,
+}
+
+impl SqliteFile {
+    /// Opens the SQLite file at `path` under `name`.
+    pub fn open(name: &str, path: &Path) -> Result<Self, EngineError> {
+        Ok(SqliteFile {
+            name: name.to_string(),
+            engine: RowEngine::open(path)?,
+            path: path.to_path_buf(),
+        })
+    }
+
+    /// Opens the SQLite file at `path` under its stem.
+    fn open_stem(path: &Path) -> Result<Self, EngineError> {
+        Self::open(&stem_name(path), path)
+    }
+}
+
+/// `path`'s file stem, the name a SQLite file is qualified with by default.
+fn stem_name(path: &Path) -> String {
+    path.file_stem()
+        .map_or_else(|| "main".to_string(), |s| s.to_string_lossy().into_owned())
+}
+
+/// A SQLite file as one query sees it (`name` the file's), or a table the
+/// query reads together with its file (`name` the table's). `E` is
+/// `&RowEngine`; a type parameter rather than a borrowing struct, which
+/// `make check-mvl-limit` forbids.
+#[derive(Clone)]
+struct Sqlite<E> {
+    name: String,
+    engine: E,
+    path: PathBuf,
+}
+
+/// `files` as the query-time view [`bind_sqlite_tables`] reads.
+fn sqlite_files(files: &[SqliteFile]) -> Vec<Sqlite<&RowEngine>> {
+    files
+        .iter()
+        .map(|f| Sqlite {
+            name: f.name.clone(),
+            engine: &f.engine,
+            path: f.path.clone(),
+        })
+        .collect()
+}
+
+/// One SQLite file, named after `path`'s stem, as [`sqlite_files`] makes it.
+fn one_sqlite_file<E>(engine: E, path: &Path) -> Vec<Sqlite<E>> {
+    vec![Sqlite {
+        name: stem_name(path),
+        engine,
+        path: path.to_path_buf(),
+    }]
+}
+
+/// Whether the SQLite file `engine` has a table `name`.
+fn has_table(engine: &RowEngine, name: &str) -> Result<bool, EngineError> {
+    Ok(engine
+        .tables()?
+        .iter()
+        .any(|t| t.name.eq_ignore_ascii_case(name)))
+}
+
+/// Binds every table `select`'s `FROM`/`JOIN` names that is not one of
+/// `column_tables` to the SQLite file of `files` it reads from (#924), and
+/// drops the `schema.` qualifier the planner has no use for. A bare name
+/// resolves when exactly one file has the table; `name.table` picks the
+/// file. One query reads a table name from one file only: the planner
+/// tells the sides of a join apart by table name.
+fn bind_sqlite_tables<E: Copy + std::ops::Deref<Target = RowEngine>>(
+    select: &mut Select,
+    column_tables: &[&str],
+    files: &[Sqlite<E>],
+) -> Result<Vec<Sqlite<E>>, EngineError> {
+    let mut bound: Vec<Sqlite<E>> = Vec::new();
+    let Some(from) = select.from.as_mut() else {
+        return Ok(bound);
+    };
+    for table in std::iter::once(&mut from.first).chain(from.joins.iter_mut().map(|j| &mut j.table))
+    {
+        let Some(name) = table.name().map(str::to_string) else {
+            continue;
+        };
+        let file = match table.schema.take() {
+            None if column_tables.iter().any(|c| c.eq_ignore_ascii_case(&name)) => continue,
+            Some(schema) => {
+                let file = files
+                    .iter()
+                    .find(|f| f.name.eq_ignore_ascii_case(&schema))
+                    .ok_or_else(|| {
+                        EngineError::new(
+                            ErrorKind::Compile,
+                            format!(
+                                "no such table: {schema}.{name} (no SQLite file named {schema})"
+                            ),
+                        )
+                    })?;
+                if !has_table(&file.engine, &name)? {
+                    return Err(EngineError::new(
+                        ErrorKind::Compile,
+                        format!("no such table: {schema}.{name}"),
+                    ));
+                }
+                file
+            }
+            None => {
+                let mut holding = Vec::new();
+                for file in files {
+                    if has_table(&file.engine, &name)? {
+                        holding.push(file);
+                    }
+                }
+                match holding.as_slice() {
+                    [] => {
+                        return Err(EngineError::new(
+                            ErrorKind::Compile,
+                            format!("unknown lookup table: {name}"),
+                        ))
+                    }
+                    [file] => *file,
+                    _ => {
+                        let names: Vec<String> = holding
+                            .iter()
+                            .map(|f| format!("{} ({})", f.name, f.path.display()))
+                            .collect();
+                        return Err(EngineError::new(
+                            ErrorKind::Compile,
+                            format!(
+                                "ambiguous table name: {name} is a table of {}; \
+                                 qualify it as <file>.{name}",
+                                names.join(" and ")
+                            ),
+                        ));
+                    }
+                }
+            }
+        };
+        match bound.iter().find(|b| b.name.eq_ignore_ascii_case(&name)) {
+            Some(b) if b.path == file.path => {}
+            Some(b) => {
+                return Err(EngineError::new(
+                    ErrorKind::Unsupported,
+                    format!(
+                        "the query reads table {name} of both {} and {}: one \
+                         query reads a table name from one SQLite file",
+                        b.path.display(),
+                        file.path.display()
+                    ),
+                ))
+            }
+            None => bound.push(Sqlite {
+                name,
+                engine: file.engine,
+                path: file.path.clone(),
+            }),
+        }
+    }
+    Ok(bound)
+}
+
+/// Whether `table` is one of the query's SQLite tables.
+fn is_sqlite(sqlite: &[Sqlite<&RowEngine>], table: &str) -> bool {
+    sqlite.iter().any(|s| s.name.eq_ignore_ascii_case(table))
+}
+
+/// Materializes the `raw` columns of the query's SQLite table `table` from
+/// its own file.
+fn load_sqlite(
+    sqlite: &[Sqlite<&RowEngine>],
+    table: &str,
+    raw: &[String],
+) -> Result<Batch, EngineError> {
+    let file = sqlite
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(table))
+        .ok_or_else(|| {
+            EngineError::new(ErrorKind::Compile, format!("unknown lookup table: {table}"))
+        })?;
+    cross_mode::scan_table_as_batch(file.engine, table, raw)
+}
+
 /// Which side of the query's `FROM`/`JOIN` is the stream table `log`, and
 /// the name of the SQLite lookup table on the other side -- in either
 /// grammar position (ADR-0021, #371). Rejects anything that isn't exactly
@@ -133,7 +333,7 @@ fn parse(sql: &str) -> Result<Select, EngineError> {
 fn resolve_sides(
     select: &Select,
     driving: &str,
-    lookup: &RowEngine,
+    sqlite: &[Sqlite<&RowEngine>],
     built: &[String],
 ) -> Result<String, EngineError> {
     let from = select
@@ -190,11 +390,8 @@ fn resolve_sides(
         ));
     };
 
-    let known = built.iter().any(|b| b.eq_ignore_ascii_case(lookup_name))
-        || lookup
-            .tables()?
-            .into_iter()
-            .any(|t| t.name.eq_ignore_ascii_case(lookup_name));
+    let known =
+        built.iter().any(|b| b.eq_ignore_ascii_case(lookup_name)) || is_sqlite(sqlite, lookup_name);
     if !known {
         return Err(EngineError::new(
             ErrorKind::Compile,
@@ -217,7 +414,7 @@ fn resolve_sides(
 fn resolve_multi_sides(
     select: &Select,
     driving: &str,
-    lookup: &RowEngine,
+    sqlite: &[Sqlite<&RowEngine>],
     built: &[String],
 ) -> Result<Vec<String>, EngineError> {
     let from = select
@@ -241,7 +438,6 @@ fn resolve_multi_sides(
         ));
     }
 
-    let known: Vec<TableInfo> = lookup.tables()?;
     let mut lookup_tables = Vec::with_capacity(from.joins.len());
     for join in &from.joins {
         let join_name = join.table.name().ok_or_else(|| {
@@ -259,8 +455,8 @@ fn resolve_multi_sides(
                 ),
             ));
         }
-        let is_known = built.iter().any(|b| b.eq_ignore_ascii_case(join_name))
-            || known.iter().any(|t| t.name.eq_ignore_ascii_case(join_name));
+        let is_known =
+            built.iter().any(|b| b.eq_ignore_ascii_case(join_name)) || is_sqlite(sqlite, join_name);
         if !is_known {
             return Err(EngineError::new(
                 ErrorKind::Compile,
@@ -316,9 +512,9 @@ fn resolve_cross_mode_group_by(
     select: Select,
     driving: &str,
     driving_columns: Vec<String>,
-    lookup: &RowEngine,
+    sqlite: &[Sqlite<&RowEngine>],
 ) -> Result<Resolved, EngineError> {
-    resolve_cross_mode_tables(select, &[(driving.to_string(), driving_columns)], lookup)
+    resolve_cross_mode_tables(select, &[(driving.to_string(), driving_columns)], sqlite)
 }
 
 /// [`resolve_cross_mode_group_by`] where several tables are not SQLite's:
@@ -326,9 +522,8 @@ fn resolve_cross_mode_group_by(
 fn resolve_cross_mode_tables(
     select: Select,
     column_tables: &[(String, Vec<String>)],
-    lookup: &RowEngine,
+    sqlite: &[Sqlite<&RowEngine>],
 ) -> Result<Resolved, EngineError> {
-    let known = lookup.tables()?;
     let mut tables: Vec<(String, Vec<String>)> = Vec::new();
     for name in select
         .from
@@ -342,13 +537,21 @@ fn resolve_cross_mode_tables(
         {
             columns.clone()
         } else {
-            let info = known
+            let file = sqlite
                 .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| {
+                    EngineError::new(ErrorKind::Compile, format!("unknown lookup table: {name}"))
+                })?;
+            let info = file
+                .engine
+                .tables()?
+                .into_iter()
                 .find(|t| t.name.eq_ignore_ascii_case(name))
                 .ok_or_else(|| {
                     EngineError::new(ErrorKind::Compile, format!("unknown lookup table: {name}"))
                 })?;
-            info.columns.iter().map(|c| c.name.clone()).collect()
+            info.columns.into_iter().map(|c| c.name).collect()
         };
         tables.push((name.to_string(), columns));
     }
@@ -375,16 +578,27 @@ pub fn run_query(
     lookup: &RowEngine,
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
-    let Resolved { select, headers } =
-        resolve_cross_mode_group_by(parse(sql)?, super::stream::TABLE, driving.columns(), lookup)?;
+    run_stream_sqlite_query(driving, &one_sqlite_file(lookup, Path::new("main")), sql)
+}
+
+/// [`run_query`] over the SQLite `files` of a cross-mode engine (#924).
+fn run_stream_sqlite_query(
+    driving: &StreamEngine,
+    files: &[Sqlite<&RowEngine>],
+    sql: &str,
+) -> Result<QueryResult, EngineError> {
     let table = super::stream::TABLE;
-    let load = |t: &str, raw: &[String]| cross_mode::scan_table_as_batch(lookup, t, raw);
+    let mut parsed = parse(sql)?;
+    let sqlite = bind_sqlite_tables(&mut parsed, &[table], files)?;
+    let Resolved { select, headers } =
+        resolve_cross_mode_group_by(parsed, table, driving.columns(), &sqlite)?;
+    let load = |t: &str, raw: &[String]| load_sqlite(&sqlite, t, raw);
     if join_count(&select) > 1 {
-        let plan = plan_multi_join(&select, table, lookup, &[])?;
+        let plan = plan_multi_join(&select, table, &sqlite, &[])?;
         let requests = driving.column_requests(&plan.left_columns)?;
         return execute_multi_join(driving.segments(&requests), &load, headers, &plan);
     }
-    let (lookup_table, plan) = plan_join(&select, table, lookup, &[])?;
+    let (lookup_table, plan) = plan_join(&select, table, &sqlite, &[])?;
     let requests = driving.column_requests(&plan.left_columns)?;
     execute_join(
         driving.segments(&requests),
@@ -407,15 +621,15 @@ struct ColumnQuery {
     builds: Vec<usize>,
 }
 
-/// Parses and resolves `stmt` over the Parquet `tables` and the SQLite
-/// `lookup`, and picks the probe: the only Parquet table the query names,
-/// or, for several, the largest one it can be a star around (see [`sides`]).
+/// Parses `stmt` over the Parquet `tables`, its TIMESTAMP literals
+/// resolved against each, and binds the tables it names that are not
+/// Parquet's to their SQLite file of `files` ([`bind_sqlite_tables`]).
 #[cfg(feature = "engine-column")]
-fn plan_column_query(
+fn parse_column_query<E: Copy + std::ops::Deref<Target = RowEngine>>(
     tables: &[ColumnSource<'_>],
-    lookup: &RowEngine,
+    files: &[Sqlite<E>],
     stmt: &str,
-) -> Result<ColumnQuery, EngineError> {
+) -> Result<(Select, Vec<Sqlite<E>>), EngineError> {
     let first = tables.first().ok_or_else(|| {
         EngineError::new(
             ErrorKind::Compile,
@@ -426,11 +640,26 @@ fn plan_column_query(
     for table in tables.iter().skip(1) {
         table.resolve_timestamp_literals(&mut parsed)?;
     }
+    let names: Vec<&str> = tables.iter().map(|t| t.table_name()).collect();
+    let sqlite = bind_sqlite_tables(&mut parsed, &names, files)?;
+    Ok((parsed, sqlite))
+}
+
+/// Resolves `parsed` (from [`parse_column_query`]) over the Parquet
+/// `tables` and the query's SQLite tables `sqlite`, and picks the probe:
+/// the only Parquet table the query names, or, for several, the largest
+/// one it can be a star around (see [`sides`]).
+#[cfg(feature = "engine-column")]
+fn plan_column_query(
+    tables: &[ColumnSource<'_>],
+    sqlite: &[Sqlite<&RowEngine>],
+    parsed: Select,
+) -> Result<ColumnQuery, EngineError> {
     let columns: Vec<(String, Vec<String>)> = tables
         .iter()
         .map(|t| (t.table_name().to_string(), t.columns()))
         .collect();
-    let Resolved { select, headers } = resolve_cross_mode_tables(parsed, &columns, lookup)?;
+    let Resolved { select, headers } = resolve_cross_mode_tables(parsed, &columns, sqlite)?;
     let (select, probe) = sides::choose_probe(select, tables)?;
     let named: Vec<&str> = select
         .from
@@ -460,7 +689,7 @@ fn plan_column_query(
 /// bit pattern, as the probe's do (#600).
 #[cfg(feature = "engine-column")]
 fn load_build_table(
-    lookup: &RowEngine,
+    sqlite: &[Sqlite<&RowEngine>],
     built: &[ColumnSource<'_>],
     keys: &[String],
     table: &str,
@@ -481,7 +710,7 @@ fn load_build_table(
                 .collect();
             engine.read_table(raw, &bit_pattern)
         }
-        None => cross_mode::scan_table_as_batch(lookup, table, raw),
+        None => load_sqlite(sqlite, table, raw),
     }
 }
 
@@ -511,23 +740,25 @@ pub fn run_column_tables_query(
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
     let sources: Vec<ColumnSource<'_>> = tables.iter().copied().map(ColumnSource::File).collect();
-    run_sources_query(&sources, lookup, sql)
+    run_sources_query(&sources, &one_sqlite_file(lookup, Path::new("main")), sql)
 }
 
-/// [`run_column_tables_query`] over files and table directories alike (#772).
+/// [`run_column_tables_query`] over files and table directories alike
+/// (#772), and over several SQLite files (#924).
 #[cfg(feature = "engine-column")]
 fn run_sources_query(
     tables: &[ColumnSource<'_>],
-    lookup: &RowEngine,
+    files: &[Sqlite<&RowEngine>],
     sql: &str,
 ) -> Result<QueryResult, EngineError> {
     let stmt = single_statement(sql)?;
+    let (parsed, sqlite) = parse_column_query(tables, files, &stmt)?;
     let ColumnQuery {
         select,
         headers,
         probe,
         builds,
-    } = plan_column_query(tables, lookup, &stmt)?;
+    } = plan_column_query(tables, &sqlite, parsed)?;
     let driving = tables.get(probe).ok_or_else(|| {
         EngineError::new(
             ErrorKind::Compile,
@@ -540,13 +771,13 @@ fn run_sources_query(
         .collect();
     let built_names: Vec<String> = built.iter().map(|b| b.table_name().to_string()).collect();
     let keys = join_named_columns(&select);
-    let load = |t: &str, raw: &[String]| load_build_table(lookup, &built, &keys, t, raw);
+    let load = |t: &str, raw: &[String]| load_build_table(&sqlite, &built, &keys, t, raw);
     let table = driving.table_name();
     let pruning = prune::probe_pruning(&select, &load)?;
     // A build filter that matches no row leaves an inner join empty:
     // probe nothing rather than the whole file.
     if join_count(&select) > 1 {
-        let plan = plan_multi_join(&select, table, lookup, &built_names)?;
+        let plan = plan_multi_join(&select, table, &sqlite, &built_names)?;
         return driving.with_probe_segments(
             &plan.left_columns,
             pruning.predicate.as_ref(),
@@ -559,7 +790,7 @@ fn run_sources_query(
             },
         );
     }
-    let (lookup_table, plan) = plan_join(&select, table, lookup, &built_names)?;
+    let (lookup_table, plan) = plan_join(&select, table, &sqlite, &built_names)?;
     driving.with_probe_segments(
         &plan.left_columns,
         pruning.predicate.as_ref(),
@@ -575,16 +806,22 @@ fn run_sources_query(
 
 /// What `EXPLAIN`'s `SCAN` line reports for a SQLite lookup table (#789):
 /// its real row count, and no row groups -- a SQLite table has none, which
-/// the renderer drops from the line for a `sqlite` source.
+/// the renderer drops from the line for a `sqlite` source. The source is
+/// the table's own file (#924).
 fn sqlite_scan_stats(
-    lookup: &RowEngine,
+    sqlite: &[Sqlite<&RowEngine>],
     table: &str,
-    lookup_file: &Path,
 ) -> Result<TableStats, EngineError> {
+    let file = sqlite
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(table))
+        .ok_or_else(|| {
+            EngineError::new(ErrorKind::Compile, format!("unknown lookup table: {table}"))
+        })?;
     Ok(TableStats {
         row_groups: 0,
-        rows: lookup.table_row_count(table)?,
-        source: Some(format!("sqlite {}", lookup_file.display())),
+        rows: file.engine.table_row_count(table)?,
+        source: Some(format!("sqlite {}", file.path.display())),
     })
 }
 
@@ -596,17 +833,17 @@ fn sqlite_scan_stats(
 #[cfg(feature = "engine-column")]
 fn explain_column_plan(
     tables: &[ColumnSource<'_>],
-    lookup: &RowEngine,
-    lookup_file: &Path,
+    files: &[Sqlite<&RowEngine>],
     sql: &str,
 ) -> Result<Vec<PlanRow>, EngineError> {
     let stmt = single_statement(sql)?;
+    let (parsed, sqlite) = parse_column_query(tables, files, &stmt)?;
     let ColumnQuery {
         select,
         probe,
         builds,
         ..
-    } = plan_column_query(tables, lookup, &stmt)?;
+    } = plan_column_query(tables, &sqlite, parsed)?;
     let driving = tables.get(probe).ok_or_else(|| {
         EngineError::new(
             ErrorKind::Compile,
@@ -620,11 +857,11 @@ fn explain_column_plan(
     let built_names: Vec<String> = built.iter().map(|b| b.table_name().to_string()).collect();
     let table = driving.table_name();
     let (build_tables, left_columns) = if join_count(&select) > 1 {
-        let plan = plan_multi_join(&select, table, lookup, &built_names)?;
+        let plan = plan_multi_join(&select, table, &sqlite, &built_names)?;
         let names = plan.builds.iter().map(|b| b.table_name.clone()).collect();
         (names, plan.left_columns)
     } else {
-        let (lookup_table, plan) = plan_join(&select, table, lookup, &built_names)?;
+        let (lookup_table, plan) = plan_join(&select, table, &sqlite, &built_names)?;
         (vec![lookup_table], plan.left_columns)
     };
 
@@ -646,7 +883,7 @@ fn explain_column_plan(
             });
         }
         if build_tables.iter().any(|b| b.eq_ignore_ascii_case(name)) {
-            return sqlite_scan_stats(lookup, name, lookup_file);
+            return sqlite_scan_stats(&sqlite, name);
         }
         Ok(TableStats {
             row_groups: 0,
@@ -707,7 +944,7 @@ fn explain_column_plan(
     }
 
     let load = |t: &str, raw: &[String]| {
-        load_build_table(lookup, &built, &join_named_columns(&select), t, raw)
+        load_build_table(&sqlite, &built, &join_named_columns(&select), t, raw)
     };
     let pruning = prune::probe_pruning(&select, &load)?;
     let kept = match (pruning.empty, pruning.predicate.as_ref()) {
@@ -742,16 +979,17 @@ fn explain_column_plan(
 #[cfg(feature = "engine-column")]
 fn explain_column_opcodes(
     tables: &[ColumnSource<'_>],
-    lookup: &RowEngine,
+    files: &[Sqlite<&RowEngine>],
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
     let stmt = single_statement(sql)?;
+    let (parsed, sqlite) = parse_column_query(tables, files, &stmt)?;
     let ColumnQuery {
         select,
         probe,
         builds,
         ..
-    } = plan_column_query(tables, lookup, &stmt)?;
+    } = plan_column_query(tables, &sqlite, parsed)?;
     let driving = tables.get(probe).ok_or_else(|| {
         EngineError::new(
             ErrorKind::Compile,
@@ -766,7 +1004,7 @@ fn explain_column_opcodes(
     let table = driving.table_name();
     // (table, build program) per joined table, then the probe and the body.
     let (build_sections, probe_program, body_program) = if join_count(&select) > 1 {
-        let plan = plan_multi_join(&select, table, lookup, &built_names)?;
+        let plan = plan_multi_join(&select, table, &sqlite, &built_names)?;
         let sections: Vec<(String, Vec<planner::OpcodeRow>)> = plan
             .builds
             .iter()
@@ -778,7 +1016,7 @@ fn explain_column_opcodes(
             planner::render_program(&plan.body),
         )
     } else {
-        let (name, plan) = plan_join(&select, table, lookup, &built_names)?;
+        let (name, plan) = plan_join(&select, table, &sqlite, &built_names)?;
         (
             vec![(name, planner::render_program(&plan.build))],
             planner::render_program(&plan.probe),
@@ -858,10 +1096,10 @@ fn join_count(select: &Select) -> usize {
 fn plan_join(
     select: &Select,
     driving: &str,
-    lookup: &RowEngine,
+    sqlite: &[Sqlite<&RowEngine>],
     built: &[String],
 ) -> Result<(String, JoinProgram), EngineError> {
-    let lookup_table = resolve_sides(select, driving, lookup, built)?;
+    let lookup_table = resolve_sides(select, driving, sqlite, built)?;
     let plan =
         planner::compile_join_build_side(select, &lookup_table, planner::BuildSourceKind::RowTable)
             .map_err(plan_err)?;
@@ -929,10 +1167,10 @@ fn query_result(columns: Vec<String>, rows: Vec<Vec<Value>>) -> QueryResult {
 fn plan_multi_join(
     select: &Select,
     driving: &str,
-    lookup: &RowEngine,
+    sqlite: &[Sqlite<&RowEngine>],
     built: &[String],
 ) -> Result<MultiJoinProgram, EngineError> {
-    let lookup_tables = resolve_multi_sides(select, driving, lookup, built)?;
+    let lookup_tables = resolve_multi_sides(select, driving, sqlite, built)?;
     planner::compile_cross_mode_multi_join(select, &lookup_tables).map_err(plan_err)
 }
 
@@ -1003,7 +1241,17 @@ pub fn explain_plan(
     lookup_file: &std::path::Path,
     sql: &str,
 ) -> Result<Vec<PlanRow>, EngineError> {
-    let select = parse(sql)?;
+    explain_stream_sqlite_plan(driving, &one_sqlite_file(lookup, lookup_file), sql)
+}
+
+/// [`explain_plan`] over the SQLite `files` of a cross-mode engine (#924):
+/// the lookup table is labelled with its own file.
+fn explain_stream_sqlite_plan(
+    driving: &StreamEngine,
+    files: &[Sqlite<&RowEngine>],
+    sql: &str,
+) -> Result<Vec<PlanRow>, EngineError> {
+    let mut select = parse(sql)?;
     if select.from.as_ref().is_some_and(|f| f.joins.len() > 1) {
         return Err(EngineError::new(
             ErrorKind::Unsupported,
@@ -1011,13 +1259,14 @@ pub fn explain_plan(
              not yet supported; run the query directly instead",
         ));
     }
-    let lookup_table = resolve_sides(&select, super::stream::TABLE, lookup, &[])?;
+    let sqlite = bind_sqlite_tables(&mut select, &[super::stream::TABLE], files)?;
+    let lookup_table = resolve_sides(&select, super::stream::TABLE, &sqlite, &[])?;
 
     let stream_stats = TableStats {
         source: Some(format!("stream {}", driving.path().display())),
         ..driving.table_stats()
     };
-    let lookup_stats = sqlite_scan_stats(lookup, &lookup_table, lookup_file)?;
+    let lookup_stats = sqlite_scan_stats(&sqlite, &lookup_table)?;
 
     let nodes = planner::explain(&select, |table| {
         if table.eq_ignore_ascii_case(super::stream::TABLE) {
@@ -1316,11 +1565,13 @@ pub fn explain_stream_stream_plan(
 /// (`"batch"`) regardless of either side's origin.
 fn explain_opcodes_query(
     driving: &StreamEngine,
-    lookup: &RowEngine,
+    files: &[Sqlite<&RowEngine>],
     sql: &str,
 ) -> Result<Vec<(&'static str, planner::OpcodeSection)>, EngineError> {
+    let mut parsed = parse(sql)?;
+    let sqlite = bind_sqlite_tables(&mut parsed, &[super::stream::TABLE], files)?;
     let select =
-        resolve_cross_mode_group_by(parse(sql)?, super::stream::TABLE, driving.columns(), lookup)?
+        resolve_cross_mode_group_by(parsed, super::stream::TABLE, driving.columns(), &sqlite)?
             .select;
     if select.from.as_ref().is_some_and(|f| f.joins.len() > 1) {
         return Err(EngineError::new(
@@ -1329,7 +1580,7 @@ fn explain_opcodes_query(
              supported; run the query directly instead",
         ));
     }
-    resolve_sides(&select, super::stream::TABLE, lookup, &[])?;
+    resolve_sides(&select, super::stream::TABLE, &sqlite, &[])?;
     let plan =
         planner::compile_join(&select, planner::BuildSourceKind::RowTable).map_err(plan_err)?;
     Ok(vec![
@@ -1459,6 +1710,10 @@ impl ColumnTable {
 /// cross-mode `EXPLAIN`/`explain_opcodes` has a home (closing the gap
 /// db-studio#54's F3 view worked around with a placeholder).
 ///
+/// The SQLite side may span several files (#924), each a [`SqliteFile`]
+/// whose tables a query names bare, or as `name.table` when another file
+/// has a table of that name too.
+///
 /// [`Engine::open`] takes one `path`, which cannot express the two files a
 /// cross-mode query needs -- construct via
 /// [`CrossModeEngine::open_stream_sqlite`]/
@@ -1472,10 +1727,8 @@ pub enum CrossModeEngine {
     StreamSqlite {
         /// The stream engine's `FROM` side.
         driving: StreamEngine,
-        /// The SQLite `JOIN`-target lookup engine.
-        lookup: RowEngine,
-        /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
-        lookup_path: PathBuf,
+        /// The SQLite files the `JOIN`-target lookup table is read from.
+        lookups: Vec<SqliteFile>,
     },
     /// A Parquet `FROM` joined to SQLite lookup tables (#598).
     #[cfg(feature = "engine-column")]
@@ -1486,10 +1739,8 @@ pub enum CrossModeEngine {
         /// More Parquet tables (#782): the largest one the query is a star
         /// around probes, and the rest build, next to the SQLite tables.
         others: Vec<BatchEngine>,
-        /// The SQLite lookup engine, the build side.
-        lookup: RowEngine,
-        /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
-        lookup_path: PathBuf,
+        /// The SQLite files, the build side.
+        lookups: Vec<SqliteFile>,
     },
     /// A table directory `FROM` joined to SQLite lookup tables (#772): its
     /// archive files and live pages are the probe side.
@@ -1498,10 +1749,8 @@ pub enum CrossModeEngine {
         /// The table directory's engine, the probe side. Boxed: its reader
         /// is much larger than the other variants' engines.
         driving: Box<TableEngine>,
-        /// The SQLite lookup engine, the build side.
-        lookup: RowEngine,
-        /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
-        lookup_path: PathBuf,
+        /// The SQLite files, the build side.
+        lookups: Vec<SqliteFile>,
     },
     /// Parquet files and table directories joined to SQLite lookup tables
     /// (#782): the largest table the query is a star around probes, the
@@ -1514,18 +1763,40 @@ pub enum CrossModeEngine {
         driving: ColumnTable,
         /// The other tables.
         others: Vec<ColumnTable>,
-        /// The SQLite lookup engine, the build side.
-        lookup: RowEngine,
-        /// `lookup`'s file path, for `EXPLAIN`'s per-side file labels.
-        lookup_path: PathBuf,
+        /// The SQLite files, the build side.
+        lookups: Vec<SqliteFile>,
     },
     /// Two stream engines joined via a windowed self-join (ADR-0022).
     StreamStream {
         /// The `FROM` side's stream engine (query alias: `FROM log AS <alias>`).
         left: StreamEngine,
         /// The `JOIN` side's stream engine (query alias: `JOIN log AS <alias>`).
-        right: StreamEngine,
+        /// Boxed: two stream engines dwarf every other variant.
+        right: Box<StreamEngine>,
     },
+}
+
+/// Opens the named SQLite files of a cross-mode engine (#924): at least
+/// one, and no two under the same name.
+#[cfg(feature = "engine-column")]
+fn open_sqlite_files(files: &[(&str, &Path)]) -> Result<Vec<SqliteFile>, EngineError> {
+    if files.is_empty() {
+        return Err(EngineError::new(
+            ErrorKind::Open,
+            "a cross-mode engine needs at least one SQLite file",
+        ));
+    }
+    let mut opened: Vec<SqliteFile> = Vec::with_capacity(files.len());
+    for (name, path) in files {
+        if opened.iter().any(|f| f.name.eq_ignore_ascii_case(name)) {
+            return Err(EngineError::new(
+                ErrorKind::Open,
+                format!("two SQLite files are named {name}"),
+            ));
+        }
+        opened.push(SqliteFile::open(name, path)?);
+    }
+    Ok(opened)
 }
 
 impl CrossModeEngine {
@@ -1538,8 +1809,7 @@ impl CrossModeEngine {
     ) -> Result<Self, EngineError> {
         Ok(CrossModeEngine::StreamSqlite {
             driving: StreamEngine::open(driving_path)?,
-            lookup: RowEngine::open(lookup_path)?,
-            lookup_path: lookup_path.to_path_buf(),
+            lookups: vec![SqliteFile::open_stem(lookup_path)?],
         })
     }
 
@@ -1550,8 +1820,7 @@ impl CrossModeEngine {
         Ok(CrossModeEngine::ColumnSqlite {
             driving: BatchEngine::open(parquet)?,
             others: Vec::new(),
-            lookup: RowEngine::open(lookup_path)?,
-            lookup_path: lookup_path.to_path_buf(),
+            lookups: vec![SqliteFile::open_stem(lookup_path)?],
         })
     }
 
@@ -1561,10 +1830,14 @@ impl CrossModeEngine {
     /// query reading a fresh snapshot). A query joining two of them (and
     /// SQLite lookup tables) probes with the larger and builds the other in
     /// memory. At least one table is required.
+    ///
+    /// `lookups` are the SQLite files, each `(name, path)` (#924): a query
+    /// names a table of one bare when no other file has a table of that
+    /// name, and as `name.table` otherwise. At least one is required.
     #[cfg(feature = "engine-column")]
     pub fn open_column_tables_sqlite(
         parquets: &[&Path],
-        lookup_path: &Path,
+        lookups: &[(&str, &Path)],
     ) -> Result<Self, EngineError> {
         let Some((first, rest)) = parquets.split_first() else {
             return Err(EngineError::new(
@@ -1584,8 +1857,7 @@ impl CrossModeEngine {
             return Ok(CrossModeEngine::ColumnTablesSqlite {
                 driving: open(first)?,
                 others: rest.iter().map(|p| open(p)).collect::<Result<_, _>>()?,
-                lookup: RowEngine::open(lookup_path)?,
-                lookup_path: lookup_path.to_path_buf(),
+                lookups: open_sqlite_files(lookups)?,
             });
         }
         Ok(CrossModeEngine::ColumnSqlite {
@@ -1594,8 +1866,7 @@ impl CrossModeEngine {
                 .iter()
                 .map(|p| BatchEngine::open(p))
                 .collect::<Result<_, _>>()?,
-            lookup: RowEngine::open(lookup_path)?,
-            lookup_path: lookup_path.to_path_buf(),
+            lookups: open_sqlite_files(lookups)?,
         })
     }
 
@@ -1607,8 +1878,7 @@ impl CrossModeEngine {
     pub fn open_table_sqlite(table_dir: &Path, lookup_path: &Path) -> Result<Self, EngineError> {
         Ok(CrossModeEngine::TableSqlite {
             driving: Box::new(TableEngine::open(table_dir)?),
-            lookup: RowEngine::open(lookup_path)?,
-            lookup_path: lookup_path.to_path_buf(),
+            lookups: vec![SqliteFile::open_stem(lookup_path)?],
         })
     }
 
@@ -1618,7 +1888,7 @@ impl CrossModeEngine {
     pub fn open_stream_stream(left_path: &Path, right_path: &Path) -> Result<Self, EngineError> {
         Ok(CrossModeEngine::StreamStream {
             left: StreamEngine::open(left_path)?,
-            right: StreamEngine::open(right_path)?,
+            right: Box::new(StreamEngine::open(right_path)?),
         })
     }
 }
@@ -1639,29 +1909,25 @@ impl Engine for CrossModeEngine {
 
     fn run_query(&mut self, sql: &str) -> Result<QueryResult, EngineError> {
         match self {
-            CrossModeEngine::StreamSqlite {
-                driving, lookup, ..
-            } => run_query(driving, lookup, sql),
+            CrossModeEngine::StreamSqlite { driving, lookups } => {
+                run_stream_sqlite_query(driving, &sqlite_files(lookups), sql)
+            }
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
                 driving,
                 others,
-                lookup,
-                ..
-            } => run_sources_query(&file_sources(driving, others), lookup, sql),
+                lookups,
+            } => run_sources_query(&file_sources(driving, others), &sqlite_files(lookups), sql),
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
-            CrossModeEngine::TableSqlite {
-                driving, lookup, ..
-            } => {
+            CrossModeEngine::TableSqlite { driving, lookups } => {
                 driving.refresh()?;
-                run_sources_query(&[ColumnSource::Dir(driving)], lookup, sql)
+                run_sources_query(&[ColumnSource::Dir(driving)], &sqlite_files(lookups), sql)
             }
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
             CrossModeEngine::ColumnTablesSqlite {
                 driving,
                 others,
-                lookup,
-                ..
+                lookups,
             } => {
                 for table in std::iter::once(&mut *driving).chain(others.iter_mut()) {
                     if let ColumnTable::Dir(engine) = table {
@@ -1673,7 +1939,7 @@ impl Engine for CrossModeEngine {
                         .chain(others.iter())
                         .map(ColumnTable::source)
                         .collect::<Vec<_>>(),
-                    lookup,
+                    &sqlite_files(lookups),
                     sql,
                 )
             }
@@ -1685,37 +1951,30 @@ impl Engine for CrossModeEngine {
 
     fn explain_plan(&self, sql: &str) -> Result<Vec<PlanRow>, EngineError> {
         match self {
-            CrossModeEngine::StreamSqlite {
-                driving,
-                lookup,
-                lookup_path,
-            } => explain_plan(driving, lookup, lookup_path, sql),
+            CrossModeEngine::StreamSqlite { driving, lookups } => {
+                explain_stream_sqlite_plan(driving, &sqlite_files(lookups), sql)
+            }
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
                 driving,
                 others,
-                lookup,
-                lookup_path,
-            } => explain_column_plan(&file_sources(driving, others), lookup, lookup_path, sql),
+                lookups,
+            } => explain_column_plan(&file_sources(driving, others), &sqlite_files(lookups), sql),
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
-            CrossModeEngine::TableSqlite {
-                driving,
-                lookup,
-                lookup_path,
-            } => explain_column_plan(&[ColumnSource::Dir(driving)], lookup, lookup_path, sql),
+            CrossModeEngine::TableSqlite { driving, lookups } => {
+                explain_column_plan(&[ColumnSource::Dir(driving)], &sqlite_files(lookups), sql)
+            }
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
             CrossModeEngine::ColumnTablesSqlite {
                 driving,
                 others,
-                lookup,
-                lookup_path,
+                lookups,
             } => explain_column_plan(
                 &std::iter::once(driving)
                     .chain(others.iter())
                     .map(ColumnTable::source)
                     .collect::<Vec<_>>(),
-                lookup,
-                lookup_path,
+                &sqlite_files(lookups),
                 sql,
             ),
             CrossModeEngine::StreamStream { left, right } => {
@@ -1726,32 +1985,32 @@ impl Engine for CrossModeEngine {
 
     fn explain_opcodes(&self, sql: &str) -> Result<Vec<OpcodeSection>, EngineError> {
         let sections = match self {
-            CrossModeEngine::StreamSqlite {
-                driving, lookup, ..
-            } => explain_opcodes_query(driving, lookup, sql)?,
+            CrossModeEngine::StreamSqlite { driving, lookups } => {
+                explain_opcodes_query(driving, &sqlite_files(lookups), sql)?
+            }
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
                 driving,
                 others,
-                lookup,
-                ..
-            } => explain_column_opcodes(&file_sources(driving, others), lookup, sql)?,
+                lookups,
+            } => {
+                explain_column_opcodes(&file_sources(driving, others), &sqlite_files(lookups), sql)?
+            }
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
-            CrossModeEngine::TableSqlite {
-                driving, lookup, ..
-            } => explain_column_opcodes(&[ColumnSource::Dir(driving)], lookup, sql)?,
+            CrossModeEngine::TableSqlite { driving, lookups } => {
+                explain_column_opcodes(&[ColumnSource::Dir(driving)], &sqlite_files(lookups), sql)?
+            }
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
             CrossModeEngine::ColumnTablesSqlite {
                 driving,
                 others,
-                lookup,
-                ..
+                lookups,
             } => explain_column_opcodes(
                 &std::iter::once(driving)
                     .chain(others.iter())
                     .map(ColumnTable::source)
                     .collect::<Vec<_>>(),
-                lookup,
+                &sqlite_files(lookups),
                 sql,
             )?,
             CrossModeEngine::StreamStream { left, .. } => {
@@ -1778,42 +2037,23 @@ impl Engine for CrossModeEngine {
     }
 
     fn tables(&self) -> Result<Vec<TableInfo>, EngineError> {
-        match self {
-            CrossModeEngine::StreamSqlite {
-                driving, lookup, ..
-            } => {
-                let mut tables = driving.tables()?;
-                tables.extend(lookup.tables()?);
-                Ok(tables)
-            }
+        let mut tables = match self {
+            CrossModeEngine::StreamSqlite { driving, .. } => driving.tables()?,
             #[cfg(feature = "engine-column")]
             CrossModeEngine::ColumnSqlite {
-                driving,
-                others,
-                lookup,
-                ..
+                driving, others, ..
             } => {
                 let mut tables = driving.tables()?;
                 for other in others {
                     tables.extend(other.tables()?);
                 }
-                tables.extend(lookup.tables()?);
-                Ok(tables)
+                tables
             }
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
-            CrossModeEngine::TableSqlite {
-                driving, lookup, ..
-            } => {
-                let mut tables = driving.tables()?;
-                tables.extend(lookup.tables()?);
-                Ok(tables)
-            }
+            CrossModeEngine::TableSqlite { driving, .. } => driving.tables()?,
             #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
             CrossModeEngine::ColumnTablesSqlite {
-                driving,
-                others,
-                lookup,
-                ..
+                driving, others, ..
             } => {
                 let mut tables = Vec::new();
                 for table in std::iter::once(driving).chain(others.iter()) {
@@ -1822,14 +2062,33 @@ impl Engine for CrossModeEngine {
                         ColumnTable::Dir(engine) => engine.tables()?,
                     });
                 }
-                tables.extend(lookup.tables()?);
-                Ok(tables)
+                tables
             }
             CrossModeEngine::StreamStream { left, right } => {
                 let mut tables = left.tables()?;
                 tables.extend(right.tables()?);
-                Ok(tables)
+                tables
             }
+        };
+        for file in self.lookups() {
+            tables.extend(file.engine.tables()?);
+        }
+        Ok(tables)
+    }
+}
+
+impl CrossModeEngine {
+    /// The SQLite files of this engine; none for a stream-stream one.
+    fn lookups(&self) -> &[SqliteFile] {
+        match self {
+            CrossModeEngine::StreamSqlite { lookups, .. } => lookups,
+            #[cfg(feature = "engine-column")]
+            CrossModeEngine::ColumnSqlite { lookups, .. } => lookups,
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::TableSqlite { lookups, .. } => lookups,
+            #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+            CrossModeEngine::ColumnTablesSqlite { lookups, .. } => lookups,
+            CrossModeEngine::StreamStream { .. } => &[],
         }
     }
 }

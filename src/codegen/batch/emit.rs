@@ -610,8 +610,9 @@ fn render_table_ref_kind(kind: &TableRefKind) -> String {
 
 fn render_table_ref(table: &TableRef) -> String {
     format!(
-        "TableRef {{ kind: {}, alias: {}, span: {} }}",
+        "TableRef {{ kind: {}, schema: {}, alias: {}, span: {} }}",
         render_table_ref_kind(&table.kind),
+        render_option_str(table.schema.as_deref()),
         render_option_str(table.alias.as_deref()),
         render_span()
     )

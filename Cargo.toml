@@ -254,6 +254,11 @@ path = "tests/unit/engine_table_join_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "ingest"]
 
 [[test]]
+name = "unit_engine_multi_sqlite_join"
+path = "tests/unit/engine_multi_sqlite_join_test.rs"
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "ingest"]
+
+[[test]]
 name = "unit_engine_column_tables_join"
 path = "tests/unit/engine_column_tables_join_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "storage-column-write"]
