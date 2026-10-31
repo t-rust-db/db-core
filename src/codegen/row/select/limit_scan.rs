@@ -268,6 +268,45 @@ where
     Some(operands)
 }
 
+/// `rowid IN (<integer literal or bind parameter>, ...)` as the operands a
+/// `SeekRowid` probes, one per value (#915): sqlite3 plans it as one rowid
+/// seek per list member. Literal duplicates collapse so no row is emitted
+/// twice, and a list of literals only is probed in ascending order, which
+/// is the order sqlite3's ephemeral-index walk returns rows in. `None` for
+/// `NOT IN`, an empty list, a non-rowid left side or any other member.
+pub(crate) fn rowid_in_list_operands(schema: &TableSchema, where_expr: &Expr) -> Option<Vec<Expr>> {
+    let ExprKind::In {
+        expr,
+        list,
+        negated: false,
+    } = &where_expr.kind
+    else {
+        return None;
+    };
+    if list.is_empty()
+        || !is_rowid_reference(schema, expr)
+        || !list.iter().all(is_supported_seek_operand)
+    {
+        return None;
+    }
+    let mut operands: Vec<Expr> = Vec::with_capacity(list.len());
+    for value in list {
+        let duplicate = matches!(value.kind, ExprKind::Literal(_))
+            && operands.iter().any(|seen| seen.kind == value.kind);
+        if !duplicate {
+            operands.push(value.clone());
+        }
+    }
+    let literal = |e: &Expr| match &e.kind {
+        ExprKind::Literal(Literal::Integer(n)) => Some(*n),
+        _ => None,
+    };
+    if operands.iter().all(|e| literal(e).is_some()) {
+        operands.sort_by_key(|e| literal(e));
+    }
+    Some(operands)
+}
+
 /// Looks up the rowid's resolved constant (per [`propagate_constants`])
 /// among its recognized aliases (`rowid`/`_rowid_`/`oid`, or the table's
 /// `INTEGER PRIMARY KEY` alias column), in that fixed order — so lookup
@@ -332,6 +371,9 @@ where
     // supported operand directly.
     let operands: Vec<Expr> = match direct_operand {
         Some(operand) if is_supported_seek_operand(operand) => vec![operand.clone()],
+        _ if rowid_in_list_operands(schema, where_expr).is_some() => {
+            rowid_in_list_operands(schema, where_expr).unwrap_or_default()
+        }
         _ => {
             let constants = propagate_constants(where_expr);
             match resolve_rowid_constant(schema, &constants) {
@@ -1492,5 +1534,47 @@ mod mcdc_vectors {
             &schema("INTEGER", false, false),
             &column_expr("b")
         ));
+    }
+    // limit_scan rowid_in_list_operands: `list.is_empty() || !is_rowid_reference(..)
+    // || !list.iter().all(is_supported_seek_operand)` (#915).
+    fn in_list_where(sql: &str) -> Expr {
+        match crate::parser::row::parse_select(sql) {
+            crate::parser::row::ParseOutcome::Accepted(select) => {
+                select.where_clause.expect("a WHERE clause")
+            }
+            other => panic!("{sql:?} must parse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_limit_scan_rowid_in_list_operands_b5c2c7fa__v1_rowid_with_integer_members_is_probed_in_order(
+    ) {
+        let w = in_list_where("SELECT a FROM t WHERE rowid IN (3, 1, 3)");
+        let ops = super::rowid_in_list_operands(&schema("INTEGER", false, false), &w).unwrap();
+        assert_eq!(ops.len(), 2);
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_limit_scan_rowid_in_list_operands_b5c2c7fa__v2_an_empty_list_is_not_planned(
+    ) {
+        let mut w = in_list_where("SELECT a FROM t WHERE rowid IN (3)");
+        if let ExprKind::In { list, .. } = &mut w.kind {
+            list.clear();
+        }
+        assert!(super::rowid_in_list_operands(&schema("INTEGER", false, false), &w).is_none());
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_limit_scan_rowid_in_list_operands_b5c2c7fa__v3_a_non_rowid_column_is_not_planned(
+    ) {
+        let w = in_list_where("SELECT a FROM t WHERE b IN (3, 4)");
+        assert!(super::rowid_in_list_operands(&schema("INTEGER", false, false), &w).is_none());
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_limit_scan_rowid_in_list_operands_b5c2c7fa__v4_a_text_member_is_not_planned(
+    ) {
+        let w = in_list_where("SELECT a FROM t WHERE rowid IN (3, 'x')");
+        assert!(super::rowid_in_list_operands(&schema("INTEGER", false, false), &w).is_none());
     }
 }

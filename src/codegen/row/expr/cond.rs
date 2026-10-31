@@ -3,6 +3,7 @@
 //! Jump-mode condition compilation — see `super`'s module doc.
 
 use super::value::{collation_of, compile_value, expr_affinity, expr_collation};
+use crate::codegen::row::subquery::{emit_hoisted_in_probe, in_list_id, HoistedSubquery};
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{
     p4_coll_seq, CodegenError, CondTargets, Emitter, Label, NullTarget, RegAlloc, Scope, Target,
@@ -369,6 +370,12 @@ pub(crate) fn compile_cond(
             list,
             negated,
         } => {
+            // #915: a long integer-literal list hoisted into a set.
+            if let Some(HoistedSubquery::In { eph_cursor }) =
+                scope.hoisted.get(&in_list_id(expr)).copied()
+            {
+                return emit_hoisted_in_probe(em, reg, scope, inner, eph_cursor, *negated, targets);
+            }
             if list.is_empty() {
                 // `x IN ()` is always false, even for a NULL `x` — an
                 // empty list leaves nothing to be uncertain against.

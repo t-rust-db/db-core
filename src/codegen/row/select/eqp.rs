@@ -4,7 +4,8 @@ use super::aggregate::{find_index_only_count, find_index_only_sum, IndexOnlyCoun
 use super::entry::{scan_dispatch, ScanDispatch};
 use super::join_access::{choose_auto_index_probe, choose_join_access, AutoIndexProbe, JoinAccess};
 use super::limit_scan::{
-    find_covering_index, find_skip_scan_index, is_rowid_reference, top_level_equality_operands,
+    find_covering_index, find_skip_scan_index, is_rowid_reference, rowid_in_list_operands,
+    top_level_equality_operands,
 };
 use super::*;
 use crate::codegen::row::subquery::{
@@ -259,6 +260,14 @@ pub fn explain_query_plan(
                     } else {
                         None
                     }
+                })
+                .or_else(|| {
+                    // #915: `rowid IN (...)` is one rowid seek per member.
+                    let operands = select
+                        .where_clause
+                        .as_ref()
+                        .and_then(|w| rowid_in_list_operands(&binding.schema, w))?;
+                    operands.into_iter().next().map(JoinAccess::Rowid)
                 })
         } else {
             on_expr.and_then(|e| choose_join_access(binding, e, prior_bindings))
