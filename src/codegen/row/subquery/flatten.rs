@@ -198,6 +198,33 @@ fn rewrite_alias_in_select(
     require_qualified: bool,
 ) -> bool {
     let mut candidate = select.clone();
+    // Alone in FROM, an outer `*` is the subquery's own column list, as
+    // sqlite3 expands it (#922): one bare reference per output name, which
+    // the rewrite below maps to the table's column under that name.
+    if let ColumnMap::Explicit(columns) = column_map {
+        if !require_qualified {
+            candidate.columns = std::mem::take(&mut candidate.columns)
+                .into_iter()
+                .flat_map(|col| match col {
+                    ResultColumn::Star => columns
+                        .iter()
+                        .map(|(name, expr)| ResultColumn::Expr {
+                            expr: Expr {
+                                kind: ExprKind::Column {
+                                    table: None,
+                                    catalog: None,
+                                    name: name.clone(),
+                                },
+                                span: expr.span,
+                            },
+                            alias: None,
+                        })
+                        .collect(),
+                    other => vec![other],
+                })
+                .collect();
+        }
+    }
     let ok = (|| {
         for col in &mut candidate.columns {
             match col {
@@ -739,9 +766,10 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__codegen_row_subquery_flatten_rewrite_alias_in_select_07b51d2c__v1_an_outer_star_after_an_explicit_list_is_not_flattened(
     ) {
+        // Next to a join the star also covers `u`'s columns (#922).
         for sql in [
-            "SELECT * FROM (SELECT a FROM t) AS s",
-            "SELECT * FROM (SELECT b AS x, a FROM t) AS s",
+            "SELECT * FROM (SELECT a FROM t) AS s JOIN u ON s.a = u.a",
+            "SELECT * FROM (SELECT b AS x, a FROM t) AS s JOIN u ON s.a = u.a",
         ] {
             assert!(!is_flattened(sql), "{sql}");
         }
@@ -758,6 +786,39 @@ mod tests {
             assert!(is_flattened(sql), "{sql}");
         }
     }
+    /// #922: alone in FROM, an outer `*` over an explicit list flattens to
+    /// that list, each column under the subquery's output name.
+    #[test]
+    fn an_outer_star_alone_over_an_explicit_list_flattens_to_it() {
+        let select = flatten("SELECT * FROM (SELECT b AS x, a FROM t) AS s WHERE x = 1");
+        assert!(matches!(
+            select.from.as_ref().unwrap().first.kind,
+            TableRefKind::Name(_)
+        ));
+        let columns: Vec<(String, Option<String>)> = select
+            .columns
+            .iter()
+            .map(|c| match c {
+                ResultColumn::Expr {
+                    expr:
+                        Expr {
+                            kind: ExprKind::Column { name, .. },
+                            ..
+                        },
+                    alias,
+                } => (name.clone(), alias.clone()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            columns,
+            [
+                ("b".to_string(), Some("x".to_string())),
+                ("a".to_string(), None)
+            ]
+        );
+    }
+
     // codegen_row_subquery_flatten_rewrite_alias_in_select_3d8792e1:
     // `let ColumnMap::Repeated(copies) = column_map` (#650).
     #[test]
