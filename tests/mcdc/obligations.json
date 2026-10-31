@@ -18752,7 +18752,7 @@
   {
     "id": "engine_resolve_sides_choose_probe_43250412",
     "file": "src/engine/resolve/sides.rs",
-    "line": 43,
+    "line": 44,
     "decision": "present.len() > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -18762,7 +18762,7 @@
   {
     "id": "engine_resolve_sides_choose_probe_d959e87b",
     "file": "src/engine/resolve/sides.rs",
-    "line": 52,
+    "line": 53,
     "decision": "!allowed || !is_star_around(from, &named, name)",
     "conditions": 2,
     "vectors_required": 3,
@@ -18772,7 +18772,7 @@
   {
     "id": "engine_resolve_sides_choose_probe_4ef1fed2",
     "file": "src/engine/resolve/sides.rs",
-    "line": 57,
+    "line": 58,
     "decision": "best.is_none_or(|(_, most)| rows > most)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18780,9 +18780,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_resolve_sides_choose_probe_580d7052",
+    "file": "src/engine/resolve/sides.rs",
+    "line": 73,
+    "decision": "!only_inner || !is_star_around(from, &named, &name)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_resolve_sides_choose_probe_b4aa563c",
     "file": "src/engine/resolve/sides.rs",
-    "line": 67,
+    "line": 81,
     "decision": "only_inner",
     "conditions": 1,
     "vectors_required": 2,
@@ -18792,7 +18802,7 @@
   {
     "id": "engine_resolve_sides_choose_probe_102aab1a",
     "file": "src/engine/resolve/sides.rs",
-    "line": 80,
+    "line": 94,
     "decision": "probe_name.eq_ignore_ascii_case(first)",
     "conditions": 1,
     "vectors_required": 2,
@@ -18802,7 +18812,7 @@
   {
     "id": "engine_resolve_sides_links_1f588c79",
     "file": "src/engine/resolve/sides.rs",
-    "line": 111,
+    "line": 125,
     "decision": "match &join.constraint {\n        Some(JoinConstraint::On(on)) => on_tables(on).is_some_and(|(x, y)| pair(x, y)),\n        Some(JoinConstraint::Using(_)) => match (join.table.name(), from.first.name()) {\n            (Some(x), Some(y)) => pair(x, y),\n            _ => false,\n        },\n        None => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18812,7 +18822,7 @@
   {
     "id": "engine_resolve_sides_links_4f4830af",
     "file": "src/engine/resolve/sides.rs",
-    "line": 113,
+    "line": 127,
     "decision": "match (join.table.name(), from.first.name()) {\n            (Some(x), Some(y)) => pair(x, y),\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -18822,7 +18832,7 @@
   {
     "id": "engine_resolve_sides_table_of_23705a30",
     "file": "src/engine/resolve/sides.rs",
-    "line": 136,
+    "line": 150,
     "decision": "match &expr.kind {\n        ExprKind::Column { table, .. } => table.as_deref(),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,

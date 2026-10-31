@@ -152,6 +152,43 @@ fn inner_join_written_with_the_lookup_table_first_gives_the_same_rows() {
     assert_eq!(got[0], vec![Cell::Int(1), text("one")]);
 }
 
+/// #919: a filter on the Parquet table of a join written SQLite-first was
+/// read as a lookup filter ("no such table: production").
+#[test]
+fn a_lookup_first_join_filters_and_orders_by_either_side() {
+    let db = LookupDb::new("swapped-where");
+    let mut e = db.engine();
+    for (lookup_first, probe_first) in [
+        (
+            "SELECT production.id, labels.label FROM labels \
+             JOIN production ON labels.id = production.id \
+             WHERE production.id >= 2 ORDER BY labels.label DESC LIMIT 1",
+            "SELECT production.id, labels.label FROM production \
+             JOIN labels ON labels.id = production.id \
+             WHERE production.id >= 2 ORDER BY labels.label DESC LIMIT 1",
+        ),
+        (
+            "SELECT COUNT(*) FROM labels JOIN production USING (id) \
+             WHERE production.id < 3 AND labels.label <> 'one'",
+            "SELECT COUNT(*) FROM production JOIN labels USING (id) \
+             WHERE production.id < 3 AND labels.label <> 'one'",
+        ),
+    ] {
+        let got = rows(&mut e, lookup_first);
+        assert_eq!(got, rows(&mut e, probe_first), "{lookup_first}");
+        assert!(!got.is_empty(), "{lookup_first}");
+        assert!(e.explain_plan(lookup_first).is_ok(), "{lookup_first}");
+    }
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT production.id FROM labels JOIN production ON labels.id = production.id \
+             WHERE production.id >= 2 ORDER BY labels.label DESC LIMIT 1"
+        ),
+        vec![vec![Cell::Int(2)]]
+    );
+}
+
 #[test]
 fn left_join_that_would_keep_the_lookup_rows_is_rejected_with_a_clear_message() {
     let db = LookupDb::new("wrong-left");
@@ -766,4 +803,48 @@ fn a_uint64_column_outside_the_join_key_still_errors_above_i64_max() {
         .expect_err("a UINT_64 above i64::MAX outside a join key stays an error (#595)");
     assert!(err.to_string().contains("18446744073709551615"), "{err}");
     std::fs::remove_dir_all(parquet.parent().unwrap()).ok();
+}
+
+// MC/DC vectors for `sides::choose_probe`'s single-Parquet-table rewrite
+// (obligation `engine_resolve_sides_choose_probe_580d7052`,
+// `!only_inner || !is_star_around`, #919).
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__engine_resolve_sides_choose_probe_580d7052__v1_a_left_join_is_not_rewritten() {
+    let db = LookupDb::new("mcdc-580d-v1");
+    let mut e = db.engine();
+    let got = rows(
+        &mut e,
+        "SELECT COUNT(*) FROM production LEFT JOIN labels ON production.id = labels.id \
+         WHERE production.id < 5",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(4)]]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__engine_resolve_sides_choose_probe_580d7052__v2_an_inner_star_moves_the_probe_first() {
+    let db = LookupDb::new("mcdc-580d-v2");
+    let mut e = db.engine();
+    let got = rows(
+        &mut e,
+        "SELECT COUNT(*) FROM labels JOIN production ON labels.id = production.id \
+         WHERE production.id < 3",
+    );
+    assert_eq!(got, vec![vec![Cell::Int(2)]]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__engine_resolve_sides_choose_probe_580d7052__v3_an_inner_chain_is_not_rewritten() {
+    let db = LookupDb::new("mcdc-580d-v3");
+    let mut e = db.engine();
+    let sql = "SELECT COUNT(*) FROM labels JOIN production ON labels.id = production.id \
+               JOIN tiers ON tiers.id = labels.id";
+    // Not a star around `production`, so it stays where it is written and
+    // the multi-way join keeps its probe-first refusal.
+    let err = e.run_query(sql).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
+    assert!(err.message.contains("`production` written first"), "{err}");
 }
