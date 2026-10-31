@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.220.1] - 2026-10-31
+
+### Fixed
+
+- A cross-mode join written with the SQLite table first (`FROM lookup JOIN events …`) no longer fails with "no such table" when the `WHERE` filters the Parquet file or table directory (#919)
+
 ## [0.220.0] - 2026-10-31
 
 ### Added
