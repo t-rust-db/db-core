@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.218.2] - 2026-10-31
+
+### Fixed
+
+- `tbl.*` must name the FROM item in a single-table SELECT; an unknown function in an empty `IN ( )` or in an overridden `SET` value is refused, as sqlite3 refuses it (#650)
+- `UNNEST(x) AS t(col)` is refused in the row dialect; only the column dialect reads a column list after the alias (#650)
+
 ## [0.218.1] - 2026-10-31
 
 ### Fixed
