@@ -48,6 +48,10 @@ pub struct Parser {
 /// clean `ParseFail::Invalid` instead of overflowing the stack.
 const MAX_EXPR_DEPTH: usize = 200;
 
+/// Most tables one FROM clause may join in the row dialect: sqlite3's
+/// "at most 64 tables in a join" (#877).
+const MAX_JOIN_TABLES: usize = 64;
+
 /// Height cap for a parsed expression tree, sqlite3's
 /// `SQLITE_MAX_EXPR_DEPTH` (#655). `MAX_EXPR_DEPTH` bounds the parser's
 /// own recursion, but a flat operator chain (`1+1+...`, `a AND b AND
@@ -1869,6 +1873,13 @@ impl Parser {
                 natural: false,
             });
         }
+        // sqlite3's limit (its join bitmasks are 64 bits wide), and what
+        // keeps the row planner's per-table recursion off a small thread's
+        // stack: 3,000 comma-joined tables overflowed 2 MiB (#877). DuckDB
+        // has no such limit, so the column dialect keeps none.
+        if !self.column && joins.len() >= MAX_JOIN_TABLES {
+            return self.invalid(format!("at most {MAX_JOIN_TABLES} tables in a join"));
+        }
         Ok(FromClause { first, joins })
     }
 
@@ -3285,6 +3296,42 @@ mod tests {
         parser("CREATE VIEW v AS SELECT 1 WHERE 'a?' = 'b'")
             .parse_create_view_stmt()
             .unwrap();
+    }
+
+    /// `t0, t1, ...`: a FROM clause body of `n` comma-joined tables.
+    fn tables(n: usize) -> String {
+        (0..n)
+            .map(|i| format!("t{i}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    // parser_row_grammar_parse_from_clause_cb01d42e:
+    // `!self.column && joins.len() >= MAX_JOIN_TABLES` (#877).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_parse_from_clause_cb01d42e__v1_65_tables_are_refused() {
+        let err = parser(&tables(65)).parse_from_clause().unwrap_err();
+        assert!(
+            matches!(err, ParseFail::Invalid { ref message, .. }
+                if message == "at most 64 tables in a join"),
+            "{err:?}"
+        );
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_parse_from_clause_cb01d42e__v2_the_column_dialect_has_no_limit() {
+        let from = parser(&tables(65))
+            .column_dialect()
+            .parse_from_clause()
+            .unwrap();
+        assert_eq!(from.joins.len(), 64);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_parse_from_clause_cb01d42e__v3_64_tables_parse() {
+        let from = parser(&tables(64)).parse_from_clause().unwrap();
+        assert_eq!(from.joins.len(), 63);
     }
 
     // parser_row_grammar_table_ref_930705dc (`table_ref`):
