@@ -994,6 +994,7 @@ impl db_core::engine::row::RowEngine
 pub fn db_core::engine::row::RowEngine::create(&std::path::Path, db_core::engine::row::CreateOptions, &str) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::header(&self) -> &db_core::storage::row::header::DatabaseHeader
 pub fn db_core::engine::row::RowEngine::path(&self) -> &std::path::Path
+pub fn db_core::engine::row::RowEngine::run_query_with(&mut self, &str, &[db_core::value::Value]) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 impl core::fmt::Debug for db_core::engine::row::RowEngine
 pub fn db_core::engine::row::RowEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::engine::Engine for db_core::engine::row::RowEngine

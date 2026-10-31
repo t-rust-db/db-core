@@ -33,6 +33,7 @@ use crate::storage::row::header::{DatabaseHeader, HEADER_LEN};
 use crate::storage::row::pager::Pager;
 use crate::storage::row::schema::read_schema_and_views;
 use crate::storage::row::vfs::{PageSource, UnixVfs, Vfs};
+use crate::value::Value;
 use crate::vm::row::{execute, explain, ConnectionState, Opcode, Program, Vm, OPFLAG_NCHANGE};
 
 use super::{
@@ -91,6 +92,72 @@ pub struct RowEngine {
     /// Carried across statements too: what `changes()`,
     /// `total_changes()` and `last_insert_rowid()` report (#651).
     connection: ConnectionState,
+}
+
+/// `stmt` with every bare `?` rewritten to `?N` in source order, `N` one
+/// past the largest index seen so far (sqlite3's numbering). Codegen
+/// numbers a bare `?` as it compiles it, and it compiles an `UPDATE`'s
+/// `WHERE` before its `SET`, so `SET n = ? WHERE v = ?` bound the two
+/// values the wrong way round.
+fn number_anonymous_params(stmt: &str) -> String {
+    use crate::parser::row::tokenizer::{Param, TokenKind, Tokenizer};
+    let mut out = String::with_capacity(stmt.len());
+    let mut copied = 0usize;
+    let mut largest = 0u32;
+    for token in Tokenizer::tokenize(stmt) {
+        let TokenKind::Param(param) = &token.kind else {
+            continue;
+        };
+        match **param {
+            Param::Numbered(n) => largest = largest.max(n),
+            Param::Anonymous => {
+                let start = token.span.offset as usize;
+                let end = start.saturating_add(token.span.len as usize);
+                let (Some(before), true) = (stmt.get(copied..start), stmt.is_char_boundary(end))
+                else {
+                    continue;
+                };
+                largest = largest.saturating_add(1);
+                out.push_str(before);
+                out.push_str(&format!("?{largest}"));
+                copied = end;
+            }
+            _ => {}
+        }
+    }
+    out.push_str(stmt.get(copied..).unwrap_or_default());
+    out
+}
+
+/// Binds `params` to `vm` for `program`, or does nothing for `None`. A
+/// count that differs from the program's parameter count -- its highest
+/// `Variable` slot -- is an error, before the program runs.
+fn bind_params(
+    vm: &mut Vm,
+    program: &Program,
+    params: Option<&[Value]>,
+) -> Result<(), EngineError> {
+    let Some(params) = params else {
+        return Ok(());
+    };
+    let expected = program
+        .instructions
+        .iter()
+        .filter(|i| i.opcode == Opcode::Variable)
+        .map(|i| i.p1)
+        .max()
+        .map_or(0, |slot| usize::try_from(slot).unwrap_or(0));
+    if expected != params.len() {
+        return Err(EngineError::new(
+            ErrorKind::Execute,
+            format!(
+                "the statement has {expected} parameter(s) but {} value(s) were supplied",
+                params.len()
+            ),
+        ));
+    }
+    vm.bind_params(params.to_vec());
+    Ok(())
 }
 
 impl std::fmt::Debug for RowEngine {
@@ -182,6 +249,36 @@ impl RowEngine {
             }
         }
         engine
+    }
+
+    /// Runs one statement with `?`/`?N` parameters bound to `params`
+    /// (#915): a value is data, never SQL text, so a `'` or `;` in a text
+    /// parameter cannot change the statement. `params` must hold exactly
+    /// as many values as the statement has parameters (the highest `?N`),
+    /// checked before anything runs.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Unsupported`] unless `sql` is exactly one statement;
+    /// [`ErrorKind::Execute`] for a wrong parameter count; otherwise as
+    /// [`Engine::run_query`].
+    pub fn run_query_with(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+    ) -> Result<QueryResult, EngineError> {
+        let stmt = number_anonymous_params(&single_statement(sql)?);
+        let catalog = self.catalog()?;
+        let result = if Self::is_select(&stmt) {
+            let select = Self::parse_select_or_err(&stmt)?;
+            self.run_select(&select, &stmt, &catalog, Some(params))?
+        } else {
+            let program = self.compile_one(&stmt, &catalog)?;
+            self.run_statement(&program, Some(params))?
+        };
+        if Self::is_schema_changing(&stmt) {
+            *self.catalog.borrow_mut() = None;
+        }
+        Ok(result)
     }
 
     /// The 100-byte header as read at open time. Not refreshed after
@@ -308,6 +405,7 @@ impl RowEngine {
         select: &Select,
         sql: &str,
         catalog: &Catalog,
+        params: Option<&[Value]>,
     ) -> Result<QueryResult, EngineError> {
         let (schemas, views) = catalog;
         let stats_by_table = self.stats_by_table(schemas);
@@ -315,6 +413,7 @@ impl RowEngine {
             .map_err(|e| EngineError::new(ErrorKind::Compile, e))?;
         let columns = result_column_names(select, sql, schemas, views);
         let mut vm = self.read_only_vm();
+        bind_params(&mut vm, &program, params)?;
         let rows =
             execute(&mut vm, &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
         Ok(QueryResult {
@@ -332,8 +431,13 @@ impl RowEngine {
     /// explicit transaction a clean `Halt` flushes the pager (every
     /// statement is its own transaction); inside `BEGIN ... COMMIT` the
     /// `AutoCommit` opcode flushes instead.
-    fn run_statement(&mut self, program: &Program) -> Result<QueryResult, EngineError> {
+    fn run_statement(
+        &mut self,
+        program: &Program,
+        params: Option<&[Value]>,
+    ) -> Result<QueryResult, EngineError> {
         let mut vm = self.writable_vm();
+        bind_params(&mut vm, program, params)?;
         let rows = match execute(&mut vm, program) {
             Ok(rows) => rows,
             Err(e) => {
@@ -409,7 +513,7 @@ impl RowEngine {
         let sql = format!("SELECT COUNT(*) FROM \"{}\"", table.replace('"', "\"\""));
         let select = Self::parse_select_or_err(&sql)?;
         match self
-            .run_select(&select, &sql, &catalog)?
+            .run_select(&select, &sql, &catalog, None)?
             .rows
             .first()
             .and_then(|r| r.first())
@@ -478,10 +582,10 @@ impl Engine for RowEngine {
             let catalog = self.catalog()?;
             let result = if Self::is_select(&stmt) {
                 let select = Self::parse_select_or_err(&stmt)?;
-                self.run_select(&select, &stmt, &catalog)?
+                self.run_select(&select, &stmt, &catalog, None)?
             } else {
                 let program = self.compile_one(&stmt, &catalog)?;
-                self.run_statement(&program)?
+                self.run_statement(&program, None)?
             };
             if Self::is_schema_changing(&stmt) {
                 *self.catalog.borrow_mut() = None;

@@ -53,6 +53,11 @@ path = "tests/unit/row_functions_oracle_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_row_bound_params"
+path = "tests/unit/row_bound_params_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_row_create"
 path = "tests/unit/row_create_test.rs"
 required-features = ["engine-row"]
