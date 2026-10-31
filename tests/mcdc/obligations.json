@@ -7442,7 +7442,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_with_catalog_and_stats_f41f6383",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 94,
+    "line": 95,
     "decision": "match &from.first.kind {\n        TableRefKind::Name(_) => {\n            let root_page = valid_table_root_page(schema)?;\n            em.emit(Instruction::new(\n                Opcode::OpenRead,\n                cursors.table,\n                root_page,\n                0,\n            ));\n        }\n        TableRefKind::Unnest { .. } => {\n            return Err(CodegenError::Unsupported {\n                reason: \"UNNEST is only available in the column dialect\".into(),\n            })\n        }\n        TableRefKind::Subquery(subquery) => {\n            crate::codegen::row::subquery::materialize_from_subquery(\n                &mut em,\n                &mut reg,\n                subquery,\n                catalog,\n                cursors.table,\n            )?;\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7450,9 +7450,29 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_select_entry_check_table_star_qualifiers_80505791",
+    "file": "src/codegen/row/select/entry.rs",
+    "line": 146,
+    "decision": "let ResultColumn::TableStar { table } = col",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_entry_check_table_star_qualifiers_8b25f7e1",
+    "file": "src/codegen/row/select/entry.rs",
+    "line": 147,
+    "decision": "!table.eq_ignore_ascii_case(qualifier)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_select_entry_compile_select_no_from_b912fd96",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 150,
+    "line": 167,
     "decision": "select.where_clause.is_some()\n        || !select.group_by.is_empty()\n        || select.having.is_some()\n        || !select.order_by.is_empty()\n        || select.limit.is_some()\n        || select.distinct.is_some()\n        || !select.compound.is_empty()",
     "conditions": 7,
     "vectors_required": 8,
@@ -7462,7 +7482,7 @@
   {
     "id": "codegen_row_select_entry_scan_dispatch_a57a2585",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 252,
+    "line": 269,
     "decision": "!select.group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7472,7 +7492,7 @@
   {
     "id": "codegen_row_select_entry_scan_dispatch_f8746217",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 254,
+    "line": 271,
     "decision": "select_has_aggregate(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7482,7 +7502,7 @@
   {
     "id": "codegen_row_select_entry_scan_dispatch_a7c98f27",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 256,
+    "line": 273,
     "decision": "select.order_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7492,7 +7512,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_a972d8ef",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 291,
+    "line": 308,
     "decision": "match select\n        .from\n        .as_ref()\n        .map(|f| (&f.first.kind, &f.first.alias))\n    {\n        Some((TableRefKind::Name(_), Some(alias))) if !alias.eq_ignore_ascii_case(&schema.name) => {\n            aliased = Rc::new(TableSchema {\n                name: alias.clone(),\n                ..(**schema).clone()\n            });\n            &aliased\n        }\n        _ => schema,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7502,7 +7522,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_68be126b",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 296,
+    "line": 313,
     "decision": "!alias.eq_ignore_ascii_case(&schema.name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7512,7 +7532,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_827ff87d",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 308,
+    "line": 325,
     "decision": "match resolve_single_table_group_terms(select, schema)? {\n        Some(select) => {\n            resolved = select;\n            &resolved\n        }\n        None => select,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7522,7 +7542,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_4273c6d2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 317,
+    "line": 334,
     "decision": "super::post_group::needs_post_group(select, schema)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7532,7 +7552,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_a57a2585",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 346,
+    "line": 363,
     "decision": "!select.group_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7542,7 +7562,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_04396f46",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 347,
+    "line": 364,
     "decision": "try_compile_index_ordered_group_by(\n            em, reg, select, schema, cursors, end_label, catalog, false, sink,\n        )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7552,7 +7572,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_f8746217",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 370,
+    "line": 387,
     "decision": "select_has_aggregate(select)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7562,7 +7582,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_3c22ca8f",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 371,
+    "line": 388,
     "decision": "super::aggregate::try_compile_index_only_count(\n            em, reg, select, schema, cursors, catalog, sink,\n        )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7572,7 +7592,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_a9fa286a",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 376,
+    "line": 393,
     "decision": "super::aggregate::try_compile_index_only_sum(em, reg, select, schema, cursors, sink)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7582,7 +7602,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_0b496d30",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 379,
+    "line": 396,
     "decision": "super::aggregate::try_compile_direct_agg_scan(\n            em, reg, select, schema, cursors, end_label, catalog, stats, sink,\n        )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7592,7 +7612,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_5f78b46d",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 388,
+    "line": 405,
     "decision": "select.having.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7602,7 +7622,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_0a51686a",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 395,
+    "line": 412,
     "decision": "order_by_plans.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7612,7 +7632,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_e6060a43",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 400,
+    "line": 417,
     "decision": "try_compile_index_ordered_scan(\n        em,\n        reg,\n        select,\n        schema,\n        &order_by_plans,\n        cursors,\n        end_label,\n        catalog,\n        sink,\n    )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7622,7 +7642,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_scan_body_8d36ce4d",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 413,
+    "line": 430,
     "decision": "try_compile_partial_sorted_index_scan(\n        em,\n        reg,\n        select,\n        schema,\n        &order_by_plans,\n        cursors,\n        end_label,\n        catalog,\n        sink,\n    )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -7632,7 +7652,7 @@
   {
     "id": "codegen_row_select_entry_select_result_column_count_joined_de8c9192",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 468,
+    "line": 485,
     "decision": "match col {\n            ResultColumn::Star => {\n                count = count.saturating_add(schemas.iter().map(|s| s.columns.len()).sum());\n            }\n            ResultColumn::TableStar { table } => {\n                let idx = table_refs\n                    .iter()\n                    .position(|t| {\n                        t.alias\n                            .as_deref()\n                            .or(t.name())\n                            .unwrap_or(\"\")\n                            .eq_ignore_ascii_case(table)\n                    })\n                    .ok_or_else(|| CodegenError::UnknownColumn {\n                        name: format!(\"{table}.*\"),\n                    })?;\n                // `idx` was just found in `table_refs`, which `schemas`\n                // mirrors one-to-one; a miss here is a planner bug (#232).\n                let n = schemas.get(idx).map(|s| s.columns.len()).ok_or_else(|| {\n                    CodegenError::Internal {\n                        reason: format!(\"no schema for FROM item {idx} ({table}.*)\"),\n                    }\n                })?;\n                count = count.saturating_add(n);\n            }\n            ResultColumn::Expr { .. } => count = count.saturating_add(1),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7642,7 +7662,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_3cedc988",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 557,
+    "line": 574,
     "decision": "first\n        .from\n        .as_ref()\n        .is_some_and(|from| !from.joins.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -7652,7 +7672,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_4cace95b",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 566,
+    "line": 583,
     "decision": "first.compound.len() != arm_schemas.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -7662,7 +7682,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_84517b44",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 600,
+    "line": 617,
     "decision": "order_by_plans\n        .iter()\n        .any(|plan| matches!(plan.target, OrderByTarget::Expr(_)))",
     "conditions": 1,
     "vectors_required": 2,
@@ -7672,7 +7692,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_fa52c75b",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 613,
+    "line": 630,
     "decision": "arm.from.as_ref().is_some_and(|from| !from.joins.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -7682,7 +7702,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_5960c2d2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 620,
+    "line": 637,
     "decision": "found != expected",
     "conditions": 1,
     "vectors_required": 2,
@@ -7692,7 +7712,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_d2aa294d",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 645,
+    "line": 662,
     "decision": "has_union",
     "conditions": 1,
     "vectors_required": 2,
@@ -7702,7 +7722,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_be56a1fd",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 649,
+    "line": 666,
     "decision": "match &first.limit {\n        Some(_) => compile_limit_setup(\n            &mut em,\n            &mut reg,\n            &Scope::single(&output_schema, pseudo_cursor),\n            first,\n        )?,\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7712,7 +7732,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_eab8fb93",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 665,
+    "line": 682,
     "decision": "needs_sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -7722,7 +7742,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_eab8fb93_2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 675,
+    "line": 692,
     "decision": "needs_sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -7732,7 +7752,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_e48311df",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 681,
+    "line": 698,
     "decision": "let (false, Some(addr)) = (sort_keys_patched, sorter_open_addr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -7742,7 +7762,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_8a231f40",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 688,
+    "line": 705,
     "decision": "match &plan.target {\n                                OrderByTarget::Column(index) => *index,\n                                OrderByTarget::Expr(_) => 0,\n                            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7752,7 +7772,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_197bdeb6",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 716,
+    "line": 733,
     "decision": "let Some(limit) = &limit_state",
     "conditions": 1,
     "vectors_required": 2,
@@ -7762,7 +7782,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_d2aa294d_2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 728,
+    "line": 745,
     "decision": "has_union",
     "conditions": 1,
     "vectors_required": 2,
@@ -7772,7 +7792,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_d7aaf9ed",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 752,
+    "line": 769,
     "decision": "match select.from.as_ref().map(|from| &from.first.kind) {\n            Some(TableRefKind::Subquery(subquery)) => {\n                crate::codegen::row::subquery::materialize_from_subquery(\n                    em,\n                    reg,\n                    subquery,\n                    catalog,\n                    cursors.table,\n                )?;\n            }\n            _ => {\n                let root_page = valid_table_root_page(schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    cursors.table,\n                    root_page,\n                    0,\n                ));\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -7782,7 +7802,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_eab8fb93_3",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 809,
+    "line": 826,
     "decision": "needs_sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -7792,7 +7812,7 @@
   {
     "id": "codegen_row_select_entry_compile_select_compound_197bdeb6_2",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 830,
+    "line": 847,
     "decision": "let Some(limit) = &limit_state",
     "conditions": 1,
     "vectors_required": 2,
@@ -7802,7 +7822,7 @@
   {
     "id": "codegen_row_select_entry_parsed_dff52814",
     "file": "src/codegen/row/select/entry.rs",
-    "line": 878,
+    "line": 895,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

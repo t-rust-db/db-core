@@ -81,6 +81,7 @@ pub fn compile_select_with_catalog_and_stats(
                 .to_string(),
         });
     }
+    check_table_star_qualifiers(select, &from.first)?;
 
     let mut em = Emitter::new();
     let mut reg = RegAlloc::new();
@@ -133,6 +134,22 @@ pub fn compile_select_with_catalog_and_stats(
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
 
     Ok(em.finish())
+}
+
+/// `tbl.*` names the FROM item by its alias when it has one and by its
+/// name otherwise; sqlite3 refuses any other qualifier with `no such
+/// table` (#650). The joined path resolves it per binding; here the one
+/// FROM item is checked once, before codegen treats every `x.*` as `*`.
+fn check_table_star_qualifiers(select: &Select, item: &TableRef) -> Result<(), CodegenError> {
+    let qualifier = item.alias.as_deref().or(item.name()).unwrap_or("");
+    for col in &select.columns {
+        if let ResultColumn::TableStar { table } = col {
+            if !table.eq_ignore_ascii_case(qualifier) {
+                return Err(CodegenError::Rejected(format!("no such table: {table}")));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// A FROM-less `SELECT <expr>[, ...]` (#260) — SQLite's normal way to
