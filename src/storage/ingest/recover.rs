@@ -110,7 +110,7 @@ fn valid_frame_after(buf: &[u8], from: usize, prev: u64) -> bool {
 /// Replays `dir` (created if missing) from `flushed_lsn`.
 #[cfg(feature = "ingest")]
 pub(crate) fn replay(dir: &Path, flushed_lsn: u64) -> Result<Replay, WalError> {
-    fs::create_dir_all(dir)?;
+    super::create_dir_all_synced(dir)?;
     let all = list(dir)?;
     let mut kept = Vec::new();
     for (i, segment) in all.iter().enumerate() {
