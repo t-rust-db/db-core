@@ -392,13 +392,7 @@ pub fn decode_struct(buf: &[u8]) -> Result<(Vec<(i16, Value)>, usize)> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 
@@ -617,7 +611,7 @@ mod tests_289 {
 /// #657: hostile lengths, sizes and nesting fail fast, without a panic,
 /// stack overflow or an allocation sized by the claimed length.
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests_657 {
     use super::*;
 

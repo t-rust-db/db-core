@@ -1171,7 +1171,6 @@ mod index_skip_tests {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod unknown_function_tests {
     //! #650: an unknown function in an overridden `SET` is still refused.
 

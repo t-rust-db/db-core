@@ -13342,7 +13342,7 @@
   {
     "id": "codegen_row_stmt_update_compile_36cf9018_2",
     "file": "src/codegen/row/stmt/update.rs",
-    "line": 1191,
+    "line": 1190,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => *update,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -39222,7 +39222,7 @@
   {
     "id": "storage_parquet_compression_snappy_a_block_of_maximal_copies_is_within_the_expansion_bound_364d7716",
     "file": "src/storage/parquet/compression/snappy.rs",
-    "line": 472,
+    "line": 466,
     "decision": "v >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -41122,7 +41122,7 @@
   {
     "id": "storage_parquet_encoding_write_varint_2427714d",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 542,
+    "line": 536,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41132,7 +41132,7 @@
   {
     "id": "storage_parquet_encoding_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 546,
+    "line": 540,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41142,7 +41142,7 @@
   {
     "id": "storage_parquet_encoding_pack_bits_6249d37f",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 640,
+    "line": 634,
     "decision": "bit_width == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41152,7 +41152,7 @@
   {
     "id": "storage_parquet_encoding_pack_bits_9466a82b",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 647,
+    "line": 641,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -41162,7 +41162,7 @@
   {
     "id": "storage_parquet_encoding_a_bit_packed_run_whose_byte_size_overflows_is_invalid_length_43333d26",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 746,
+    "line": 739,
     "decision": "header >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -41172,7 +41172,7 @@
   {
     "id": "storage_parquet_encoding_varints_364d7716",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 803,
+    "line": 796,
     "decision": "v >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -41182,7 +41182,7 @@
   {
     "id": "storage_parquet_encoding_varint_364d7716",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 901,
+    "line": 893,
     "decision": "v >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -41192,7 +41192,7 @@
   {
     "id": "storage_parquet_encoding_stream_ff92a7b4",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 914,
+    "line": 906,
     "decision": "bit_width >= 32",
     "conditions": 1,
     "vectors_required": 2,
@@ -41202,7 +41202,7 @@
   {
     "id": "storage_parquet_encoding_stream_cd6e0472",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 920,
+    "line": 912,
     "decision": "values.len() < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -41212,7 +41212,7 @@
   {
     "id": "storage_parquet_encoding_stream_47fd0170",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 926,
+    "line": 918,
     "decision": "values.len() >= n",
     "conditions": 1,
     "vectors_required": 2,
@@ -41222,7 +41222,7 @@
   {
     "id": "storage_parquet_encoding_stream_7f998e5a",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 934,
+    "line": 926,
     "decision": "i < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -41232,7 +41232,7 @@
   {
     "id": "storage_parquet_encoding_stream_43a60d5c",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 941,
+    "line": 933,
     "decision": "bits >= 8",
     "conditions": 1,
     "vectors_required": 2,
@@ -41242,7 +41242,7 @@
   {
     "id": "storage_parquet_encoding_read_windows_4265c954",
     "file": "src/storage/parquet/encoding.rs",
-    "line": 957,
+    "line": 949,
     "decision": "all.len() < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -41332,7 +41332,7 @@
   {
     "id": "storage_parquet_footer_write_varint_2427714d",
     "file": "src/storage/parquet/footer.rs",
-    "line": 628,
+    "line": 622,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41342,7 +41342,7 @@
   {
     "id": "storage_parquet_footer_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/footer.rs",
-    "line": 632,
+    "line": 626,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41352,7 +41352,7 @@
   {
     "id": "storage_parquet_footer_list_of_structs_field_b09c4ad2",
     "file": "src/storage/parquet/footer.rs",
-    "line": 682,
+    "line": 676,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -41362,7 +41362,7 @@
   {
     "id": "storage_parquet_footer_build_statistics_6e0c02b7",
     "file": "src/storage/parquet/footer.rs",
-    "line": 733,
+    "line": 727,
     "decision": "let Some(nc) = null_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -41372,7 +41372,7 @@
   {
     "id": "storage_parquet_footer_build_statistics_c902b83d",
     "file": "src/storage/parquet/footer.rs",
-    "line": 736,
+    "line": 730,
     "decision": "let Some(dc) = distinct_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -41382,7 +41382,7 @@
   {
     "id": "storage_parquet_footer_build_statistics_deb319cf",
     "file": "src/storage/parquet/footer.rs",
-    "line": 739,
+    "line": 733,
     "decision": "let Some(max) = max_value",
     "conditions": 1,
     "vectors_required": 2,
@@ -41392,7 +41392,7 @@
   {
     "id": "storage_parquet_footer_build_statistics_0edd8feb",
     "file": "src/storage/parquet/footer.rs",
-    "line": 742,
+    "line": 736,
     "decision": "let Some(min) = min_value",
     "conditions": 1,
     "vectors_required": 2,
@@ -41402,7 +41402,7 @@
   {
     "id": "storage_parquet_footer_exercise_94fba42a",
     "file": "src/storage/parquet/footer.rs",
-    "line": 1001,
+    "line": 989,
     "decision": "match parse_footer(file) {\n            Ok(meta) => {\n                let tree = build_schema_tree(&meta.schema);\n                assert!(tree.leaves().len() <= meta.schema.len());\n                if let Ok(f) = ParquetFile::open(file) {\n                    assert!(f.fields().len() <= meta.schema.len());\n                }\n                true\n            }\n            Err(e) => {\n                assert!(!e.to_string().is_empty());\n                false\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41412,7 +41412,7 @@
   {
     "id": "storage_parquet_footer_exercise_080f25df",
     "file": "src/storage/parquet/footer.rs",
-    "line": 1005,
+    "line": 993,
     "decision": "let Ok(f) = ParquetFile::open(file)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41422,7 +41422,7 @@
   {
     "id": "storage_parquet_footer_every_declared_metadata_length_is_handled_00b75ab0",
     "file": "src/storage/parquet/footer.rs",
-    "line": 1071,
+    "line": 1059,
     "decision": "len as usize > tail",
     "conditions": 1,
     "vectors_required": 2,
@@ -41432,7 +41432,7 @@
   {
     "id": "storage_parquet_footer_varint_a5b1bbc4",
     "file": "src/storage/parquet/footer.rs",
-    "line": 1113,
+    "line": 1101,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41612,7 +41612,7 @@
   {
     "id": "storage_parquet_page_write_varint_2427714d",
     "file": "src/storage/parquet/page.rs",
-    "line": 206,
+    "line": 200,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41622,7 +41622,7 @@
   {
     "id": "storage_parquet_page_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/page.rs",
-    "line": 210,
+    "line": 204,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42692,7 +42692,7 @@
   {
     "id": "storage_parquet_parquet_file_write_varint_2427714d",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2454,
+    "line": 2448,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42702,7 +42702,7 @@
   {
     "id": "storage_parquet_parquet_file_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2458,
+    "line": 2452,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -42712,7 +42712,7 @@
   {
     "id": "storage_parquet_parquet_file_list_of_structs_field_b09c4ad2",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2492,
+    "line": 2486,
     "decision": "n < 15",
     "conditions": 1,
     "vectors_required": 2,
@@ -42722,7 +42722,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_typed_642303d1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2649,
+    "line": 2643,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -42732,7 +42732,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_annotated_642303d1",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2682,
+    "line": 2676,
     "decision": "let Some(len) = type_length",
     "conditions": 1,
     "vectors_required": 2,
@@ -42742,7 +42742,7 @@
   {
     "id": "storage_parquet_parquet_file_build_file_from_chunk_annotated_aafe5a53",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2688,
+    "line": 2682,
     "decision": "let Some(s) = scale",
     "conditions": 1,
     "vectors_required": 2,
@@ -42752,7 +42752,7 @@
   {
     "id": "storage_parquet_parquet_file_encode_dictionary_indices_9466a82b",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 2717,
+    "line": 2711,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -42762,7 +42762,7 @@
   {
     "id": "storage_parquet_parquet_file_build_fixed_dictionary_chunk_bc1ee538",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 3087,
+    "line": 3081,
     "decision": "match page {\n                DictTestPage::Codes(codes) => {\n                    let body = encode_dictionary_indices(codes, bit_width);\n                    let header = build_dictionary_encoded_data_page_header(\n                        codes.len() as i32,\n                        body.len() as i32,\n                    );\n                    num_rows += codes.len() as i64;\n                    (header, body)\n                }\n                DictTestPage::Plain(body, n) => {\n                    num_rows += i64::from(*n);\n                    (build_page_header(*n, body.len() as i32), body.to_vec())\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42772,7 +42772,7 @@
   {
     "id": "storage_parquet_parquet_file_a_row_group_claiming_more_rows_than_the_cap_is_refused_before_decoding_d90eaf1e",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 3304,
+    "line": 3298,
     "decision": "run >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -42782,7 +42782,7 @@
   {
     "id": "storage_parquet_parquet_file_an_rle_run_claiming_more_values_than_rows_is_refused_before_decoding_d90eaf1e",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 3401,
+    "line": 3395,
     "decision": "run >= 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -42792,7 +42792,7 @@
   {
     "id": "storage_parquet_parquet_file_read_decimal_column_refuses_a_fixed_len_byte_array_past_16_bytes_e69e6d01",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 4203,
+    "line": 4197,
     "decision": "match rg.read_decimal_column(0) {\n            Err(FileError::InvalidMetadata { field, value }) => {\n                assert_eq!(field, \"DECIMAL fixed_len_byte_array length\");\n                assert_eq!(value, 17);\n            }\n            other => panic!(\"expected InvalidMetadata, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42802,7 +42802,7 @@
   {
     "id": "storage_parquet_parquet_file_negative_page_size_is_invalid_metadata_not_a_huge_allocation_a5ccf881",
     "file": "src/storage/parquet/parquet_file.rs",
-    "line": 4223,
+    "line": 4217,
     "decision": "match page_size(\"compressed_page_size\", -1) {\n            Err(FileError::InvalidMetadata { field, value }) => {\n                assert_eq!(field, \"compressed_page_size\");\n                assert_eq!(value, -1);\n            }\n            other => panic!(\"expected InvalidMetadata, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43342,7 +43342,7 @@
   {
     "id": "storage_parquet_reader_encode_def_levels_62d37561",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1134,
+    "line": 1128,
     "decision": "idx < n && levels[idx] == 1",
     "conditions": 2,
     "vectors_required": 3,
@@ -43352,7 +43352,7 @@
   {
     "id": "storage_parquet_reader_encode_dictionary_indices_9466a82b",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1615,
+    "line": 1609,
     "decision": "(value >> bit) & 1 == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -43362,7 +43362,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_fixed_rejects_a_code_past_the_dictionary_4c7ae637",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1756,
+    "line": 1750,
     "decision": "max_def_level == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -43372,7 +43372,7 @@
   {
     "id": "storage_parquet_reader_read_dictionary_fixed_rejects_a_code_past_the_dictionary_4c7ae637_2",
     "file": "src/storage/parquet/reader.rs",
-    "line": 1761,
+    "line": 1755,
     "decision": "max_def_level == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -43382,7 +43382,7 @@
   {
     "id": "storage_parquet_reader_plain_scalar_booleans_advance_a_byte_every_eight_bits_cf8788a7",
     "file": "src/storage/parquet/reader.rs",
-    "line": 2017,
+    "line": 2006,
     "decision": "match read_plain_scalar(&mut buf, PhysicalType::Boolean, &mut bit_pos).unwrap() {\n                LeafScalar::Bool(b) => bits.push(b),\n                other => panic!(\"expected a boolean, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43752,7 +43752,7 @@
   {
     "id": "storage_parquet_thrift_write_varint_2427714d",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 413,
+    "line": 407,
     "decision": "v != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -43762,7 +43762,7 @@
   {
     "id": "storage_parquet_thrift_write_varint_a5b1bbc4",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 417,
+    "line": 411,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -43772,7 +43772,7 @@
   {
     "id": "storage_parquet_thrift_decodes_nested_struct_0e893d60",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 458,
+    "line": 452,
     "decision": "match &fields[0].1 {\n            Value::Struct(inner_fields) => {\n                assert_eq!(inner_fields, &vec![(1, Value::Bool(true))]);\n            }\n            other => panic!(\"expected nested struct, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43782,7 +43782,7 @@
   {
     "id": "storage_parquet_thrift_decodes_map_caa53fb3",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 525,
+    "line": 519,
     "decision": "match &fields[0].1 {\n            Value::Map(entries) => {\n                assert_eq!(entries.len(), 1);\n                assert_eq!(entries[0].0.as_str(), Some(\"a\"));\n                assert_eq!(entries[0].1, Value::I32(1));\n            }\n            other => panic!(\"expected map, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43792,7 +43792,7 @@
   {
     "id": "storage_parquet_thrift_encode_varint_test_a5b1bbc4",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 608,
+    "line": 602,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -43802,7 +43802,7 @@
   {
     "id": "storage_parquet_thrift_varint_a5b1bbc4",
     "file": "src/storage/parquet/thrift.rs",
-    "line": 628,
+    "line": 622,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -45662,7 +45662,7 @@
   {
     "id": "storage_row_btree_text_cf9777d8",
     "file": "src/storage/row/btree.rs",
-    "line": 1985,
+    "line": 1979,
     "decision": "match v {\n            Value::Text(s) => s,\n            other => panic!(\"expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45672,7 +45672,7 @@
   {
     "id": "storage_row_btree_int_50ac411a",
     "file": "src/storage/row/btree.rs",
-    "line": 1992,
+    "line": 1986,
     "decision": "match v {\n            Value::Integer(i) => *i,\n            other => panic!(\"expected integer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45682,7 +45682,7 @@
   {
     "id": "storage_row_btree_blob_0fd307c4",
     "file": "src/storage/row/btree.rs",
-    "line": 1999,
+    "line": 1993,
     "decision": "match v {\n            Value::Blob(b) => b,\n            other => panic!(\"expected blob, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -45692,7 +45692,7 @@
   {
     "id": "storage_row_btree_table_multipage_full_scan_matches_oracle_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2039,
+    "line": 2033,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45702,7 +45702,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_and_prev_walk_descending_rowid_order_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2085,
+    "line": 2079,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45712,7 +45712,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_matches_full_scans_final_row_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2114,
+    "line": 2108,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45722,7 +45722,7 @@
   {
     "id": "storage_row_btree_table_single_page_seek_binary_search_on_small_leaf_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2198,
+    "line": 2192,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -45732,7 +45732,7 @@
   {
     "id": "storage_row_btree_sha256_of_8adec907",
     "file": "src/storage/row/btree.rs",
-    "line": 2480,
+    "line": 2474,
     "decision": "msg.len() % 64 != 56",
     "conditions": 1,
     "vectors_required": 2,
@@ -45742,7 +45742,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_885fe06a",
     "file": "src/storage/row/btree.rs",
-    "line": 2687,
+    "line": 2681,
     "decision": "value < 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -45752,7 +45752,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_c6634d1d",
     "file": "src/storage/row/btree.rs",
-    "line": 2695,
+    "line": 2689,
     "decision": "value == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -45762,7 +45762,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_832a894a",
     "file": "src/storage/row/btree.rs",
-    "line": 2701,
+    "line": 2695,
     "decision": "i + 1 == chunks.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -45772,7 +45772,7 @@
   {
     "id": "storage_row_btree_local_payload_borrows_from_the_page_instead_of_copying_a3f083e9",
     "file": "src/storage/row/btree.rs",
-    "line": 2793,
+    "line": 2787,
     "decision": "match &row.payload {\n            Payload::Local { page, .. } => {\n                assert!(\n                    Rc::strong_count(page) >= 2,\n                    \"expected the row to share the page's Rc, not hold the only reference\"\n                );\n            }\n            Payload::Owned(_) => panic!(\"expected a borrowed Local payload, got an Owned copy\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46152,7 +46152,7 @@
   {
     "id": "storage_row_btree_index_text_cf9777d8",
     "file": "src/storage/row/btree/index.rs",
-    "line": 929,
+    "line": 923,
     "decision": "match v {\n            Value::Text(s) => s,\n            other => panic!(\"expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46162,7 +46162,7 @@
   {
     "id": "storage_row_btree_index_int_50ac411a",
     "file": "src/storage/row/btree/index.rs",
-    "line": 936,
+    "line": 930,
     "decision": "match v {\n            Value::Integer(i) => *i,\n            other => panic!(\"expected integer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46172,7 +46172,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_walk_matches_oracle_binary_order_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 951,
+    "line": 945,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46182,7 +46182,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_last_prev_matches_reversed_forward_walk_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 986,
+    "line": 980,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46192,7 +46192,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_last_prev_matches_reversed_forward_walk_c6c2d2df_2",
     "file": "src/storage/row/btree/index.rs",
-    "line": 994,
+    "line": 988,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46202,7 +46202,7 @@
   {
     "id": "storage_row_btree_index_secondary_index_seek_between_keys_matches_full_scan_and_next_continues_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1026,
+    "line": 1020,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46212,7 +46212,7 @@
   {
     "id": "storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_c6c2d2df",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1129,
+    "line": 1123,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -46222,7 +46222,7 @@
   {
     "id": "storage_row_btree_index_without_rowid_table_is_readable_as_index_btree_559109f7",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1145,
+    "line": 1139,
     "decision": "idx < expect_order.len() && text(&key[0]) == expect_order[idx]",
     "conditions": 2,
     "vectors_required": 3,
@@ -46232,7 +46232,7 @@
   {
     "id": "storage_row_btree_index_index_local_payload_borrows_from_the_page_instead_of_copying_a3f083e9",
     "file": "src/storage/row/btree/index.rs",
-    "line": 1166,
+    "line": 1160,
     "decision": "match &row.payload {\n            Payload::Local { page, .. } => {\n                assert!(\n                    Rc::strong_count(page) >= 2,\n                    \"expected the row to share the page's Rc, not hold the only reference\"\n                );\n            }\n            Payload::Owned(_) => panic!(\"expected a borrowed Local payload, got an Owned copy\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46472,7 +46472,7 @@
   {
     "id": "storage_row_btree_index_index_delete_walk_f1135128",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 815,
+    "line": 814,
     "decision": "match read_page_type(&buf, header_start, page).unwrap() {\n            LEAF_INDEX => {\n                let cells = collect_index_leaf_cells(\n                    pager,\n                    &buf,\n                    header_start,\n                    page,\n                    usable,\n                    TextEncoding::Utf8,\n                )\n                .unwrap();\n                assert!(is_root || !cells.is_empty(), \"leaf {page} is empty\");\n                out.extend(cells.into_iter().map(|(key, _)| key));\n            }\n            INTERIOR_INDEX => {\n                let (entries, rightmost) = collect_index_interior_entries(\n                    pager,\n                    &buf,\n                    header_start,\n                    page,\n                    usable,\n                    TextEncoding::Utf8,\n                )\n                .unwrap();\n                assert!(!entries.is_empty(), \"interior page {page} has no entries\");\n                for (child, key, _) in entries {\n                    walk(pager, header, child, false, out);\n                    out.push(key);\n                }\n                walk(pager, header, rightmost, false, out);\n            }\n            other => panic!(\"page {page} has type {other:#x}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46482,7 +46482,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_every_entry_in_ascending_order_leaves_a_valid_tree_throughout_2b65e5c5",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 898,
+    "line": 897,
     "decision": "n % 7 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -46492,7 +46492,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_every_entry_in_descending_order_leaves_a_valid_tree_throughout_2b65e5c5",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 913,
+    "line": 912,
     "decision": "n % 7 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -46502,7 +46502,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_from_the_middle_outwards_leaves_a_valid_tree_throughout_a3d20f7f",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 928,
+    "line": 927,
     "decision": "!remaining.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -46512,7 +46512,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_from_the_middle_outwards_leaves_a_valid_tree_throughout_d707b591",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 933,
+    "line": 932,
     "decision": "step % 11 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -46522,7 +46522,7 @@
   {
     "id": "storage_row_btree_index_index_delete_deleting_a_separator_over_an_interior_subtree_with_an_emptied_leaf_944e49c1",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1030,
+    "line": 1029,
     "decision": "read_page_type(&buf, page1_header_start(page), page).unwrap() == LEAF_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -46532,7 +46532,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_131bc340",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1069,
+    "line": 1068,
     "decision": "big",
     "conditions": 1,
     "vectors_required": 2,
@@ -46542,7 +46542,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_5b29cd39",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1082,
+    "line": 1081,
     "decision": "step < 1200",
     "conditions": 1,
     "vectors_required": 2,
@@ -46552,7 +46552,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_453b75ea",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1083,
+    "line": 1082,
     "decision": "rng.next() % 100 < insert_bias",
     "conditions": 1,
     "vectors_required": 2,
@@ -46562,7 +46562,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_2b85f343",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1084,
+    "line": 1083,
     "decision": "let std::collections::btree_map::Entry::Vacant(slot) = model.entry(text)",
     "conditions": 1,
     "vectors_required": 2,
@@ -46572,7 +46572,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_c8b82283",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1089,
+    "line": 1088,
     "decision": "model.remove(&text).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -46582,7 +46582,7 @@
   {
     "id": "storage_row_btree_index_index_delete_random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid_f3a7aabf",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1096,
+    "line": 1095,
     "decision": "step % 20 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -46592,7 +46592,7 @@
   {
     "id": "storage_row_btree_index_index_delete_split_then_delete_all_including_promoted_interior_entries_734b4601",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1189,
+    "line": 1188,
     "decision": "let Err(e) = r",
     "conditions": 1,
     "vectors_required": 2,
@@ -46602,7 +46602,7 @@
   {
     "id": "storage_row_btree_index_index_delete_split_then_delete_descending_hits_the_interior_predecessor_swap_with_a_nonempty_subtree_734b4601",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1228,
+    "line": 1227,
     "decision": "let Err(e) = r",
     "conditions": 1,
     "vectors_required": 2,
@@ -46612,7 +46612,7 @@
   {
     "id": "storage_row_btree_index_index_delete_reachable_pages_594ac9a2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1246,
+    "line": 1245,
     "decision": "page_type != INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -46622,7 +46622,7 @@
   {
     "id": "storage_row_btree_index_index_delete_freelist_pages_ccf8b9e2",
     "file": "src/storage/row/btree/index/index_delete.rs",
-    "line": 1270,
+    "line": 1269,
     "decision": "trunk != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -46732,7 +46732,7 @@
   {
     "id": "storage_row_btree_index_index_insert_entries_stay_in_ascending_key_order_813e3486",
     "file": "src/storage/row/btree/index/index_insert.rs",
-    "line": 629,
+    "line": 628,
     "decision": "match &k[0] {\n                Value::Text(s) => s.as_ref(),\n                _ => panic!(\"expected text\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -46972,7 +46972,7 @@
   {
     "id": "storage_row_btree_schema_populate_index_from_table_covers_existing_rows_c6c2d2df",
     "file": "src/storage/row/btree/schema.rs",
-    "line": 151,
+    "line": 150,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -47082,7 +47082,7 @@
   {
     "id": "storage_row_btree_table_table_delete_deleting_one_subtree_never_orphans_a_sibling_rightmost_subtree_e5c2f557",
     "file": "src/storage/row/btree/table/table_delete.rs",
-    "line": 546,
+    "line": 545,
     "decision": "let Some(page_num) = stack.pop()",
     "conditions": 1,
     "vectors_required": 2,
@@ -47092,7 +47092,7 @@
   {
     "id": "storage_row_btree_table_table_delete_deleting_one_subtree_never_orphans_a_sibling_rightmost_subtree_f4615865",
     "file": "src/storage/row/btree/table/table_delete.rs",
-    "line": 550,
+    "line": 549,
     "decision": "page_type == LEAF_TABLE",
     "conditions": 1,
     "vectors_required": 2,
@@ -47512,7 +47512,7 @@
   {
     "id": "storage_row_header_new_empty_page1_parses_back_as_a_fresh_header_b16118a6",
     "file": "src/storage/row/header.rs",
-    "line": 580,
+    "line": 574,
     "decision": "page_size == 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -48682,7 +48682,7 @@
   {
     "id": "storage_row_pager_db_with_journal_22a86bc9",
     "file": "src/storage/row/pager.rs",
-    "line": 1611,
+    "line": 1605,
     "decision": "let Some(bytes) = journal_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -48692,7 +48692,7 @@
   {
     "id": "storage_row_pager_hot_journal_open_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1742,
+    "line": 1736,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48702,7 +48702,7 @@
   {
     "id": "storage_row_pager_flush_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1789,
+    "line": 1783,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48712,7 +48712,7 @@
   {
     "id": "storage_row_pager_pager_with_freelist_2fbc1de0",
     "file": "src/storage/row/pager.rs",
-    "line": 2848,
+    "line": 2842,
     "decision": "(2..=4).contains(&trunk)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48812,7 +48812,7 @@
   {
     "id": "storage_row_pager_checkpoint_page_size_mismatch_is_an_error_274b6741",
     "file": "src/storage/row/pager/checkpoint.rs",
-    "line": 457,
+    "line": 452,
     "decision": "match err {\n            PagerError::Wal { source, .. } => {\n                assert!(matches!(\n                    source,\n                    wal::WalError::InvalidPageSize { page_size: 512 }\n                ));\n            }\n            other => panic!(\"expected PagerError::Wal, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -49172,7 +49172,7 @@
   {
     "id": "storage_row_pager_wal_last_valid_frame_state_d3a4b5e1",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 1165,
+    "line": 1159,
     "decision": "match super::super::last_valid_frame_state(header, frames, |index, frame| {\n                slice_frame(bytes, index, frame)\n            }) {\n                Ok(state) => state,\n                Err(never) => match never {},\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -49182,7 +49182,7 @@
   {
     "id": "storage_row_pager_wal_last_valid_frame_state_66cb4bff",
     "file": "src/storage/row/pager/wal.rs",
-    "line": 1169,
+    "line": 1163,
     "decision": "match never {}",
     "conditions": 0,
     "vectors_required": 0,
@@ -49432,7 +49432,7 @@
   {
     "id": "storage_row_record_decode_varint_bytes_09444ce9",
     "file": "src/storage/row/record/decode.rs",
-    "line": 444,
+    "line": 438,
     "decision": "i != 7",
     "conditions": 1,
     "vectors_required": 2,
@@ -49442,7 +49442,7 @@
   {
     "id": "storage_row_record_decode_varint_bytes_c6634d1d",
     "file": "src/storage/row/record/decode.rs",
-    "line": 448,
+    "line": 442,
     "decision": "value == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -49452,7 +49452,7 @@
   {
     "id": "storage_row_record_decode_record_bytes_811a56ee",
     "file": "src/storage/row/record/decode.rs",
-    "line": 472,
+    "line": 466,
     "decision": "hl_bytes.len() + header.len() == header_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -49462,7 +49462,7 @@
   {
     "id": "storage_row_record_decode_real_edge_values_bit_identical_4e256b85",
     "file": "src/storage/row/record/decode.rs",
-    "line": 577,
+    "line": 571,
     "decision": "match &decoded[..] {\n                [Value::Real(r)] => assert_eq!(r.to_bits(), v.to_bits(), \"value {v} bit mismatch\"),\n                other => panic!(\"expected one Real, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50262,7 +50262,7 @@
   {
     "id": "storage_row_vfs_lock_lock_shared_fails_with_contention_errno_when_exclusively_held_elsewhere_59603616",
     "file": "src/storage/row/vfs/lock.rs",
-    "line": 309,
+    "line": 308,
     "decision": "match result {\n            Err(VfsError::Locked { .. }) => {}\n            Err(other) => panic!(\"expected VfsError::Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected VfsError::Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50302,7 +50302,7 @@
   {
     "id": "storage_row_vfs_memory_handle_surfaces_io_error_when_lock_poisoned_ffa76cbf",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 247,
+    "line": 246,
     "decision": "match vfs.open_read(Path::new(\"/x\")) {\n            Ok(_) => panic!(\"expected an error\"),\n            Err(e) => e,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50312,7 +50312,7 @@
   {
     "id": "storage_row_vfs_memory_handle_surfaces_io_error_when_lock_poisoned_5db40bab",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 251,
+    "line": 250,
     "decision": "match err {\n            VfsError::Io { path, .. } => assert_eq!(path, \"/x\"),\n            other => panic!(\"expected Io error, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50322,7 +50322,7 @@
   {
     "id": "storage_row_vfs_memory_exists_surfaces_io_error_when_lock_poisoned_d21650d8",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 263,
+    "line": 262,
     "decision": "match err {\n            VfsError::Io { path, .. } => assert_eq!(path, \"/y\"),\n            other => panic!(\"expected Io error, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50392,7 +50392,7 @@
   {
     "id": "storage_row_vfs_page_source_short_file_reports_short_read_3f526844",
     "file": "src/storage/row/vfs/page_source.rs",
-    "line": 301,
+    "line": 300,
     "decision": "match source.read_page(1) {\n            Err(PageError::ShortRead {\n                page_num,\n                expected,\n                got,\n            }) => {\n                assert_eq!(page_num, 1);\n                assert_eq!(expected, 16);\n                assert_eq!(got, 8);\n            }\n            other => panic!(\"expected ShortRead, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50402,7 +50402,7 @@
   {
     "id": "storage_row_vfs_page_source_display_and_source_for_each_variant_28c3053b",
     "file": "src/storage/row/vfs/page_source.rs",
-    "line": 346,
+    "line": 345,
     "decision": "match vfs.open_read(Path::new(\"/missing\")) {\n            Err(e) => e,\n            Ok(_) => panic!(\"expected open_read to fail for a missing file\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50412,7 +50412,7 @@
   {
     "id": "storage_row_vfs_page_source_writable_page_source_rejects_wrong_length_3e1667ec",
     "file": "src/storage/row/vfs/page_source.rs",
-    "line": 384,
+    "line": 383,
     "decision": "match source.write_page(1, &[0u8; 8]) {\n            Err(PageError::WrongLength {\n                page_num,\n                expected,\n                got,\n            }) => {\n                assert_eq!(page_num, 1);\n                assert_eq!(expected, 16);\n                assert_eq!(got, 8);\n            }\n            other => panic!(\"expected WrongLength, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50532,7 +50532,7 @@
   {
     "id": "storage_row_vfs_shm_unix_vfs_surfaces_locked_error_when_all_slots_contended_72c97c66",
     "file": "src/storage/row/vfs/shm.rs",
-    "line": 670,
+    "line": 664,
     "decision": "match result {\n            Err(VfsError::Locked { .. }) => {}\n            other => panic!(\"expected VfsError::Locked, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

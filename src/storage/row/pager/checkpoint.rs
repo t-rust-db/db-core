@@ -218,12 +218,7 @@ pub fn checkpoint_passive(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    non_snake_case
-)]
+#[allow(non_snake_case)]
 mod tests {
     use super::wal::{WalHeader, WalWriter};
     use super::*;

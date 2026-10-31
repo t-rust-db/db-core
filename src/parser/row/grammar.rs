@@ -4252,7 +4252,6 @@ impl Parser {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod select_depth_tests {
     use crate::parser::row::{parse_select, ParseOutcome};
 

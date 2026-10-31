@@ -177,13 +177,7 @@ pub fn decode_page_header(buf: &[u8]) -> Result<(PageHeader, usize)> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 

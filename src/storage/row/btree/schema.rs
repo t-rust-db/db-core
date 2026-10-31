@@ -78,7 +78,6 @@ pub fn populate_index_from_table(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::storage::row::btree::{insert_row, MasterEntry};

@@ -69,7 +69,6 @@ pub fn update_row(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::storage::row::btree::insert_row;

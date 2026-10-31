@@ -486,7 +486,7 @@ fn root_split(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, non_snake_case)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
     use std::path::Path;

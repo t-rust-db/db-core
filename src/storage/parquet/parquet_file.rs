@@ -2308,13 +2308,7 @@ impl ElementSink {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 
@@ -4302,11 +4296,6 @@ mod tests_289 {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::panic,
-    reason = "test code fails fast (db-core#230)"
-)]
 mod tests_657 {
     use super::*;
 

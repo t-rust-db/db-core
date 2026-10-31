@@ -525,13 +525,7 @@ pub fn null_mask(levels: &[u32], max_def_level: u32) -> Vec<bool> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 
@@ -724,7 +718,6 @@ mod tests_289 {
 
 #[cfg(test)]
 #[allow(
-    clippy::unwrap_used,
     clippy::cast_possible_truncation,
     reason = "test code: hand-built varints"
 )]
@@ -887,7 +880,6 @@ mod malformed_input {
 
 #[cfg(test)]
 #[allow(
-    clippy::unwrap_used,
     clippy::cast_possible_truncation,
     reason = "test code: values are generated below the bit width"
 )]

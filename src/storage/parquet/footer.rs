@@ -596,13 +596,7 @@ fn parse_statistics(v: &Value) -> Statistics {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 
@@ -950,13 +944,7 @@ mod tests {
 /// as `Ok` or `Err` -- a panic, stack overflow or huge allocation fails the
 /// test run.
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod corruption_tests {
     use super::*;
     use crate::storage::parquet::parquet_file::ParquetFile;

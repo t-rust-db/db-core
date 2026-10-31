@@ -477,13 +477,7 @@ pub fn slot_is_free_test_only(shm_path: &Path, slot: usize) -> bool {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::arithmetic_side_effects,
-    clippy::panic
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use std::io::Write;

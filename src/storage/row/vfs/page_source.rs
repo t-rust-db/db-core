@@ -276,7 +276,6 @@ impl<T: PageSource + ?Sized> PageSource for &T {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::storage::row::vfs::MemoryVfs;

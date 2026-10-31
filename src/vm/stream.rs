@@ -322,7 +322,6 @@ fn reduce_window(func: RangeAggFunc, values: &[Value], size: Duration) -> Value 
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test code fails fast (db-core#230)")]
 mod tests {
     use super::*;
 

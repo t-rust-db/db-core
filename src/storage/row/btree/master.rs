@@ -410,7 +410,6 @@ pub fn insert_stat1_row(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::path::Path;

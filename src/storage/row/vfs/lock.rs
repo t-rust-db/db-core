@@ -237,7 +237,6 @@ pub fn reserved_byte_range() -> (off_t, off_t) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use std::fs::OpenOptions;

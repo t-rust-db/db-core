@@ -449,12 +449,7 @@ fn check_freelist<P: PageSource>(source: &P, header: &DatabaseHeader, problems: 
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use std::collections::HashMap;
     use std::rc::Rc;
