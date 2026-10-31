@@ -312,7 +312,6 @@ fn to_lock_error(path: &Path, source: std::io::Error) -> VfsError {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

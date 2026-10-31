@@ -14,7 +14,7 @@
 //! once rather than row-by-row.
 
 use super::hll::Hll;
-use super::int_key_table::{murmur_finalize, HashGroupTable, IntKeyTable};
+use super::int_key_table::{murmur_finalize, slot_seed, HashGroupTable, IntKeyTable};
 use crate::value::len_to_i64;
 pub use crate::vm::column::{Bitmap, Column};
 pub use crate::vm::join::JoinKind;
@@ -4824,9 +4824,18 @@ impl BuildTable {
 /// finalizer of that word -- the same mixer [`IntKeyTable`] and
 /// [`HashGroupTable`] use -- rather than a SipHash of a hash, which the
 /// default `RandomState` cost every probe row (~20 ns of the 34 ns a
-/// match took).
-#[derive(Clone, Copy, Default)]
-pub(crate) struct SlotState;
+/// match took). Each instance carries its own random seed, the hasher's
+/// starting state, so the slots cannot be precomputed from the data
+/// (hash flooding, #891); `default()` draws a fresh one, like
+/// `RandomState`.
+#[derive(Clone, Copy)]
+pub(crate) struct SlotState(u64);
+
+impl Default for SlotState {
+    fn default() -> Self {
+        SlotState(slot_seed())
+    }
+}
 
 pub(crate) struct SlotHasher(u64);
 
@@ -4854,7 +4863,7 @@ impl BuildHasher for SlotState {
     type Hasher = SlotHasher;
 
     fn build_hasher(&self) -> SlotHasher {
-        SlotHasher(0)
+        SlotHasher(self.0)
     }
 }
 
@@ -6612,7 +6621,7 @@ impl Vm {
                 // #621: map functions read `Value::Map`, which the row
                 // functions' values cannot carry.
                 let result: Vec<Value> = if super::map_fns::is_map_function(name) {
-                    super::map_fns::call_column(name, &arg_regs, num_rows)
+                    super::map_fns::call_column(name, &arg_regs, num_rows)?
                 } else {
                     let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];
                     let mut result = Vec::with_capacity(num_rows);
@@ -7372,7 +7381,7 @@ impl Vm {
             .map(|_| Vec::with_capacity(num_rows))
             .collect();
         let mut index: JoinHashTable<u64, usize, SlotState> =
-            JoinHashTable::with_capacity_and_hasher(num_rows, SlotState);
+            JoinHashTable::with_capacity_and_hasher(num_rows, SlotState::default());
         // #514: `int_keys` used to be a second pass over the
         // freshly cloned `keys` column, re-walking and re-copying
         // values this loop already touched. Fold it into the same
@@ -8663,8 +8672,9 @@ fn merge_branches(
 fn numeric_in_list(column: &Column, list: &[Value], negated: bool) -> Option<Column> {
     let float_rows = matches!(column, Column::Float { .. });
     // Murmur, not SipHash: every row probes (see [`SlotState`]).
-    let mut ints = std::collections::HashSet::with_capacity_and_hasher(list.len(), SlotState);
-    let mut floats = std::collections::HashSet::with_hasher(SlotState);
+    let mut ints =
+        std::collections::HashSet::with_capacity_and_hasher(list.len(), SlotState::default());
+    let mut floats = std::collections::HashSet::with_hasher(SlotState::default());
     let mut has_null = false;
     for item in list {
         match item {
@@ -9229,6 +9239,20 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #891: the join index, IN-list sets and dictionaries hash through
+    /// [`SlotState`]; keys built to collide in its unseeded form spread.
+    #[test]
+    fn seeded_slot_state_spreads_keys_built_to_collide() {
+        use std::hash::BuildHasher;
+        let state = SlotState::default();
+        let homes: std::collections::HashSet<u64> =
+            crate::vm::int_key_table::tests::flooding_keys()
+                .into_iter()
+                .map(|k| state.hash_one(k) & 0xFFF)
+                .collect();
+        assert!(homes.len() > 1_000, "only {} home slots", homes.len());
+    }
 
     /// #801: a list prints as a JSON array, its strings escaped; equal
     /// lists hash and group alike, and order after maps.

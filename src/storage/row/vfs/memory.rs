@@ -213,7 +213,6 @@ impl SharedLockGuard for NoopLock {}
 /// trigger (the field is private) — hence these white-box tests live here
 /// instead, exercising the `poisoned` error path per #224.
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
 

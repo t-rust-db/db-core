@@ -222,9 +222,12 @@ fn aggregate_steps_refuse_wrong_p4s_and_unknown_functions() {
         arity: 0,
         collation: Collation::Binary,
     };
-    assert!(malformed(
+    // An unknown aggregate is sqlite3's "no such aggregate" (#892).
+    assert!(matches!(
         step_sort_agg(&mut vm, &with_p4(Opcode::AggStep, 0, 0, 0, unknown)),
-        "AggStep"
+        Err(ExecError::AggregateFailed(
+            crate::vm::row::AggregateError::Unknown { .. }
+        ))
     ));
     assert!(malformed(
         step_sort_agg(&mut vm, &with_p4(Opcode::AggFinal, 0, 0, 1, P4::Int(0))),
@@ -237,7 +240,7 @@ fn aggregate_steps_refuse_wrong_p4s_and_unknown_functions() {
         ),
         "AggFinal"
     ));
-    assert!(malformed(
+    assert!(matches!(
         step_sort_agg(
             &mut vm,
             &with_p4(
@@ -248,7 +251,9 @@ fn aggregate_steps_refuse_wrong_p4s_and_unknown_functions() {
                 P4::Str("no_such_aggregate(0)".into())
             )
         ),
-        "AggFinal"
+        Err(ExecError::AggregateFailed(
+            crate::vm::row::AggregateError::Unknown { .. }
+        ))
     ));
 }
 

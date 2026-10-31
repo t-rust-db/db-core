@@ -1283,6 +1283,8 @@ pub fn db_core::functions::FunctionError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::functions::FunctionError
 impl core::cmp::PartialEq for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::eq(&self, &Self) -> bool
+impl core::convert::From<db_core::functions::FunctionError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::functions::FunctionError) -> Self
 impl core::error::Error for db_core::functions::FunctionError
 impl core::fmt::Debug for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -6314,6 +6316,10 @@ pub db_core::storage::row::pager::wal::WalError::InvalidMagic
 pub db_core::storage::row::pager::wal::WalError::InvalidMagic::magic: u32
 pub db_core::storage::row::pager::wal::WalError::InvalidPageSize
 pub db_core::storage::row::pager::wal::WalError::InvalidPageSize::page_size: u32
+pub db_core::storage::row::pager::wal::WalError::ShortRead
+pub db_core::storage::row::pager::wal::WalError::ShortRead::expected: usize
+pub db_core::storage::row::pager::wal::WalError::ShortRead::got: usize
+pub db_core::storage::row::pager::wal::WalError::ShortRead::offset: u64
 pub db_core::storage::row::pager::wal::WalError::Vfs(db_core::storage::row::vfs::VfsError)
 impl db_core::storage::row::pager::wal::WalError
 pub fn db_core::storage::row::pager::wal::WalError::is_unusable_header(&self) -> bool
@@ -7284,9 +7290,12 @@ pub fn db_core::storage::stream::file::LogFile::read_tail(&mut self, u64) -> cor
 pub fn db_core::storage::stream::file::LogFile::refresh(&mut self) -> core::io::error::Result<db_core::storage::stream::file::Refresh>
 pub fn db_core::storage::stream::file::LogFile::rotated(&self) -> core::io::error::Result<bool>
 pub const fn db_core::storage::stream::file::LogFile::tail_off(&self) -> u64
+pub fn db_core::storage::stream::file::LogFile::with_max_line(self, usize) -> Self
 impl core::fmt::Debug for db_core::storage::stream::file::LogFile
 pub fn db_core::storage::stream::file::LogFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub const db_core::storage::stream::file::BLOCK_SIZE: usize
+pub const db_core::storage::stream::file::DEFAULT_MAX_LINE: usize
+pub const db_core::storage::stream::file::REFRESH_BATCH: u64
 pub mod db_core::storage::stream::json
 pub enum db_core::storage::stream::json::JsonValue<'a>
 pub db_core::storage::stream::json::JsonValue::Array(&'a str)
@@ -7797,6 +7806,7 @@ pub fn db_core::storage::stream::file::LogFile::read_tail(&mut self, u64) -> cor
 pub fn db_core::storage::stream::file::LogFile::refresh(&mut self) -> core::io::error::Result<db_core::storage::stream::file::Refresh>
 pub fn db_core::storage::stream::file::LogFile::rotated(&self) -> core::io::error::Result<bool>
 pub const fn db_core::storage::stream::file::LogFile::tail_off(&self) -> u64
+pub fn db_core::storage::stream::file::LogFile::with_max_line(self, usize) -> Self
 impl core::fmt::Debug for db_core::storage::stream::file::LogFile
 pub fn db_core::storage::stream::file::LogFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::stream::LogfmtParser
@@ -9108,6 +9118,7 @@ pub db_core::vm::row::aggregate::AggState::Max(core::option::Option<db_core::val
 pub db_core::vm::row::aggregate::AggState::Min(core::option::Option<db_core::value::Value>)
 pub db_core::vm::row::aggregate::AggState::Sum
 pub db_core::vm::row::aggregate::AggState::Sum::int_total: i128
+pub db_core::vm::row::aggregate::AggState::Sum::overflowed: bool
 pub db_core::vm::row::aggregate::AggState::Sum::real_total: f64
 pub db_core::vm::row::aggregate::AggState::Sum::saw_any: bool
 pub db_core::vm::row::aggregate::AggState::Sum::saw_real: bool
@@ -9127,6 +9138,8 @@ pub fn db_core::vm::row::aggregate::AggregateError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::aggregate::AggregateError
 impl core::cmp::PartialEq for db_core::vm::row::aggregate::AggregateError
 pub fn db_core::vm::row::aggregate::AggregateError::eq(&self, &Self) -> bool
+impl core::convert::From<db_core::vm::row::aggregate::AggregateError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::vm::row::aggregate::AggregateError) -> Self
 impl core::error::Error for db_core::vm::row::aggregate::AggregateError
 impl core::fmt::Debug for db_core::vm::row::aggregate::AggregateError
 pub fn db_core::vm::row::aggregate::AggregateError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -9933,6 +9946,8 @@ pub fn db_core::functions::FunctionError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::functions::FunctionError
 impl core::cmp::PartialEq for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::eq(&self, &Self) -> bool
+impl core::convert::From<db_core::functions::FunctionError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::functions::FunctionError) -> Self
 impl core::error::Error for db_core::functions::FunctionError
 impl core::fmt::Debug for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -10347,12 +10362,14 @@ pub fn db_core::engine::row::adapter::PagerTransaction::wal_autocheckpoint(&mut 
 pub fn db_core::engine::row::adapter::PagerTransaction::wal_checkpoint(&mut self, i32) -> core::result::Result<core::option::Option<(i64, i64, i64)>, db_core::vm::row::transaction::TransactionError>
 pub mod db_core::vm::row::vm
 pub enum db_core::vm::row::vm::ExecError
+pub db_core::vm::row::vm::ExecError::AggregateFailed(db_core::vm::row::aggregate::AggregateError)
 pub db_core::vm::row::vm::ExecError::AttachedDatabasesUnsupported
 pub db_core::vm::row::vm::ExecError::CheckpointDuringTransaction
 pub db_core::vm::row::vm::ExecError::CursorFactoryFailed(db_core::vm::row::cursor_factory::CursorFactoryError)
 pub db_core::vm::row::vm::ExecError::CursorFailed(db_core::vm::row::cursor::CursorError)
 pub db_core::vm::row::vm::ExecError::CursorNotOpen
 pub db_core::vm::row::vm::ExecError::CursorNotOpen::slot: i32
+pub db_core::vm::row::vm::ExecError::FunctionFailed(db_core::functions::FunctionError)
 pub db_core::vm::row::vm::ExecError::Halted
 pub db_core::vm::row::vm::ExecError::Halted::code: i32
 pub db_core::vm::row::vm::ExecError::Halted::message: core::option::Option<alloc::string::String>
@@ -10390,6 +10407,10 @@ pub db_core::vm::row::vm::ExecError::TypeMismatch::found: &'static str
 pub db_core::vm::row::vm::ExecError::TypeMismatch::opcode: &'static str
 pub db_core::vm::row::vm::ExecError::Unimplemented
 pub db_core::vm::row::vm::ExecError::Unimplemented::opcode: db_core::vm::row::program::Opcode
+impl core::convert::From<db_core::functions::FunctionError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::functions::FunctionError) -> Self
+impl core::convert::From<db_core::vm::row::aggregate::AggregateError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::vm::row::aggregate::AggregateError) -> Self
 impl core::convert::From<db_core::vm::row::cursor::CursorError> for db_core::vm::row::vm::ExecError
 pub fn db_core::vm::row::vm::ExecError::from(db_core::vm::row::cursor::CursorError) -> Self
 impl core::error::Error for db_core::vm::row::vm::ExecError
@@ -10478,6 +10499,7 @@ pub db_core::vm::row::AggState::Max(core::option::Option<db_core::value::Value>)
 pub db_core::vm::row::AggState::Min(core::option::Option<db_core::value::Value>)
 pub db_core::vm::row::AggState::Sum
 pub db_core::vm::row::AggState::Sum::int_total: i128
+pub db_core::vm::row::AggState::Sum::overflowed: bool
 pub db_core::vm::row::AggState::Sum::real_total: f64
 pub db_core::vm::row::AggState::Sum::saw_any: bool
 pub db_core::vm::row::AggState::Sum::saw_real: bool
@@ -10497,6 +10519,8 @@ pub fn db_core::vm::row::aggregate::AggregateError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::vm::row::aggregate::AggregateError
 impl core::cmp::PartialEq for db_core::vm::row::aggregate::AggregateError
 pub fn db_core::vm::row::aggregate::AggregateError::eq(&self, &Self) -> bool
+impl core::convert::From<db_core::vm::row::aggregate::AggregateError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::vm::row::aggregate::AggregateError) -> Self
 impl core::error::Error for db_core::vm::row::aggregate::AggregateError
 impl core::fmt::Debug for db_core::vm::row::aggregate::AggregateError
 pub fn db_core::vm::row::aggregate::AggregateError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -10504,12 +10528,14 @@ impl core::fmt::Display for db_core::vm::row::aggregate::AggregateError
 pub fn db_core::vm::row::aggregate::AggregateError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::vm::row::aggregate::AggregateError
 pub enum db_core::vm::row::ExecError
+pub db_core::vm::row::ExecError::AggregateFailed(db_core::vm::row::aggregate::AggregateError)
 pub db_core::vm::row::ExecError::AttachedDatabasesUnsupported
 pub db_core::vm::row::ExecError::CheckpointDuringTransaction
 pub db_core::vm::row::ExecError::CursorFactoryFailed(db_core::vm::row::cursor_factory::CursorFactoryError)
 pub db_core::vm::row::ExecError::CursorFailed(db_core::vm::row::cursor::CursorError)
 pub db_core::vm::row::ExecError::CursorNotOpen
 pub db_core::vm::row::ExecError::CursorNotOpen::slot: i32
+pub db_core::vm::row::ExecError::FunctionFailed(db_core::functions::FunctionError)
 pub db_core::vm::row::ExecError::Halted
 pub db_core::vm::row::ExecError::Halted::code: i32
 pub db_core::vm::row::ExecError::Halted::message: core::option::Option<alloc::string::String>
@@ -10547,6 +10573,10 @@ pub db_core::vm::row::ExecError::TypeMismatch::found: &'static str
 pub db_core::vm::row::ExecError::TypeMismatch::opcode: &'static str
 pub db_core::vm::row::ExecError::Unimplemented
 pub db_core::vm::row::ExecError::Unimplemented::opcode: db_core::vm::row::program::Opcode
+impl core::convert::From<db_core::functions::FunctionError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::functions::FunctionError) -> Self
+impl core::convert::From<db_core::vm::row::aggregate::AggregateError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::vm::row::aggregate::AggregateError) -> Self
 impl core::convert::From<db_core::vm::row::cursor::CursorError> for db_core::vm::row::vm::ExecError
 pub fn db_core::vm::row::vm::ExecError::from(db_core::vm::row::cursor::CursorError) -> Self
 impl core::error::Error for db_core::vm::row::vm::ExecError
@@ -10566,6 +10596,8 @@ pub fn db_core::functions::FunctionError::clone(&self) -> Self
 impl core::cmp::Eq for db_core::functions::FunctionError
 impl core::cmp::PartialEq for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::eq(&self, &Self) -> bool
+impl core::convert::From<db_core::functions::FunctionError> for db_core::vm::row::vm::ExecError
+pub fn db_core::vm::row::vm::ExecError::from(db_core::functions::FunctionError) -> Self
 impl core::error::Error for db_core::functions::FunctionError
 impl core::fmt::Debug for db_core::functions::FunctionError
 pub fn db_core::functions::FunctionError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result

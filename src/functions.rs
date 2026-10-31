@@ -114,8 +114,20 @@ fn length(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(match &args[0] {
         Value::Null => Value::Null,
         Value::Blob(b) => Value::Integer(len_to_i64(b.len())),
-        // sqlite3 counts the characters before the first NUL (#651).
-        Value::Text(s) => Value::Integer(len_to_i64(s.chars().take_while(|&c| c != '\0').count())),
+        // sqlite3 counts the characters before the first NUL (#651). ASCII
+        // text is one byte per character, so a 100 MB string is not walked
+        // character by character (#877).
+        Value::Text(s) => {
+            let text = s
+                .find('\0')
+                .map_or(&**s, |nul| s.get(..nul).unwrap_or_default());
+            let chars = if text.is_ascii() {
+                text.len()
+            } else {
+                text.chars().count()
+            };
+            Value::Integer(len_to_i64(chars))
+        }
         other => Value::Integer(len_to_i64(as_text(other).chars().count())),
     })
 }

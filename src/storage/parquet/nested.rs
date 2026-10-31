@@ -321,13 +321,7 @@ fn build_repeated(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
     use crate::storage::parquet::footer::{PhysicalType, Repetition, SchemaElement};
@@ -675,12 +669,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(
-    non_snake_case,
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing
-)]
+#[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
     //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
@@ -899,12 +888,9 @@ mod mcdc_vectors {
 
 #[cfg(test)]
 #[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
-    clippy::panic,
     reason = "test code: fixed schemas and a test-local PRNG"
 )]
 mod malformed_levels {

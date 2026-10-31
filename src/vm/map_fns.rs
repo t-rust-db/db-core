@@ -16,14 +16,15 @@
 //! #825: `list_contains(l, v)` (aliases `list_has`, `array_contains`,
 //! `array_has`) tests a list for a value, DuckDB's answers -- `true` when
 //! an element equals `v`, `false` otherwise (a NULL element matches
-//! nothing), NULL when `l` or `v` is NULL. A value that is not a list gives
-//! NULL, as a non-map does below.
+//! nothing), NULL when `l` or `v` is NULL. A value that is not a list is
+//! a conversion error, as a non-map is below.
 //!
 //! #826: on a list, `l[i]` (`map_extract_value`), `list_extract(l, i)` and
 //! `list_element(l, i)` read element `i`: 1-based, a negative `i` counts
 //! from the end, and 0 or out of range is NULL. `len(l)` and
-//! `array_length(l)` count its elements, NULL ones included. DuckDB's
-//! `cardinality` takes only a map, so on a list it is NULL here.
+//! `array_length(l)` count its elements, NULL ones included; on a string,
+//! `len` is its length in characters. DuckDB's `cardinality` takes only a
+//! map, so on a list it is an error.
 //!
 //! #827: `list_value(v, ...)` (a list literal `['a', 'b']` parses as it)
 //! makes a list of strings and NULLs. `list_has_any(a, b)` / `list_has_all(a,
@@ -47,12 +48,17 @@
 //! `list_aggr`'s aggregate and `list_sort`'s order are string literals,
 //! checked at plan time ([`literal_arg_error`]).
 //!
-//! A NULL map gives NULL. A value that is not a map (or a key that is not a
-//! string) gives NULL too: column types are only known per row here.
+//! A NULL map, list or argument gives NULL. A value of the wrong type -- a
+//! string where a list belongs, a list where a map does, an index that is
+//! not an integer -- is a [`VmError::Conversion`] in DuckDB's words (#892):
+//! column types are only known per row here, so the error comes with the
+//! first row that has one, where DuckDB refuses the query when binding.
+//! Index and slice arguments are cast as DuckDB casts them: integer text
+//! parses, and a slice bound may be a float, rounded half away from zero.
 
 use std::sync::Arc;
 
-use super::batch::{ListItems, MapEntries, SlotState, Value};
+use super::batch::{ListItems, MapEntries, Result, SlotState, Value, VmError};
 
 /// The functions handled here, with their arities.
 pub(crate) const MAP_FUNCTIONS: &[(&str, usize)] = &[
@@ -136,12 +142,12 @@ pub(crate) fn is_map_function(name: &str) -> bool {
 /// `num_rows` long). A split column holds few distinct strings (labels,
 /// tags), so `string_split` of two strings is computed once per distinct
 /// pair and shared by `Arc` (#815).
-pub(crate) fn call_column(name: &str, columns: &[&[Value]], num_rows: usize) -> Vec<Value> {
+pub(crate) fn call_column(name: &str, columns: &[&[Value]], num_rows: usize) -> Result<Vec<Value>> {
     if name.eq_ignore_ascii_case("string_split") || name.eq_ignore_ascii_case("str_split") {
         if let [strings, seps] = columns {
             let mut memo: std::collections::HashMap<(&str, &str), Value, SlotState> =
                 std::collections::HashMap::default();
-            return strings
+            return Ok(strings
                 .iter()
                 .zip(seps.iter())
                 .take(num_rows)
@@ -152,7 +158,7 @@ pub(crate) fn call_column(name: &str, columns: &[&[Value]], num_rows: usize) -> 
                         .clone(),
                     (s, sep) => string_split(s, sep),
                 })
-                .collect();
+                .collect());
         }
     }
     (0..num_rows)
@@ -160,30 +166,30 @@ pub(crate) fn call_column(name: &str, columns: &[&[Value]], num_rows: usize) -> 
             let args: Vec<&Value> = columns.iter().filter_map(|c| c.get(row)).collect();
             call(name, &args)
         })
-        .collect()
+        .collect::<Result<_>>()
 }
 
 /// `name(args)` for one row.
-pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
+pub(crate) fn call(name: &str, args: &[&Value]) -> Result<Value> {
     if name.eq_ignore_ascii_case("string_split") || name.eq_ignore_ascii_case("str_split") {
         return match args {
-            [s, sep] => string_split(s, sep),
-            _ => Value::Null,
+            [s, sep] => Ok(string_split(s, sep)),
+            _ => Err(arity(name, args)),
         };
     }
     if name.eq_ignore_ascii_case("list_value") {
-        return list_value(args);
+        return Ok(list_value(args));
     }
     if is_list_concat(name) {
         return match args {
             [a, b] => list_concat(a, b),
-            _ => Value::Null,
+            _ => Err(arity(name, args)),
         };
     }
     if is_list_contains(name) {
         return match args {
             [list, value] => list_contains(list, value),
-            _ => Value::Null,
+            _ => Err(arity(name, args)),
         };
     }
     if name.eq_ignore_ascii_case("json_keys") {
@@ -192,18 +198,28 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
     if name.eq_ignore_ascii_case("json_array_elements_text") {
         return json_array_elements_text(args);
     }
-    if let Some((Value::List(items), rest)) = args.split_first() {
-        return list_call(name, items, rest);
-    }
-    let (Some(Value::Map(entries)), key) = (args.first(), args.get(1)) else {
-        return Value::Null;
+    let Some((first, rest)) = args.split_first() else {
+        return Err(arity(name, args));
     };
-    let key = match key {
-        Some(Value::Str(k)) => Some(k.as_ref()),
-        Some(_) => return Value::Null,
-        None => None,
+    let entries = match first {
+        Value::Null => return Ok(Value::Null),
+        Value::List(items) => return list_call(name, first, items, rest),
+        Value::Str(s) if name.eq_ignore_ascii_case("len") && rest.is_empty() => {
+            return Ok(Value::Int(
+                i64::try_from(s.chars().count()).unwrap_or(i64::MAX),
+            ));
+        }
+        Value::Map(entries) => entries,
+        other => return Err(not_a(other, wanted_type(name))),
     };
-    match (name.to_ascii_lowercase().as_str(), key) {
+    let key = match rest {
+        [] => None,
+        [Value::Str(k)] => Some(k.as_ref()),
+        [Value::Null] => return Ok(Value::Null),
+        [other] => return Err(not_a(other, "VARCHAR")),
+        _ => return Err(arity(name, args)),
+    };
+    Ok(match (name.to_ascii_lowercase().as_str(), key) {
         ("map_extract_value", Some(k)) => value_of(lookup(entries, |e| e == k)),
         ("map_get_ci", Some(k)) => {
             let k = k.to_lowercase();
@@ -222,7 +238,88 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
             Value::Str(format!("[{}]", keys.join(", ")).into())
         }
         ("cardinality", None) => Value::Int(i64::try_from(entries.len()).unwrap_or(i64::MAX)),
-        _ => Value::Null,
+        // A map function with the wrong argument count; any other
+        // function here reads a list, not a map.
+        _ if wanted_type(name) == "MAP" || name.eq_ignore_ascii_case("map_extract_value") => {
+            return Err(arity(name, args))
+        }
+        _ => return Err(not_a(first, "VARCHAR[]")),
+    })
+}
+
+/// The type `name`'s first argument must have: a map for the map
+/// functions, a list for the rest.
+fn wanted_type(name: &str) -> &'static str {
+    let map_only = ["map_get_ci", "element_at", "map_keys", "cardinality"];
+    if map_only.iter().any(|f| f.eq_ignore_ascii_case(name)) {
+        "MAP"
+    } else {
+        "VARCHAR[]"
+    }
+}
+
+/// `value` cannot be read as `to` (#892): DuckDB's conversion error.
+fn not_a(value: &Value, to: &'static str) -> VmError {
+    // A float keeps its point: `1.0`, not the `1` it displays as, which
+    // would read as a convertible integer.
+    let value = match value {
+        Value::Float(f) => format!("{f:?}"),
+        other => other.to_string(),
+    };
+    VmError::Conversion { value, to }
+}
+
+/// A call whose argument count the parser should have refused.
+fn arity(name: &str, args: &[&Value]) -> VmError {
+    VmError::MalformedProgram {
+        opcode: "Function",
+        reason: format!("{name} called with {} arguments", args.len()),
+    }
+}
+
+/// A list argument: `None` for NULL, a conversion error for a non-list.
+fn list_arg(value: &Value) -> Result<Option<&ListItems>> {
+    match value {
+        Value::Null => Ok(None),
+        Value::List(items) => Ok(Some(items)),
+        other => Err(not_a(other, "VARCHAR[]")),
+    }
+}
+
+/// An index argument: an integer, or text DuckDB casts to one; `None` for
+/// NULL.
+fn index_arg(value: &Value) -> Result<Option<i64>> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Int(i) => Ok(Some(*i)),
+        Value::Str(s) => s
+            .trim()
+            .parse()
+            .map(Some)
+            .map_err(|_| not_a(value, "INT64")),
+        other => Err(not_a(other, "INT64")),
+    }
+}
+
+/// A slice bound: an index, or a float rounded half away from zero as
+/// DuckDB casts `DOUBLE` to `BIGINT`.
+fn bound_arg(value: &Value) -> Result<Option<i64>> {
+    // 2^63 as an `f64`: every rounded float below it in magnitude fits.
+    const LIMIT: f64 = 9_223_372_036_854_775_808.0;
+    match value {
+        Value::Float(f) => {
+            let r = f.round();
+            if r.is_finite() && r > -LIMIT && r < LIMIT {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "`r` is integral and inside `i64`'s range, checked above"
+                )]
+                Ok(Some(r as i64))
+            } else {
+                Err(not_a(value, "INT64"))
+            }
+        }
+        other => index_arg(other),
     }
 }
 
@@ -231,32 +328,48 @@ pub(crate) fn call(name: &str, args: &[&Value]) -> Value {
 /// object, as in DuckDB. NULL for a non-string document, malformed JSON or
 /// a missing path. The value is found by the batch `json_extract`, so a
 /// path indexes arrays.
-fn json_keys(args: &[&Value]) -> Value {
-    let (Some(Value::Str(doc)), path) = (args.first(), args.get(1)) else {
-        return Value::Null;
+fn json_keys(args: &[&Value]) -> Result<Value> {
+    let Some((doc, path)) = json_args(args)? else {
+        return Ok(Value::Null);
     };
-    let path = match path {
-        None => "$",
-        Some(Value::Str(p)) => p.as_ref(),
-        Some(_) => return Value::Null,
-    };
+    let (doc, path) = (doc.as_str(), path.as_str());
     let text = |s: &str| crate::value::Value::Text(s.to_string().into());
     let Ok(crate::value::Value::Text(object)) =
         crate::functions::late_json_extract(&[text(doc), text(path)])
     else {
-        return Value::Null;
+        return Ok(Value::Null);
     };
     let Some((crate::json_path::JsonValue::Object(fields), _)) =
         crate::json_path::parse_object(&object)
     else {
-        return Value::List(Arc::new(Vec::new()));
+        return Ok(Value::List(Arc::new(Vec::new())));
     };
-    Value::List(Arc::new(
+    Ok(Value::List(Arc::new(
         fields
             .iter()
             .map(|(k, _)| Some(Arc::from(crate::json_path::unescape(k).as_ref())))
             .collect(),
-    ))
+    )))
+}
+
+/// The `(json, path)` arguments of the JSON list functions: `None` when
+/// either is NULL, the root `$` when there is no path, and a conversion
+/// error for a document or path that is not text.
+fn json_args(args: &[&Value]) -> Result<Option<(String, String)>> {
+    let text = |v: &Value| match v {
+        Value::Null => Ok(None),
+        Value::Str(s) => Ok(Some(s.to_string())),
+        other => Err(not_a(other, "VARCHAR")),
+    };
+    let doc = match args.first() {
+        Some(doc) => text(doc)?,
+        None => return Err(arity("json", args)),
+    };
+    let path = match args.get(1) {
+        Some(path) => text(path)?,
+        None => Some("$".to_string()),
+    };
+    Ok(doc.zip(path))
 }
 
 /// `json_array_elements_text(json[, path])` (#839): the elements of the
@@ -264,16 +377,12 @@ fn json_keys(args: &[&Value]) -> Value {
 /// string is its text, a number its digits, an object or array its JSON
 /// text and a JSON `null` a NULL element. NULL for anything but an array.
 /// The row engine's `json_array_length` and `json_extract` do the work.
-fn json_array_elements_text(args: &[&Value]) -> Value {
+fn json_array_elements_text(args: &[&Value]) -> Result<Value> {
     use crate::value::Value as Scalar;
-    let (Some(Value::Str(doc)), path) = (args.first(), args.get(1)) else {
-        return Value::Null;
+    let Some((doc, path)) = json_args(args)? else {
+        return Ok(Value::Null);
     };
-    let path = match path {
-        None => "$",
-        Some(Value::Str(p)) => p.as_ref(),
-        Some(_) => return Value::Null,
-    };
+    let (doc, path) = (doc.as_str(), path.as_str());
     let text = |s: &str| Scalar::Text(s.to_string().into());
     let is_array = matches!(
         crate::functions::call("json_type", &[text(doc), text(path)]),
@@ -282,10 +391,10 @@ fn json_array_elements_text(args: &[&Value]) -> Value {
     let Ok(Scalar::Integer(len)) =
         crate::functions::call("json_array_length", &[text(doc), text(path)])
     else {
-        return Value::Null;
+        return Ok(Value::Null);
     };
     if !is_array {
-        return Value::Null;
+        return Ok(Value::Null);
     }
     let items: ListItems = (0..len)
         .map(|i| {
@@ -298,7 +407,7 @@ fn json_array_elements_text(args: &[&Value]) -> Value {
             }
         })
         .collect();
-    Value::List(Arc::new(items))
+    Ok(Value::List(Arc::new(items)))
 }
 
 fn string_split(s: &Value, sep: &Value) -> Value {
@@ -320,25 +429,28 @@ fn string_split(s: &Value, sep: &Value) -> Value {
     Value::List(std::sync::Arc::new(items))
 }
 
-/// `name(list, rest...)` for a function that reads a list (#826).
-fn list_call(name: &str, items: &ListItems, rest: &[&Value]) -> Value {
-    match (name.to_ascii_lowercase().as_str(), rest) {
+/// `name(list, rest...)` for a function that reads a list (#826); a map
+/// function given the list is a conversion error.
+fn list_call(name: &str, list: &Value, items: &ListItems, rest: &[&Value]) -> Result<Value> {
+    Ok(match (name.to_ascii_lowercase().as_str(), rest) {
         ("map_extract_value" | "list_extract" | "list_element", [index]) => {
-            list_element(items, index)
+            index_arg(index)?.map_or(Value::Null, |i| list_element(items, i))
         }
         ("len" | "array_length", []) => Value::Int(i64::try_from(items.len()).unwrap_or(i64::MAX)),
-        ("list_has_any" | "array_has_any", [Value::List(wanted)]) => {
-            Value::Bool(wanted.iter().flatten().any(|w| has(items, w)))
-        }
-        ("list_has_all" | "array_has_all", [Value::List(wanted)]) => {
-            Value::Bool(wanted.iter().flatten().all(|w| has(items, w)))
-        }
+        ("list_has_any" | "array_has_any", [wanted]) => list_arg(wanted)?
+            .map_or(Value::Null, |w| {
+                Value::Bool(w.iter().flatten().any(|w| has(items, w)))
+            }),
+        ("list_has_all" | "array_has_all", [wanted]) => list_arg(wanted)?
+            .map_or(Value::Null, |w| {
+                Value::Bool(w.iter().flatten().all(|w| has(items, w)))
+            }),
         ("list_position" | "list_indexof" | "array_position" | "array_indexof", [value]) => {
             list_position(items, value)
         }
         ("array_to_string", [sep]) => join(items, sep),
-        ("list_aggr" | "list_aggregate", [Value::Str(agg), sep @ ..]) => {
-            aggregate(items, agg, sep.first().copied().unwrap_or(&Value::Null))
+        ("list_aggr" | "list_aggregate", [agg, sep @ ..]) => {
+            aggregate(items, agg, sep.first().copied().unwrap_or(&Value::Null))?
         }
         ("list_distinct" | "array_distinct", []) => Value::List(std::sync::Arc::new(
             distinct(items)
@@ -349,27 +461,28 @@ fn list_call(name: &str, items: &ListItems, rest: &[&Value]) -> Value {
         ("list_unique" | "array_unique", []) => {
             Value::Int(i64::try_from(distinct(items).len()).unwrap_or(i64::MAX))
         }
-        ("list_sort" | "array_sort", order) => match sort_order(order) {
-            Some((desc, nulls_first)) => sorted(items, desc, nulls_first),
-            None => Value::Null,
-        },
+        ("list_sort" | "array_sort", order) => {
+            let (desc, nulls_first) = sort_order(order)?;
+            sorted(items, desc, nulls_first)
+        }
         ("list_reverse_sort" | "array_reverse_sort", nulls) => {
-            match sort_order(&[
+            let (desc, nulls_first) = sort_order(&[
                 &Value::Str("DESC".into()),
                 nulls.first().copied().unwrap_or(&Value::Null),
-            ]) {
-                Some((desc, nulls_first)) => sorted(items, desc, nulls_first),
-                None => Value::Null,
-            }
+            ])?;
+            sorted(items, desc, nulls_first)
         }
         ("list_reverse" | "array_reverse", []) => {
             Value::List(std::sync::Arc::new(items.iter().rev().cloned().collect()))
         }
-        ("list_slice" | "array_slice", [Value::Int(begin), Value::Int(end)]) => {
-            slice(items, *begin, *end)
+        ("list_slice" | "array_slice", [begin, end]) => {
+            match (bound_arg(begin)?, bound_arg(end)?) {
+                (Some(begin), Some(end)) => slice(items, begin, end),
+                _ => Value::Null,
+            }
         }
-        _ => Value::Null,
-    }
+        _ => return Err(not_a(list, "MAP")),
+    })
 }
 
 /// Whether `name` (any case) is `list_concat` or one of its aliases.
@@ -380,22 +493,17 @@ fn is_list_concat(name: &str) -> bool {
 }
 
 /// `a` then `b`; a NULL list counts as empty, as in DuckDB.
-fn list_concat(a: &Value, b: &Value) -> Value {
-    match (list_part(a), list_part(b)) {
-        (Some(a), Some(b)) => {
-            Value::List(std::sync::Arc::new(a.iter().chain(b).cloned().collect()))
-        }
-        _ => Value::Null,
-    }
+fn list_concat(a: &Value, b: &Value) -> Result<Value> {
+    let (a, b) = (list_part(a)?, list_part(b)?);
+    Ok(Value::List(std::sync::Arc::new(
+        a.iter().chain(b).cloned().collect(),
+    )))
 }
 
-/// A list's elements, a NULL list as none; `None` for a non-list.
-fn list_part(v: &Value) -> Option<&[Option<std::sync::Arc<str>>]> {
-    match v {
-        Value::List(items) => Some(items.as_slice()),
-        Value::Null => Some(&[]),
-        _ => None,
-    }
+/// A list's elements, a NULL list as none; a conversion error for a
+/// non-list.
+fn list_part(v: &Value) -> Result<&[Option<std::sync::Arc<str>>]> {
+    Ok(list_arg(v)?.map_or(&[][..], |items| items.as_slice()))
 }
 
 /// A separator argument: NULL is DuckDB's default, `,`.
@@ -417,9 +525,18 @@ fn text(item: Option<&std::sync::Arc<str>>) -> Value {
 }
 
 /// `agg` over the elements: the aggregates that make sense of strings.
-fn aggregate(items: &ListItems, agg: &str, sep: &Value) -> Value {
+/// Any other name is DuckDB's "no such aggregate" error; the parser
+/// already refuses one written as a literal.
+fn aggregate(items: &ListItems, agg: &Value, sep: &Value) -> Result<Value> {
     let values = items.iter().flatten();
-    match agg.to_ascii_lowercase().as_str() {
+    let unknown = || VmError::UnsupportedOp {
+        opcode: "list_aggr",
+        op: format!("aggregate {agg}"),
+    };
+    let Value::Str(name) = agg else {
+        return Err(unknown());
+    };
+    Ok(match name.to_ascii_lowercase().as_str() {
         // Like the `string_agg` aggregate: nothing to join is NULL, where
         // `array_to_string` gives ''.
         "string_agg" if items.iter().all(Option::is_none) => Value::Null,
@@ -429,8 +546,8 @@ fn aggregate(items: &ListItems, agg: &str, sep: &Value) -> Value {
         "max" => text(values.max()),
         "first" => text(items.first().and_then(Option::as_ref)),
         "last" => text(items.last().and_then(Option::as_ref)),
-        _ => Value::Null,
-    }
+        _ => return Err(unknown()),
+    })
 }
 
 /// The distinct non-NULL elements, in first-seen order.
@@ -444,24 +561,29 @@ fn distinct(items: &ListItems) -> Vec<&std::sync::Arc<str>> {
 }
 
 /// `list_sort`'s order arguments: (descending, NULLs first). NULLs come
-/// last unless asked; an unknown word is `None` (the parser refuses it).
-fn sort_order(args: &[&Value]) -> Option<(bool, bool)> {
+/// last unless asked; an unknown word is an error (the parser refuses one
+/// written as a literal).
+fn sort_order(args: &[&Value]) -> Result<(bool, bool)> {
     let word = |i: usize| match args.get(i) {
-        None | Some(Value::Null) => Some(None),
-        Some(Value::Str(s)) => Some(Some(s.trim().to_ascii_uppercase())),
-        Some(_) => None,
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Str(s)) => Ok(Some(s.trim().to_ascii_uppercase())),
+        Some(other) => Err(not_a(other, "sort order")),
+    };
+    let unknown = |w: &str| VmError::Conversion {
+        value: w.to_string(),
+        to: "sort order",
     };
     let desc = match word(0)?.as_deref() {
         None | Some("ASC") => false,
         Some("DESC") => true,
-        Some(_) => return None,
+        Some(w) => return Err(unknown(w)),
     };
     let nulls_first = match word(1)?.as_deref() {
         None | Some("NULLS LAST") => false,
         Some("NULLS FIRST") => true,
-        Some(_) => return None,
+        Some(w) => return Err(unknown(w)),
     };
-    Some((desc, nulls_first))
+    Ok((desc, nulls_first))
 }
 
 fn sorted(items: &ListItems, desc: bool, nulls_first: bool) -> Value {
@@ -563,14 +685,11 @@ fn list_value(values: &[&Value]) -> Value {
     ))
 }
 
-/// Element `index` of `items`: 1-based, negative from the end.
-fn list_element(items: &ListItems, index: &Value) -> Value {
-    let Value::Int(i) = index else {
-        return Value::Null;
-    };
+/// Element `i` of `items`: 1-based, negative from the end.
+fn list_element(items: &ListItems, i: i64) -> Value {
     let len = i64::try_from(items.len()).unwrap_or(i64::MAX);
-    let at = if *i < 0 {
-        len.saturating_add(*i)
+    let at = if i < 0 {
+        len.saturating_add(i)
     } else {
         i.saturating_sub(1)
     };
@@ -587,20 +706,20 @@ fn is_list_contains(name: &str) -> bool {
         .any(|f| f.eq_ignore_ascii_case(name))
 }
 
-fn list_contains(list: &Value, value: &Value) -> Value {
-    let Value::List(items) = list else {
-        return Value::Null;
+fn list_contains(list: &Value, value: &Value) -> Result<Value> {
+    let Some(items) = list_arg(list)? else {
+        return Ok(Value::Null);
     };
     if matches!(value, Value::Null) {
-        return Value::Null;
+        return Ok(Value::Null);
     }
     // A list's elements are strings, so `value` is compared as text.
     let value = value.to_string();
-    Value::Bool(
+    Ok(Value::Bool(
         items
             .iter()
             .any(|item| item.as_deref() == Some(value.as_str())),
-    )
+    ))
 }
 
 /// The value of the first entry whose key matches: `None` when no key
@@ -623,6 +742,16 @@ fn value_of(found: Option<Option<&str>>) -> Value {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// The row's value; tests that expect an error call [`super::call`].
+    fn call(name: &str, args: &[&Value]) -> Value {
+        super::call(name, args).unwrap()
+    }
+
+    /// Every row's value.
+    fn call_column(name: &str, columns: &[&[Value]], num_rows: usize) -> Vec<Value> {
+        super::call_column(name, columns, num_rows).unwrap()
+    }
 
     fn m() -> Value {
         Value::Map(Arc::new(vec![
@@ -768,7 +897,6 @@ mod tests {
             call("list_contains", &[&list(&["a"]), &Value::Null]),
             Value::Null
         );
-        assert_eq!(call("list_contains", &[&s("a"), &s("a")]), Value::Null);
         assert_eq!(
             call("list_contains", &[&list(&["1"]), &Value::Int(1)]),
             Value::Bool(true)
@@ -790,6 +918,106 @@ mod tests {
         );
     }
 
+    fn bound(f: f64) -> Result<Option<i64>> {
+        bound_arg(&Value::Float(f))
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_bound_arg_6e257dc1__v1_a_finite_float_in_range_rounds() {
+        assert_eq!(bound(2.5).unwrap(), Some(3));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_bound_arg_6e257dc1__v2_nan_is_an_error() {
+        assert!(bound(f64::NAN).is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_bound_arg_6e257dc1__v3_below_i64_is_an_error() {
+        assert!(bound(-1e19).is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_bound_arg_6e257dc1__v4_above_i64_is_an_error() {
+        assert!(bound(1e19).is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_95857d66__v1_len_of_a_string_counts_characters() {
+        assert_eq!(call("LEN", &[&s("héllo")]), Value::Int(5));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_95857d66__v2_another_function_on_a_string_is_an_error() {
+        assert!(matches!(
+            super::call("cardinality", &[&s("x")]),
+            Err(VmError::Conversion { to: "MAP", .. })
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_95857d66__v3_len_with_more_arguments_is_an_error() {
+        assert!(super::call("len", &[&s("abc"), &s("x")]).is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_b8ba15a0__v1_a_map_function_with_a_wrong_count() {
+        assert!(matches!(
+            super::call("cardinality", &[&m(), &s("extra")]),
+            Err(VmError::MalformedProgram { .. })
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_b8ba15a0__v2_map_extract_value_without_a_key() {
+        assert!(matches!(
+            super::call("map_extract_value", &[&m()]),
+            Err(VmError::MalformedProgram { .. })
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_map_fns_call_b8ba15a0__v3_a_list_function_given_a_map() {
+        assert!(matches!(
+            super::call("list_sort", &[&m()]),
+            Err(VmError::Conversion {
+                to: "VARCHAR[]",
+                ..
+            })
+        ));
+    }
+
+    /// #892: slice bounds cast as DuckDB casts them -- integer text
+    /// parses, a float rounds half away from zero -- and anything else is
+    /// an error rather than NULL.
+    #[test]
+    fn list_slice_bounds_cast_like_duckdb() {
+        let abcd = list(&["a", "b", "c", "d"]);
+        let sl = |b: Value, e: Value| super::call("list_slice", &[&abcd, &b, &e]);
+        assert_eq!(sl(s("1"), s("2")).unwrap(), list(&["a", "b"]));
+        assert_eq!(sl(Value::Float(2.5), Value::Int(3)).unwrap(), list(&["c"]));
+        assert_eq!(
+            sl(Value::Float(-1.5), Value::Int(4)).unwrap(),
+            list(&["c", "d"])
+        );
+        assert!(sl(s("x"), Value::Int(2)).is_err());
+        assert!(sl(Value::Float(f64::NAN), Value::Int(2)).is_err());
+        assert!(sl(Value::Float(1e19), Value::Int(2)).is_err());
+        assert!(sl(Value::Bool(true), Value::Int(2)).is_err());
+        assert!(super::call("list_has_any", &[&abcd, &s("x")]).is_err());
+        assert_eq!(call("list_has_any", &[&abcd, &Value::Null]), Value::Null);
+    }
+
     #[test]
     fn list_element_and_length_follow_duckdb() {
         let l = Value::List(Arc::new(vec![Some("a".into()), None, Some("c".into())]));
@@ -803,7 +1031,10 @@ mod tests {
         assert_eq!(at(4), Value::Null);
         assert_eq!(at(i64::MIN), Value::Null);
         assert_eq!(call("list_extract", &[&l, &Value::Null]), Value::Null);
-        assert_eq!(call("LIST_ELEMENT", &[&l, &s("1")]), Value::Null);
+        // Text casts to an index as DuckDB casts it; other types do not.
+        assert_eq!(call("LIST_ELEMENT", &[&l, &s("1")]), s("a"));
+        assert!(super::call("list_extract", &[&l, &s("x")]).is_err());
+        assert!(super::call("list_extract", &[&l, &Value::Float(1.0)]).is_err());
         assert_eq!(
             call("list_extract", &[&Value::Null, &Value::Int(1)]),
             Value::Null
@@ -811,9 +1042,12 @@ mod tests {
         assert_eq!(call("len", &[&l]), Value::Int(3));
         assert_eq!(call("array_length", &[&list(&[])]), Value::Int(0));
         assert_eq!(call("len", &[&Value::Null]), Value::Null);
+        // On a string, `len` is its length in characters.
+        assert_eq!(call("len", &[&s("héllo")]), Value::Int(5));
+        assert!(super::call("len", &[&Value::Int(5)]).is_err());
         // DuckDB's `cardinality` takes only a map.
-        assert_eq!(call("cardinality", &[&l]), Value::Null);
-        assert_eq!(call("map_keys", &[&l]), Value::Null);
+        assert!(super::call("cardinality", &[&l]).is_err());
+        assert!(super::call("map_keys", &[&l]).is_err());
     }
 
     #[test]
@@ -888,8 +1122,9 @@ mod tests {
         assert_eq!(agg("max"), s("b"));
         assert_eq!(agg("first"), s("b"));
         assert_eq!(agg("last"), s("b"));
-        assert_eq!(agg("avg"), Value::Null);
-        assert_eq!(call("list_aggr", &[&l, &Value::Null]), Value::Null);
+        // An aggregate the parser could not check is DuckDB's catalog error.
+        assert!(super::call("list_aggr", &[&l, &s("avg")]).is_err());
+        assert!(super::call("list_aggr", &[&l, &Value::Null]).is_err());
         assert_eq!(call("list_distinct", &[&l]), list(&["b", "a"]));
         assert_eq!(call("list_unique", &[&l]), Value::Int(2));
         let with_null = |v: &[Option<&str>]| {
@@ -907,12 +1142,10 @@ mod tests {
             call("list_reverse_sort", &[&l]),
             with_null(&[Some("b"), Some("b"), Some("a"), None])
         );
-        assert_eq!(call("list_sort", &[&l, &s("sideways")]), Value::Null);
-        assert_eq!(
-            call("list_sort", &[&l, &s("ASC"), &s("middle")]),
-            Value::Null
-        );
-        assert_eq!(call("list_sort", &[&l, &Value::Int(1)]), Value::Null);
+        // An order the parser could not check is an error, as in DuckDB.
+        assert!(super::call("list_sort", &[&l, &s("sideways")]).is_err());
+        assert!(super::call("list_sort", &[&l, &s("ASC"), &s("middle")]).is_err());
+        assert!(super::call("list_sort", &[&l, &Value::Int(1)]).is_err());
         assert_eq!(
             call("list_reverse", &[&l]),
             with_null(&[Some("b"), Some("a"), None, Some("b")])
@@ -935,7 +1168,7 @@ mod tests {
             list(&["a", "b"])
         );
         assert_eq!(call("array_cat", &[&Value::Null, &Value::Null]), list(&[]));
-        assert_eq!(call("list_cat", &[&s("a"), &list(&["b"])]), Value::Null);
+        assert!(super::call("list_cat", &[&s("a"), &list(&["b"])]).is_err());
     }
 
     #[test]
@@ -962,19 +1195,51 @@ mod tests {
     }
 
     #[test]
-    fn null_and_non_map_arguments_give_null() {
+    fn null_arguments_give_null_and_wrong_types_are_conversion_errors() {
         let m = m();
         assert_eq!(
             call("map_extract_value", &[&Value::Null, &s("a")]),
             Value::Null
         );
-        assert_eq!(call("cardinality", &[&s("{}")]), Value::Null);
-        assert_eq!(
-            call("map_extract_value", &[&m, &Value::Int(1)]),
-            Value::Null
-        );
         assert_eq!(call("map_extract_value", &[&m, &Value::Null]), Value::Null);
-        assert_eq!(call("cardinality", &[&m, &s("extra")]), Value::Null);
+        // #892: a wrong type is DuckDB's conversion error, not NULL.
+        let err = |name: &str, args: &[&Value]| super::call(name, args).unwrap_err();
+        assert_eq!(
+            err("cardinality", &[&s("{}")]),
+            VmError::Conversion {
+                value: "{}".into(),
+                to: "MAP"
+            }
+        );
+        assert_eq!(
+            err("map_extract_value", &[&m, &Value::Int(1)]),
+            VmError::Conversion {
+                value: "1".into(),
+                to: "VARCHAR"
+            }
+        );
+        assert_eq!(
+            err("list_contains", &[&s("abc"), &s("a")]),
+            VmError::Conversion {
+                value: "abc".into(),
+                to: "VARCHAR[]"
+            }
+        );
+        assert!(matches!(
+            err("cardinality", &[&m, &s("extra")]),
+            VmError::MalformedProgram { .. }
+        ));
+        assert!(matches!(
+            err("json_keys", &[&Value::Int(5)]),
+            VmError::Conversion { to: "VARCHAR", .. }
+        ));
+        assert!(matches!(
+            err("list_concat", &[&list(&["a"]), &s("b")]),
+            VmError::Conversion {
+                to: "VARCHAR[]",
+                ..
+            }
+        ));
         assert!(is_map_function("Map_Get_CI"));
         assert!(!is_map_function("json_extract"));
     }

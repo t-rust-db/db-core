@@ -7,6 +7,12 @@
 //! backwards for tail-first display and forwards for live follow without
 //! ever scanning the whole file. Only complete lines leave this module: a
 //! trailing partial line stays unconsumed until its newline arrives.
+//!
+//! Memory is bounded (#883): one [`LogFile::refresh`] reads at most
+//! [`REFRESH_BATCH`] bytes of complete lines, and a line longer than the
+//! file's maximum ([`DEFAULT_MAX_LINE`] unless set with
+//! [`LogFile::with_max_line`]) is an `InvalidData` error naming its offset
+//! -- never skipped and never buffered without limit.
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
@@ -16,6 +22,13 @@ use std::sync::Arc;
 /// Bytes per read. One block becomes one [`Block`] (minus the partial
 /// line at its boundary) and, downstream, one or more segments.
 pub const BLOCK_SIZE: usize = 256 * 1024;
+
+/// The longest line a [`LogFile`] reads unless told otherwise (#883).
+pub const DEFAULT_MAX_LINE: usize = 1024 * 1024;
+
+/// Bytes of complete lines one [`LogFile::refresh`] reads before it
+/// returns them; the caller refreshes again for the rest (#883).
+pub const REFRESH_BATCH: u64 = 8 * 1024 * 1024;
 
 /// A run of complete lines from the file. `bytes` ends with `\n` unless
 /// it is empty; `file_off` is the file offset of `bytes[0]`.
@@ -93,6 +106,8 @@ pub struct LogFile {
     head_off: u64,
     /// Total bytes read from disk, for tests and stats.
     bytes_read: u64,
+    /// The longest line this reads; a longer one is an error (#883).
+    max_line: usize,
 }
 
 impl LogFile {
@@ -108,6 +123,7 @@ impl LogFile {
             tail_off: 0,
             head_off: 0,
             bytes_read: 0,
+            max_line: DEFAULT_MAX_LINE,
         };
         lf.reposition_at_end()?;
         Ok(lf)
@@ -140,7 +156,16 @@ impl LogFile {
             tail_off: offset,
             head_off: offset,
             bytes_read: 0,
+            max_line: DEFAULT_MAX_LINE,
         })
+    }
+
+    /// Reads lines up to `bytes` long (at least one [`BLOCK_SIZE`]); a
+    /// longer one is an error (#883). The default is [`DEFAULT_MAX_LINE`].
+    #[must_use]
+    pub fn with_max_line(mut self, bytes: usize) -> Self {
+        self.max_line = bytes.max(BLOCK_SIZE);
+        self
     }
 
     /// The identity of the file this was opened on.
@@ -196,34 +221,46 @@ impl LogFile {
     /// Read backwards from `tail_off` until at least `min_bytes` of
     /// complete lines are loaded or the file start is reached. Blocks are
     /// returned oldest first; `tail_off` moves to the first returned byte.
+    /// A line longer than a block is read whole, from further back; one
+    /// longer than the maximum is an error (#883), where it used to be
+    /// skipped.
     pub fn read_tail(&mut self, min_bytes: u64) -> io::Result<Vec<Block>> {
         let mut blocks: Vec<Block> = Vec::new();
         let mut loaded: u64 = 0;
         while loaded < min_bytes && self.tail_off > 0 {
             let end = self.tail_off;
             let start = end.saturating_sub(BLOCK_SIZE as u64);
-            let mut buf = self.read_range(start, end)?;
+            let buf = self.read_range(start, end)?;
             // Align to a line start: drop the partial first line unless we
             // are at the file start. The dropped bytes are re-read as the
-            // end of the next (older) block.
-            let cut = if start == 0 {
-                0
+            // end of the next (older) block. A block with no newline is
+            // inside one long line, which starts further back. The block's
+            // last byte is the newline ending the line at `end`, so it is
+            // not a line start inside the block: counting it would cut the
+            // whole block and never move `tail_off` (#883).
+            let first_line = if start == 0 {
+                Some(0)
             } else {
-                match buf.iter().position(|&b| b == b'\n') {
-                    Some(i) => i.saturating_add(1),
-                    None => buf.len(), // a line longer than a block: skip it
+                buf.split_last()
+                    .and_then(|(_, before)| before.iter().position(|&b| b == b'\n'))
+                    .map(|i| i.saturating_add(1))
+            };
+            let (block_off, bytes) = match first_line {
+                Some(cut) => (
+                    start.saturating_add(cut as u64),
+                    buf.get(cut..).unwrap_or_default().to_vec(),
+                ),
+                None => {
+                    let line = self.line_start(start, end)?;
+                    (line, self.read_range(line, end)?)
                 }
             };
-            let block_off = start.saturating_add(cut as u64);
-            if cut > 0 {
-                buf.drain(..cut);
-            }
             self.tail_off = block_off;
-            if !buf.is_empty() {
-                loaded = loaded.saturating_add(buf.len() as u64);
+            if !bytes.is_empty() {
+                loaded = loaded.saturating_add(bytes.len() as u64);
                 blocks.push(Block {
                     file_off: block_off,
-                    bytes: Arc::from(buf),
+                    bytes: Arc::from(bytes),
                 });
             }
         }
@@ -231,8 +268,43 @@ impl LogFile {
         Ok(blocks)
     }
 
-    /// Read forward from `head_off` to the end of file. Handles the three
-    /// outcomes: nothing new, new complete lines, or truncation.
+    /// Where the line that holds byte `before - 1` starts: one past the
+    /// last newline before `before`, or 0. Reads backwards a block at a
+    /// time; the line runs to `line_end`, and one longer than the maximum
+    /// is an error (#883).
+    fn line_start(&mut self, before: u64, line_end: u64) -> io::Result<u64> {
+        let mut hi = before;
+        while hi > 0 {
+            let lo = hi.saturating_sub(BLOCK_SIZE as u64);
+            let buf = self.read_range(lo, hi)?;
+            if let Some(i) = buf.iter().rposition(|&b| b == b'\n') {
+                return Ok(lo.saturating_add(i as u64).saturating_add(1));
+            }
+            if line_end.saturating_sub(lo) > self.max_line as u64 {
+                return Err(self.line_too_long(lo, line_end.saturating_sub(lo)));
+            }
+            hi = lo;
+        }
+        Ok(0)
+    }
+
+    /// The error for a line longer than the maximum: at least `len` bytes,
+    /// reaching byte `at` (#883).
+    fn line_too_long(&self, at: u64, len: u64) -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{}: the line through byte {at} is at least {len} bytes, longer than the {}-byte maximum",
+                self.path.display(),
+                self.max_line
+            ),
+        )
+    }
+
+    /// Read forward from `head_off`, up to [`REFRESH_BATCH`] bytes of
+    /// complete lines (#883: the caller refreshes again for more). Handles
+    /// the three outcomes: nothing new, new complete lines, or truncation.
+    /// A line longer than the maximum is an `InvalidData` error.
     pub fn refresh(&mut self) -> io::Result<Refresh> {
         let len = self.len()?;
         if len < self.head_off {
@@ -242,6 +314,7 @@ impl LogFile {
         if len == self.head_off {
             return Ok(Refresh::NoNew);
         }
+        let started = self.head_off;
         let mut blocks = Vec::new();
         let mut pending: Vec<u8> = Vec::new();
         let mut pending_off = self.head_off;
@@ -250,21 +323,41 @@ impl LogFile {
             let end = pos.saturating_add(BLOCK_SIZE as u64).min(len);
             let chunk = self.read_range(pos, end)?;
             pos = end;
+            // `pending` holds no newline, so only the new chunk is searched
+            // (#883: rescanning all of `pending` made a long line O(n^2)).
+            let carried = pending.len();
             pending.extend_from_slice(&chunk);
-            if let Some(i) = pending.iter().rposition(|&b| b == b'\n') {
-                let cut = i.saturating_add(1);
-                let rest = pending.split_off(cut);
-                let complete = std::mem::replace(&mut pending, rest);
-                let block_len = complete.len() as u64;
-                blocks.push(Block {
-                    file_off: pending_off,
-                    bytes: Arc::from(complete),
-                });
-                pending_off = pending_off.saturating_add(block_len);
-                self.head_off = pending_off;
+            match chunk.iter().rposition(|&b| b == b'\n') {
+                Some(i) => {
+                    // The carried partial line ends at the chunk's first
+                    // newline; lines wholly inside a chunk are shorter than
+                    // the maximum, which is at least a block.
+                    let first = chunk.iter().position(|&b| b == b'\n').unwrap_or(i);
+                    let line = carried.saturating_add(first) as u64;
+                    if line > self.max_line as u64 {
+                        return Err(self.line_too_long(pending_off.saturating_add(line), line));
+                    }
+                    let cut = carried.saturating_add(i).saturating_add(1);
+                    let rest = pending.split_off(cut);
+                    let complete = std::mem::replace(&mut pending, rest);
+                    let block_len = complete.len() as u64;
+                    blocks.push(Block {
+                        file_off: pending_off,
+                        bytes: Arc::from(complete),
+                    });
+                    pending_off = pending_off.saturating_add(block_len);
+                    self.head_off = pending_off;
+                    if pending_off.saturating_sub(started) >= REFRESH_BATCH {
+                        break;
+                    }
+                }
+                // No newline yet: a long line or a partial tail. It stays
+                // pending until its newline arrives, up to the maximum.
+                None if pending.len() > self.max_line => {
+                    return Err(self.line_too_long(pos, pending.len() as u64));
+                }
+                None => {}
             }
-            // else: no newline yet -- keep accumulating (long line or
-            // partial tail); the loop ends at `len` and leaves it pending.
         }
         if blocks.is_empty() {
             Ok(Refresh::NoNew)
@@ -274,16 +367,12 @@ impl LogFile {
     }
 
     /// Position both cursors after the last complete line in the file,
-    /// reading at most one block from the end.
+    /// reading one block from the end -- more only when the last line is
+    /// longer than a block, which used to be skipped; one longer than the
+    /// maximum is an error (#883).
     fn reposition_at_end(&mut self) -> io::Result<()> {
         let len = self.len()?;
-        let start = len.saturating_sub(BLOCK_SIZE as u64);
-        let buf = self.read_range(start, len)?;
-        let head = match buf.iter().rposition(|&b| b == b'\n') {
-            Some(i) => start.saturating_add(i as u64).saturating_add(1),
-            None if start == 0 => 0, // no complete line at all
-            None => len,             // a final line longer than a block
-        };
+        let head = self.line_start(len, len)?;
         self.head_off = head;
         self.tail_off = head;
         Ok(())
@@ -446,7 +535,8 @@ mod mcdc_vectors {
     //! by `make test-mcdc`; db-core#299 MC/DC backfill).
 
     use super::tests::{lines, tmp};
-    use super::LogFile;
+    use super::{Block, LogFile, Refresh, BLOCK_SIZE, DEFAULT_MAX_LINE, REFRESH_BATCH};
+    use std::io;
 
     // storage_stream_file_read_tail_c82dd615: `loaded < min_bytes && self.tail_off > 0`
     #[test]
@@ -481,6 +571,110 @@ mod mcdc_vectors {
         // runs and returns no blocks.
         assert!(lf.read_tail(1).unwrap().is_empty());
         assert_eq!(lf.tail_off(), 0);
+    }
+
+    /// `n` bytes of `x` and a newline.
+    fn long_line(n: usize) -> Vec<u8> {
+        let mut line = vec![b'x'; n];
+        line.push(b'\n');
+        line
+    }
+
+    fn refreshed(lf: &mut LogFile) -> Vec<Block> {
+        match lf.refresh().unwrap() {
+            Refresh::New(blocks) => blocks,
+            other => panic!("expected lines, got {other:?}"),
+        }
+    }
+
+    /// #883: a line longer than a block but within the maximum comes out
+    /// whole, from either end; it used to be skipped by `read_tail`.
+    #[test]
+    fn a_line_longer_than_a_block_is_read_whole_from_both_ends() {
+        let long = 600 * 1024;
+        let mut contents = b"a\n".to_vec();
+        contents.extend(long_line(long));
+        contents.extend(b"b\n");
+        let t = tmp("long-both", &contents);
+        let mut lf = LogFile::open_at(&t.0, 0).unwrap();
+        let blocks = refreshed(&mut lf);
+        let got = lines(&blocks);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[1].len(), long);
+        let mut tail = LogFile::open(&t.0).unwrap();
+        let blocks = tail.read_tail(u64::MAX).unwrap();
+        assert_eq!(
+            lines(&blocks).iter().map(String::len).collect::<Vec<_>>(),
+            [1, long, 1]
+        );
+    }
+
+    /// #883: a line longer than the maximum is an `InvalidData` error from
+    /// `refresh`, `read_tail` and `open`, complete or still being written.
+    #[test]
+    fn a_line_longer_than_the_maximum_is_an_error() {
+        let over = DEFAULT_MAX_LINE + BLOCK_SIZE;
+        let mut contents = b"a\n".to_vec();
+        contents.extend(long_line(over));
+        let t = tmp("long-over", &contents);
+        let mut lf = LogFile::open_at(&t.0, 0).unwrap();
+        let err = lf.refresh().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{err}");
+        assert!(err.to_string().contains("maximum"), "{err}");
+        // Raising the maximum reads it.
+        let mut lf = LogFile::open_at(&t.0, 0).unwrap().with_max_line(2 * over);
+        assert_eq!(lines(&refreshed(&mut lf))[1].len(), over);
+        // From the end, a complete last line is never read: the cursors go
+        // after its newline.
+        assert_eq!(
+            LogFile::open(&t.0).unwrap().head_off(),
+            contents.len() as u64
+        );
+        // Still being written (no newline yet): an error too, not a wait --
+        // and `open` cannot place the cursors before it.
+        let partial = tmp("long-partial", &vec![b'x'; over]);
+        let mut lf = LogFile::open_at(&partial.0, 0).unwrap();
+        assert_eq!(lf.refresh().unwrap_err().kind(), io::ErrorKind::InvalidData);
+        let err = LogFile::open(&partial.0).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{err}");
+        // `read_tail` reaching back into an over-long line.
+        let mut contents = long_line(over);
+        contents.extend(b"b\n");
+        let t = tmp("long-tail", &contents);
+        let mut lf = LogFile::open(&t.0).unwrap();
+        assert_eq!(
+            lf.read_tail(u64::MAX).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        // The maximum is never below a block.
+        let lf = LogFile::open_at(&t.0, 0).unwrap().with_max_line(1);
+        assert_eq!(lf.max_line, BLOCK_SIZE);
+    }
+
+    /// #883: one refresh reads a bounded batch, not the whole new file;
+    /// refreshing again continues where it stopped.
+    #[test]
+    fn refresh_reads_a_bounded_batch_and_continues() {
+        let line = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\n";
+        let count = (3 * REFRESH_BATCH as usize) / line.len();
+        let t = tmp("batches", &line.repeat(count));
+        let mut lf = LogFile::open_at(&t.0, 0).unwrap();
+        let mut total = 0;
+        let mut refreshes = 0;
+        loop {
+            match lf.refresh().unwrap() {
+                Refresh::New(blocks) => {
+                    let bytes: usize = blocks.iter().map(|b| b.bytes.len()).sum();
+                    assert!(bytes as u64 <= REFRESH_BATCH + BLOCK_SIZE as u64);
+                    total += lines(&blocks).len();
+                    refreshes += 1;
+                }
+                Refresh::NoNew => break,
+                Refresh::Truncated => panic!("not truncated"),
+            }
+        }
+        assert_eq!(total, count);
+        assert!(refreshes >= 3, "{refreshes} refreshes");
     }
 
     #[test]

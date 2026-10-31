@@ -26,7 +26,7 @@
 use std::fs::{self, File};
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use super::error::IngestError;
@@ -68,10 +68,15 @@ impl Table {
         &self.dir
     }
 
-    fn lock(&self) -> MutexGuard<'_, Option<TableWriter>> {
-        // A call that panicked left the writer as its last commit left it:
-        // every step of a flush or compaction is recoverable on its own.
-        self.writer.lock().unwrap_or_else(PoisonError::into_inner)
+    /// The writer, or `WalError::Failed` if a call panicked while holding
+    /// it (#884): nothing shows a writer stopped mid-append is consistent,
+    /// so the table must be reopened (its WAL replays) rather than used on.
+    fn lock(&self) -> Result<MutexGuard<'_, Option<TableWriter>>, IngestError> {
+        self.writer.lock().map_err(|_| {
+            IngestError::Wal(WalError::Failed(
+                "a call panicked while holding the table; reopen it".to_string(),
+            ))
+        })
     }
 
     /// Runs `f` on the writer, or fails with `WalError::Closed`.
@@ -79,15 +84,16 @@ impl Table {
         &self,
         f: impl FnOnce(&mut TableWriter) -> Result<T, IngestError>,
     ) -> Result<T, IngestError> {
-        match self.lock().as_mut() {
+        match self.lock()?.as_mut() {
             Some(writer) => f(writer),
             None => Err(IngestError::Wal(WalError::Closed)),
         }
     }
 
-    /// Whether [`close`](Self::close) was called on any clone.
+    /// Whether [`close`](Self::close) was called on any clone, or a call
+    /// panicked and left the table unusable.
     pub fn is_closed(&self) -> bool {
-        self.lock().is_none()
+        !self.lock().is_ok_and(|writer| writer.is_some())
     }
 
     /// Appends one record of a lines table; see [`TableWriter::append`].
@@ -158,7 +164,7 @@ impl Table {
     /// clone: later calls fail with `WalError::Closed`, and a running
     /// [`follow`](Self::follow) returns. Closing again does nothing.
     pub fn close(&self) -> Result<(), IngestError> {
-        match self.lock().take() {
+        match self.lock()?.take() {
             Some(writer) => writer.close(),
             None => Ok(()),
         }
@@ -194,7 +200,7 @@ impl Table {
         let state = self.dir.join(FOLLOW_DIR).join(state_name(path));
         let mut file = resume(path, &state)?;
         let mut count = 0u64;
-        while !self.is_closed() {
+        while self.lock()?.is_some() {
             match file.refresh()? {
                 Refresh::New(blocks) => match self.append_blocks(&file, &blocks, &state)? {
                     Some(n) => count = count.saturating_add(n),
@@ -208,7 +214,13 @@ impl Table {
                     // A rotation: once the new file exists, read what the
                     // old one got since the last look, then switch.
                     if file.rotated()? {
-                        if let Ok(new) = LogFile::open_at(path, 0) {
+                        // Until the new file appears, keep waiting.
+                        let new = match LogFile::open_at(path, 0) {
+                            Ok(new) => Some(new),
+                            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+                            Err(e) => return Err(e.into()),
+                        };
+                        if let Some(new) = new {
                             if let Refresh::New(blocks) = file.refresh()? {
                                 match self.append_blocks(&file, &blocks, &state)? {
                                     Some(n) => count = count.saturating_add(n),
@@ -294,26 +306,31 @@ fn state_name(path: &Path) -> String {
     format!("{name}-{hash:016x}.offset")
 }
 
-/// Opens `path` where `state` says the last follow stopped: the same file
-/// (device and inode) and at least that long. Otherwise from its start.
+/// Opens `path` where `state` says the last follow stopped. It starts
+/// from the beginning only when there is nothing to resume: no `state`
+/// yet, or `path` names another file (rotated) or one shorter than the
+/// saved offset (truncated). A `state` that cannot be read or does not
+/// parse is an error (#884): starting over would ingest every line again.
 fn resume(path: &Path, state: &Path) -> Result<LogFile, IngestError> {
-    let saved = fs::read_to_string(state).ok().and_then(|text| {
-        let mut parts = text.split_whitespace().map(str::parse::<u64>);
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some(Ok(dev)), Some(Ok(ino)), Some(Ok(offset))) => {
-                Some((FileIdentity { dev, ino }, offset))
-            }
-            _ => None,
-        }
-    });
-    if let Some((identity, offset)) = saved {
-        if FileIdentity::of(path).ok() == Some(identity) {
-            if let Ok(file) = LogFile::open_at(path, offset) {
-                return Ok(file);
-            }
-        }
+    let text = match fs::read_to_string(state) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LogFile::open_at(path, 0)?),
+        Err(e) => return Err(e.into()),
+    };
+    let mut parts = text.split_whitespace().map(str::parse::<u64>);
+    let (Some(Ok(dev)), Some(Ok(ino)), Some(Ok(offset)), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(IngestError::Corrupt(format!(
+            "resume file {} is not `dev ino offset`: {text:?}",
+            state.display()
+        )));
+    };
+    let file = LogFile::open_at(path, 0)?;
+    if file.identity() != (FileIdentity { dev, ino }) || file.len()? < offset {
+        return Ok(file);
     }
-    Ok(LogFile::open_at(path, 0)?)
+    Ok(LogFile::open_at(path, offset)?)
 }
 
 /// Records that everything before `offset` of the file `identity` is

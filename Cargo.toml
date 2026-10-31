@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.218.4"
+version = "0.219.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -272,6 +272,12 @@ path = "tests/unit/codegen_cursor_factory_test.rs"
 [[test]]
 name = "unit_nesting_depth"
 path = "tests/unit/nesting_depth_test.rs"
+
+# #877: the fixed adversarial suite -- hostile SQL values and corrupt
+# files, each on a 2 MiB thread.
+[[test]]
+name = "unit_adversarial_sql"
+path = "tests/unit/adversarial_sql_test.rs"
 
 [[test]]
 name = "unit_root_public_api"

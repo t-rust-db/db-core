@@ -93,10 +93,7 @@ pub(super) fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecEr
             let result = result.map_err(|e| match e {
                 // A limit sqlite3 reports in its own words (#659).
                 functions::FunctionError::TooBig => ExecError::TooBig,
-                e => ExecError::MalformedInstruction {
-                    opcode: "Function",
-                    reason: e.to_string(),
-                },
+                e => ExecError::FunctionFailed(e),
             })?;
             vm.set_register(instr.p3, result)?;
             Ok(Step::Next)

@@ -1342,3 +1342,34 @@ fn a_corrupt_table_page_is_an_error_not_an_empty_table() {
         }
     }
 }
+
+/// #892: an all-integer `sum` that overflows at any step is sqlite3's
+/// `integer overflow`, even when later rows bring the total back in range
+/// (it returned 9223372036854775803); a REAL row after the overflow makes
+/// the sum REAL. Function and aggregate errors carry sqlite3's message,
+/// not "malformed instruction".
+#[test]
+fn sum_overflow_and_function_errors_match_sqlite3() {
+    let db = TempDb::new("sum-overflow");
+    let mut e = RowEngine::open(db.path()).unwrap();
+    for sql in [
+        "SELECT sum(x) FROM (SELECT 9223372036854775807 x UNION ALL SELECT 1 UNION ALL SELECT -5)",
+        "SELECT sum(x) FROM (SELECT 9223372036854775807 x UNION ALL SELECT 1)",
+        "SELECT abs(-9223372036854775807 - 1)",
+    ] {
+        match e.run_query(sql) {
+            Err(err) => assert_eq!(err.to_string(), "execute: integer overflow", "{sql}"),
+            Ok(r) => panic!("{sql}: returned {:?}", r.rows),
+        }
+    }
+    let r = e
+        .run_query(
+            "SELECT sum(x) FROM (SELECT 9223372036854775807 x UNION ALL SELECT 1 UNION ALL SELECT 1.5)",
+        )
+        .unwrap();
+    assert!(
+        matches!(r.rows[..], [ref row] if matches!(row[..], [Cell::Real(_)])),
+        "{:?}",
+        r.rows
+    );
+}

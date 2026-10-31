@@ -689,7 +689,6 @@ fn remove_entry_by_child(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::storage::row::btree::index::insert::insert_entry;

@@ -303,13 +303,7 @@ fn copy_from_offset(out: &mut [u8], dst: usize, offset: usize, len: usize) -> Re
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic,
-    clippy::arithmetic_side_effects
-)]
+#[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
 
@@ -519,7 +513,7 @@ mod tests {
 }
 
 #[cfg(test)]
-#[allow(non_snake_case, clippy::unwrap_used)]
+#[allow(non_snake_case)]
 mod mcdc_vectors {
     //! Tagged MC/DC vectors for this file's multi-leaf decisions
     //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`

@@ -171,6 +171,14 @@ pub enum ExecError {
     /// that doesn't decode, an I/O error on a read or write. These used to
     /// read as "no row" / "end of table" or "does not support".
     CursorFailed(CursorError),
+    /// An aggregate failed on the program's data (#892): sqlite3's
+    /// `integer overflow` from `sum()`, or an unknown aggregate. Used to
+    /// read as a malformed instruction.
+    AggregateFailed(aggregate::AggregateError),
+    /// A scalar function failed on its arguments (#892) -- `abs()` of the
+    /// smallest integer, a bad `LIKE` escape, a JSON path error. Used to
+    /// read as a malformed instruction.
+    FunctionFailed(functions::FunctionError),
     /// `opcode` needs a [`super::schema_storage::SchemaStorage`] hook
     /// but none is installed (db-core#128).
     SchemaStorageMissing {
@@ -256,6 +264,9 @@ impl std::fmt::Display for ExecError {
             }
             ExecError::CursorFactoryFailed(err) => write!(f, "cursor factory failed: {err}"),
             ExecError::CursorFailed(err) => write!(f, "cursor failed: {err}"),
+            // sqlite3's own words, as its shell prints them.
+            ExecError::AggregateFailed(err) => write!(f, "{err}"),
+            ExecError::FunctionFailed(err) => write!(f, "{err}"),
             ExecError::SchemaStorageMissing { opcode } => {
                 write!(f, "{opcode}: no schema storage hook is installed")
             }
@@ -267,6 +278,18 @@ impl std::fmt::Display for ExecError {
 impl From<CursorError> for ExecError {
     fn from(err: CursorError) -> Self {
         ExecError::CursorFailed(err)
+    }
+}
+
+impl From<aggregate::AggregateError> for ExecError {
+    fn from(err: aggregate::AggregateError) -> Self {
+        ExecError::AggregateFailed(err)
+    }
+}
+
+impl From<functions::FunctionError> for ExecError {
+    fn from(err: functions::FunctionError) -> Self {
+        ExecError::FunctionFailed(err)
     }
 }
 
@@ -2061,10 +2084,7 @@ mod tests {
         )]);
         assert!(matches!(
             execute(&mut vm, &program),
-            Err(ExecError::MalformedInstruction {
-                opcode: "Function",
-                ..
-            })
+            Err(ExecError::FunctionFailed(_))
         ));
     }
 

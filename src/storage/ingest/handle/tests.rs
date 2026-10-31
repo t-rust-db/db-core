@@ -292,21 +292,73 @@ fn resume_files_are_named_per_path() {
     assert!(state_name(Path::new("/x/a b?.log")).starts_with("a_b_.log-"));
 }
 
+/// #884: only a missing resume file, a rotated file (another identity) or
+/// a truncated one (shorter than the offset) starts from the beginning.
 #[test]
-fn a_damaged_or_stale_resume_file_starts_from_the_beginning() {
+fn a_missing_stale_or_truncated_resume_starts_from_the_beginning() {
     let t = TempDir::new();
     let log = t.0.join("app.log");
     append_to(&log, "one\ntwo\n");
     let state = t.0.join("state.offset");
-    for text in ["garbage", "1 2", "0 0 4"] {
-        fs::write(&state, text).unwrap();
-        assert_eq!(resume(&log, &state).unwrap().head_off(), 0, "{text}");
-    }
+    assert_eq!(resume(&log, &state).unwrap().head_off(), 0, "no state yet");
+    fs::write(&state, "0 0 4").unwrap();
+    assert_eq!(resume(&log, &state).unwrap().head_off(), 0, "rotated");
     let id = FileIdentity::of(&log).unwrap();
     save(&state, id, 4).unwrap();
     assert_eq!(resume(&log, &state).unwrap().head_off(), 4);
     save(&state, id, 99).unwrap();
-    assert_eq!(resume(&log, &state).unwrap().head_off(), 0, "past the end");
+    assert_eq!(resume(&log, &state).unwrap().head_off(), 0, "truncated");
+}
+
+/// #884: a resume file that does not parse used to start from offset 0
+/// and ingest every line again; it is an error now.
+#[test]
+fn a_damaged_resume_file_is_an_error_not_a_full_reingest() {
+    let t = TempDir::new();
+    let log = t.0.join("app.log");
+    append_to(&log, "one\ntwo\n");
+    let state = t.0.join("state.offset");
+    for text in ["garbage", "1 2", "1 2 x", "1 2 3 4", ""] {
+        fs::write(&state, text).unwrap();
+        assert!(
+            matches!(resume(&log, &state), Err(IngestError::Corrupt(_))),
+            "{text:?}"
+        );
+    }
+}
+
+/// #884: a resume file that cannot be read (here: a directory in its
+/// place, which fails the same way on every platform and as root) is an
+/// I/O error, not a restart.
+#[test]
+fn an_unreadable_resume_file_is_an_error() {
+    let t = TempDir::new();
+    let log = t.0.join("app.log");
+    append_to(&log, "one\n");
+    let state = t.0.join("state.offset");
+    fs::create_dir(&state).unwrap();
+    assert!(matches!(resume(&log, &state), Err(IngestError::Io(_))));
+}
+
+/// #884: a call that panicked while holding the writer used to be papered
+/// over; the table now refuses further calls until it is reopened.
+#[test]
+fn a_poisoned_table_refuses_calls_instead_of_continuing() {
+    let t = TempDir::new();
+    let table = Table::open(t.table(), TableOptions::default()).unwrap();
+    let clone = table.clone();
+    let poisoned = std::thread::spawn(move || {
+        let _guard = clone.writer.lock().unwrap();
+        panic!("a call panicked holding the writer");
+    })
+    .join();
+    assert!(poisoned.is_err());
+    assert!(table.is_closed());
+    assert!(matches!(
+        table.append(b"x", Ack::Memory),
+        Err(IngestError::Wal(WalError::Failed(_)))
+    ));
+    assert!(table.close().is_err());
 }
 
 #[test]
@@ -382,4 +434,35 @@ fn mcdc__storage_ingest_handle_state_name_8a402fee__v2_a_dot_is_kept() {
 #[allow(non_snake_case)]
 fn mcdc__storage_ingest_handle_state_name_8a402fee__v3_anything_else_is_replaced() {
     assert_eq!(state_stem("x.y"), "x.y");
+}
+
+/// A log with two lines and a resume file for it at `offset`, under
+/// `identity` (the log's own when `None`).
+fn resume_case(t: &TempDir, identity: Option<FileIdentity>, offset: u64) -> u64 {
+    let log = t.0.join("app.log");
+    append_to(&log, "one\ntwo\n");
+    let state = t.0.join("state.offset");
+    let id = identity.unwrap_or_else(|| FileIdentity::of(&log).unwrap());
+    save(&state, id, offset).unwrap();
+    resume(&log, &state).unwrap().head_off()
+}
+
+// `file.identity() != (FileIdentity { dev, ino }) || file.len()? < offset`
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_handle_resume_6ba5a2bb__v1_same_file_long_enough_resumes() {
+    assert_eq!(resume_case(&TempDir::new(), None, 4), 4);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_handle_resume_6ba5a2bb__v2_another_file_starts_over() {
+    let other = FileIdentity { dev: 0, ino: 0 };
+    assert_eq!(resume_case(&TempDir::new(), Some(other), 4), 0);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_handle_resume_6ba5a2bb__v3_a_truncated_file_starts_over() {
+    assert_eq!(resume_case(&TempDir::new(), None, 99), 0);
 }

@@ -266,7 +266,6 @@ impl From<PagerError> for BtreeError {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

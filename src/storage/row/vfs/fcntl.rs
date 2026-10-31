@@ -194,7 +194,6 @@ pub fn fcntl_call(file: &File, arg: FcntlArg) -> io::Result<c_int> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs::OpenOptions;

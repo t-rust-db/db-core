@@ -69,7 +69,6 @@ impl std::fmt::Display for RecordError {
 impl std::error::Error for RecordError {}
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

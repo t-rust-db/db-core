@@ -735,7 +735,7 @@ struct GenericIndex {
 impl GenericIndex {
     fn with_capacity(groups: usize) -> Self {
         GenericIndex {
-            first: HashMap::with_capacity_and_hasher(groups, SlotState),
+            first: HashMap::with_capacity_and_hasher(groups, SlotState::default()),
             more: HashMap::default(),
         }
     }

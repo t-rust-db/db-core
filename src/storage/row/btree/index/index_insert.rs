@@ -515,7 +515,6 @@ fn root_split(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::storage::row::vfs::{MemoryVfs, PageSource};
