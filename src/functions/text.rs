@@ -716,10 +716,22 @@ impl Spec {
                 int_part.push(at(i));
             }
         }
-        let mut frac = String::new();
-        for k in 1..=i64::try_from(precision).unwrap_or(0) {
-            frac.push(at(exp.saturating_add(k)));
-        }
+        // The decimals are digit indices `exp + 1 ..= exp + precision`:
+        // zeros before index 0, the digits that exist, zeros after them.
+        // Built as three runs, not one closure call per decimal -- a
+        // `%.100000000f` was 100M calls (#877).
+        let p = i64::try_from(precision).unwrap_or(i64::MAX);
+        let first = exp.saturating_add(1);
+        let lead = usize::try_from(first.saturating_neg().min(p)).unwrap_or(0);
+        let from = usize::try_from(first.max(0)).unwrap_or(usize::MAX);
+        let to = usize::try_from(exp.saturating_add(p).saturating_add(1))
+            .unwrap_or(0)
+            .min(digits.len());
+        let shown = digits.get(from..to).unwrap_or_default();
+        let trail = precision.saturating_sub(lead).saturating_sub(shown.len());
+        let mut frac = "0".repeat(lead);
+        frac.extend(shown.iter().map(|d| char::from(b'0'.saturating_add(*d))));
+        frac.push_str(&"0".repeat(trail));
         if self.comma {
             int_part = group_thousands(&int_part);
         }
