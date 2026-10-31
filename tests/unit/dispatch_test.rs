@@ -294,6 +294,28 @@ fn outer_star_over_an_explicit_subquery_projection_keeps_its_columns() {
     }
 }
 
+/// #922: `SELECT *` over a view that projects some of its table's columns
+/// flattens into the table, as in sqlite3, and keeps the view's columns
+/// under the view's names.
+#[test]
+fn a_star_over_a_projecting_view_flattens_and_keeps_its_columns() {
+    let db = TempDb::new("flatten-projecting-view");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE pv(id INTEGER PRIMARY KEY, x INTEGER, y TEXT); \
+         CREATE INDEX pv_x ON pv(x); \
+         INSERT INTO pv VALUES (1, 15, 'a'); INSERT INTO pv VALUES (2, 16, 'b'); \
+         CREATE VIEW v AS SELECT y AS label, x FROM pv",
+    )
+    .unwrap();
+    let result = e.run_query("SELECT * FROM v WHERE x = 15").unwrap();
+    assert_eq!(result.columns, ["label", "x"]);
+    assert_eq!(format!("{:?}", result.rows), "[[Text(\"a\"), Int(15)]]");
+    let plan = e.explain_plan("SELECT * FROM v WHERE x = 15").unwrap();
+    assert_eq!(plan.len(), 1, "{plan:?}");
+    assert!(plan[0].detail.contains("INDEX pv_x"), "{plan:?}");
+}
+
 /// #650: a flattened `SELECT *` subquery lost its alias, so a reference to
 /// it next to a joined table with a same-named column was "ambiguous".
 #[test]
