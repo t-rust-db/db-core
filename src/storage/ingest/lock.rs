@@ -48,7 +48,7 @@ impl TableLock {
     /// Takes the lock without waiting, creating the table directory and
     /// the lock file if needed.
     pub fn acquire(table: &Path) -> Result<Self, LockError> {
-        std::fs::create_dir_all(table).map_err(LockError::Io)?;
+        super::create_dir_all_synced(table).map_err(LockError::Io)?;
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)

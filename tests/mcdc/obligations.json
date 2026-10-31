@@ -35620,6 +35620,66 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_create_dir_all_synced_56bfc9d9",
+    "file": "src/storage/ingest.rs",
+    "line": 66,
+    "decision": "let Some(path) = at",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_create_dir_all_synced_a0ca1343",
+    "file": "src/storage/ingest.rs",
+    "line": 67,
+    "decision": "path.as_os_str().is_empty() || path.is_dir()",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_create_dir_all_synced_7c7ef5e7",
+    "file": "src/storage/ingest.rs",
+    "line": 74,
+    "decision": "match std::fs::create_dir(path) {\n            Ok(()) => {}\n            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,\n            Err(e) => return Err(e),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_create_dir_all_synced_0589d395",
+    "file": "src/storage/ingest.rs",
+    "line": 76,
+    "decision": "e.kind() == std::io::ErrorKind::AlreadyExists",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_create_dir_all_synced_c6f21bf5",
+    "file": "src/storage/ingest.rs",
+    "line": 79,
+    "decision": "match path.parent() {\n            Some(p) if !p.as_os_str().is_empty() => p,\n            _ => std::path::Path::new(\".\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_create_dir_all_synced_f879969f",
+    "file": "src/storage/ingest.rs",
+    "line": 80,
+    "decision": "!p.as_os_str().is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_ingest_crc32c_build_table_ebcd475b",
     "file": "src/storage/ingest/crc32c.rs",
     "line": 16,

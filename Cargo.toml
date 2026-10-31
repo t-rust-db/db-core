@@ -399,6 +399,11 @@ path = "tests/helpers/wal_probe.rs"
 required-features = ["ingest"]
 
 [[bin]]
+name = "tier_probe"
+path = "tests/helpers/tier_probe.rs"
+required-features = ["ingest"]
+
+[[bin]]
 name = "table_probe"
 path = "tests/helpers/table_probe.rs"
 required-features = ["ingest"]

@@ -780,7 +780,7 @@ fn publish(table: &Path, tmp: &Path, target: &str) -> Result<(), IngestError> {
     let parent = target
         .parent()
         .ok_or_else(|| IngestError::Corrupt(format!("{} has no parent", target.display())))?;
-    fs::create_dir_all(parent)?;
+    super::create_dir_all_synced(parent)?;
     fs::rename(tmp, &target)?;
     File::open(parent)?.sync_all()?;
     Ok(())
