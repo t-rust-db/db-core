@@ -21,8 +21,9 @@ use crate::parser::ast::{
 };
 
 /// The index into `tables` of the Parquet table that probes `select`, and
-/// `select` with that table first in its `FROM`. A query that names at most
-/// one Parquet table is returned as it is.
+/// `select` with that table first in its `FROM`. A query that names one
+/// Parquet table is returned as it is unless it is an inner star join
+/// written with a SQLite table first, which is rewritten probe-first (#919).
 pub(super) fn choose_probe(
     select: Select,
     tables: &[ColumnSource<'_>],
@@ -59,7 +60,20 @@ pub(super) fn choose_probe(
             }
         }
     } else {
-        return Ok((select, present.first().copied().unwrap_or(0)));
+        // One Parquet table probes wherever the query writes it; an inner
+        // join written SQLite-first is put probe-first too, the shape row
+        // group pruning reads its `JOIN` targets as build tables in (#919).
+        let Some(&probe) = present.first() else {
+            return Ok((select, 0));
+        };
+        let name = tables
+            .get(probe)
+            .map(|t| t.table_name().to_string())
+            .unwrap_or_default();
+        if !only_inner || !is_star_around(from, &named, &name) {
+            return Ok((select, probe));
+        }
+        return Ok((with_probe_first(select, &name)?, probe));
     }
     let Some((probe, _)) = best else {
         return Err(EngineError::new(

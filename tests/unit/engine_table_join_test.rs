@@ -230,6 +230,35 @@ fn a_left_join_keeps_every_probe_row_and_the_lookup_first_form_is_rejected() {
     assert!(err.message.contains("events LEFT JOIN"), "{err}");
 }
 
+/// #919: an inner join written SQLite-first, filtered on the directory's
+/// table, gives the rows of the directory-first form, live page included.
+#[test]
+fn a_lookup_first_join_filters_on_the_directory_table() {
+    let f = Fixture::new();
+    let _w = four_files_and_a_page(&f);
+    f.define(&[(3, "three"), (25, "twenty-five"), (42, "forty-two")]);
+    let mut e = f.engine();
+    let got = rows(
+        &mut e,
+        "SELECT events.event_id, event_def.name FROM event_def \
+         JOIN events ON events.event_id = event_def.event_id \
+         WHERE events.n > 10 ORDER BY event_def.name LIMIT 5",
+    );
+    assert_eq!(
+        got,
+        vec![
+            vec![Cell::Int(42), text("forty-two")],
+            vec![Cell::Int(25), text("twenty-five")],
+        ]
+    );
+    assert!(!plan(
+        &e,
+        "SELECT COUNT(*) FROM event_def JOIN events ON events.event_id = event_def.event_id \
+         WHERE events.n > 10"
+    )
+    .is_empty());
+}
+
 #[test]
 fn a_star_join_probes_several_lookup_tables() {
     let f = Fixture::new();
