@@ -1,0 +1,135 @@
+# #868: BLOB columns. Table blobs: 5000 rows, three row groups
+# (2048, 2048, 904). k is a
+# 16-byte key from six values (0x00, 0x33, 0x66, 0x99, 0xCC repeated, and an
+# empty blob every 20th row); d is a 32-byte digest, NULL on every third row.
+# DuckDB reads x'..' as text, so its answers come from unhex('..'); the
+# column engine reads x'..' as a blob, so these records use unhex() for both
+# (the x'..' forms are covered by the engine's own tests).
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k = unhex('33333333333333333333333333333333')
+----
+1000
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k <> unhex('33333333333333333333333333333333')
+----
+4000
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k IN (unhex('00000000000000000000000000000000'), unhex('CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC'))
+----
+1750
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k < unhex('66666666666666666666666666666666')
+----
+2000
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k > unhex('66666666666666666666666666666666')
+----
+2000
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k BETWEEN unhex('33333333333333333333333333333333') AND unhex('99999999999999999999999999999999')
+----
+3000
+
+# DuckDB 1.5.6 answers `d = unhex('01..01')` with 3 rows (it skips two
+# row groups that hold matches); the true count is 14. The same bounds as a
+# range keep the oracle honest.
+
+query I nosort
+SELECT count(*) FROM blobs WHERE d >= unhex('0101010101010101010101010101010101010101010101010101010101010101') AND d <= unhex('0101010101010101010101010101010101010101010101010101010101010101')
+----
+14
+
+query I nosort
+SELECT count(*) FROM blobs WHERE d IS NOT NULL AND d > unhex('F0')
+----
+202
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k = unhex('')
+----
+250
+
+query II nosort
+SELECT count(DISTINCT k), count(DISTINCT d) FROM blobs
+----
+6
+256
+
+query TT nosort
+SELECT hex(min(k)), hex(max(k)) FROM blobs
+----
+(empty)
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+
+query T nosort
+SELECT hex(max(d)) FROM blobs
+----
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+
+query TI rowsort
+SELECT hex(k), count(*) FROM blobs GROUP BY k
+----
+(empty)
+250
+00000000000000000000000000000000
+750
+33333333333333333333333333333333
+1000
+66666666666666666666666666666666
+1000
+99999999999999999999999999999999
+1000
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+1000
+
+query T nosort
+SELECT hex(k) FROM blobs WHERE id < 8 ORDER BY k DESC, id LIMIT 4
+----
+CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC
+99999999999999999999999999999999
+66666666666666666666666666666666
+66666666666666666666666666666666
+
+query T nosort
+SELECT hex(d) FROM blobs WHERE d IS NOT NULL ORDER BY d DESC LIMIT 2
+----
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+
+# A blob never equals text, not even its hex form.
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k = '33333333333333333333333333333333'
+----
+0
+
+# seq's row groups hold disjoint ranges above 0x7F: a literal in the middle
+# group is read from that group alone, one past the end from none.
+
+query I nosort
+SELECT count(*) FROM blobs WHERE seq = unhex('FFFF0900')
+----
+1
+
+query I nosort
+SELECT count(*) FROM blobs WHERE seq BETWEEN unhex('FFFF0800') AND unhex('FFFF0FFF')
+----
+2048
+
+query I nosort
+SELECT count(*) FROM blobs WHERE seq > unhex('FFFF1000')
+----
+903
+
+# A literal outside every row group's min/max: nothing to read.
+
+query I nosort
+SELECT count(*) FROM blobs WHERE k > unhex('FFFFFFFF')
+----
+0

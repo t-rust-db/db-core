@@ -2,6 +2,7 @@
   "files": [
     {"file": "between_717.test", "pass": 25, "skip": 0, "fail": 0},
     {"file": "big_int_compare_845.test", "pass": 14, "skip": 0, "fail": 0},
+    {"file": "blob_868.test", "pass": 20, "skip": 0, "fail": 0},
     {"file": "case_725.test", "pass": 38, "skip": 0, "fail": 0},
     {"file": "codecs.test", "pass": 8, "skip": 0, "fail": 0},
     {"file": "distinct_multi_807.test", "pass": 10, "skip": 0, "fail": 0},
@@ -22,5 +23,5 @@
     {"file": "unnest_filters_812.test", "pass": 7, "skip": 2, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 315, "skip": 7, "fail": 0}
+  "total": {"pass": 335, "skip": 7, "fail": 0}
 }
