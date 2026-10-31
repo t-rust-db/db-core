@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.218.4] - 2026-10-31
+
+### Fixed
+
+- `ROLLBACK` restores the catalog it undoes; `SELECT *` over a subquery with explicit columns returns only those columns (#650)
+- `INSERT` with a column listed twice keeps the first value; `HAVING` without `GROUP BY` needs an aggregate result column; `?` in a `CHECK` is refused, as sqlite3 refuses it (#650)
+
 ## [0.218.3] - 2026-10-31
 
 ### Fixed
