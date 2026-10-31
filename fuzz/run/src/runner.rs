@@ -596,17 +596,39 @@ fn in_sync(cmp: &Comparison, sql: &str) -> bool {
 
 /// Statements whose acceptance on one side but not the other leaves
 /// state behind: everything that is not a read.
+///
+/// A `PRAGMA` assignment counts, also under `EXPLAIN`: sqlite3 applies it
+/// while preparing, so `EXPLAIN PRAGMA synchronous = OFF` changes the
+/// oracle's connection even where we refuse the statement (#910). Any
+/// other `EXPLAIN` only prepares, so it leaves nothing behind.
 fn changes_state(sql: &str) -> bool {
-    let head = sql
-        .trim_start()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .next()
-        .unwrap_or("")
-        .to_ascii_uppercase();
-    !matches!(
-        head.as_str(),
-        "SELECT" | "WITH" | "EXPLAIN" | "PRAGMA" | "ANALYZE"
-    )
+    let words = |s: &str| {
+        s.trim_start()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .next()
+            .unwrap_or("")
+            .to_ascii_uppercase()
+    };
+    let mut rest = sql;
+    let mut explained = false;
+    if words(rest) == "EXPLAIN" {
+        explained = true;
+        rest = rest.trim_start().get("EXPLAIN".len()..).unwrap_or("");
+        let after = rest.trim_start();
+        if words(after) == "QUERY" {
+            rest = after.get("QUERY".len()..).unwrap_or("");
+            let after = rest.trim_start();
+            if words(after) == "PLAN" {
+                rest = after.get("PLAN".len()..).unwrap_or("");
+            }
+        }
+    }
+    match words(rest).as_str() {
+        "PRAGMA" => rest.contains(['=', '(']),
+        _ if explained => false,
+        "SELECT" | "WITH" | "ANALYZE" => false,
+        _ => true,
+    }
 }
 
 /// Post-statement health probe: the catalog must still read and
@@ -952,4 +974,33 @@ pub fn reduce_finding(
         |cand| reproduces(config, cand, finding.class),
         max_probes,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::changes_state;
+
+    /// #910: only a statement that runs and leaves state behind counts;
+    /// an `EXPLAIN` of anything but a `PRAGMA` assignment only prepares.
+    #[test]
+    fn changes_state_follows_what_sqlite3_runs() {
+        for (sql, expected) in [
+            ("INSERT INTO t DEFAULT VALUES", true),
+            ("CREATE TABLE t(a)", true),
+            ("PRAGMA synchronous = OFF", true),
+            ("PRAGMA synchronous(2)", true),
+            ("EXPLAIN PRAGMA synchronous = OFF", true),
+            ("explain query plan pragma synchronous = OFF", true),
+            ("  EXPLAIN   QUERY   PLAN PRAGMA journal_mode = WAL", true),
+            ("PRAGMA synchronous", false),
+            ("EXPLAIN PRAGMA synchronous", false),
+            ("SELECT 1", false),
+            ("WITH x AS (SELECT 1) SELECT * FROM x", false),
+            ("ANALYZE", false),
+            ("EXPLAIN INSERT INTO t DEFAULT VALUES", false),
+            ("EXPLAIN QUERY PLAN DELETE FROM t", false),
+        ] {
+            assert_eq!(changes_state(sql), expected, "{sql}");
+        }
+    }
 }

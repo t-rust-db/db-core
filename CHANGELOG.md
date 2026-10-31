@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.218.1] - 2026-10-31
+
+### Fixed
+
+- Fuzz harness only: `EXPLAIN PRAGMA` assignments reset the differential oracle, removing a false wrong-answer finding (#910)
+
 ## [0.218.0] - 2026-10-31
 
 ### Changed
