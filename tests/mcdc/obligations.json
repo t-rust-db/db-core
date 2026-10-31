@@ -14412,7 +14412,7 @@
   {
     "id": "codegen_row_subquery_flatten_sel_2e123bd1",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 1133,
+    "line": 1188,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

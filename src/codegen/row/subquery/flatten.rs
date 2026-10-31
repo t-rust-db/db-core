@@ -833,6 +833,61 @@ mod tests {
         );
     }
 
+    /// Every expression shape that can hold a reference to the alias,
+    /// placed inside a nested subquery: flattening must refuse each (#650
+    /// coverage of the reference scan).
+    #[test]
+    fn a_reference_to_the_alias_in_any_nested_shape_blocks_flattening() {
+        let shapes = [
+            "-s.a > 1",
+            "NOT s.a",
+            "s.a IS NULL",
+            "CAST(s.a AS INTEGER) > 1",
+            "(s.a) > 1",
+            "s.a COLLATE NOCASE = 'x'",
+            "s.a + 1 > 1",
+            "s.a IS 1",
+            "s.a BETWEEN 1 AND 2",
+            "s.a IN (1, 2)",
+            "s.a LIKE 'x' ESCAPE '!'",
+            "CASE WHEN s.a THEN 1 ELSE 2 END > 1",
+            "CASE s.a WHEN 1 THEN 1 END > 1",
+            "abs(s.a) > 1",
+            "abs(*) > 1 AND s.a",
+            "EXISTS (SELECT 1 FROM v WHERE s.a = v.a)",
+            "(SELECT s.a) > 1",
+            "s.a IN (SELECT 1)",
+            "(s.a, 1) IN (SELECT 1, 2)",
+        ];
+        for shape in shapes {
+            let sql = format!(
+                "SELECT s.a FROM (SELECT a FROM t) AS s \
+                 WHERE EXISTS (SELECT 1 FROM v WHERE {shape})"
+            );
+            assert!(!is_flattened(&sql), "{shape}");
+        }
+        // The same reference in the nested query's own result columns,
+        // GROUP BY, HAVING, ORDER BY, FROM subquery and ON clause.
+        for sql in [
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT s.a FROM v)",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM v GROUP BY s.a)",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM v GROUP BY 1 HAVING s.a)",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM v ORDER BY s.a)",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM (SELECT s.a FROM v))",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM v JOIN w ON s.a = w.a)",
+        ] {
+            assert!(!is_flattened(sql), "{sql}");
+        }
+    }
+
+    /// `*` after an explicit column list in a repeated projection: the
+    /// other result columns pass through unchanged (#650).
+    #[test]
+    fn a_repeated_projection_keeps_other_outer_columns() {
+        let select = flatten("SELECT a, *, s.b FROM (SELECT t.*, t.* FROM t) AS s");
+        assert_eq!(star_qualifiers(&select), ["expr", "s", "s", "expr"]);
+    }
+
     #[test]
     fn flattens_star_subquery_into_base_table() {
         let select = flatten("SELECT * FROM (SELECT * FROM t) AS s WHERE s.a > 1");
