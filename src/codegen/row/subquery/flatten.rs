@@ -201,7 +201,14 @@ fn rewrite_alias_in_select(
     let ok = (|| {
         for col in &mut candidate.columns {
             match col {
-                ResultColumn::Star => {}
+                // A bare `*` expands to the flattened table's own columns,
+                // which a `SELECT *` (or `t.*`) subquery projects too; after
+                // an explicit list it would widen the result (#650).
+                ResultColumn::Star => {
+                    if matches!(column_map, ColumnMap::Explicit(_)) {
+                        return false;
+                    }
+                }
                 ResultColumn::TableStar { table } => {
                     // `alias.*` has no single underlying expression to
                     // rewrite to — bail rather than guess.
@@ -256,6 +263,11 @@ fn rewrite_alias_in_select(
                 return false;
             }
         }
+        if let ColumnMap::Repeated(copies) = column_map {
+            if !expand_stars(&mut candidate, alias, *copies) {
+                return false;
+            }
+        }
         // A sibling JOIN's own ON-condition can also reference this
         // alias (e.g. joining a third table against it).
         if let Some(from) = &mut candidate.from {
@@ -273,6 +285,42 @@ fn rewrite_alias_in_select(
         *select = candidate;
     }
     ok
+}
+
+/// An outer `*` over a subquery that projects its table `copies` times:
+/// once flattened, the table appears once, so spell the star out as one
+/// `x.*` per FROM item, repeating the flattened `alias` (#650). False when
+/// a FROM item has no name to qualify by.
+fn expand_stars(select: &mut Select, alias: &str, copies: usize) -> bool {
+    let Some(from) = &select.from else {
+        return false;
+    };
+    let mut qualifiers = Vec::new();
+    for item in std::iter::once(&from.first).chain(from.joins.iter().map(|j| &j.table)) {
+        let Some(qualifier) = item.alias.as_deref().or(item.name()) else {
+            return false;
+        };
+        let times = if qualifier.eq_ignore_ascii_case(alias) {
+            copies
+        } else {
+            1
+        };
+        qualifiers.extend(std::iter::repeat_n(qualifier.to_string(), times));
+    }
+    let columns = std::mem::take(&mut select.columns);
+    select.columns = columns
+        .into_iter()
+        .flat_map(|col| match col {
+            ResultColumn::Star => qualifiers
+                .iter()
+                .map(|table| ResultColumn::TableStar {
+                    table: table.clone(),
+                })
+                .collect(),
+            other => vec![other],
+        })
+        .collect();
+    true
 }
 
 /// Rewrites a single expression in place, replacing every column
@@ -305,8 +353,13 @@ fn rewrite_expr(
                 return true;
             }
             match column_map {
-                ColumnMap::Wildcard => {
-                    *table = None;
+                ColumnMap::Wildcard | ColumnMap::Repeated(_) => {
+                    // The flattened table keeps `alias`; next to a sibling
+                    // join the reference must too, or it turns ambiguous
+                    // against a same-named column there (#650).
+                    if !require_qualified {
+                        *table = None;
+                    }
                     true
                 }
                 ColumnMap::Explicit(cols) => {
@@ -664,6 +717,177 @@ mod tests {
         select
     }
 
+    fn is_flattened(sql: &str) -> bool {
+        matches!(flatten(sql).from.unwrap().first.kind, TableRefKind::Name(_))
+    }
+
+    fn star_qualifiers(select: &Select) -> Vec<String> {
+        select
+            .columns
+            .iter()
+            .map(|c| match c {
+                ResultColumn::TableStar { table } => table.clone(),
+                ResultColumn::Star => "*".to_string(),
+                ResultColumn::Expr { .. } => "expr".to_string(),
+            })
+            .collect()
+    }
+
+    // codegen_row_subquery_flatten_rewrite_alias_in_select_07b51d2c:
+    // `matches!(column_map, ColumnMap::Explicit(_))` (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_rewrite_alias_in_select_07b51d2c__v1_an_outer_star_after_an_explicit_list_is_not_flattened(
+    ) {
+        for sql in [
+            "SELECT * FROM (SELECT a FROM t) AS s",
+            "SELECT * FROM (SELECT b AS x, a FROM t) AS s",
+        ] {
+            assert!(!is_flattened(sql), "{sql}");
+        }
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_rewrite_alias_in_select_07b51d2c__v2_an_outer_star_after_a_star_is_flattened(
+    ) {
+        for sql in [
+            "SELECT * FROM (SELECT * FROM t) AS s",
+            "SELECT * FROM (SELECT t.* FROM t) AS s",
+            "SELECT * FROM (SELECT t.*, t.* FROM t) AS s",
+        ] {
+            assert!(is_flattened(sql), "{sql}");
+        }
+    }
+    // codegen_row_subquery_flatten_rewrite_alias_in_select_3d8792e1:
+    // `let ColumnMap::Repeated(copies) = column_map` (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_rewrite_alias_in_select_3d8792e1__v1_a_repeated_projection_spells_the_star_out(
+    ) {
+        let select = flatten("SELECT * FROM (SELECT t.*, t.*, t.* FROM t) AS s");
+        assert_eq!(star_qualifiers(&select), ["s", "s", "s"]);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_rewrite_alias_in_select_3d8792e1__v2_other_projections_leave_the_star_alone(
+    ) {
+        let select = flatten("SELECT * FROM (SELECT * FROM t) AS s");
+        assert_eq!(star_qualifiers(&select), ["*"]);
+    }
+    // codegen_row_subquery_flatten_rewrite_alias_in_select_71a2d962:
+    // `!expand_stars(&mut candidate, alias, *copies)` (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_rewrite_alias_in_select_71a2d962__v1_a_from_item_without_a_name_blocks_flattening(
+    ) {
+        // The UNNEST has no alias, so the star cannot be qualified.
+        assert!(!is_flattened(
+            "SELECT * FROM (SELECT t.*, t.* FROM t) AS s JOIN UNNEST(1) ON 1"
+        ));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_rewrite_alias_in_select_71a2d962__v2_named_from_items_flatten(
+    ) {
+        assert!(is_flattened(
+            "SELECT * FROM (SELECT t.*, t.* FROM t) AS s JOIN u ON s.a = u.a"
+        ));
+    }
+    // codegen_row_subquery_flatten_expand_stars_739752c8:
+    // `qualifier.eq_ignore_ascii_case(alias)` (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_expand_stars_739752c8__v1_the_flattened_alias_repeats() {
+        let select = flatten("SELECT * FROM (SELECT t.*, t.* FROM t) AS s JOIN u ON s.a = u.a");
+        assert_eq!(star_qualifiers(&select), ["s", "s", "u"]);
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_expand_stars_739752c8__v2_another_from_item_appears_once()
+    {
+        let select = flatten("SELECT * FROM u JOIN (SELECT t.*, t.* FROM t) AS s ON s.a = u.a");
+        assert_eq!(star_qualifiers(&select), ["u", "s", "s"]);
+    }
+    // codegen_row_subquery_flatten_rewrite_expr_84a93720: `!require_qualified` (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_rewrite_expr_84a93720__v1_alone_the_qualifier_is_dropped()
+    {
+        let select = flatten("SELECT s.a FROM (SELECT * FROM t) AS s");
+        let ResultColumn::Expr { expr, .. } = &select.columns[0] else {
+            panic!("expected Expr result column");
+        };
+        assert!(matches!(&expr.kind, ExprKind::Column { table: None, .. }));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_rewrite_expr_84a93720__v2_next_to_a_join_the_alias_stays()
+    {
+        let select = flatten("SELECT s.a FROM (SELECT * FROM t) AS s JOIN u ON s.a = u.a");
+        let ResultColumn::Expr { expr, .. } = &select.columns[0] else {
+            panic!("expected Expr result column");
+        };
+        assert!(
+            matches!(&expr.kind, ExprKind::Column { table: Some(t), .. } if t == "s"),
+            "{expr:?}"
+        );
+    }
+
+    /// Every expression shape that can hold a reference to the alias,
+    /// placed inside a nested subquery: flattening must refuse each (#650
+    /// coverage of the reference scan).
+    #[test]
+    fn a_reference_to_the_alias_in_any_nested_shape_blocks_flattening() {
+        let shapes = [
+            "-s.a > 1",
+            "NOT s.a",
+            "s.a IS NULL",
+            "CAST(s.a AS INTEGER) > 1",
+            "(s.a) > 1",
+            "s.a COLLATE NOCASE = 'x'",
+            "s.a + 1 > 1",
+            "s.a IS 1",
+            "s.a BETWEEN 1 AND 2",
+            "s.a IN (1, 2)",
+            "s.a LIKE 'x' ESCAPE '!'",
+            "CASE WHEN s.a THEN 1 ELSE 2 END > 1",
+            "CASE s.a WHEN 1 THEN 1 END > 1",
+            "abs(s.a) > 1",
+            "abs(*) > 1 AND s.a",
+            "EXISTS (SELECT 1 FROM v WHERE s.a = v.a)",
+            "(SELECT s.a) > 1",
+            "s.a IN (SELECT 1)",
+            "(s.a, 1) IN (SELECT 1, 2)",
+        ];
+        for shape in shapes {
+            let sql = format!(
+                "SELECT s.a FROM (SELECT a FROM t) AS s \
+                 WHERE EXISTS (SELECT 1 FROM v WHERE {shape})"
+            );
+            assert!(!is_flattened(&sql), "{shape}");
+        }
+        // The same reference in the nested query's own result columns,
+        // GROUP BY, HAVING, ORDER BY, FROM subquery and ON clause.
+        for sql in [
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT s.a FROM v)",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM v GROUP BY s.a)",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM v GROUP BY 1 HAVING s.a)",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM v ORDER BY s.a)",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM (SELECT s.a FROM v))",
+            "SELECT s.a FROM (SELECT a FROM t) AS s WHERE EXISTS (SELECT 1 FROM v JOIN w ON s.a = w.a)",
+        ] {
+            assert!(!is_flattened(sql), "{sql}");
+        }
+    }
+
+    /// `*` after an explicit column list in a repeated projection: the
+    /// other result columns pass through unchanged (#650).
+    #[test]
+    fn a_repeated_projection_keeps_other_outer_columns() {
+        let select = flatten("SELECT a, *, s.b FROM (SELECT t.*, t.* FROM t) AS s");
+        assert_eq!(star_qualifiers(&select), ["expr", "s", "s", "expr"]);
+    }
+
     #[test]
     fn flattens_star_subquery_into_base_table() {
         let select = flatten("SELECT * FROM (SELECT * FROM t) AS s WHERE s.a > 1");
@@ -706,7 +930,7 @@ mod tests {
     #[test]
     fn requalifies_when_sibling_join_present() {
         let select =
-            flatten("SELECT * FROM (SELECT a FROM t) AS s JOIN u ON s.a = u.a WHERE s.a > 1");
+            flatten("SELECT s.a FROM (SELECT a FROM t) AS s JOIN u ON s.a = u.a WHERE s.a > 1");
         let from = select.from.unwrap();
         assert!(matches!(&from.first.kind, TableRefKind::Name(n) if n == "t"));
         let where_str = format!("{:?}", select.where_clause.unwrap());
@@ -783,7 +1007,7 @@ mod tests {
 
     #[test]
     fn flattens_join_slot_subquery() {
-        let select = flatten("SELECT * FROM t JOIN (SELECT a FROM u) AS s ON t.a = s.a");
+        let select = flatten("SELECT t.a, s.a FROM t JOIN (SELECT a FROM u) AS s ON t.a = s.a");
         let from = select.from.unwrap();
         assert!(matches!(&from.joins[0].table.kind, TableRefKind::Name(n) if n == "u"));
     }
@@ -827,7 +1051,7 @@ mod tests {
         // predicate, in a sibling-join query (so `require_qualified` is
         // true and the alias actually gets substituted back in).
         let select = flatten(
-            "SELECT * FROM (SELECT a FROM t \
+            "SELECT s.a FROM (SELECT a FROM t \
                WHERE CASE WHEN a BETWEEN 1 AND 10 THEN a IN (1, 2) ELSE a LIKE 'y' END \
                  AND -a IS NOT NULL AND (a) = 1 AND foo(a, a)) AS s \
              JOIN u ON s.a = u.a",

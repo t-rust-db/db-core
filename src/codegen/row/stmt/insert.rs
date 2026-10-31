@@ -696,7 +696,20 @@ fn compile_row(
     let mut value_sources: Vec<Option<ColumnSource>> = vec![None; schema.columns.len()];
     for (pos, &col_idx) in target_columns.iter().enumerate() {
         if let (Some(source), Some(slot)) = (column_at(pos), value_sources.get_mut(col_idx)) {
-            *slot = Some(source);
+            // sqlite3 keeps the first value of a column listed twice, and
+            // still prepares the others: compile those into a scratch
+            // emitter so their errors surface (#650).
+            if slot.is_some() {
+                compile_column_source(
+                    &mut Emitter::new(),
+                    &mut RegAlloc::new(),
+                    schema,
+                    TABLE_CURSOR,
+                    &source,
+                )?;
+            } else {
+                *slot = Some(source);
+            }
         }
     }
     let value_source_at =
@@ -1662,5 +1675,24 @@ mod mcdc_vectors {
             result,
             Err(CodegenError::RowShapeMismatch { .. })
         ));
+    }
+
+    // codegen_row_stmt_insert_compile_row_4d66f676: `slot.is_some()` (#650).
+    #[test]
+    fn mcdc__codegen_row_stmt_insert_compile_row_4d66f676__v1_a_column_listed_twice_validates_its_later_values(
+    ) {
+        for sql in [
+            "INSERT INTO t(a, a) VALUES (1, nosuch(2))",
+            "INSERT INTO t(a, a) VALUES (nosuch(1), 2)",
+        ] {
+            let message = insert_result(sql).unwrap_err().to_string();
+            assert_eq!(message, "no such function: nosuch", "{sql}");
+        }
+    }
+
+    #[test]
+    fn mcdc__codegen_row_stmt_insert_compile_row_4d66f676__v2_each_column_listed_once_compiles() {
+        assert!(insert_result("INSERT INTO t(a, b) VALUES (1, 2)").is_ok());
+        assert!(insert_result("INSERT INTO t(a, a) VALUES (1, 2)").is_ok());
     }
 }

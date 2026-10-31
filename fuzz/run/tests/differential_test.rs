@@ -63,6 +63,45 @@ fn row_order_follows_order_by_and_limit() {
     );
 }
 
+/// #650: EXPLAIN output differs in form between the engines (plan rows vs
+/// the CLI's text tree), so two accepting sides agree whatever it says; a
+/// rejection on either side is still a finding.
+#[test]
+fn explain_is_compared_for_acceptance_only() {
+    let ours = result(vec![vec![Cell::Int(0), Cell::Text("SCAN t".to_string())]]);
+    let tree = OracleOutcome::Rows(vec![
+        vec!["QUERY PLAN".to_string()],
+        vec!["`--SCAN t".to_string()],
+    ]);
+    for sql in [
+        "EXPLAIN QUERY PLAN SELECT 1",
+        "  explain query plan SELECT 1",
+        "EXPLAIN SELECT 1",
+    ] {
+        let cmp = compare(sql, &Outcome::Ok, Some(&ours), Some(&tree));
+        assert_eq!(cmp.verdict, Verdict::Pass, "{sql}");
+    }
+    // The same rows for a plain SELECT are still a wrong answer.
+    let cmp = compare("SELECT 1", &Outcome::Ok, Some(&ours), Some(&tree));
+    assert_eq!(cmp.verdict, Verdict::WrongAnswer);
+    // Acceptance on one side only stays a finding.
+    let err = OracleOutcome::Error("Parse error: x".to_string());
+    let cmp = compare(
+        "EXPLAIN QUERY PLAN SELECT 1",
+        &Outcome::Ok,
+        Some(&ours),
+        Some(&err),
+    );
+    assert_eq!(cmp.verdict, Verdict::OverPermissive);
+    let rejected = Outcome::Rejected {
+        stage: Stage::Codegen,
+        kind: Rejection::Compile,
+        message: String::new(),
+    };
+    let cmp = compare("EXPLAIN QUERY PLAN SELECT 1", &rejected, None, Some(&tree));
+    assert_eq!(cmp.verdict, Verdict::Gap);
+}
+
 #[test]
 fn verdicts_cover_every_quadrant() {
     let ok = Outcome::Ok;

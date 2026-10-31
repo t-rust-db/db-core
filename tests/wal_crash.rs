@@ -138,7 +138,16 @@ fn sigkill_never_loses_a_durable_ack_or_leaves_half_a_record() {
     let mut acked: HashMap<u64, String> = HashMap::new();
     let mut recovered_total = 0;
     let mut tears = 0;
-    for i in 0..iterations() {
+    // The base number of kills, and more -- up to eight times as many --
+    // only while no kill has yet produced an ack or a torn tail: on a
+    // loaded machine the probe can be killed before it gets that far, in
+    // every one of the base kills, which the two checks below would
+    // report as a failure of the log.
+    let base = iterations();
+    let mut kills = 0u32;
+    while kills < base || ((acked.is_empty() || tears == 0) && kills < base.saturating_mul(8)) {
+        let i = kills;
+        kills += 1;
         // Spread kills from just after start-up to well into the run.
         let delay = Duration::from_millis(5 + u64::from(i * 37 % 150));
         acked.extend(run_and_kill(&table, delay));
@@ -180,8 +189,7 @@ fn sigkill_never_loses_a_durable_ack_or_leaves_half_a_record() {
     );
     assert!(tears > 0, "no unacked tail was ever cut");
     eprintln!(
-        "{} kills, {tears} simulated power losses, {} durable acks checked, {recovered_total} records recovered",
-        iterations(),
+        "{kills} kills, {tears} simulated power losses, {} durable acks checked, {recovered_total} records recovered",
         acked.len()
     );
     std::fs::remove_dir_all(&table).ok();

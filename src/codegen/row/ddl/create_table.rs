@@ -205,6 +205,10 @@ fn check_constraint(create: &CreateTable, expr: &Expr) -> Result<(), CodegenErro
     }
     let mut problem = None;
     any_node(expr, &mut |e| {
+        if matches!(e.kind, ExprKind::Param(_)) {
+            problem = Some("parameters prohibited in CHECK constraints".to_string());
+            return true;
+        }
         if let ExprKind::Column { name, .. } = &e.kind {
             let rowid = !create.without_rowid
                 && ["rowid", "_rowid_", "oid"]
@@ -317,6 +321,32 @@ mod tests {
             Err(CodegenError::Rejected(m)) => Some(m),
             Err(other) => panic!("{sql}: {other}"),
         }
+    }
+
+    // codegen_row_ddl_create_table_check_constraint_aa6dd797:
+    // `matches!(e.kind, ExprKind::Param(_))` (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_ddl_create_table_check_constraint_aa6dd797__v1_a_parameter_in_a_check_is_refused(
+    ) {
+        for sql in [
+            "CREATE TABLE x(a CHECK (a > ?))",
+            "CREATE TABLE x(a, CHECK (? > 1))",
+            "CREATE TABLE x(a, CHECK (a > ?2))",
+            "CREATE TABLE x(a, CONSTRAINT c CHECK (a > :p))",
+        ] {
+            assert_eq!(
+                rejected(sql).as_deref(),
+                Some("parameters prohibited in CHECK constraints"),
+                "{sql}"
+            );
+        }
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_ddl_create_table_check_constraint_aa6dd797__v2_a_check_without_one_is_fine(
+    ) {
+        assert_eq!(rejected("CREATE TABLE x(a CHECK (a > 1))"), None);
     }
 
     // codegen_row_ddl_create_table_validate_create_table_c4322884: `*auto && !integer`

@@ -121,6 +121,21 @@ pub(in crate::codegen::row::select) fn collect_aggregates(
         .collect()
 }
 
+/// Whether any of `columns` is, or contains, an aggregate call -- unlike
+/// [`select_has_aggregate`], not counting one in the `HAVING` clause (#650).
+pub(crate) fn columns_have_aggregate(columns: &[ResultColumn]) -> bool {
+    let mut found = Vec::new();
+    for col in columns {
+        if let ResultColumn::Expr { expr, .. } = col {
+            find_aggregates(expr, &mut found);
+            if !found.is_empty() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Whether `select` has any aggregate call in its result columns or
 /// `HAVING` clause — the #287 trigger for compiling an implicit
 /// whole-table group when `select.group_by.is_empty()`, distinguishing
@@ -665,4 +680,47 @@ where
     sink(em, reg, proj_first, i32::try_from(proj_count).unwrap_or(0))?;
     em.place(skip_label);
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::columns_have_aggregate;
+    use crate::parser::row::{parse_select, ParseOutcome};
+
+    fn has_aggregate(sql: &str) -> bool {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => columns_have_aggregate(&select.columns),
+            other => panic!("{sql}: {other:?}"),
+        }
+    }
+
+    // codegen_row_select_aggregate_accum_columns_have_aggregate_be2ff6a2:
+    // `let ResultColumn::Expr { expr, .. } = col` (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_aggregate_accum_columns_have_aggregate_be2ff6a2__v1_an_expression_column_is_looked_at(
+    ) {
+        assert!(has_aggregate("SELECT count(*) FROM t"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_aggregate_accum_columns_have_aggregate_be2ff6a2__v2_a_star_has_no_calls(
+    ) {
+        assert!(!has_aggregate("SELECT * FROM t"));
+        assert!(!has_aggregate("SELECT t.* FROM t"));
+    }
+    // ..._aeb19e21: `!found.is_empty()`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_aggregate_accum_columns_have_aggregate_aeb19e21__v1_an_aggregate_inside_an_expression_counts(
+    ) {
+        assert!(has_aggregate("SELECT a, max(b) + 1 FROM t"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_aggregate_accum_columns_have_aggregate_aeb19e21__v2_plain_columns_do_not(
+    ) {
+        assert!(!has_aggregate("SELECT a, b + 1, abs(a) FROM t"));
+    }
 }

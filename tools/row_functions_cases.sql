@@ -136,3 +136,14 @@ CREATE VIEW v650g AS SELECT 1
 SELECT hex(unhex('abC1')), typeof(unhex('abC1')), hex(unhex('')), typeof(unhex('')), unhex('abc'), unhex('zz'), unhex(NULL)
 SELECT hex(x'00ff'), hex(x''), hex(unhex('00FF')), unhex('0'), unhex('0g'), unhex(' 00'), hex(unhex('4142')) = '4142'
 SELECT unhex('41 42'), unhex(123), hex(unhex('3132')), hex(unhex(x'4142')), unhex(1.5), unhex('é')
+-- #650: HAVING needs GROUP BY or an aggregate result column; no parameters in CHECK; EXPLAIN QUERY PLAN checks tbl.* too
+SELECT 1 HAVING 1
+SELECT 1 WHERE 1 HAVING 1
+SELECT * FROM (VALUES (1), (2)) HAVING 1
+SELECT * FROM (SELECT 1 AS a HAVING 1)
+CREATE TABLE c650a(a CHECK (a > ?))
+CREATE TABLE c650b(a, CHECK (? > 1))
+CREATE TABLE c650c(a, CHECK (a > :p))
+CREATE TABLE c650d(a CHECK (a > 1))
+EXPLAIN QUERY PLAN SELECT *, t.* FROM (VALUES (1))
+EXPLAIN QUERY PLAN SELECT zzz.* FROM (SELECT 1 AS a) AS b

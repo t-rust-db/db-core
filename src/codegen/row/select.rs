@@ -245,12 +245,12 @@ pub use joins::compile_select_joined;
 pub use order_by::output_column_names;
 
 pub(crate) use aggregate::{
-    compile_grouped_scan, select_has_aggregate, try_compile_index_only_count,
-    try_compile_index_only_sum,
+    columns_have_aggregate, compile_grouped_scan, select_has_aggregate,
+    try_compile_index_only_count, try_compile_index_only_sum,
 };
 pub(crate) use entry::{
-    compile_constant_row, compile_select_scan, select_result_column_count,
-    select_result_column_count_joined,
+    check_having_clauses, check_table_star_qualifiers, compile_constant_row, compile_select_scan,
+    select_result_column_count, select_result_column_count_joined,
 };
 pub(crate) use joins::compile_select_joined_scan;
 pub(crate) use limit_scan::{is_rowid_reference, top_level_equality_operands};

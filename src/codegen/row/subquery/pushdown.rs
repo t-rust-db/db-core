@@ -46,6 +46,10 @@ use crate::parser::ast::{
 pub(super) enum ColumnMap {
     /// `SELECT * FROM t` — any bare name passes through unchanged.
     Wildcard,
+    /// `SELECT t.*, t.* FROM t` (`copies` >= 2 times) — names resolve as
+    /// for [`Self::Wildcard`] (the first copy); only an enclosing `*`
+    /// has to repeat (#650).
+    Repeated(usize),
     /// `SELECT a, b AS c, ... FROM t` — each output name (its alias, or
     /// its own name when unaliased) maps to exactly that column; a
     /// computed expression is never in this list.
@@ -149,6 +153,28 @@ pub(super) fn subquery_column_map(inner: &Select) -> Option<ColumnMap> {
     if let [ResultColumn::Star] = inner.columns.as_slice() {
         return Some(ColumnMap::Wildcard);
     }
+    // `SELECT t.* FROM t` projects what `SELECT * FROM t` does, and
+    // `t.*, t.*` projects it twice (#650).
+    if let (Some(ResultColumn::TableStar { table }), Some(from)) =
+        (inner.columns.first(), inner.from.as_ref())
+    {
+        let first = &from.first;
+        if from.joins.is_empty()
+            && first
+                .alias
+                .as_deref()
+                .or(first.name())
+                .is_some_and(|name| name.eq_ignore_ascii_case(table))
+            && inner.columns.iter().all(
+                |c| matches!(c, ResultColumn::TableStar { table: t } if t.eq_ignore_ascii_case(table)),
+            )
+        {
+            return Some(match inner.columns.len() {
+                1 => ColumnMap::Wildcard,
+                copies => ColumnMap::Repeated(copies),
+            });
+        }
+    }
     let mut out = Vec::with_capacity(inner.columns.len());
     for col in &inner.columns {
         let ResultColumn::Expr { expr, alias } = col else {
@@ -198,7 +224,7 @@ fn rewrite_for_pushdown(
                 return false;
             }
             match column_map {
-                ColumnMap::Wildcard => {
+                ColumnMap::Wildcard | ColumnMap::Repeated(_) => {
                     *table = None;
                     true
                 }
@@ -349,6 +375,76 @@ mod tests {
         let mut select = parse(sql);
         push_down_where_predicates(&mut select);
         select.to_string()
+    }
+
+    fn column_map(sql: &str) -> Option<ColumnMap> {
+        let TableRefKind::Subquery(inner) = parse(sql).from.unwrap().first.kind else {
+            panic!("expected a subquery: {sql}");
+        };
+        subquery_column_map(&inner)
+    }
+
+    // codegen_row_subquery_pushdown_subquery_column_map_4f6b83fa: the
+    // `Some(TableStar), Some(from)` pattern (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_pushdown_subquery_column_map_4f6b83fa__v1_a_leading_table_star_is_matched(
+    ) {
+        let map = column_map("SELECT * FROM (SELECT t.* FROM t) AS s");
+        assert!(matches!(map, Some(ColumnMap::Wildcard)));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_pushdown_subquery_column_map_4f6b83fa__v2_other_projections_are_not(
+    ) {
+        let map = column_map("SELECT * FROM (SELECT a FROM t) AS s");
+        assert!(matches!(map, Some(ColumnMap::Explicit(_))));
+    }
+    // codegen_row_subquery_pushdown_subquery_column_map_203ec6bc:
+    // `joins.is_empty() && <qualifier names the FROM item> && <every item is that star>` (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_pushdown_subquery_column_map_203ec6bc__v1_the_name_or_the_alias_qualifies(
+    ) {
+        for sql in [
+            "SELECT * FROM (SELECT t.* FROM t) AS s",
+            "SELECT * FROM (SELECT T.* FROM t) AS s",
+            "SELECT * FROM (SELECT x.* FROM t x) AS s",
+        ] {
+            assert!(
+                matches!(column_map(sql), Some(ColumnMap::Wildcard)),
+                "{sql}"
+            );
+        }
+        for (sql, copies) in [
+            ("SELECT * FROM (SELECT t.*, t.* FROM t) AS s", 2),
+            ("SELECT * FROM (SELECT t.*, T.*, t.* FROM t) AS s", 3),
+        ] {
+            assert!(
+                matches!(column_map(sql), Some(ColumnMap::Repeated(n)) if n == copies),
+                "{sql}"
+            );
+        }
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_pushdown_subquery_column_map_203ec6bc__v2_a_join_is_not_a_single_table(
+    ) {
+        assert!(column_map("SELECT * FROM (SELECT t.* FROM t JOIN u ON 1) AS s").is_none());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_pushdown_subquery_column_map_203ec6bc__v3_a_qualifier_that_names_nothing_does_not_qualify(
+    ) {
+        // `t` is hidden behind the alias `x`.
+        assert!(column_map("SELECT * FROM (SELECT t.* FROM t x) AS s").is_none());
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_pushdown_subquery_column_map_203ec6bc__v4_a_mixed_projection_is_not_a_star(
+    ) {
+        assert!(column_map("SELECT * FROM (SELECT t.*, a FROM t) AS s").is_none());
+        assert!(column_map("SELECT * FROM (SELECT t.*, x.* FROM t) AS s").is_none());
     }
 
     #[test]

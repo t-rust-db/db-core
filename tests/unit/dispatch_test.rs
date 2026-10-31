@@ -216,6 +216,257 @@ fn begin_commit_and_rollback_compile_and_run() {
     assert_eq!(rows.len(), 1);
 }
 
+/// #650: ROLLBACK also undoes DDL, so the cached catalog must follow the
+/// file back; it kept the in-transaction schema, and a dropped table
+/// stayed "no such table" while a rolled-back CREATE stayed visible.
+#[test]
+fn rollback_restores_a_dropped_table() {
+    let db = TempDb::new("rollback-drop-table");
+    let mut e = open(&db);
+    e.run_query("CREATE TABLE rdt(a INTEGER); INSERT INTO rdt VALUES (7)")
+        .unwrap();
+    e.run_query("BEGIN; DROP TABLE rdt; ROLLBACK").unwrap();
+    assert_eq!(e.run_query("SELECT a FROM rdt").unwrap().rows.len(), 1);
+    // sqlite3 checks the kind before `IF EXISTS`.
+    let err = e.run_query("DROP VIEW IF EXISTS rdt").unwrap_err();
+    assert!(
+        err.message.contains("use DROP TABLE to delete table rdt"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn rollback_forgets_a_created_table_and_view() {
+    let db = TempDb::new("rollback-create");
+    let mut e = open(&db);
+    e.run_query("BEGIN; CREATE TABLE rct(a INTEGER); CREATE VIEW rcv AS SELECT 1; ROLLBACK")
+        .unwrap();
+    for sql in ["SELECT a FROM rct", "SELECT * FROM rcv"] {
+        let err = e.run_query(sql).unwrap_err();
+        assert!(
+            err.message.contains("no such table"),
+            "{sql}: {}",
+            err.message
+        );
+    }
+    // Free again: nothing is left to collide with.
+    e.run_query("CREATE TABLE rct(a INTEGER); CREATE VIEW rcv AS SELECT 1")
+        .unwrap();
+    e.run_query("INSERT INTO rct VALUES (3)").unwrap();
+    assert_eq!(e.run_query("SELECT a FROM rct").unwrap().rows.len(), 1);
+}
+
+#[test]
+fn rollback_restores_a_dropped_view() {
+    let db = TempDb::new("rollback-drop-view");
+    let mut e = open(&db);
+    e.run_query("CREATE VIEW rdv AS SELECT 1").unwrap();
+    e.run_query("BEGIN; DROP VIEW rdv; ROLLBACK").unwrap();
+    assert_eq!(e.run_query("SELECT * FROM rdv").unwrap().rows.len(), 1);
+}
+
+/// #650: flattening a subquery left an outer `*` to expand over the base
+/// table, so `SELECT * FROM (SELECT a FROM t) s` returned every column.
+#[test]
+fn outer_star_over_an_explicit_subquery_projection_keeps_its_columns() {
+    let db = TempDb::new("flatten-outer-star");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE fs(a INTEGER, b INTEGER, c INTEGER); INSERT INTO fs VALUES (1, 2, 3)",
+    )
+    .unwrap();
+    for (sql, expected) in [
+        ("SELECT * FROM (SELECT a FROM fs) s", "[Int(1)]"),
+        ("SELECT * FROM (SELECT c, a FROM fs) s", "[Int(3), Int(1)]"),
+        ("SELECT * FROM (SELECT b AS x FROM fs) s", "[Int(2)]"),
+        (
+            "SELECT * FROM (SELECT * FROM fs) s",
+            "[Int(1), Int(2), Int(3)]",
+        ),
+        (
+            "SELECT * FROM (SELECT fs.* FROM fs) s",
+            "[Int(1), Int(2), Int(3)]",
+        ),
+    ] {
+        let rows = e.run_query(sql).unwrap().rows;
+        assert_eq!(format!("{:?}", rows[0]), expected, "{sql}");
+    }
+}
+
+/// #650: a flattened `SELECT *` subquery lost its alias, so a reference to
+/// it next to a joined table with a same-named column was "ambiguous".
+#[test]
+fn a_flattened_star_subquery_keeps_its_alias_next_to_a_join() {
+    let db = TempDb::new("flatten-star-join");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE js(a INTEGER, b INTEGER); INSERT INTO js VALUES (1, 2); \
+         CREATE TABLE ju(a INTEGER, z INTEGER); INSERT INTO ju VALUES (1, 9)",
+    )
+    .unwrap();
+    for (sql, expected) in [
+        (
+            "SELECT * FROM (SELECT * FROM js) s JOIN ju ON s.a = ju.a",
+            "[Int(1), Int(2), Int(1), Int(9)]",
+        ),
+        (
+            "SELECT * FROM (SELECT js.* FROM js) s JOIN ju ON s.a = ju.a",
+            "[Int(1), Int(2), Int(1), Int(9)]",
+        ),
+        (
+            "SELECT s.b, ju.z FROM (SELECT * FROM js) s JOIN ju ON s.a = ju.a WHERE s.a = 1",
+            "[Int(2), Int(9)]",
+        ),
+    ] {
+        let rows = e
+            .run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"))
+            .rows;
+        assert_eq!(format!("{:?}", rows[0]), expected, "{sql}");
+    }
+}
+
+/// #650: a subquery projecting `t.*` twice repeats the star outside too,
+/// flattened or not, alone or next to a joined table.
+#[test]
+fn repeated_table_stars_keep_every_copy_after_flattening() {
+    let db = TempDb::new("flatten-repeated-star");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE rs(a INTEGER, b INTEGER); INSERT INTO rs VALUES (1, 2); \
+         CREATE TABLE ru(a INTEGER, z INTEGER); INSERT INTO ru VALUES (1, 9)",
+    )
+    .unwrap();
+    for (sql, expected) in [
+        (
+            "SELECT * FROM (SELECT rs.*, rs.* FROM rs) s",
+            "[Int(1), Int(2), Int(1), Int(2)]",
+        ),
+        (
+            "SELECT * FROM (SELECT x.*, x.*, x.* FROM rs x) s",
+            "[Int(1), Int(2), Int(1), Int(2), Int(1), Int(2)]",
+        ),
+        (
+            "SELECT * FROM (SELECT rs.*, rs.* FROM rs) s JOIN ru ON s.a = ru.a",
+            "[Int(1), Int(2), Int(1), Int(2), Int(1), Int(9)]",
+        ),
+        (
+            "SELECT * FROM ru JOIN (SELECT rs.*, rs.* FROM rs) s ON s.a = ru.a",
+            "[Int(1), Int(9), Int(1), Int(2), Int(1), Int(2)]",
+        ),
+    ] {
+        let rows = e
+            .run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"))
+            .rows;
+        assert_eq!(format!("{:?}", rows[0]), expected, "{sql}");
+    }
+    let plan = e
+        .explain_plan("SELECT * FROM (SELECT rs.*, rs.* FROM rs) s")
+        .unwrap();
+    assert!(
+        plan.iter().all(|r| !r.detail.contains("(subquery)")),
+        "{plan:?}"
+    );
+}
+
+/// #650: `SELECT t.* FROM t` projects what `SELECT * FROM t` does, so a
+/// subquery of that shape flattens, as it does in sqlite3.
+#[test]
+fn a_single_table_star_subquery_flattens_like_a_plain_star() {
+    let db = TempDb::new("flatten-table-star");
+    let mut e = open(&db);
+    e.run_query("CREATE TABLE ft(a INTEGER, b INTEGER)")
+        .unwrap();
+    for sql in [
+        "SELECT * FROM (SELECT * FROM ft) s",
+        "SELECT * FROM (SELECT ft.* FROM ft) s",
+        "SELECT * FROM (SELECT x.* FROM ft x) s",
+    ] {
+        let plan = e.explain_plan(sql).unwrap();
+        assert!(
+            plan.iter().all(|r| !r.detail.contains("(subquery)")),
+            "{sql}: {plan:?}"
+        );
+    }
+}
+
+/// #650: sqlite3 keeps the first value of a column listed twice in an
+/// INSERT, and still prepares (so validates) the others.
+#[test]
+fn insert_with_a_column_listed_twice_keeps_the_first_value_and_validates_the_rest() {
+    let db = TempDb::new("insert-dup-column");
+    let mut e = open(&db);
+    e.run_query("CREATE TABLE dc(a INTEGER, s INTEGER)")
+        .unwrap();
+    e.run_query("INSERT INTO dc(s, s) VALUES (1, 2)").unwrap();
+    let rows = e.run_query("SELECT a, s FROM dc").unwrap().rows;
+    assert_eq!(format!("{:?}", rows[0]), "[Null, Int(1)]");
+    for (sql, message) in [
+        (
+            "INSERT INTO dc(s, s) VALUES (nosuch(1), 2)",
+            "no such function: nosuch",
+        ),
+        (
+            "INSERT INTO dc(s, s) VALUES (1, nosuch(2))",
+            "no such function: nosuch",
+        ),
+        ("INSERT INTO dc(s, s) VALUES (pj, 2)", "pj"),
+        ("INSERT INTO dc(s, s) VALUES (1, pj)", "pj"),
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert!(err.message.contains(message), "{sql}: {}", err.message);
+    }
+    // Nothing was added by the refused statements.
+    assert_eq!(e.run_query("SELECT a FROM dc").unwrap().rows.len(), 1);
+}
+
+/// #650: statements sqlite3 refuses at prepare, with its messages.
+#[test]
+fn having_check_parameters_and_explain_star_are_refused_like_sqlite3() {
+    let db = TempDb::new("prepare-refusals");
+    let mut e = open(&db);
+    e.run_query("CREATE TABLE pr(a INTEGER, b INTEGER); INSERT INTO pr VALUES (1, 2)")
+        .unwrap();
+    for (sql, message) in [
+        (
+            "SELECT a FROM pr HAVING a > 0",
+            "HAVING clause on a non-aggregate query",
+        ),
+        (
+            "SELECT a FROM pr HAVING count(*) > 0",
+            "HAVING clause on a non-aggregate query",
+        ),
+        (
+            "SELECT * FROM (SELECT a FROM pr HAVING a) s",
+            "HAVING clause on a non-aggregate query",
+        ),
+        (
+            "CREATE TABLE pc(a CHECK (a > ?))",
+            "parameters prohibited in CHECK constraints",
+        ),
+        ("SELECT *, pr.* FROM (VALUES (1))", "no such table: pr"),
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert!(err.message.contains(message), "{sql}: {}", err.message);
+        // EXPLAIN QUERY PLAN refuses what the statement itself refuses.
+        if sql.starts_with("SELECT") {
+            let err = e.explain_plan(sql).unwrap_err();
+            assert!(err.message.contains(message), "{sql}: {}", err.message);
+        }
+    }
+    // The accepted shapes still run.
+    for sql in [
+        "SELECT count(*) FROM pr HAVING count(*) > 0",
+        "SELECT a FROM pr GROUP BY a HAVING a > 0",
+        "SELECT a, count(*) FROM pr HAVING 1",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+}
+
 #[test]
 fn an_unrecognized_leading_keyword_is_reported_with_the_original_casing() {
     let db = TempDb::new("unrecognized");
