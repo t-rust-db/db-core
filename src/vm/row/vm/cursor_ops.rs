@@ -11,7 +11,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
     match instr.opcode {
         Opcode::Rewind => {
             vm.clear_null_row(instr.p1)?;
-            let has_row = vm.cursor_mut(instr.p1)?.rewind();
+            let has_row = vm.cursor_mut(instr.p1)?.rewind()?;
             Ok(if has_row {
                 Step::Next
             } else {
@@ -20,7 +20,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
         }
         Opcode::Last => {
             vm.clear_null_row(instr.p1)?;
-            let has_row = vm.cursor_mut(instr.p1)?.last();
+            let has_row = vm.cursor_mut(instr.p1)?.last()?;
             Ok(if has_row {
                 Step::Next
             } else {
@@ -47,7 +47,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
         Opcode::SeekRowid => {
             vm.clear_null_row(instr.p1)?;
             let rowid = register_as_i64(vm, instr.p3)?;
-            let found = vm.cursor_mut(instr.p1)?.seek(rowid);
+            let found = vm.cursor_mut(instr.p1)?.seek(rowid)?;
             Ok(if found {
                 Step::Next
             } else {
@@ -73,9 +73,9 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
                 let mut cursor = factory
                     .open_read(root)
                     .map_err(ExecError::CursorFactoryFailed)?;
-                count_rows(cursor.as_mut())
+                count_rows(cursor.as_mut())?
             } else {
-                count_rows(vm.cursor_mut(instr.p1)?.as_mut())
+                count_rows(vm.cursor_mut(instr.p1)?.as_mut())?
             };
             vm.set_register(instr.p2, Value::Integer(count))?;
             Ok(Step::Next)
@@ -199,7 +199,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             Ok(Step::Next)
         }
         Opcode::IdxRewind => {
-            let has_row = vm.cursor_mut(instr.p1)?.rewind();
+            let has_row = vm.cursor_mut(instr.p1)?.rewind()?;
             Ok(if has_row {
                 Step::Next
             } else {
@@ -207,7 +207,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             })
         }
         Opcode::IdxLast => {
-            let has_row = vm.cursor_mut(instr.p1)?.last();
+            let has_row = vm.cursor_mut(instr.p1)?.last()?;
             Ok(if has_row {
                 Step::Next
             } else {
@@ -215,7 +215,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             })
         }
         Opcode::IdxNext => {
-            let has_row = vm.cursor_mut(instr.p1)?.next();
+            let has_row = vm.cursor_mut(instr.p1)?.next()?;
             Ok(if has_row {
                 Step::Jump(to_pc(instr.p2))
             } else {
@@ -223,7 +223,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             })
         }
         Opcode::IdxPrev => {
-            let has_row = vm.cursor_mut(instr.p1)?.prev();
+            let has_row = vm.cursor_mut(instr.p1)?.prev()?;
             Ok(if has_row {
                 Step::Jump(to_pc(instr.p2))
             } else {
@@ -244,7 +244,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
         }
         Opcode::SeekIndexEq => {
             let (key, collations) = key_from_registers(vm, "SeekIndexEq", instr.p3, &instr.p4)?;
-            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key, &collations);
+            let found = vm.cursor_mut(instr.p1)?.seek_index_eq(&key, &collations)?;
             Ok(if found {
                 Step::Next
             } else {
@@ -253,7 +253,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
         }
         Opcode::SeekIndexGE => {
             let (key, collations) = key_from_registers(vm, "SeekIndexGE", instr.p3, &instr.p4)?;
-            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key, &collations);
+            let found = vm.cursor_mut(instr.p1)?.seek_index_ge(&key, &collations)?;
             Ok(if found {
                 Step::Next
             } else {
@@ -312,7 +312,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             // normalized key; real index: a seek.
             let found = match cursor.found(&key, &collations) {
                 Some(present) => present,
-                None => cursor.seek_index_eq(&key, &collations),
+                None => cursor.seek_index_eq(&key, &collations)?,
             };
             Ok(if found {
                 Step::Jump(to_pc(instr.p2))
@@ -345,7 +345,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             // IGNORE can SeekRowid straight to the displaced row.
             let found = match cursor.found(&key, &collations) {
                 Some(present) => present,
-                None => cursor.seek_index_eq(&key, &collations),
+                None => cursor.seek_index_eq(&key, &collations)?,
             };
             if found {
                 let rowid = cursor.idx_rowid();

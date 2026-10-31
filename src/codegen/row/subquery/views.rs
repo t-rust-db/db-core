@@ -24,7 +24,7 @@ use crate::parser::row::error::ParseOutcome;
 
 use crate::codegen::row::select::CodegenError;
 
-use super::cte::{apply_column_aliases, expand_with_clause};
+use super::cte::{apply_column_aliases, expand_ctes_in, Expansion};
 
 /// A view's catalog entry, pre-parsed once per query by the caller
 /// (`bin/sqlite-rs/query.rs`) from `schema::ViewSchema::sql`.
@@ -85,7 +85,7 @@ impl ExpandViews for Select {
         }
         let mut out = self.clone();
         let mut stack = Vec::new();
-        expand_views_in_select(&mut out, views, &mut stack)?;
+        expand_views_in_select(&mut out, views, &mut stack, &mut Expansion::new())?;
         Ok(Cow::Owned(out))
     }
 }
@@ -96,46 +96,78 @@ impl ExpandViews for Select {
 /// [`expand_views`] can never disagree with what the rewrite itself
 /// would have found.
 fn select_references_any_view(select: &Select, views: &[ResolvedView]) -> bool {
-    let from_has_view = |from: &crate::parser::ast::FromClause| {
-        table_ref_references_view(&from.first, views)
+    select_references_table(select, &|name: &str| {
+        views.iter().any(|v| v.name.eq_ignore_ascii_case(name))
+    })
+}
+
+/// Whether any `FROM`/`JOIN` table of `select` (main query, compound arms,
+/// nested `FROM`-subqueries) is named `is_target`.
+fn select_references_table(select: &Select, is_target: &impl Fn(&str) -> bool) -> bool {
+    let from_has_target = |from: &crate::parser::ast::FromClause| {
+        table_ref_references_table(&from.first, is_target)
             || from
                 .joins
                 .iter()
-                .any(|j| table_ref_references_view(&j.table, views))
+                .any(|j| table_ref_references_table(&j.table, is_target))
     };
-    if select.from.as_ref().is_some_and(from_has_view) {
+    if select.from.as_ref().is_some_and(from_has_target) {
         return true;
     }
     select
         .compound
         .iter()
-        .any(|arm| arm.from.as_ref().is_some_and(from_has_view))
+        .any(|arm| arm.from.as_ref().is_some_and(from_has_target))
 }
 
-fn table_ref_references_view(table_ref: &TableRef, views: &[ResolvedView]) -> bool {
+fn table_ref_references_table(table_ref: &TableRef, is_target: &impl Fn(&str) -> bool) -> bool {
     match &table_ref.kind {
-        TableRefKind::Name(name) => views.iter().any(|v| v.name.eq_ignore_ascii_case(name)),
-        TableRefKind::Subquery(inner) => select_references_any_view(inner, views),
+        TableRefKind::Name(name) => is_target(name),
+        TableRefKind::Subquery(inner) => select_references_table(inner, is_target),
         TableRefKind::Unnest { .. } => false,
     }
+}
+
+/// [`resolve_views`] leaves out a view whose stored `CREATE VIEW` doesn't
+/// parse, so unrelated statements still run. A statement that still names
+/// one after expansion -- directly or through another view -- reports that
+/// view's parse error instead of a misleading "no such table" (#887).
+pub(crate) fn reject_unparsable_view_refs(
+    expanded: &Select,
+    views: &[crate::codegen::row::ViewSchema],
+) -> Result<(), CodegenError> {
+    for view in views {
+        if !select_references_table(expanded, &|name: &str| view.name.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        if let ParseOutcome::Unsupported { message, .. } | ParseOutcome::Invalid { message, .. } =
+            crate::parser::row::parse_create_view(&view.sql)
+        {
+            return Err(CodegenError::Unsupported {
+                reason: format!("view {} cannot be used: {message}", view.name),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn expand_views_in_select(
     select: &mut Select,
     views: &[ResolvedView],
     stack: &mut Vec<String>,
+    expansion: &mut Expansion,
 ) -> Result<(), CodegenError> {
     if let Some(from) = &mut select.from {
-        expand_table_ref(&mut from.first, views, stack)?;
+        expand_table_ref(&mut from.first, views, stack, expansion)?;
         for join in &mut from.joins {
-            expand_table_ref(&mut join.table, views, stack)?;
+            expand_table_ref(&mut join.table, views, stack, expansion)?;
         }
     }
     for arm in &mut select.compound {
         if let Some(from) = &mut arm.from {
-            expand_table_ref(&mut from.first, views, stack)?;
+            expand_table_ref(&mut from.first, views, stack, expansion)?;
             for join in &mut from.joins {
-                expand_table_ref(&mut join.table, views, stack)?;
+                expand_table_ref(&mut join.table, views, stack, expansion)?;
             }
         }
     }
@@ -146,6 +178,7 @@ fn expand_table_ref(
     table_ref: &mut TableRef,
     views: &[ResolvedView],
     stack: &mut Vec<String>,
+    expansion: &mut Expansion,
 ) -> Result<(), CodegenError> {
     match &mut table_ref.kind {
         TableRefKind::Name(name) => {
@@ -167,14 +200,19 @@ fn expand_table_ref(
             // of `compile_select_program`. Expanding it here, before
             // recursing for nested views, mirrors the ordering already
             // used at the top level (CTEs first, then views).
-            let mut query = expand_with_clause(&view.query).into_owned();
+            // Every view reference inlines the view's body, so it is
+            // charged against the statement's expansion budget (#876).
+            expansion.enter(&view.query)?;
+            let mut query = (*view.query).clone();
+            expand_ctes_in(&mut query, expansion)?;
             if let Some(columns) = &view.columns {
-                apply_column_aliases(&mut query, columns);
+                apply_column_aliases(&mut query, columns, &view.name)?;
             }
             stack.push(view.name.clone());
-            let result = expand_views_in_select(&mut query, views, stack);
+            let result = expand_views_in_select(&mut query, views, stack, expansion);
             stack.pop();
             result?;
+            expansion.leave();
             // Same alias-defaulting rule as CTE substitution (#376): a
             // bare `FROM view_name` (no explicit alias) needs the
             // subquery's alias set to the view's own name, since a
@@ -185,7 +223,7 @@ fn expand_table_ref(
             table_ref.alias = alias;
             Ok(())
         }
-        TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack),
+        TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack, expansion),
         TableRefKind::Unnest { .. } => Ok(()),
     }
 }
@@ -207,6 +245,38 @@ mod mcdc_vectors {
         match parse_select(sql) {
             ParseOutcome::Accepted(select) => *select,
             other => panic!("{sql:?} must parse, got {other:?}"),
+        }
+    }
+
+    /// #887: a view whose stored definition doesn't parse was dropped,
+    /// so using it -- directly or through another view -- reported "no
+    /// such table". Unrelated statements still run.
+    #[test]
+    fn using_a_view_that_does_not_parse_reports_why() {
+        let views = vec![
+            ViewSchema {
+                name: "bad".to_string(),
+                sql: "CREATE VIEW bad AS WITH RECURSIVE r(n) AS (SELECT 1) SELECT n FROM r"
+                    .to_string(),
+            },
+            ViewSchema {
+                name: "good".to_string(),
+                sql: "CREATE VIEW good AS SELECT n FROM bad".to_string(),
+            },
+        ];
+        let resolved = resolve_views(&views);
+        let check = |sql: &str| {
+            let select = sel(sql);
+            let expanded = select.expand_views(&resolved).unwrap();
+            super::reject_unparsable_view_refs(&expanded, &views)
+        };
+        assert!(check("SELECT a FROM t").is_ok());
+        for sql in ["SELECT n FROM bad", "SELECT n FROM good"] {
+            let err = check(sql).unwrap_err().to_string();
+            assert!(
+                err.contains("view bad cannot be used: WITH RECURSIVE"),
+                "{sql}: {err}"
+            );
         }
     }
 

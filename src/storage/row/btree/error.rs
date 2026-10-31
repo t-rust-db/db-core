@@ -101,6 +101,16 @@ pub enum BtreeError {
         max: usize,
     },
 
+    /// A recursive whole-tree walk went more than `max` levels below its
+    /// root at `page_num` (#872): sqlite3 caps b-tree depth at 20, so a
+    /// deeper tree is corrupt -- typically a cyclic child pointer.
+    TreeTooDeep {
+        /// The page reached past the limit.
+        page_num: u32,
+        /// Deepest level allowed.
+        max: usize,
+    },
+
     /// A lower-level pager operation failed.
     Pager(PagerError),
 
@@ -211,6 +221,10 @@ impl std::fmt::Display for BtreeError {
             BtreeError::TraversalTooLong { max } => write!(
                 f,
                 "b-tree traversal visited more than {max} pages (possible cycle)"
+            ),
+            BtreeError::TreeTooDeep { page_num, max } => write!(
+                f,
+                "b-tree page {page_num} is more than {max} levels deep (corrupt or cyclic tree)"
             ),
             BtreeError::Pager(source) => write!(f, "pager error: {source}"),
             BtreeError::DuplicateRowid { rowid } => {
@@ -340,6 +354,14 @@ mod tests {
         assert_eq!(
             BtreeError::TraversalTooLong { max: 100 }.to_string(),
             "b-tree traversal visited more than 100 pages (possible cycle)"
+        );
+        assert_eq!(
+            BtreeError::TreeTooDeep {
+                page_num: 2,
+                max: 20
+            }
+            .to_string(),
+            "b-tree page 2 is more than 20 levels deep (corrupt or cyclic tree)"
         );
         assert!(BtreeError::Pager(PagerError::PendingTransaction)
             .to_string()

@@ -46,7 +46,7 @@ use crate::storage::row::btree::index::{
     write_index_leaf_page, IndexDescent, IndexLeafCell, LeafSearch, INTERIOR_INDEX, LEAF_INDEX,
 };
 use crate::storage::row::btree::{
-    local_payload_size, page1_header_start, read_num_cells, read_page_type, read_u32,
+    check_depth, local_payload_size, page1_header_start, read_num_cells, read_page_type, read_u32,
     splice_delete_cell, BtreeError, MAX_PAGES_VISITED,
 };
 use crate::storage::row::header::DatabaseHeader;
@@ -579,8 +579,9 @@ fn delete_via_predecessor_swap(
 /// the immediate child — so a caller that sees `None` only needs to
 /// deallocate `page_num` itself, not walk its subtree. `depth` guards
 /// against a corrupted/cyclic `rightmost` chain causing unbounded
-/// recursion, mirroring [`descend_index_tree`]'s `MAX_PAGES_VISITED`
-/// convention.
+/// recursion: past [`MAX_BTREE_DEPTH`](crate::storage::row::btree::MAX_BTREE_DEPTH) levels it is
+/// [`BtreeError::TreeTooDeep`] (#872; the 1,000,000-page budget it used
+/// overflowed the stack first).
 fn extract_max_entry(
     pager: &mut Pager,
     usable_size: u32,
@@ -588,11 +589,7 @@ fn extract_max_entry(
     encoding: TextEncoding,
     depth: usize,
 ) -> Result<Option<Vec<u8>>, BtreeError> {
-    if depth > MAX_PAGES_VISITED {
-        return Err(BtreeError::TraversalTooLong {
-            max: MAX_PAGES_VISITED,
-        });
-    }
+    check_depth(page_num, depth)?;
     let header_start = page1_header_start(page_num);
     let buf = pager.get_page_mut(page_num)?.clone();
     let page_type = read_page_type(&buf, header_start, page_num)?;
@@ -697,6 +694,7 @@ mod tests {
     use super::*;
     use crate::storage::row::btree::index::insert::insert_entry;
     use crate::storage::row::btree::index::write_index_leaf_page;
+    use crate::storage::row::btree::MAX_BTREE_DEPTH;
     use crate::storage::row::vfs::{MemoryVfs, PageSource};
     use std::path::Path;
 
@@ -1328,8 +1326,8 @@ mod tests {
         );
     }
 
-    /// Kills the `depth > MAX_PAGES_VISITED` -> `==`/`>=` mutants: at
-    /// exactly `MAX_PAGES_VISITED`, the real `>` guard has NOT yet
+    /// Kills the `depth > MAX_BTREE_DEPTH` -> `==`/`>=` mutants: at
+    /// exactly `MAX_BTREE_DEPTH`, the real `>` guard has NOT yet
     /// tripped (only depths strictly greater than the max are rejected),
     /// so a call at that exact depth must still succeed.
     #[test]
@@ -1345,12 +1343,12 @@ mod tests {
             header.usable_page_size(),
             1,
             TextEncoding::Utf8,
-            MAX_PAGES_VISITED,
+            MAX_BTREE_DEPTH,
         )
         .unwrap();
         assert!(
             result.is_some(),
-            "depth == MAX_PAGES_VISITED must still be processed, not rejected"
+            "depth == MAX_BTREE_DEPTH must still be processed, not rejected"
         );
     }
 
@@ -1368,9 +1366,9 @@ mod tests {
             header.usable_page_size(),
             1,
             TextEncoding::Utf8,
-            MAX_PAGES_VISITED + 1,
+            MAX_BTREE_DEPTH + 1,
         )
         .unwrap_err();
-        assert!(matches!(err, BtreeError::TraversalTooLong { .. }));
+        assert!(matches!(err, BtreeError::TreeTooDeep { max: 20, .. }));
     }
 }

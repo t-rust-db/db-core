@@ -89,6 +89,37 @@ pub enum FileError {
         /// What the chunk had left.
         left: u64,
     },
+    /// A row group claims more rows than [`MAX_ROW_GROUP_ROWS`] (#881).
+    /// A column chunk is decoded a row group at a time, so this many rows
+    /// would be materialized before anything is checked -- and an RLE run
+    /// or a zero-width dictionary index expands to any count in a few
+    /// bytes, so the file's own size bounds nothing.
+    RowGroupTooLarge {
+        /// The rows the footer claims.
+        rows: u64,
+        /// The most this reader decodes in one row group.
+        max: u64,
+    },
+}
+
+/// Most rows this reader decodes in one row group (#881): far above what
+/// writers produce (DuckDB 122,880; Arrow 1 Mi), yet a forged footer can
+/// no longer have a 119-byte file materialize billions of values.
+pub const MAX_ROW_GROUP_ROWS: u64 = 64 << 20;
+
+/// A string dictionary page's entry count, refused when `body_len` bytes
+/// can't hold that many entries (#881): each needs at least its 4-byte
+/// length prefix, and the count sizes buffers before any entry is read.
+fn string_dictionary_entries(num_values: i32, body_len: usize) -> Result<usize> {
+    let invalid = || FileError::InvalidMetadata {
+        field: "dictionary_page.num_values",
+        value: i64::from(num_values),
+    };
+    let entries = usize::try_from(num_values).map_err(|_| invalid())?;
+    if entries > body_len / 4 {
+        return Err(invalid());
+    }
+    Ok(entries)
 }
 
 impl fmt::Display for FileError {
@@ -157,6 +188,10 @@ impl fmt::Display for FileError {
             } => write!(
                 f,
                 "page {field} {declared} is more than its column chunk has left ({left})"
+            ),
+            FileError::RowGroupTooLarge { rows, max } => write!(
+                f,
+                "row group claims {rows} rows; this reader decodes at most {max} per row group"
             ),
         }
     }
@@ -737,6 +772,12 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
 
     /// The pages of column chunk `column_index`, budgeted by `values`.
     fn pages_with(&self, column_index: usize, values: u64) -> Result<Pages<'a>> {
+        if values > MAX_ROW_GROUP_ROWS {
+            return Err(FileError::RowGroupTooLarge {
+                rows: values,
+                max: MAX_ROW_GROUP_ROWS,
+            });
+        }
         let meta = self.column_meta(column_index)?;
         Ok(Pages {
             chunk: self.column_chunk_bytes(column_index)?,
@@ -1500,12 +1541,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     }
                     let body = pages.body(compressed, header.uncompressed_page_size)?;
                     let count =
-                        usize::try_from(dictionary_page_header.num_values).map_err(|_| {
-                            FileError::InvalidMetadata {
-                                field: "dictionary_page.num_values",
-                                value: i64::from(dictionary_page_header.num_values),
-                            }
-                        })?;
+                        string_dictionary_entries(dictionary_page_header.num_values, body.len())?;
                     let mut buf: &[u8] = &body;
                     let mut bit_pos = 0usize;
                     let mut first: HashMap<Arc<str>, u32> = HashMap::with_capacity(count);
@@ -1728,14 +1764,9 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                     if dictionary.is_some() {
                         return Err(FileError::UnexpectedDictionaryPage);
                     }
-                    let entries =
-                        usize::try_from(dictionary_page_header.num_values).map_err(|_| {
-                            FileError::InvalidMetadata {
-                                field: "dictionary_page.num_values",
-                                value: i64::from(dictionary_page_header.num_values),
-                            }
-                        })?;
                     let body = pages.body(compressed, header.uncompressed_page_size)?;
+                    let entries =
+                        string_dictionary_entries(dictionary_page_header.num_values, body.len())?;
                     dictionary = Some((body, entries));
                 }
             }
@@ -3260,6 +3291,105 @@ mod tests {
         let file = ParquetFile::open(&file_bytes).unwrap();
         let rg = file.row_group(0).unwrap();
         rg.read_int64_column(0).unwrap_err()
+    }
+
+    /// #881: a forgery whose footer is consistent with its page -- the
+    /// row group and the page both claim i32::MAX rows -- passed the #671
+    /// budget, and one RLE run of 3 bytes made a 119-byte file decode to
+    /// 5.7 GB. The row group itself is now refused before any page.
+    #[test]
+    fn a_row_group_claiming_more_rows_than_the_cap_is_refused_before_decoding() {
+        let mut body = vec![2u8];
+        let mut run = (i32::MAX as u64) << 1;
+        while run >= 0x80 {
+            body.push((run as u8) | 0x80);
+            run >>= 7;
+        }
+        body.push(run as u8);
+        body.push(1);
+        let (page_bytes, meta_bytes) = dictionary_chunk_claiming(i32::MAX, &body);
+        let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, i64::from(i32::MAX));
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let err = file.row_group(0).unwrap().read_int64_column(0).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FileError::RowGroupTooLarge {
+                    rows: 2_147_483_647,
+                    max: MAX_ROW_GROUP_ROWS,
+                }
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "row group claims 2147483647 rows; this reader decodes at most {MAX_ROW_GROUP_ROWS} per row group"
+            )
+        );
+    }
+
+    /// #881: the cap refuses only past `MAX_ROW_GROUP_ROWS`; at it, the
+    /// #671 per-page checks still apply as before.
+    #[test]
+    fn a_row_group_at_the_cap_is_not_refused_by_it() {
+        let (page_bytes, meta_bytes) =
+            dictionary_chunk_claiming(3, &encode_dictionary_indices(&[0, 1, 2], 2));
+        let rows = i64::try_from(MAX_ROW_GROUP_ROWS).unwrap();
+        let file_bytes = build_file_from_chunk(&page_bytes, meta_bytes, rows);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let result = file.row_group(0).unwrap().read_int64_column(0);
+        assert!(
+            !matches!(result, Err(FileError::RowGroupTooLarge { .. })),
+            "{result:?}"
+        );
+    }
+
+    /// #881: a string dictionary's entry count sized buffers before any
+    /// entry was read; one whose body can't hold that many length-prefixed
+    /// entries is refused.
+    #[test]
+    fn a_string_dictionary_claiming_more_entries_than_its_bytes_hold_is_refused() {
+        let mut dict_body = Vec::new();
+        for v in ["east", "west"] {
+            dict_body.extend_from_slice(&(v.len() as u32).to_le_bytes());
+            dict_body.extend_from_slice(v.as_bytes());
+        }
+        let mut page_bytes = build_dictionary_page_header(1 << 30, dict_body.len() as i32);
+        page_bytes.extend_from_slice(&dict_body);
+        let indices = encode_dictionary_indices(&[1, 0], 1);
+        page_bytes.extend_from_slice(&build_dictionary_encoded_data_page_header(
+            2,
+            indices.len() as i32,
+        ));
+        page_bytes.extend_from_slice(&indices);
+        let mut meta = StructWriter::new();
+        meta.i32_field(1, 6); // BYTE_ARRAY
+        meta.field_header(3, 0x09);
+        meta.buf.push((1u8 << 4) | 0x08);
+        meta.write_varint(1);
+        meta.buf.push(b'v');
+        meta.i64_field(5, 2);
+        meta.i64_field(6, page_bytes.len() as i64);
+        meta.i64_field(7, page_bytes.len() as i64);
+        meta.i64_field(9, 4);
+        let file_bytes = build_file_from_chunk_typed(&page_bytes, meta.finish(), 2, 6, None);
+        let file = ParquetFile::open(&file_bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let result = rg.read_string_column_dictionary_at(0, &[0, 1]);
+        assert!(
+            matches!(
+                result,
+                Err(FileError::InvalidMetadata {
+                    field: "dictionary_page.num_values",
+                    value: 1_073_741_824,
+                })
+            ),
+            "{result:?}"
+        );
+        // The indices path decodes entry by entry and stops at the
+        // body's end: a typed error either way, never the claimed size.
+        assert!(rg.read_string_column_dictionary_indices(0).is_err());
     }
 
     #[test]

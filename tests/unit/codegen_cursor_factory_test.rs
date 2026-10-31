@@ -29,6 +29,7 @@ use std::rc::Rc;
 use db_core::codegen::row::dispatch::compile_statement;
 use db_core::codegen::row::TableSchema;
 use db_core::value::Value;
+use db_core::vm::row::cursor::CursorResult;
 use db_core::vm::row::{execute, Cursor, CursorFactory, CursorFactoryError, Vm};
 
 type TableStore = Rc<RefCell<Vec<(i64, Vec<Value>)>>>;
@@ -42,60 +43,72 @@ struct SharedTableCursor {
 }
 
 impl Cursor for SharedTableCursor {
-    fn rewind(&mut self) -> bool {
-        self.pos = if self.store.borrow().is_empty() {
-            None
-        } else {
-            Some(0)
-        };
-        self.pos.is_some()
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok({
+            self.pos = if self.store.borrow().is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+            self.pos.is_some()
+        })
     }
 
-    fn next(&mut self) -> bool {
-        let len = self.store.borrow().len();
-        self.pos = match self.pos {
-            Some(p) if p + 1 < len => Some(p + 1),
-            _ => None,
-        };
-        self.pos.is_some()
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok({
+            let len = self.store.borrow().len();
+            self.pos = match self.pos {
+                Some(p) if p + 1 < len => Some(p + 1),
+                _ => None,
+            };
+            self.pos.is_some()
+        })
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
-        Some(self.store.borrow()[self.pos?].1[col].clone())
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        Ok(self.pos.map(|pos| self.store.borrow()[pos].1[col].clone()))
     }
 
     fn rowid(&self) -> Option<i64> {
         Some(self.store.borrow()[self.pos?].0)
     }
 
-    fn seek(&mut self, rowid: i64) -> bool {
-        self.pos = self.store.borrow().iter().position(|(r, _)| *r == rowid);
-        self.pos.is_some()
+    fn seek(&mut self, rowid: i64) -> CursorResult<bool> {
+        Ok({
+            self.pos = self.store.borrow().iter().position(|(r, _)| *r == rowid);
+            self.pos.is_some()
+        })
     }
 
-    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
-        let mut store = self.store.borrow_mut();
-        store.retain(|(r, _)| *r != rowid);
-        store.push((rowid, values));
-        true
+    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> CursorResult<bool> {
+        Ok({
+            let mut store = self.store.borrow_mut();
+            store.retain(|(r, _)| *r != rowid);
+            store.push((rowid, values));
+            true
+        })
     }
 
-    fn delete(&mut self) -> bool {
-        let Some(pos) = self.pos.take() else {
-            return false;
-        };
-        self.store.borrow_mut().remove(pos);
-        true
+    fn delete(&mut self) -> CursorResult<bool> {
+        Ok({
+            let Some(pos) = self.pos.take() else {
+                return Ok(false);
+            };
+            self.store.borrow_mut().remove(pos);
+            true
+        })
     }
 
-    fn next_rowid(&self) -> i64 {
-        self.store
-            .borrow()
-            .iter()
-            .map(|(r, _)| *r)
-            .max()
-            .unwrap_or(0)
-            + 1
+    fn next_rowid(&self) -> CursorResult<i64> {
+        Ok({
+            self.store
+                .borrow()
+                .iter()
+                .map(|(r, _)| *r)
+                .max()
+                .unwrap_or(0)
+                + 1
+        })
     }
 }
 

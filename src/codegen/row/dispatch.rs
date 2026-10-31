@@ -525,8 +525,9 @@ pub fn compile_statement(
                         // "invalid root page (0)" (the subquery's synthetic,
                         // rootpage-less schema).
                         let resolved_views = resolve_views(views);
-                        let cte_expanded = expand_with_clause(select);
+                        let cte_expanded = expand_with_clause(select)?;
                         let expanded = cte_expanded.expand_views(&resolved_views)?;
+                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;
 
                         let Some(from) = &expanded.from else {
                             return Err(DispatchError::NoFromClause);
@@ -601,9 +602,10 @@ pub fn compile_statement(
 /// simple ones are flattened back into the enclosing query and
 /// safely-movable `WHERE` conjuncts pushed into the rest.
 fn rewrite_select(select: &Select, views: &[ViewSchema]) -> Result<Select, DispatchError> {
-    let cte_expanded = expand_with_clause(select);
+    let cte_expanded = expand_with_clause(select)?;
     let resolved_views = resolve_views(views);
     let expanded = cte_expanded.expand_views(&resolved_views)?;
+    super::subquery::reject_unparsable_view_refs(&expanded, views)?;
     let mut expanded = expanded.into_owned();
     flatten_from_subqueries(&mut expanded);
     push_down_where_predicates(&mut expanded);

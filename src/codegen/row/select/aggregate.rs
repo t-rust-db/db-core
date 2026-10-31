@@ -42,6 +42,14 @@ pub(super) fn find_index_only_count(
     if select.having.is_some() || select.limit.is_some() || !select.order_by.is_empty() {
         return None;
     }
+    // Only a catalog table has a b-tree for `Count`/an index to probe: a
+    // FROM-subquery is materialized into an ephemeral table (#257), and
+    // counting its synthetic root page 0 failed `SELECT count(*) FROM
+    // (SELECT ...)` with "invalid root page (0)" (#887).
+    let from_table = select.from.as_ref().map(|from| &from.first.kind);
+    if !matches!(from_table, Some(crate::parser::ast::TableRefKind::Name(_))) {
+        return None;
+    }
     let [ResultColumn::Expr { expr, .. }] = select.columns.as_slice() else {
         return None;
     };

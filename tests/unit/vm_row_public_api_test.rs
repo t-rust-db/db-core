@@ -120,26 +120,26 @@ fn running_off_the_end_of_the_program_is_a_program_counter_error() {
 fn ephemeral_dup_sibling_can_mutate_while_the_original_is_mid_scan() {
     let mut a = EphemeralTableCursor::new();
     for rowid in 1..=5 {
-        a.insert(rowid, vec![Value::Integer(rowid * 10)]);
+        a.insert(rowid, vec![Value::Integer(rowid * 10)]).unwrap();
     }
     let mut b = a.dup().expect("ephemeral tables support OpenDup");
 
-    assert!(a.rewind());
+    assert!(a.rewind().unwrap());
     assert_eq!(a.rowid().unwrap(), 1);
 
     // Through the sibling, while `a` is positioned on row 1: delete the
     // row `a` would visit next-but-one, and append one past the end.
-    assert!(b.seek(3));
-    assert!(b.delete());
-    assert!(b.insert(6, vec![Value::Integer(60)]));
+    assert!(b.seek(3).unwrap());
+    assert!(b.delete().unwrap());
+    assert!(b.insert(6, vec![Value::Integer(60)]).unwrap());
 
     // Read the column *inside* the scan: once `next()` has returned
     // false there is no current row, and `column()` on a positionless
     // cursor is one of the production `expect`s db-core#231 turns into
     // a typed error -- this test exercises the RefCell sharing, not that.
-    let mut visited = vec![(a.rowid().unwrap(), a.column(0).unwrap())];
-    while a.next() {
-        visited.push((a.rowid().unwrap(), a.column(0).unwrap()));
+    let mut visited = vec![(a.rowid().unwrap(), a.column(0).unwrap().unwrap())];
+    while a.next().unwrap() {
+        visited.push((a.rowid().unwrap(), a.column(0).unwrap().unwrap()));
     }
     assert_eq!(
         visited,
@@ -153,11 +153,11 @@ fn ephemeral_dup_sibling_can_mutate_while_the_original_is_mid_scan() {
     );
 
     // And the other way round: `b` scanning while `a` mutates.
-    assert!(b.rewind());
-    assert!(a.seek(2));
-    assert!(a.delete());
+    assert!(b.rewind().unwrap());
+    assert!(a.seek(2).unwrap());
+    assert!(a.delete().unwrap());
     let mut visited = vec![b.rowid().unwrap()];
-    while b.next() {
+    while b.next().unwrap() {
         visited.push(b.rowid().unwrap());
     }
     assert_eq!(visited, vec![1, 4, 5, 6]);

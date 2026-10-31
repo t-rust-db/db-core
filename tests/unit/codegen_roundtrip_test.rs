@@ -66,7 +66,7 @@ fn run(schemas: &[TableSchema], sql: &str, seed: Vec<(i64, Vec<Value>)>) -> Vec<
     let mut vm = Vm::new();
     let mut table = EphemeralTableCursor::new();
     for (rowid, values) in seed {
-        table.insert(rowid, values);
+        table.insert(rowid, values).unwrap();
     }
     vm.open_cursor(0, Box::new(table)).unwrap();
     execute(&mut vm, &program).unwrap()
@@ -150,11 +150,11 @@ fn where_clause_scalar_subquery() {
     // nested subquery scan gets an explicit `OpenRead`.
     let mut vm = Vm::new();
     let mut t = EphemeralTableCursor::new();
-    t.insert(1, vec![Value::Integer(5)]);
-    t.insert(2, vec![Value::Integer(15)]);
+    t.insert(1, vec![Value::Integer(5)]).unwrap();
+    t.insert(2, vec![Value::Integer(15)]).unwrap();
     vm.open_cursor(0, Box::new(t)).unwrap();
     let mut bound = EphemeralTableCursor::new();
-    bound.insert(1, vec![Value::Integer(10)]);
+    bound.insert(1, vec![Value::Integer(10)]).unwrap();
     vm.open_cursor(cursor_slot_for_root(&program, 3), Box::new(bound))
         .unwrap();
 
@@ -250,7 +250,7 @@ fn run_two(
     for (root, seed) in [(2, t.1), (3, u.1)] {
         let mut table = EphemeralTableCursor::new();
         for (rowid, values) in seed {
-            table.insert(rowid, values);
+            table.insert(rowid, values).unwrap();
         }
         vm.open_cursor(cursor_slot_for_root(&program, root), Box::new(table))
             .unwrap();
@@ -455,7 +455,7 @@ fn with_clause_later_cte_may_reference_an_earlier_one() {
                 (3, ints(&[4])),
                 (4, ints(&[5])),
             ] {
-                t.insert(rowid, values);
+                t.insert(rowid, values).unwrap();
             }
             vm.open_cursor(instr.p1, Box::new(t)).unwrap();
         }
@@ -475,16 +475,21 @@ fn with_clause_applies_explicit_column_aliases() {
 }
 
 #[test]
-fn with_clause_mismatched_column_alias_count_leaves_natural_names() {
-    // `apply_column_aliases` only renames a same-length, all-`Expr`
-    // result list; a mismatched count is left alone, so the CTE is
-    // still queryable, just under its query's own column name.
-    let rows = run(
-        &[schema("t", &["a"])],
+fn with_clause_mismatched_column_alias_count_is_sqlite3s_error() {
+    // #885: a column list of the wrong length used to be skipped
+    // silently, leaving the CTE under its query's own column name;
+    // sqlite3 refuses it.
+    let err = compile_statement(
         "WITH renamed(x, y) AS (SELECT a FROM t) SELECT a FROM renamed",
-        vec![(1, ints(&[5]))],
+        &[schema("t", &["a"])],
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("table renamed has 1 values for 2 columns"),
+        "{err}"
     );
-    assert_eq!(rows, vec![ints(&[5])]);
 }
 
 #[test]
@@ -506,7 +511,7 @@ fn with_clause_over_a_union_all_compound_substitutes_every_arm() {
         if instr.opcode == Opcode::OpenRead {
             let mut t = EphemeralTableCursor::new();
             for (rowid, values) in [(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))] {
-                t.insert(rowid, values);
+                t.insert(rowid, values).unwrap();
             }
             vm.open_cursor(instr.p1, Box::new(t)).unwrap();
         }
@@ -519,13 +524,38 @@ fn with_clause_over_a_union_all_compound_substitutes_every_arm() {
 fn with_clause_shadows_a_real_table_of_the_same_name() {
     // The CTE `t` shadows the real table `t` for this statement only --
     // `substitute_table_ref` rewrites the `FROM t` reference to the
-    // CTE's own (filtered) body rather than the real table.
-    let rows = run(
-        &[schema("t", &["a"])],
-        "WITH t AS (SELECT a FROM t WHERE a > 1) SELECT a FROM t",
-        vec![(1, ints(&[1])), (2, ints(&[2])), (3, ints(&[3]))],
+    // CTE's own body (over `u`) rather than the real table.
+    let schemas = [schema("t", &["a"]), schema_with_root("u", &["a"], 3)];
+    let program = compile_statement(
+        "WITH t AS (SELECT a FROM u WHERE a > 1) SELECT a FROM t",
+        &schemas,
+        &[],
+    )
+    .unwrap();
+    let opened: Vec<i32> = program
+        .instructions
+        .iter()
+        .filter(|i| i.opcode == Opcode::OpenRead)
+        .map(|i| i.p2)
+        .collect();
+    assert_eq!(
+        opened,
+        vec![3],
+        "only `u` (root 3) is read, never the real `t`"
     );
-    assert_eq!(rows, vec![ints(&[2]), ints(&[3])]);
+}
+
+#[test]
+fn a_cte_reading_its_own_name_is_a_circular_reference() {
+    // #885: inside its own body a (non-recursive) CTE isn't visible, so
+    // `FROM t` silently read the real table `t`; sqlite3 refuses it.
+    let err = compile_statement(
+        "WITH t AS (SELECT a FROM t WHERE a > 1) SELECT a FROM t",
+        &[schema("t", &["a"])],
+        &[],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("circular reference: t"), "{err}");
 }
 
 #[test]
@@ -553,7 +583,7 @@ fn run_with_params(sql: &str, params: Vec<Value>, seed: Vec<(i64, Vec<Value>)>) 
     vm.bind_params(params);
     let mut table = EphemeralTableCursor::new();
     for (rowid, values) in seed {
-        table.insert(rowid, values);
+        table.insert(rowid, values).unwrap();
     }
     vm.open_cursor(0, Box::new(table)).unwrap();
     execute(&mut vm, &program).unwrap()
@@ -838,13 +868,13 @@ fn between_in_exists_and_in_subquery_in_the_select_list() {
     .unwrap();
     let mut vm = Vm::new();
     let mut t = EphemeralTableCursor::new();
-    t.insert(1, ints(&[2]));
-    t.insert(2, ints(&[9]));
+    t.insert(1, ints(&[2])).unwrap();
+    t.insert(2, ints(&[9])).unwrap();
     vm.open_cursor(0, Box::new(t)).unwrap();
     for instr in &program.instructions {
         if instr.opcode == Opcode::OpenRead && instr.p2 == 3 {
             let mut u = EphemeralTableCursor::new();
-            u.insert(1, ints(&[2]));
+            u.insert(1, ints(&[2])).unwrap();
             vm.open_cursor(instr.p1, Box::new(u)).unwrap();
         }
     }
@@ -877,10 +907,10 @@ fn scalar_subquery_in_the_select_list() {
     let program = compile_statement("SELECT (SELECT n FROM bound) FROM t", &schemas, &[]).unwrap();
     let mut vm = Vm::new();
     let mut t = EphemeralTableCursor::new();
-    t.insert(1, ints(&[1]));
+    t.insert(1, ints(&[1])).unwrap();
     vm.open_cursor(0, Box::new(t)).unwrap();
     let mut bound = EphemeralTableCursor::new();
-    bound.insert(1, ints(&[10]));
+    bound.insert(1, ints(&[10])).unwrap();
     vm.open_cursor(cursor_slot_for_root(&program, 3), Box::new(bound))
         .unwrap();
     let rows = execute(&mut vm, &program).unwrap();

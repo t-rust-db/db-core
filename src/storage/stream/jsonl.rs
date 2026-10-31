@@ -281,10 +281,38 @@ impl LineParser for JsonlParser {
 fn resolve_timestamp(value: &JsonValue<'_>) -> Option<i64> {
     match value {
         JsonValue::Str(s) => timestamp::parse_flexible(s),
-        #[allow(clippy::cast_possible_truncation)]
         JsonValue::Int(n) => timestamp::parse_epoch(&n.to_string()),
-        JsonValue::Float(f) => timestamp::parse_epoch(&(*f as i64).to_string()),
+        JsonValue::Float(f) => float_epoch(*f),
         _ => None,
+    }
+}
+
+/// A fractional epoch number: the whole part picks the unit by digit
+/// count exactly as an integer epoch does, and the fraction keeps its
+/// sub-unit digits (#882: `1700000000.789` lost its `.789`). The digits
+/// come from Rust's shortest round-trip rendering of `f`, which is what
+/// the line said, not the binary approximation's tail (`.78900003...`);
+/// digits finer than a nanosecond are dropped.
+fn float_epoch(f: f64) -> Option<i64> {
+    let text = f.to_string();
+    let (whole, fraction) = text.split_once('.').unwrap_or((&text, ""));
+    let unit = timestamp::epoch_unit_nanos(whole.trim_start_matches('-').len())?;
+    let unit_digits = usize::try_from(unit.ilog10()).ok()?;
+    let fraction: String = fraction
+        .chars()
+        .chain(std::iter::repeat('0'))
+        .take(unit_digits)
+        .collect();
+    let fraction_nanos: i64 = if fraction.is_empty() {
+        0
+    } else {
+        fraction.parse().ok()?
+    };
+    let base = timestamp::parse_epoch(whole)?;
+    if whole.starts_with('-') {
+        base.checked_sub(fraction_nanos)
+    } else {
+        base.checked_add(fraction_nanos)
     }
 }
 
@@ -323,6 +351,21 @@ mod tests {
         let batch = parse_one(line);
         assert_eq!(batch.len(), 1);
         assert_eq!(batch.message[0], Some(deep.as_str()));
+    }
+
+    /// #882: a fractional epoch kept only its whole part.
+    #[test]
+    fn a_fractional_epoch_keeps_its_fraction() {
+        let ts = |line: &'static str| parse_one(line).timestamp_ns[0];
+        assert_eq!(
+            ts("{\"ts\":1700000000.789,\"msg\":\"x\"}\n"),
+            Some(1_700_000_000_789_000_000)
+        );
+        assert_eq!(
+            ts("{\"ts\":1700000000123.5,\"msg\":\"x\"}\n"),
+            Some(1_700_000_000_123_500_000)
+        );
+        assert_eq!(ts("{\"ts\":12.5,\"msg\":\"x\"}\n"), None);
     }
 
     #[test]

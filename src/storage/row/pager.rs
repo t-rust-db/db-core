@@ -1300,7 +1300,7 @@ impl Pager {
         let freelist_page_count = read_be_u32(&header, FREELIST_PAGE_COUNT_OFFSET)?;
 
         if freelist_trunk_page == 0 {
-            let new_page_num = page_count.saturating_add(1);
+            let new_page_num = page_count.checked_add(1).ok_or(PagerError::DatabaseFull)?;
             self.dirty
                 .insert(new_page_num, vec![0u8; self.page_size as usize]);
             let page1 = self.get_page_mut(1)?;
@@ -1308,14 +1308,21 @@ impl Pager {
             return Ok(new_page_num);
         }
 
+        // Every page number here comes off disk: a corrupt one must not
+        // hand out page 1 or a page past the end (#874).
+        freelist::check_page(freelist_trunk_page, page_count)?;
         let trunk_buf = self.read_page(freelist_trunk_page)?;
         let mut trunk = TrunkPage::parse(&trunk_buf)?;
 
         let (allocated, new_trunk_page) = if let Some(leaf) = trunk.leaves.pop() {
+            freelist::check_page(leaf, page_count)?;
             let trunk_buf = self.get_page_mut(freelist_trunk_page)?;
             trunk.write(trunk_buf)?;
             (leaf, freelist_trunk_page)
         } else {
+            if trunk.next_trunk != 0 {
+                freelist::check_page(trunk.next_trunk, page_count)?;
+            }
             (freelist_trunk_page, trunk.next_trunk)
         };
 
@@ -1335,11 +1342,16 @@ impl Pager {
     /// freelist trunk/count fields on page 1 in the same call.
     pub fn deallocate_page(&mut self, page_num: u32) -> Result<(), PagerError> {
         let header = self.read_page(1)?;
+        // A corrupt overflow/child pointer must not free page 1 (overwriting
+        // the header) or a page past the end (#874).
+        let page_count = read_be_u32(&header, PAGE_COUNT_OFFSET)?;
+        freelist::check_page(page_num, page_count)?;
         let freelist_trunk_page = read_be_u32(&header, FREELIST_TRUNK_PAGE_OFFSET)?;
         let freelist_page_count = read_be_u32(&header, FREELIST_PAGE_COUNT_OFFSET)?;
 
         let max_leaves = freelist::max_leaves_per_trunk(self.usable_size) as usize;
         let new_trunk_page = if freelist_trunk_page != 0 {
+            freelist::check_page(freelist_trunk_page, page_count)?;
             let trunk_buf = self.read_page(freelist_trunk_page)?;
             let mut trunk = TrunkPage::parse(&trunk_buf)?;
             if trunk.leaves.len() < max_leaves {
@@ -2826,6 +2838,95 @@ mod tests {
         let new_trunk = TrunkPage::parse(&pager.read_page(4).unwrap()).unwrap();
         assert_eq!(new_trunk.next_trunk, 3);
         assert!(new_trunk.leaves.is_empty());
+    }
+
+    /// A 4-page database whose freelist trunk is `trunk` holding `leaves`
+    /// and pointing at `next`, as a corrupt file could have it (#874).
+    fn pager_with_freelist(vfs: &mut MemoryVfs, trunk: u32, next: u32, leaves: Vec<u32>) -> Pager {
+        let mut contents = vec![0u8; 512 * 4];
+        write_be_u32(&mut contents, PAGE_COUNT_OFFSET, 4).unwrap();
+        write_be_u32(&mut contents, FREELIST_TRUNK_PAGE_OFFSET, trunk).unwrap();
+        write_be_u32(&mut contents, FREELIST_PAGE_COUNT_OFFSET, 1).unwrap();
+        if (2..=4).contains(&trunk) {
+            let start = 512 * (trunk as usize - 1);
+            TrunkPage {
+                next_trunk: next,
+                leaves,
+            }
+            .write(&mut contents[start..start + 512])
+            .unwrap();
+        }
+        vfs.insert("/test.db", contents);
+        Pager::open(&*vfs, Path::new("/test.db"), 512).unwrap()
+    }
+
+    /// Whether `result` is #874's out-of-range error naming `page`.
+    fn out_of_range<T>(result: Result<T, PagerError>, page: u32) -> bool {
+        matches!(
+            result,
+            Err(PagerError::Freelist(freelist::FreelistError::PageOutOfRange { page: p, page_count: 4 }))
+                if p == page
+        )
+    }
+
+    /// #874: every freelist page number comes off disk; one that is page
+    /// 1 (the header) or past the end is corruption, never handed out.
+    #[test]
+    fn allocate_refuses_an_out_of_range_freelist_page() {
+        let mut vfs = MemoryVfs::new();
+        let mut pager = pager_with_freelist(&mut vfs, 3, 0, vec![1]);
+        assert!(out_of_range(pager.allocate_page(), 1), "leaf 1");
+
+        let mut vfs = MemoryVfs::new();
+        let mut pager = pager_with_freelist(&mut vfs, 3, 0, vec![99]);
+        assert!(out_of_range(pager.allocate_page(), 99), "leaf past the end");
+
+        let mut vfs = MemoryVfs::new();
+        let mut pager = pager_with_freelist(&mut vfs, 99, 0, vec![]);
+        assert!(
+            out_of_range(pager.allocate_page(), 99),
+            "trunk past the end"
+        );
+
+        let mut vfs = MemoryVfs::new();
+        let mut pager = pager_with_freelist(&mut vfs, 3, 1, vec![]);
+        assert!(out_of_range(pager.allocate_page(), 1), "next trunk 1");
+
+        // An in-range freelist still allocates.
+        let mut vfs = MemoryVfs::new();
+        let mut pager = pager_with_freelist(&mut vfs, 3, 0, vec![4]);
+        assert_eq!(pager.allocate_page().unwrap(), 4);
+    }
+
+    /// #874: freeing page 1 would write a trunk header over the database
+    /// header; freeing past the end, or into a corrupt trunk, is refused.
+    #[test]
+    fn deallocate_refuses_page_one_and_a_corrupt_trunk() {
+        let mut vfs = MemoryVfs::new();
+        let mut pager = pager_with_freelist(&mut vfs, 0, 0, vec![]);
+        let header = pager.read_page(1).unwrap();
+        assert!(out_of_range(pager.deallocate_page(1), 1));
+        assert!(out_of_range(pager.deallocate_page(5), 5));
+        assert_eq!(pager.read_page(1).unwrap(), header, "header untouched");
+
+        let mut vfs = MemoryVfs::new();
+        let mut pager = pager_with_freelist(&mut vfs, 1, 0, vec![]);
+        assert!(out_of_range(pager.deallocate_page(3), 1), "trunk 1");
+    }
+
+    /// #874: extending a database already at `u32::MAX` pages reported
+    /// page `u32::MAX` again instead of failing.
+    #[test]
+    fn allocate_past_u32_max_pages_is_database_full() {
+        let mut vfs = MemoryVfs::new();
+        let mut header = vec![0u8; 512];
+        write_be_u32(&mut header, PAGE_COUNT_OFFSET, u32::MAX).unwrap();
+        vfs.insert("/test.db", header);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), 512).unwrap();
+        assert!(matches!(
+            pager.allocate_page(),
+            Err(PagerError::DatabaseFull)
+        ));
     }
 
     #[test]

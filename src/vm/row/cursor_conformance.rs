@@ -22,8 +22,9 @@ use crate::value::Value;
 /// adapter is writable.
 fn build(cursor: &mut dyn Cursor, rows: &[(i64, Vec<Value>)]) {
     for (rowid, values) in rows {
-        assert!(
+        assert_eq!(
             cursor.insert(*rowid, values.clone()),
+            Ok(true),
             "conformance suite requires an insert-capable Cursor"
         );
     }
@@ -42,17 +43,17 @@ pub fn assert_forward_scan_matches_insertion_order<C: Cursor>(mut make: impl FnM
     build(&mut cursor, &rows);
 
     let mut seen = Vec::new();
-    let mut has_row = cursor.rewind();
+    let mut has_row = cursor.rewind() == Ok(true);
     while has_row {
         seen.push((cursor.rowid(), cursor.column(0)));
-        has_row = cursor.next();
+        has_row = cursor.next() == Ok(true);
     }
     assert_eq!(
         seen,
         vec![
-            (Some(10), Some(Value::Integer(1))),
-            (Some(20), Some(Value::Integer(2))),
-            (Some(30), Some(Value::Integer(3))),
+            (Some(10), Ok(Some(Value::Integer(1)))),
+            (Some(20), Ok(Some(Value::Integer(2)))),
+            (Some(30), Ok(Some(Value::Integer(3)))),
         ]
     );
 }
@@ -63,8 +64,8 @@ pub fn assert_seek_finds_an_exact_rowid<C: Cursor>(mut make: impl FnMut() -> C) 
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(cursor.seek(20));
-    assert_eq!(cursor.column(0), Some(Value::Integer(2)));
+    assert_eq!(cursor.seek(20), Ok(true));
+    assert_eq!(cursor.column(0), Ok(Some(Value::Integer(2))));
 }
 
 /// `seek` reports `false` on a miss.
@@ -73,7 +74,7 @@ pub fn assert_seek_misses_an_absent_rowid<C: Cursor>(mut make: impl FnMut() -> C
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(!cursor.seek(999));
+    assert_eq!(cursor.seek(999), Ok(false));
 }
 
 /// `delete` removes exactly the row currently positioned at, leaving
@@ -87,14 +88,14 @@ pub fn assert_delete_removes_only_the_current_row<C: Cursor>(mut make: impl FnMu
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(cursor.seek(20));
-    assert!(cursor.delete());
+    assert_eq!(cursor.seek(20), Ok(true));
+    assert_eq!(cursor.delete(), Ok(true));
 
     let mut seen = Vec::new();
-    let mut has_row = cursor.rewind();
+    let mut has_row = cursor.rewind() == Ok(true);
     while has_row {
         seen.push(cursor.rowid());
-        has_row = cursor.next();
+        has_row = cursor.next() == Ok(true);
     }
     assert_eq!(seen, vec![Some(10), Some(30)]);
 }
@@ -117,8 +118,8 @@ pub fn assert_seek_index_eq_finds_an_exact_key<C: Cursor>(mut make: impl FnMut()
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(cursor.seek_index_eq(&[Value::Integer(2)], &[]));
-    assert_eq!(cursor.column(0), Some(Value::Integer(2)));
+    assert_eq!(cursor.seek_index_eq(&[Value::Integer(2)], &[]), Ok(true));
+    assert_eq!(cursor.column(0), Ok(Some(Value::Integer(2))));
     assert_eq!(cursor.idx_rowid(), Some(20));
 }
 
@@ -128,7 +129,7 @@ pub fn assert_seek_index_eq_misses_an_absent_key<C: Cursor>(mut make: impl FnMut
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(!cursor.seek_index_eq(&[Value::Integer(999)], &[]));
+    assert_eq!(cursor.seek_index_eq(&[Value::Integer(999)], &[]), Ok(false));
 }
 
 /// `seek_index_ge` positions at the first entry whose key is not less
@@ -140,8 +141,8 @@ pub fn assert_seek_index_ge_positions_at_the_first_not_less_key<C: Cursor>(
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(cursor.seek_index_ge(&[Value::Integer(2)], &[]));
-    assert_eq!(cursor.column(0), Some(Value::Integer(3)));
+    assert_eq!(cursor.seek_index_ge(&[Value::Integer(2)], &[]), Ok(true));
+    assert_eq!(cursor.column(0), Ok(Some(Value::Integer(3))));
 }
 
 /// `idx_compare` reports how the current entry's key orders against an
@@ -153,7 +154,7 @@ pub fn assert_idx_compare_orders_the_current_entry_against_a_key<C: Cursor>(
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert!(cursor.rewind());
+    assert_eq!(cursor.rewind(), Ok(true));
     assert_eq!(
         cursor.idx_compare(&[Value::Integer(1)], &[]),
         Some(std::cmp::Ordering::Greater)
@@ -184,12 +185,12 @@ pub fn assert_reads_with_no_current_row_are_none<C: Cursor>(mut make: impl FnMut
     let mut cursor = make();
     build(&mut cursor, &rows);
 
-    assert_eq!(cursor.column(0), None);
+    assert_eq!(cursor.column(0), Ok(None));
     assert_eq!(cursor.rowid(), None);
 
-    assert!(cursor.rewind());
-    assert!(!cursor.next());
-    assert_eq!(cursor.column(0), None);
+    assert_eq!(cursor.rewind(), Ok(true));
+    assert_eq!(cursor.next(), Ok(false));
+    assert_eq!(cursor.column(0), Ok(None));
     assert_eq!(cursor.rowid(), None);
 }
 
@@ -197,7 +198,7 @@ pub fn assert_reads_with_no_current_row_are_none<C: Cursor>(mut make: impl FnMut
 mod tests {
     use std::rc::Rc;
 
-    use super::super::cursor::EphemeralTableCursor;
+    use super::super::cursor::{CursorResult, EphemeralTableCursor};
     use super::super::record::{decode_column, decode_record, encode_record};
     use super::*;
     use crate::value::TextEncoding;
@@ -219,50 +220,42 @@ mod tests {
     }
 
     impl Cursor for MockTableCursor {
-        fn rewind(&mut self) -> bool {
+        fn rewind(&mut self) -> CursorResult<bool> {
             self.pos = if self.rows.is_empty() { None } else { Some(0) };
-            self.pos.is_some()
+            Ok(self.pos.is_some())
         }
 
-        fn next(&mut self) -> bool {
+        fn next(&mut self) -> CursorResult<bool> {
             let next = self.pos.map_or(0, |p| p + 1);
             if next < self.rows.len() {
                 self.pos = Some(next);
-                true
+                Ok(true)
             } else {
                 self.pos = None;
-                false
+                Ok(false)
             }
         }
 
-        fn column(&self, col: usize) -> Option<Value> {
-            let (_, blob) = &self.rows[self.pos?];
-            Some(decode_column(blob, col, TextEncoding::Utf8).unwrap_or(Value::Null))
+        fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+            Ok(self.pos.map(|pos| {
+                decode_column(&self.rows[pos].1, col, TextEncoding::Utf8).unwrap_or(Value::Null)
+            }))
         }
 
         fn rowid(&self) -> Option<i64> {
             Some(self.rows[self.pos?].0)
         }
 
-        fn seek(&mut self, rowid: i64) -> bool {
-            match self.rows.iter().position(|(r, _)| *r == rowid) {
-                Some(pos) => {
-                    self.pos = Some(pos);
-                    true
-                }
-                None => {
-                    self.pos = None;
-                    false
-                }
-            }
+        fn seek(&mut self, rowid: i64) -> CursorResult<bool> {
+            self.pos = self.rows.iter().position(|(r, _)| *r == rowid);
+            Ok(self.pos.is_some())
         }
 
-        fn payload(&self) -> Option<Rc<[u8]>> {
-            let pos = self.pos?;
-            Some(self.rows[pos].1.clone())
+        fn payload(&self) -> CursorResult<Option<Rc<[u8]>>> {
+            Ok(self.pos.map(|pos| self.rows[pos].1.clone()))
         }
 
-        fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
+        fn insert(&mut self, rowid: i64, values: Vec<Value>) -> CursorResult<bool> {
             let blob: Rc<[u8]> = encode_record(&values, TextEncoding::Utf8).into();
             let pos = self.rows.partition_point(|(r, _)| *r < rowid);
             if self.rows.get(pos).is_some_and(|(r, _)| *r == rowid) {
@@ -270,16 +263,16 @@ mod tests {
             } else {
                 self.rows.insert(pos, (rowid, blob));
             }
-            true
+            Ok(true)
         }
 
-        fn delete(&mut self) -> bool {
+        fn delete(&mut self) -> CursorResult<bool> {
             let Some(pos) = self.pos else {
-                return false;
+                return Ok(false);
             };
             self.rows.remove(pos);
             self.pos = None;
-            true
+            Ok(true)
         }
     }
 
@@ -307,9 +300,9 @@ mod tests {
     #[test]
     fn mock_table_cursor_payload_exposes_raw_encoded_bytes() {
         let mut cursor = MockTableCursor::default();
-        cursor.insert(1, vec![Value::Integer(42)]);
-        cursor.rewind();
-        let payload = cursor.payload().unwrap();
+        cursor.insert(1, vec![Value::Integer(42)]).unwrap();
+        cursor.rewind().unwrap();
+        let payload = cursor.payload().unwrap().unwrap();
         assert_eq!(
             decode_record(&payload, TextEncoding::Utf8).unwrap(),
             vec![Value::Integer(42)]

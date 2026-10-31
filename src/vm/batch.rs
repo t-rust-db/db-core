@@ -2493,18 +2493,25 @@ pub fn compare_for_order(a: &Value, b: &Value, descending: bool) -> std::cmp::Or
         (false, true) => Ordering::Less,
         (false, false) => {
             let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });
-            let ord = match (a.as_f64(), b.as_f64()) {
-                // A decimal compares exactly (#632), never through f64 or
-                // as text.
-                (Some(_), Some(_)) if decimal => numeric_cmp(a, b).unwrap_or(Ordering::Equal),
-                (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
-                // #266: compare `Str`/`Str` directly -- `Value`'s `Display`
-                // prints a `Str`'s contents verbatim (no quoting), so this
-                // is byte-identical to the `to_string()` fallback below
-                // without the two allocations.
-                _ => match (a, b) {
-                    (Value::Str(x), Value::Str(y)) => x.cmp(y),
-                    _ => a.to_string().cmp(&b.to_string()),
+            let ord = match (a, b) {
+                // Two integers compare exactly (#890, as `compare_values`
+                // does since #845): through f64, values past 2^53 that
+                // differ compared equal and top-N kept the wrong rows.
+                (Value::Int(x), Value::Int(y)) => x.cmp(y),
+                _ => match (a.as_f64(), b.as_f64()) {
+                    // A decimal compares exactly (#632), never through f64
+                    // or as text.
+                    (Some(_), Some(_)) if decimal => numeric_cmp(a, b).unwrap_or(Ordering::Equal),
+                    (Some(x), Some(y)) => x.partial_cmp(&y).unwrap_or(Ordering::Equal),
+                    // #266: compare `Str`/`Str` directly -- `Value`'s
+                    // `Display` prints a `Str`'s contents verbatim (no
+                    // quoting), so this is byte-identical to the
+                    // `to_string()` fallback below without the two
+                    // allocations.
+                    _ => match (a, b) {
+                        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+                        _ => a.to_string().cmp(&b.to_string()),
+                    },
                 },
             };
             // ORDER BY direction flips the comparison, not the sort itself.
@@ -2586,7 +2593,7 @@ fn top_n_merge(items: impl IntoIterator<Item = TopNItem>, limit: usize) -> Vec<T
         return Vec::new();
     }
 
-    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(limit.saturating_add(1));
+    let mut heap: BinaryHeap<TopNItem> = top_n_heap(limit);
     for item in items {
         push_bounded(&mut heap, item, limit);
     }
@@ -2616,7 +2623,7 @@ fn top_n_reduce_output(output: &QueryOutput, spec: &TopN) -> Vec<TopNItem> {
         return Vec::new();
     }
 
-    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.saturating_add(1));
+    let mut heap: BinaryHeap<TopNItem> = top_n_heap(spec.limit);
     for chunk in output.chunks() {
         let sort_column = chunk.get(spec.col);
         for r in 0..chunk_len(chunk) {
@@ -2675,6 +2682,18 @@ pub fn run_parallel_top_n<S: Segment>(
     Ok(QueryOutput::from_rows(
         winners.into_iter().map(|item| item.row).collect(),
     ))
+}
+
+/// Most candidates a top-N heap reserves up front (#889). `limit` is SQL
+/// `LIMIT` + `OFFSET`, so reserving `limit + 1` outright let `LIMIT
+/// 9223372036854775807` panic with "capacity overflow" and `LIMIT
+/// 1000000000000` abort on a failed allocation; past this the heap grows
+/// with the rows actually kept, as it would for any `Vec`.
+const TOP_N_RESERVE_CAP: usize = 4096;
+
+/// An empty top-N heap for `limit` candidates (see [`TOP_N_RESERVE_CAP`]).
+fn top_n_heap(limit: usize) -> std::collections::BinaryHeap<TopNItem> {
+    std::collections::BinaryHeap::with_capacity(limit.saturating_add(1).min(TOP_N_RESERVE_CAP))
 }
 
 /// Pushes `item` onto a heap bounded to `limit` candidates, dropping the
@@ -2908,7 +2927,7 @@ fn top_n_reduce_positions(
             reason: format!("top-N key row {ordinal} has no source position"),
         })
     };
-    let mut heap: BinaryHeap<TopNItem> = BinaryHeap::with_capacity(spec.limit.saturating_add(1));
+    let mut heap: BinaryHeap<TopNItem> = top_n_heap(spec.limit);
     let mut ordinal = 0usize;
     for chunk in output.chunks() {
         let sort_column = chunk.get(spec.col);
@@ -2968,8 +2987,7 @@ fn top_n_over_segments<S: Segment>(
         (Some(x), Some(y)) => compare_for_order(x, y, spec.descending),
     });
 
-    let threshold: Mutex<BinaryHeap<TopNItem>> =
-        Mutex::new(BinaryHeap::with_capacity(spec.limit.saturating_add(1)));
+    let threshold: Mutex<BinaryHeap<TopNItem>> = Mutex::new(top_n_heap(spec.limit));
     let skipped = AtomicUsize::new(0);
     let plan = late_plan(program, spec);
 
@@ -3154,6 +3172,32 @@ pub enum VmError {
         /// The type it was converted to.
         to: &'static str,
     },
+}
+
+/// A value as a boolean, as DuckDB casts a `WHERE`/`HAVING`/`CASE WHEN`/
+/// `AND`/`OR`/`NOT`/`FILTER` operand to `BOOLEAN`: a number is true when
+/// nonzero, NULL is false, text converts as in a comparison (`'true'`,
+/// `'t'`, `'1'`, ...), anything else is a [`VmError::Conversion`]. Only
+/// `Bool(true)` used to count (#886), so `WHERE 1`, `WHERE ts`, `HAVING
+/// count(*)` and `CASE WHEN n THEN ...` silently went the false way.
+fn predicate_truth(value: &Value) -> Result<bool> {
+    match value {
+        Value::Bool(b) => Ok(*b),
+        Value::Null => Ok(false),
+        Value::Int(i) => Ok(*i != 0),
+        Value::Float(x) => Ok(*x != 0.0),
+        Value::Decimal { unscaled, .. } => Ok(*unscaled != 0),
+        Value::Str(text) => Ok(matches!(
+            convert_str_like(text, &Value::Bool(true))?,
+            Value::Bool(true)
+        )),
+        Value::Map(_) | Value::List(_) | Value::Bytes(_) | Value::Blob(_) => {
+            Err(VmError::Conversion {
+                value: format!("{value:?}"),
+                to: "BOOLEAN",
+            })
+        }
+    }
 }
 
 impl fmt::Display for VmError {
@@ -6626,8 +6670,17 @@ impl Vm {
                 self.resolve_selection(opcode)?;
                 self.ensure_materialized(*cond);
                 let (then_rows, else_rows): (Vec<usize>, Vec<usize>) = {
-                    let cond_values = self.reg(*cond, opcode)?;
-                    (0..cond_values.len()).partition(|&i| cond_values.get(i).is_some_and(as_bool))
+                    let truths = self
+                        .reg(*cond, opcode)?
+                        .iter()
+                        .map(predicate_truth)
+                        .collect::<Result<Vec<bool>>>()?;
+                    let (then_rows, else_rows): (Vec<_>, Vec<_>) =
+                        truths.iter().enumerate().partition(|(_, keep)| **keep);
+                    (
+                        then_rows.into_iter().map(|(i, _)| i).collect(),
+                        else_rows.into_iter().map(|(i, _)| i).collect(),
+                    )
                 };
                 let num_rows = then_rows.len().saturating_add(else_rows.len());
                 let (then_values, then_kind) = self.run_branch(opcode, then, &then_rows)?;
@@ -6738,15 +6791,15 @@ impl Vm {
                     .map(|i| valid.get(i) && data.get(i).copied().unwrap_or(false))
                     .collect(),
                 other => (0..other.len())
-                    .map(|i| matches!(other.get(i), Value::Bool(true)))
-                    .collect(),
+                    .map(|i| predicate_truth(&other.get(i)))
+                    .collect::<Result<_>>()?,
             },
             None => {
                 self.ensure_materialized(*predicate);
                 self.reg(*predicate, opcode)?
                     .iter()
-                    .map(|v| matches!(v, Value::Bool(true)))
-                    .collect()
+                    .map(predicate_truth)
+                    .collect::<Result<_>>()?
             }
         };
         let base_len = mask.len();
@@ -8702,7 +8755,7 @@ fn in_list_values(values: &[Value], list: &[Value], negated: bool) -> Result<Vec
                 let r = apply_map_op(cmp, v, item)?;
                 acc = Some(match acc {
                     None => r,
-                    Some(prev) => three_valued(join, truth(&prev), truth(&r)),
+                    Some(prev) => three_valued(join, truth(&prev)?, truth(&r)?),
                 });
             }
             Ok(acc.unwrap_or(Value::Bool(negated)))
@@ -8728,7 +8781,7 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     // FALSE, not NULL -- the null-propagation rule below dropped those
     // rows from every WHERE and HAVING.
     if matches!(op, MapOp::And | MapOp::Or) {
-        return Ok(three_valued(op, truth(a), truth(b)));
+        return Ok(three_valued(op, truth(a)?, truth(b)?));
     }
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Ok(Value::Null);
@@ -8767,9 +8820,9 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
         MapOp::Le => comparison(a, b, |o| matches!(o, Some(Less | Equal))),
         MapOp::Gt => comparison(a, b, |o| o == Some(Greater)),
         MapOp::Ge => comparison(a, b, |o| matches!(o, Some(Greater | Equal))),
-        MapOp::And => Value::Bool(as_bool(a) && as_bool(b)),
-        MapOp::Or => Value::Bool(as_bool(a) || as_bool(b)),
-        MapOp::Not => Value::Bool(!as_bool(a)),
+        MapOp::And => Value::Bool(predicate_truth(a)? && predicate_truth(b)?),
+        MapOp::Or => Value::Bool(predicate_truth(a)? || predicate_truth(b)?),
+        MapOp::Not => Value::Bool(!predicate_truth(a)?),
         MapOp::Concat => Value::Str(Cow::Owned(format!("{a}{b}"))),
         MapOp::Neg => match a {
             // `-i64::MIN` has no integer representation: an error, as in
@@ -8796,7 +8849,7 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
         MapOp::Copy => a.clone(),
         MapOp::MaskIf => {
             // MaskIf keeps `a` wherever the predicate register is true.
-            if matches!(b, Value::Bool(true)) {
+            if predicate_truth(b)? {
                 a.clone()
             } else {
                 Value::Null
@@ -8888,10 +8941,6 @@ fn comparison(a: &Value, b: &Value, pred: impl Fn(Option<std::cmp::Ordering>) ->
     Value::Bool(pred(compare_values(a, b)))
 }
 
-fn as_bool(v: &Value) -> bool {
-    matches!(v, Value::Bool(true))
-}
-
 /// A string compared with `v` is converted to `v`'s type first (#679).
 fn converts_from_str(v: &Value) -> bool {
     matches!(
@@ -8931,10 +8980,10 @@ fn convert_str_like(s: &str, like: &Value) -> Result<Value> {
 }
 
 /// A value as a SQL truth value: `None` for NULL (unknown).
-fn truth(v: &Value) -> Option<bool> {
+fn truth(v: &Value) -> Result<Option<bool>> {
     match v {
-        Value::Null => None,
-        other => Some(as_bool(other)),
+        Value::Null => Ok(None),
+        other => predicate_truth(other).map(Some),
     }
 }
 

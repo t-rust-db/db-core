@@ -22,6 +22,16 @@ pub enum FreelistError {
         /// Actual length of the page buffer.
         len: usize,
     },
+    /// A freelist trunk, leaf or next-trunk page number (or a page being
+    /// freed) outside `2..=page_count` (#874): sqlite3's
+    /// `allocateBtreePage`/`freePage2` refuse it as corruption, since using
+    /// it would hand out page 1 or a page past the end of the file.
+    PageOutOfRange {
+        /// The out-of-range page number.
+        page: u32,
+        /// The database's page count from its header.
+        page_count: u32,
+    },
 }
 
 impl std::fmt::Display for FreelistError {
@@ -31,11 +41,24 @@ impl std::fmt::Display for FreelistError {
                 f,
                 "freelist trunk page is {len} bytes, too short to read a field at offset {offset}"
             ),
+            FreelistError::PageOutOfRange { page, page_count } => write!(
+                f,
+                "freelist names page {page}, outside 2..={page_count}: database disk image is malformed"
+            ),
         }
     }
 }
 
 impl std::error::Error for FreelistError {}
+
+/// `page` if it can be on the freelist of a `page_count`-page database:
+/// neither page 1 (the header) nor past the end (#874).
+pub(crate) fn check_page(page: u32, page_count: u32) -> Result<u32, FreelistError> {
+    if page < 2 || page > page_count {
+        return Err(FreelistError::PageOutOfRange { page, page_count });
+    }
+    Ok(page)
+}
 
 /// Reads a big-endian `u32` at `offset` in `buf`, never panicking on a
 /// truncated/corrupt page.
@@ -152,6 +175,39 @@ mod tests {
     fn max_leaves_matches_page_size() {
         assert_eq!(max_leaves_per_trunk(4096), (4096 - 8) / 4);
         assert_eq!(max_leaves_per_trunk(512), (512 - 8) / 4);
+    }
+
+    // storage_row_pager_freelist_check_page_ea1b5e66 (#874):
+    // `page < 2 || page > page_count`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_pager_freelist_check_page_ea1b5e66__v1_in_range_is_accepted() {
+        assert_eq!(check_page(2, 4), Ok(2));
+        assert_eq!(check_page(4, 4), Ok(4));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_pager_freelist_check_page_ea1b5e66__v2_page_one_is_rejected() {
+        assert_eq!(
+            check_page(1, 4),
+            Err(FreelistError::PageOutOfRange {
+                page: 1,
+                page_count: 4
+            })
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_row_pager_freelist_check_page_ea1b5e66__v3_past_the_end_is_rejected() {
+        assert_eq!(
+            check_page(5, 4),
+            Err(FreelistError::PageOutOfRange {
+                page: 5,
+                page_count: 4
+            })
+        );
     }
 
     #[test]

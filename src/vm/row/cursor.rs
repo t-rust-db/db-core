@@ -18,6 +18,25 @@ use super::record::{
 };
 use crate::value::{Collation, TextEncoding, Value};
 
+/// A storage failure under a cursor (#873): reading or writing the file
+/// that backs it failed -- a corrupt page, an I/O error. The storage
+/// adapters used to turn it into "no row" / "end of table", so a corrupt
+/// file returned wrong answers (`count(*)` = 0, no rows) instead of an
+/// error. Reaching the end, or a miss, is never an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorError(pub String);
+
+impl std::fmt::Display for CursorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for CursorError {}
+
+/// What a cursor operation that can touch storage returns (#873).
+pub type CursorResult<T> = Result<T, CursorError>;
+
 /// A forward-scanning, row-at-a-time cursor over a table's rows.
 /// Mirrors the read-only subset of sqlite-rs's `TableCursor` interface
 /// that the `Rewind`/`Next`/`Column`/`Rowid` opcodes need.
@@ -25,23 +44,23 @@ pub trait Cursor {
     /// Positions the cursor at the first row. Returns `true` if a row
     /// exists (matches sqlite-rs's `Rewind`: "jump to p2 if empty", so
     /// `false` here is the jump condition).
-    fn rewind(&mut self) -> bool;
+    fn rewind(&mut self) -> CursorResult<bool>;
 
     /// Advances to the next row. Returns `true` if there was one.
-    fn next(&mut self) -> bool;
+    fn next(&mut self) -> CursorResult<bool>;
 
     /// Positions the cursor at the last row. Returns `true` if a row
     /// exists (matches sqlite-rs's `Last`). Default `false` so cursor
     /// kinds that don't support backward positioning yet don't each
     /// have to repeat the same stub.
-    fn last(&mut self) -> bool {
-        false
+    fn last(&mut self) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// Moves to the previous row. Returns `true` if there was one.
     /// Default `false`, same rationale as [`Cursor::last`].
-    fn prev(&mut self) -> bool {
-        false
+    fn prev(&mut self) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// Reads column `col` of the current row; `None` if the cursor has no
@@ -50,7 +69,7 @@ pub trait Cursor {
     /// `ExecError::NoCurrentRow` -- a malformed program is a typed error,
     /// never a panic (db-core#231). A `col` past the row's width reads
     /// `Value::Null`, as in SQLite.
-    fn column(&self, col: usize) -> Option<Value>;
+    fn column(&self, col: usize) -> CursorResult<Option<Value>>;
 
     /// The current row's rowid; `None` if there is no current row
     /// (db-core#231, same contract as [`Self::column`]).
@@ -65,8 +84,8 @@ pub trait Cursor {
     /// override this with an actual key-based seek; this crate's own
     /// in-memory fixtures ([`InMemoryCursor`], [`EphemeralTableCursor`])
     /// override it too, cheaply, since they already index by rowid.
-    fn seek(&mut self, _rowid: i64) -> bool {
-        false
+    fn seek(&mut self, _rowid: i64) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// The current row's raw, still-encoded record bytes, for an
@@ -80,8 +99,8 @@ pub trait Cursor {
     /// this crate today -- unlike [`Cursor::current_blob`] (the
     /// sorter's own record blob, which `Opcode::SorterData` does
     /// dispatch), this exists purely as a hook for a real adapter.
-    fn payload(&self) -> Option<Rc<[u8]>> {
-        None
+    fn payload(&self) -> CursorResult<Option<Rc<[u8]>>> {
+        Ok(None)
     }
 
     /// Inserts a decoded row under `rowid`. Returns `false` if this
@@ -89,8 +108,8 @@ pub trait Cursor {
     /// a read-only fixture) -- `Opcode::Insert`'s dispatch turns that
     /// into an error. Default no-op so read-only cursor kinds don't
     /// each have to repeat the same stub.
-    fn insert(&mut self, _rowid: i64, _values: Vec<Value>) -> bool {
-        false
+    fn insert(&mut self, _rowid: i64, _values: Vec<Value>) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// Buffers a record-encoded row for later sorting (`Opcode::
@@ -110,8 +129,8 @@ pub trait Cursor {
     /// Deletes the row at the current position. Returns `false` if this
     /// cursor kind doesn't support deletion. Default no-op, same
     /// rationale as [`Cursor::insert`].
-    fn delete(&mut self) -> bool {
-        false
+    fn delete(&mut self) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// The rowid `Opcode::NewRowid` should hand out next for this
@@ -120,8 +139,8 @@ pub trait Cursor {
     /// rows yet; cursor kinds that don't track insertion (e.g.
     /// read-only fixtures) never have `Opcode::NewRowid` run against
     /// them in practice.
-    fn next_rowid(&self) -> i64 {
-        1
+    fn next_rowid(&self) -> CursorResult<i64> {
+        Ok(1)
     }
 
     /// Inserts an index entry (`db-core#96`'s secondary-index
@@ -132,15 +151,15 @@ pub trait Cursor {
     /// looked up by exact equality ([`Cursor::idx_delete`]), not ordered
     /// range scan (that's `#94`'s index-scan codegen, a separate
     /// ticket).
-    fn idx_insert(&mut self, _key: Vec<Value>) -> bool {
-        false
+    fn idx_insert(&mut self, _key: Vec<Value>) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// Deletes the index entry equal to `key` (see [`Cursor::idx_insert`]).
     /// Returns `false` if no such entry exists, or this cursor kind
     /// isn't an index cursor.
-    fn idx_delete(&mut self, _key: &[Value]) -> bool {
-        false
+    fn idx_delete(&mut self, _key: &[Value]) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// Locates (creating on first sight) the group `blob` -- this
@@ -181,8 +200,8 @@ pub trait Cursor {
     /// kind tracks one (`Opcode::Count`'s fast path, db-core#127). `None`
     /// (the default) tells the dispatcher to fall back to a full
     /// `rewind`/`next` scan instead.
-    fn count(&self) -> Option<i64> {
-        None
+    fn count(&self) -> CursorResult<Option<i64>> {
+        Ok(None)
     }
 
     /// Appends `rowid` under `key` into this automatic-index cursor
@@ -219,16 +238,16 @@ pub trait Cursor {
     /// `key` exactly (`Opcode::SeekIndexEq`/`Found`/`NoConflict`,
     /// db-core#126). Returns `false` (and leaves no current entry) on a
     /// miss, or if this cursor kind isn't an index cursor.
-    fn seek_index_eq(&mut self, _key: &[Value], _collations: &[Collation]) -> bool {
-        false
+    fn seek_index_eq(&mut self, _key: &[Value], _collations: &[Collation]) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// Seeks this index cursor to the first entry whose key is `>=`
     /// `key` (`Opcode::SeekIndexGE`, db-core#126). Returns `false` (and
     /// leaves no current entry) if no such entry exists, or this cursor
     /// kind isn't an index cursor.
-    fn seek_index_ge(&mut self, _key: &[Value], _collations: &[Collation]) -> bool {
-        false
+    fn seek_index_ge(&mut self, _key: &[Value], _collations: &[Collation]) -> CursorResult<bool> {
+        Ok(false)
     }
 
     /// Compares this index cursor's current entry's key against `key`
@@ -274,8 +293,8 @@ pub trait Cursor {
     /// storage-backed cursor writes them byte-for-byte instead of
     /// re-encoding decoded values. `None` means "decode and use
     /// [`Self::insert`]" (the in-memory cursors) (#134).
-    fn insert_payload(&mut self, _rowid: i64, _payload: &Rc<[u8]>) -> Option<bool> {
-        None
+    fn insert_payload(&mut self, _rowid: i64, _payload: &Rc<[u8]>) -> CursorResult<Option<bool>> {
+        Ok(None)
     }
 
     /// `Opcode::FilterAdd`: records `key` in this cursor's bloom
@@ -300,8 +319,8 @@ pub trait Cursor {
     /// [`Self::delete`] followed by [`Self::insert_payload`] (db-core#524).
     /// `None` means "not supported directly" and the dispatcher falls
     /// back to that pair.
-    fn update_payload(&mut self, _rowid: i64, _payload: &Rc<[u8]>) -> Option<bool> {
-        None
+    fn update_payload(&mut self, _rowid: i64, _payload: &Rc<[u8]>) -> CursorResult<Option<bool>> {
+        Ok(None)
     }
 
     /// `OpenDup`: a second cursor over the same underlying rows with a
@@ -334,67 +353,82 @@ impl InMemoryCursor {
 }
 
 impl Cursor for InMemoryCursor {
-    fn rewind(&mut self) -> bool {
-        self.pos = if self.rows.is_empty() { None } else { Some(0) };
-        self.pos.is_some()
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok({
+            self.pos = if self.rows.is_empty() { None } else { Some(0) };
+            self.pos.is_some()
+        })
     }
 
-    fn next(&mut self) -> bool {
-        let next = self.pos.map_or(0, |p| p.saturating_add(1));
-        if next < self.rows.len() {
-            self.pos = Some(next);
-            true
-        } else {
-            self.pos = None;
-            false
-        }
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok({
+            let next = self.pos.map_or(0, |p| p.saturating_add(1));
+            if next < self.rows.len() {
+                self.pos = Some(next);
+                true
+            } else {
+                self.pos = None;
+                false
+            }
+        })
     }
 
-    fn last(&mut self) -> bool {
-        self.pos = self.rows.len().checked_sub(1);
-        self.pos.is_some()
+    fn last(&mut self) -> CursorResult<bool> {
+        Ok({
+            self.pos = self.rows.len().checked_sub(1);
+            self.pos.is_some()
+        })
     }
 
-    fn prev(&mut self) -> bool {
-        // `checked_sub` folds the "already at the first entry" case into
-        // the "not positioned" one: both leave the cursor off the table.
-        self.pos = self.pos.and_then(|p| p.checked_sub(1));
-        self.pos.is_some()
+    fn prev(&mut self) -> CursorResult<bool> {
+        Ok({
+            // `checked_sub` folds the "already at the first entry" case into
+            // the "not positioned" one: both leave the cursor off the table.
+            self.pos = self.pos.and_then(|p| p.checked_sub(1));
+            self.pos.is_some()
+        })
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
-        let row = self.rows.get(self.pos?)?;
-        Some(row.get(col).cloned().unwrap_or(Value::Null))
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        let current = || -> Option<Value> {
+            let row = self.rows.get(self.pos?)?;
+            Some(row.get(col).cloned().unwrap_or(Value::Null))
+        };
+        Ok(current())
     }
 
     fn rowid(&self) -> Option<i64> {
         Some(i64::try_from(self.pos?).ok()?.saturating_add(1))
     }
 
-    fn seek(&mut self, rowid: i64) -> bool {
-        let idx = usize::try_from(rowid.saturating_sub(1)).ok();
-        match idx.filter(|&idx| idx < self.rows.len()) {
-            Some(idx) => {
-                self.pos = Some(idx);
-                true
+    fn seek(&mut self, rowid: i64) -> CursorResult<bool> {
+        Ok({
+            let idx = usize::try_from(rowid.saturating_sub(1)).ok();
+            match idx.filter(|&idx| idx < self.rows.len()) {
+                Some(idx) => {
+                    self.pos = Some(idx);
+                    true
+                }
+                None => {
+                    self.pos = None;
+                    false
+                }
             }
-            None => {
-                self.pos = None;
-                false
-            }
-        }
+        })
     }
 
-    fn delete(&mut self) -> bool {
-        let Some(pos) = self.pos else {
-            return false;
-        };
-        if pos >= self.rows.len() {
-            return false;
-        }
-        self.rows.remove(pos);
-        self.pos = None;
-        true
+    fn delete(&mut self) -> CursorResult<bool> {
+        Ok({
+            let Some(pos) = self.pos else {
+                return Ok(false);
+            };
+            if pos >= self.rows.len() {
+                return Ok(false);
+            }
+            self.rows.remove(pos);
+            self.pos = None;
+            true
+        })
     }
 }
 
@@ -490,62 +524,73 @@ impl EphemeralTableCursor {
 }
 
 impl Cursor for EphemeralTableCursor {
-    fn rewind(&mut self) -> bool {
-        let first = self.rows.borrow().first().map(|(r, _)| (0, *r));
-        if first.is_none() {
-            self.current_rowid = None;
-        }
-        self.position_at(first)
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok({
+            let first = self.rows.borrow().first().map(|(r, _)| (0, *r));
+            if first.is_none() {
+                self.current_rowid = None;
+            }
+            self.position_at(first)
+        })
     }
 
-    fn next(&mut self) -> bool {
-        let after = self.current_rowid.unwrap_or(i64::MIN);
-        let found = {
-            let rows = self.rows.borrow();
-            // The cached index is the common case: the next row is the
-            // one right after it. Fall back to the partition search when
-            // the hint is stale (a sibling cursor inserted or deleted).
-            let pos = match self.current_index {
-                Some(idx) if self.at_row && rows.get(idx).is_some_and(|(r, _)| *r == after) => {
-                    idx.saturating_add(1)
-                }
-                _ => rows.partition_point(|(r, _)| *r <= after),
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok({
+            let after = self.current_rowid.unwrap_or(i64::MIN);
+            let found = {
+                let rows = self.rows.borrow();
+                // The cached index is the common case: the next row is the
+                // one right after it. Fall back to the partition search when
+                // the hint is stale (a sibling cursor inserted or deleted).
+                let pos = match self.current_index {
+                    Some(idx) if self.at_row && rows.get(idx).is_some_and(|(r, _)| *r == after) => {
+                        idx.saturating_add(1)
+                    }
+                    _ => rows.partition_point(|(r, _)| *r <= after),
+                };
+                rows.get(pos).map(|(r, _)| (pos, *r))
             };
-            rows.get(pos).map(|(r, _)| (pos, *r))
-        };
-        self.position_at(found)
+            self.position_at(found)
+        })
     }
 
-    fn last(&mut self) -> bool {
-        let last = {
+    fn last(&mut self) -> CursorResult<bool> {
+        Ok({
+            let last = {
+                let rows = self.rows.borrow();
+                rows.last().map(|(r, _)| (rows.len().saturating_sub(1), *r))
+            };
+            if last.is_none() {
+                self.current_rowid = None;
+            }
+            self.position_at(last)
+        })
+    }
+
+    fn prev(&mut self) -> CursorResult<bool> {
+        Ok({
+            let before = self.current_rowid.unwrap_or(i64::MAX);
+            let found = {
+                let rows = self.rows.borrow();
+                let pos = rows.partition_point(|(r, _)| *r < before);
+                pos.checked_sub(1)
+                    .and_then(|p| rows.get(p).map(|(r, _)| (p, *r)))
+            };
+            self.position_at(found)
+        })
+    }
+
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        let current = || -> Option<Value> {
+            let rowid = self.rowid()?;
+            // `at_row` says the rowid names a live row; if a sibling `OpenDup`
+            // cursor deleted it meanwhile, that is "no current row" too.
+            let idx = self.row_index(rowid)?;
             let rows = self.rows.borrow();
-            rows.last().map(|(r, _)| (rows.len().saturating_sub(1), *r))
+            let (_, values) = rows.get(idx)?;
+            Some(values.get(col).cloned().unwrap_or(Value::Null))
         };
-        if last.is_none() {
-            self.current_rowid = None;
-        }
-        self.position_at(last)
-    }
-
-    fn prev(&mut self) -> bool {
-        let before = self.current_rowid.unwrap_or(i64::MAX);
-        let found = {
-            let rows = self.rows.borrow();
-            let pos = rows.partition_point(|(r, _)| *r < before);
-            pos.checked_sub(1)
-                .and_then(|p| rows.get(p).map(|(r, _)| (p, *r)))
-        };
-        self.position_at(found)
-    }
-
-    fn column(&self, col: usize) -> Option<Value> {
-        let rowid = self.rowid()?;
-        // `at_row` says the rowid names a live row; if a sibling `OpenDup`
-        // cursor deleted it meanwhile, that is "no current row" too.
-        let idx = self.row_index(rowid)?;
-        let rows = self.rows.borrow();
-        let (_, values) = rows.get(idx)?;
-        Some(values.get(col).cloned().unwrap_or(Value::Null))
+        Ok(current())
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -555,57 +600,69 @@ impl Cursor for EphemeralTableCursor {
         self.current_rowid
     }
 
-    fn seek(&mut self, rowid: i64) -> bool {
-        let hit = self.row_index(rowid).map(|idx| (idx, rowid));
-        self.position_at(hit)
+    fn seek(&mut self, rowid: i64) -> CursorResult<bool> {
+        Ok({
+            let hit = self.row_index(rowid).map(|idx| (idx, rowid));
+            self.position_at(hit)
+        })
     }
 
-    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
-        let mut rows = self.rows.borrow_mut();
-        let pos = rows.partition_point(|(r, _)| *r < rowid);
-        if let Some(existing) = rows.get_mut(pos).filter(|(r, _)| *r == rowid) {
-            existing.1 = values;
-        } else {
-            if rows.len() >= MAX_EPHEMERAL_ROWS {
-                return false;
+    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> CursorResult<bool> {
+        Ok({
+            let mut rows = self.rows.borrow_mut();
+            let pos = rows.partition_point(|(r, _)| *r < rowid);
+            if let Some(existing) = rows.get_mut(pos).filter(|(r, _)| *r == rowid) {
+                existing.1 = values;
+            } else {
+                if rows.len() >= MAX_EPHEMERAL_ROWS {
+                    return Ok(false);
+                }
+                rows.insert(pos, (rowid, values));
             }
-            rows.insert(pos, (rowid, values));
-        }
-        true
+            true
+        })
     }
 
-    fn delete(&mut self) -> bool {
-        if !self.at_row {
-            return false;
-        }
-        let Some(idx) = self.current_rowid.and_then(|rowid| self.row_index(rowid)) else {
-            return false;
-        };
-        self.rows.borrow_mut().remove(idx);
-        self.at_row = false;
-        true
+    fn delete(&mut self) -> CursorResult<bool> {
+        Ok({
+            if !self.at_row {
+                return Ok(false);
+            }
+            let Some(idx) = self.current_rowid.and_then(|rowid| self.row_index(rowid)) else {
+                return Ok(false);
+            };
+            self.rows.borrow_mut().remove(idx);
+            self.at_row = false;
+            true
+        })
     }
 
-    fn next_rowid(&self) -> i64 {
-        self.rows
-            .borrow()
-            .last()
-            .map_or(0, |(rowid, _)| *rowid)
-            .saturating_add(1)
+    fn next_rowid(&self) -> CursorResult<i64> {
+        Ok({
+            self.rows
+                .borrow()
+                .last()
+                .map_or(0, |(rowid, _)| *rowid)
+                .saturating_add(1)
+        })
     }
 
-    fn idx_insert(&mut self, key: Vec<Value>) -> bool {
-        self.rows.borrow_mut().push((0, key));
-        true
+    fn idx_insert(&mut self, key: Vec<Value>) -> CursorResult<bool> {
+        Ok({
+            self.rows.borrow_mut().push((0, key));
+            true
+        })
     }
 
-    fn idx_delete(&mut self, key: &[Value]) -> bool {
-        let mut rows = self.rows.borrow_mut();
-        let Some(pos) = rows.iter().position(|(_, values)| values == key) else {
-            return false;
-        };
-        rows.remove(pos);
-        true
+    fn idx_delete(&mut self, key: &[Value]) -> CursorResult<bool> {
+        Ok({
+            let mut rows = self.rows.borrow_mut();
+            let Some(pos) = rows.iter().position(|(_, values)| values == key) else {
+                return Ok(false);
+            };
+            rows.remove(pos);
+            true
+        })
     }
 
     fn dup(&self) -> Option<Box<dyn Cursor>> {
@@ -816,20 +873,23 @@ impl EphemeralIndexCursor {
 impl Cursor for EphemeralIndexCursor {
     // Never scanned: sqlite-rs drives this kind only through
     // Found/IdxInsert/IdxDelete/Delete/Column/Sequence.
-    fn rewind(&mut self) -> bool {
-        false
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok(false)
     }
 
-    fn next(&mut self) -> bool {
-        false
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok(false)
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
-        let values = match self.last_key.as_ref()? {
-            EphKey::Int(i) => self.int_entries.get(i)?,
-            EphKey::Encoded(k) => self.entries.get(k)?,
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        let current = || -> Option<Value> {
+            let values = match self.last_key.as_ref()? {
+                EphKey::Int(i) => self.int_entries.get(i)?,
+                EphKey::Encoded(k) => self.entries.get(k)?,
+            };
+            Some(values.get(col).cloned().unwrap_or(Value::Null))
         };
-        Some(values.get(col).cloned().unwrap_or(Value::Null))
+        Ok(current())
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -887,33 +947,37 @@ impl Cursor for EphemeralIndexCursor {
         bloom_maybe_present(&self.bloom, hash)
     }
 
-    fn idx_delete(&mut self, key: &[Value]) -> bool {
-        if let Some(i) = fast_int_key(key) {
-            self.int_entries.remove(&i);
-            if self.last_key.as_ref() == Some(&EphKey::Int(i)) {
+    fn idx_delete(&mut self, key: &[Value]) -> CursorResult<bool> {
+        Ok({
+            if let Some(i) = fast_int_key(key) {
+                self.int_entries.remove(&i);
+                if self.last_key.as_ref() == Some(&EphKey::Int(i)) {
+                    self.last_key = None;
+                }
+                return Ok(true);
+            }
+            let encoded = encode_record(key, TextEncoding::Utf8);
+            self.entries.remove(&encoded);
+            if self.last_key.as_ref() == Some(&EphKey::Encoded(encoded)) {
                 self.last_key = None;
             }
-            return true;
-        }
-        let encoded = encode_record(key, TextEncoding::Utf8);
-        self.entries.remove(&encoded);
-        if self.last_key.as_ref() == Some(&EphKey::Encoded(encoded)) {
-            self.last_key = None;
-        }
-        true
+            true
+        })
     }
 
-    fn delete(&mut self) -> bool {
-        match self.last_key.take() {
-            Some(EphKey::Int(i)) => {
-                self.int_entries.remove(&i);
+    fn delete(&mut self) -> CursorResult<bool> {
+        Ok({
+            match self.last_key.take() {
+                Some(EphKey::Int(i)) => {
+                    self.int_entries.remove(&i);
+                }
+                Some(EphKey::Encoded(k)) => {
+                    self.entries.remove(&k);
+                }
+                None => {}
             }
-            Some(EphKey::Encoded(k)) => {
-                self.entries.remove(&k);
-            }
-            None => {}
-        }
-        true
+            true
+        })
     }
 
     // #525/#527: no `idx_compare` override — see the struct doc. `IdxLE`
@@ -1024,39 +1088,46 @@ impl Cursor for SorterCursor {
     /// Sorts the buffer (if not already sorted since the last insert)
     /// and positions at the first row -- `SorterSort`/`Sort`'s dispatch
     /// target.
-    fn rewind(&mut self) -> bool {
-        if !self.sorted {
-            let keys = self.keys.clone();
-            self.buffer
-                .sort_by(|(_, a), (_, b)| compare_keys(a, b, &keys));
-            self.sorted = true;
-        }
-        self.pos = if self.buffer.is_empty() {
-            None
-        } else {
-            Some(0)
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok({
+            if !self.sorted {
+                let keys = self.keys.clone();
+                self.buffer
+                    .sort_by(|(_, a), (_, b)| compare_keys(a, b, &keys));
+                self.sorted = true;
+            }
+            self.pos = if self.buffer.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+            self.pos.is_some()
+        })
+    }
+
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok({
+            let next = self.pos.map_or(0, |p| p.saturating_add(1));
+            if next < self.buffer.len() {
+                self.pos = Some(next);
+                true
+            } else {
+                self.pos = None;
+                false
+            }
+        })
+    }
+
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        let current = || -> Option<Value> {
+            let (blob, _) = self.buffer.get(self.pos?)?;
+            // `decode_column` walks the header once and decodes only `col`'s
+            // body, rather than `decode_record`'s full-row decode (db-core#485)
+            // -- a wide sorted projection would otherwise re-decode every
+            // column's body on each of its `Column` opcodes.
+            Some(decode_column(blob, col, TextEncoding::Utf8).unwrap_or(Value::Null))
         };
-        self.pos.is_some()
-    }
-
-    fn next(&mut self) -> bool {
-        let next = self.pos.map_or(0, |p| p.saturating_add(1));
-        if next < self.buffer.len() {
-            self.pos = Some(next);
-            true
-        } else {
-            self.pos = None;
-            false
-        }
-    }
-
-    fn column(&self, col: usize) -> Option<Value> {
-        let (blob, _) = self.buffer.get(self.pos?)?;
-        // `decode_column` walks the header once and decodes only `col`'s
-        // body, rather than `decode_record`'s full-row decode (db-core#485)
-        // -- a wide sorted projection would otherwise re-decode every
-        // column's body on each of its `Column` opcodes.
-        Some(decode_column(blob, col, TextEncoding::Utf8).unwrap_or(Value::Null))
+        Ok(current())
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -1237,47 +1308,54 @@ impl Cursor for HashAggCursor {
     /// Freezes the group set, orders groups by key (ascending, per
     /// column, matching the sort strategy's group-boundary order), and
     /// positions at the first -- `HashAggRewind`'s dispatch target.
-    fn rewind(&mut self) -> bool {
-        if !self.frozen {
-            let keys = &self.keys;
-            let mut order: Vec<(usize, &GroupSlot)> = self.groups.iter().enumerate().collect();
-            order.sort_by(|(_, ga), (_, gb)| {
-                for ((va, vb), key) in ga.key_values.iter().zip(&gb.key_values).zip(keys) {
-                    let ord = super::compare::compare(va, vb, key.collation);
-                    if ord != std::cmp::Ordering::Equal {
-                        return ord;
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok({
+            if !self.frozen {
+                let keys = &self.keys;
+                let mut order: Vec<(usize, &GroupSlot)> = self.groups.iter().enumerate().collect();
+                order.sort_by(|(_, ga), (_, gb)| {
+                    for ((va, vb), key) in ga.key_values.iter().zip(&gb.key_values).zip(keys) {
+                        let ord = super::compare::compare(va, vb, key.collation);
+                        if ord != std::cmp::Ordering::Equal {
+                            return ord;
+                        }
                     }
-                }
-                std::cmp::Ordering::Equal
-            });
-            self.order = order.into_iter().map(|(idx, _)| idx).collect();
-            self.frozen = true;
-        }
-        self.pos = if self.order.is_empty() { None } else { Some(0) };
-        self.pos.is_some()
+                    std::cmp::Ordering::Equal
+                });
+                self.order = order.into_iter().map(|(idx, _)| idx).collect();
+                self.frozen = true;
+            }
+            self.pos = if self.order.is_empty() { None } else { Some(0) };
+            self.pos.is_some()
+        })
     }
 
-    fn next(&mut self) -> bool {
-        let next = self.pos.map_or(0, |p| p.saturating_add(1));
-        if next < self.order.len() {
-            self.pos = Some(next);
-            true
-        } else {
-            self.pos = None;
-            false
-        }
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok({
+            let next = self.pos.map_or(0, |p| p.saturating_add(1));
+            if next < self.order.len() {
+                self.pos = Some(next);
+                true
+            } else {
+                self.pos = None;
+                false
+            }
+        })
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
-        let group = self.groups.get(*self.order.get(self.pos?)?)?;
-        // `hash_agg_find` decoded this row's blob, so `.ok()` is
-        // unreachable; a `col` past the row's width is NULL.
-        Some(
-            decode_record(&group.row, TextEncoding::Utf8)
-                .ok()
-                .and_then(|values| values.get(col).cloned())
-                .unwrap_or(Value::Null),
-        )
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        let current = || -> Option<Value> {
+            let group = self.groups.get(*self.order.get(self.pos?)?)?;
+            // `hash_agg_find` decoded this row's blob, so `.ok()` is
+            // unreachable; a `col` past the row's width is NULL.
+            Some(
+                decode_record(&group.row, TextEncoding::Utf8)
+                    .ok()
+                    .and_then(|values| values.get(col).cloned())
+                    .unwrap_or(Value::Null),
+            )
+        };
+        Ok(current())
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -1405,16 +1483,16 @@ impl PseudoCursor {
 }
 
 impl Cursor for PseudoCursor {
-    fn rewind(&mut self) -> bool {
-        true
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok(true)
     }
 
-    fn next(&mut self) -> bool {
-        false
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok(false)
     }
 
-    fn column(&self, col: usize) -> Option<Value> {
-        Some(self.values.get(col).cloned().unwrap_or(Value::Null))
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        Ok(Some(self.values.get(col).cloned().unwrap_or(Value::Null)))
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -1448,16 +1526,16 @@ impl Cursor for AutoIndexCursor {
     // An automatic index is only ever driven by `auto_index_*` (never
     // `Rewind`/`Next`, per its own opcodes' doc), so these have no real
     // work to do.
-    fn rewind(&mut self) -> bool {
-        false
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok(false)
     }
 
-    fn next(&mut self) -> bool {
-        false
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok(false)
     }
 
-    fn column(&self, _col: usize) -> Option<Value> {
-        Some(Value::Null)
+    fn column(&self, _col: usize) -> CursorResult<Option<Value>> {
+        Ok(Some(Value::Null))
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -1534,41 +1612,52 @@ impl InMemoryIndexCursor {
 }
 
 impl Cursor for InMemoryIndexCursor {
-    fn rewind(&mut self) -> bool {
-        self.pos = if self.entries.is_empty() {
-            None
-        } else {
-            Some(0)
+    fn rewind(&mut self) -> CursorResult<bool> {
+        Ok({
+            self.pos = if self.entries.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+            self.pos.is_some()
+        })
+    }
+
+    fn next(&mut self) -> CursorResult<bool> {
+        Ok({
+            let next = self.pos.map_or(0, |p| p.saturating_add(1));
+            if next < self.entries.len() {
+                self.pos = Some(next);
+                true
+            } else {
+                self.pos = None;
+                false
+            }
+        })
+    }
+
+    fn last(&mut self) -> CursorResult<bool> {
+        Ok({
+            self.pos = self.entries.len().checked_sub(1);
+            self.pos.is_some()
+        })
+    }
+
+    fn prev(&mut self) -> CursorResult<bool> {
+        Ok({
+            // `checked_sub` folds the "already at the first entry" case into
+            // the "not positioned" one: both leave the cursor off the table.
+            self.pos = self.pos.and_then(|p| p.checked_sub(1));
+            self.pos.is_some()
+        })
+    }
+
+    fn column(&self, col: usize) -> CursorResult<Option<Value>> {
+        let current = || -> Option<Value> {
+            let (key, _) = self.entries.get(self.pos?)?;
+            Some(key.get(col).cloned().unwrap_or(Value::Null))
         };
-        self.pos.is_some()
-    }
-
-    fn next(&mut self) -> bool {
-        let next = self.pos.map_or(0, |p| p.saturating_add(1));
-        if next < self.entries.len() {
-            self.pos = Some(next);
-            true
-        } else {
-            self.pos = None;
-            false
-        }
-    }
-
-    fn last(&mut self) -> bool {
-        self.pos = self.entries.len().checked_sub(1);
-        self.pos.is_some()
-    }
-
-    fn prev(&mut self) -> bool {
-        // `checked_sub` folds the "already at the first entry" case into
-        // the "not positioned" one: both leave the cursor off the table.
-        self.pos = self.pos.and_then(|p| p.checked_sub(1));
-        self.pos.is_some()
-    }
-
-    fn column(&self, col: usize) -> Option<Value> {
-        let (key, _) = self.entries.get(self.pos?)?;
-        Some(key.get(col).cloned().unwrap_or(Value::Null))
+        Ok(current())
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -1581,44 +1670,52 @@ impl Cursor for InMemoryIndexCursor {
     /// `entries` sorted -- this fixture's only way to build index data
     /// purely through the trait, matching `cursor_conformance`'s
     /// `build` helper.
-    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> bool {
-        let Some(key) = self.key_of(&values) else {
-            return false;
-        };
-        let pos = self.entries.partition_point(|(k, _)| {
-            compare_keys(k, &key, &self.key_cols) == std::cmp::Ordering::Less
-        });
-        self.entries.insert(pos, (key, rowid));
-        true
+    fn insert(&mut self, rowid: i64, values: Vec<Value>) -> CursorResult<bool> {
+        Ok({
+            let Some(key) = self.key_of(&values) else {
+                return Ok(false);
+            };
+            let pos = self.entries.partition_point(|(k, _)| {
+                compare_keys(k, &key, &self.key_cols) == std::cmp::Ordering::Less
+            });
+            self.entries.insert(pos, (key, rowid));
+            true
+        })
     }
 
-    fn seek_index_eq(&mut self, key: &[Value], _collations: &[Collation]) -> bool {
-        let pos = self.entries.partition_point(|(k, _)| {
-            compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Less
-        });
-        match self.entries.get(pos) {
-            Some((k, _)) if compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Equal => {
+    fn seek_index_eq(&mut self, key: &[Value], _collations: &[Collation]) -> CursorResult<bool> {
+        Ok({
+            let pos = self.entries.partition_point(|(k, _)| {
+                compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Less
+            });
+            match self.entries.get(pos) {
+                Some((k, _))
+                    if compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Equal =>
+                {
+                    self.pos = Some(pos);
+                    true
+                }
+                _ => {
+                    self.pos = None;
+                    false
+                }
+            }
+        })
+    }
+
+    fn seek_index_ge(&mut self, key: &[Value], _collations: &[Collation]) -> CursorResult<bool> {
+        Ok({
+            let pos = self.entries.partition_point(|(k, _)| {
+                compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Less
+            });
+            if pos < self.entries.len() {
                 self.pos = Some(pos);
                 true
-            }
-            _ => {
+            } else {
                 self.pos = None;
                 false
             }
-        }
-    }
-
-    fn seek_index_ge(&mut self, key: &[Value], _collations: &[Collation]) -> bool {
-        let pos = self.entries.partition_point(|(k, _)| {
-            compare_keys(k, key, &self.key_cols) == std::cmp::Ordering::Less
-        });
-        if pos < self.entries.len() {
-            self.pos = Some(pos);
-            true
-        } else {
-            self.pos = None;
-            false
-        }
+        })
     }
 
     fn idx_compare(&self, key: &[Value], _collations: &[Collation]) -> Option<std::cmp::Ordering> {
@@ -1640,7 +1737,7 @@ mod tests {
     #[test]
     fn empty_cursor_rewind_reports_no_row() {
         let mut c = InMemoryCursor::new(vec![]);
-        assert!(!c.rewind());
+        assert!(!c.rewind().unwrap());
     }
 
     #[test]
@@ -1650,27 +1747,27 @@ mod tests {
             vec![Value::Integer(2)],
             vec![Value::Integer(3)],
         ]);
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(1));
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(1));
         assert_eq!(c.rowid().unwrap(), 1);
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(3));
-        assert!(!c.next());
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(2));
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(3));
+        assert!(!c.next().unwrap());
     }
 
     #[test]
     fn missing_column_reads_as_null() {
         let mut c = InMemoryCursor::new(vec![vec![Value::Integer(1)]]);
-        c.rewind();
-        assert_eq!(c.column(5).unwrap(), Value::Null);
+        c.rewind().unwrap();
+        assert_eq!(c.column(5).unwrap().unwrap(), Value::Null);
     }
 
     #[test]
     fn in_memory_cursor_does_not_support_insert() {
         let mut c = InMemoryCursor::new(vec![]);
-        assert!(!c.insert(1, vec![Value::Integer(1)]));
+        assert!(!c.insert(1, vec![Value::Integer(1)]).unwrap());
     }
 
     #[test]
@@ -1680,34 +1777,34 @@ mod tests {
             vec![Value::Integer(2)],
             vec![Value::Integer(3)],
         ]);
-        assert!(c.last());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(3));
-        assert!(c.prev());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
-        assert!(c.prev());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(1));
-        assert!(!c.prev());
+        assert!(c.last().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(3));
+        assert!(c.prev().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(2));
+        assert!(c.prev().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(1));
+        assert!(!c.prev().unwrap());
     }
 
     #[test]
     fn empty_cursor_last_reports_no_row() {
         let mut c = InMemoryCursor::new(vec![]);
-        assert!(!c.last());
+        assert!(!c.last().unwrap());
     }
 
     #[test]
     fn delete_removes_current_row_and_clears_position() {
         let mut c = InMemoryCursor::new(vec![vec![Value::Integer(1)], vec![Value::Integer(2)]]);
-        c.rewind();
-        assert!(c.delete());
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
+        c.rewind().unwrap();
+        assert!(c.delete().unwrap());
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(2));
     }
 
     #[test]
     fn delete_with_no_current_row_returns_false() {
         let mut c = InMemoryCursor::new(vec![vec![Value::Integer(1)]]);
-        assert!(!c.delete());
+        assert!(!c.delete().unwrap());
     }
 
     #[test]
@@ -1717,35 +1814,35 @@ mod tests {
             vec![Value::Integer(20)],
             vec![Value::Integer(30)],
         ]);
-        assert!(c.seek(2));
-        assert_eq!(c.column(0).unwrap(), Value::Integer(20));
+        assert!(c.seek(2).unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(20));
     }
 
     #[test]
     fn seek_misses_out_of_range_rowid() {
         let mut c = InMemoryCursor::new(vec![vec![Value::Integer(10)]]);
-        assert!(!c.seek(2));
-        assert!(!c.seek(0));
+        assert!(!c.seek(2).unwrap());
+        assert!(!c.seek(0).unwrap());
     }
 
     #[test]
     fn ephemeral_table_cursor_starts_empty() {
         let mut c = EphemeralTableCursor::new();
-        assert!(!c.rewind());
+        assert!(!c.rewind().unwrap());
     }
 
     #[test]
     fn ephemeral_table_cursor_scans_inserted_rows_with_explicit_rowids() {
         let mut c = EphemeralTableCursor::new();
-        assert!(c.insert(10, vec![Value::Integer(1)]));
-        assert!(c.insert(20, vec![Value::Integer(2)]));
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(1));
+        assert!(c.insert(10, vec![Value::Integer(1)]).unwrap());
+        assert!(c.insert(20, vec![Value::Integer(2)]).unwrap());
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(1));
         assert_eq!(c.rowid().unwrap(), 10);
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(2));
         assert_eq!(c.rowid().unwrap(), 20);
-        assert!(!c.next());
+        assert!(!c.next().unwrap());
     }
 
     fn ascending_key(index: usize) -> SortKeyColumn {
@@ -1765,13 +1862,13 @@ mod tests {
                 super::super::record::encode_record(&[Value::Integer(v)], TextEncoding::Utf8);
             assert!(c.sorter_insert(blob.into()));
         }
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(10));
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(20));
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(30));
-        assert!(!c.next());
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(10));
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(20));
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(30));
+        assert!(!c.next().unwrap());
     }
 
     #[test]
@@ -1787,19 +1884,19 @@ mod tests {
             let blob = super::super::record::encode_record(&[v], TextEncoding::Utf8);
             c.sorter_insert(blob.into());
         }
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Null);
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(5));
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(-7));
-        assert!(!c.next());
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Null);
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(5));
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(-7));
+        assert!(!c.next().unwrap());
     }
 
     #[test]
     fn empty_sorter_rewind_reports_no_row() {
         let mut c = SorterCursor::new(vec![ascending_key(0)], None);
-        assert!(!c.rewind());
+        assert!(!c.rewind().unwrap());
         assert!(c.current_blob().is_none());
     }
 
@@ -1811,7 +1908,7 @@ mod tests {
             TextEncoding::Utf8,
         );
         c.sorter_insert(blob.clone().into());
-        c.rewind();
+        c.rewind().unwrap();
         assert_eq!(c.current_blob(), Some(Value::Blob(blob.into())));
     }
 
@@ -1825,22 +1922,22 @@ mod tests {
             );
             c.sorter_insert(blob.into());
         }
-        assert!(c.rewind());
+        assert!(c.rewind().unwrap());
         assert_eq!(
-            (c.column(0).unwrap(), c.column(1).unwrap()),
+            (c.column(0).unwrap().unwrap(), c.column(1).unwrap().unwrap()),
             (Value::Integer(0), Value::Integer(5))
         );
-        assert!(c.next());
+        assert!(c.next().unwrap());
         assert_eq!(
-            (c.column(0).unwrap(), c.column(1).unwrap()),
+            (c.column(0).unwrap().unwrap(), c.column(1).unwrap().unwrap()),
             (Value::Integer(1), Value::Integer(10))
         );
-        assert!(c.next());
+        assert!(c.next().unwrap());
         assert_eq!(
-            (c.column(0).unwrap(), c.column(1).unwrap()),
+            (c.column(0).unwrap().unwrap(), c.column(1).unwrap().unwrap()),
             (Value::Integer(1), Value::Integer(20))
         );
-        assert!(!c.next());
+        assert!(!c.next().unwrap());
     }
 
     #[test]
@@ -1851,11 +1948,11 @@ mod tests {
                 super::super::record::encode_record(&[Value::Integer(v)], TextEncoding::Utf8);
             c.sorter_insert(blob.into());
         }
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(1));
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
-        assert!(!c.next());
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(1));
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(2));
+        assert!(!c.next().unwrap());
     }
 
     #[test]
@@ -1863,46 +1960,46 @@ mod tests {
         let mut c = SorterCursor::new(vec![ascending_key(0)], Some(0));
         let blob = super::super::record::encode_record(&[Value::Integer(1)], TextEncoding::Utf8);
         c.sorter_insert(blob.into());
-        assert!(!c.rewind());
+        assert!(!c.rewind().unwrap());
     }
 
     #[test]
     fn ephemeral_table_cursor_last_then_prev_walks_in_reverse() {
         let mut c = EphemeralTableCursor::new();
-        c.insert(10, vec![Value::Integer(1)]);
-        c.insert(20, vec![Value::Integer(2)]);
-        assert!(c.last());
+        c.insert(10, vec![Value::Integer(1)]).unwrap();
+        c.insert(20, vec![Value::Integer(2)]).unwrap();
+        assert!(c.last().unwrap());
         assert_eq!(c.rowid().unwrap(), 20);
-        assert!(c.prev());
+        assert!(c.prev().unwrap());
         assert_eq!(c.rowid().unwrap(), 10);
-        assert!(!c.prev());
+        assert!(!c.prev().unwrap());
     }
 
     #[test]
     fn ephemeral_table_cursor_delete_removes_current_row() {
         let mut c = EphemeralTableCursor::new();
-        c.insert(10, vec![Value::Integer(1)]);
-        c.insert(20, vec![Value::Integer(2)]);
-        c.rewind();
-        assert!(c.delete());
-        assert!(c.rewind());
+        c.insert(10, vec![Value::Integer(1)]).unwrap();
+        c.insert(20, vec![Value::Integer(2)]).unwrap();
+        c.rewind().unwrap();
+        assert!(c.delete().unwrap());
+        assert!(c.rewind().unwrap());
         assert_eq!(c.rowid().unwrap(), 20);
     }
 
     #[test]
     fn ephemeral_table_cursor_seek_positions_on_exact_rowid() {
         let mut c = EphemeralTableCursor::new();
-        c.insert(10, vec![Value::Integer(1)]);
-        c.insert(20, vec![Value::Integer(2)]);
-        assert!(c.seek(20));
-        assert_eq!(c.column(0).unwrap(), Value::Integer(2));
+        c.insert(10, vec![Value::Integer(1)]).unwrap();
+        c.insert(20, vec![Value::Integer(2)]).unwrap();
+        assert!(c.seek(20).unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(2));
     }
 
     #[test]
     fn ephemeral_table_cursor_seek_misses_absent_rowid() {
         let mut c = EphemeralTableCursor::new();
-        c.insert(10, vec![Value::Integer(1)]);
-        assert!(!c.seek(99));
+        c.insert(10, vec![Value::Integer(1)]).unwrap();
+        assert!(!c.seek(99).unwrap());
     }
 
     fn group_key(index: usize) -> GroupKeyColumn {
@@ -1923,13 +2020,22 @@ mod tests {
         for group in ["b", "a", "b", "c"] {
             assert!(c.hash_agg_find(make_row(&[Value::Text(group.to_string().into())])));
         }
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Text("a".to_string().into()));
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Text("b".to_string().into()));
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Text("c".to_string().into()));
-        assert!(!c.next());
+        assert!(c.rewind().unwrap());
+        assert_eq!(
+            c.column(0).unwrap().unwrap(),
+            Value::Text("a".to_string().into())
+        );
+        assert!(c.next().unwrap());
+        assert_eq!(
+            c.column(0).unwrap().unwrap(),
+            Value::Text("b".to_string().into())
+        );
+        assert!(c.next().unwrap());
+        assert_eq!(
+            c.column(0).unwrap().unwrap(),
+            Value::Text("c".to_string().into())
+        );
+        assert!(!c.next().unwrap());
     }
 
     #[test]
@@ -1937,8 +2043,8 @@ mod tests {
         let mut c = HashAggCursor::new(vec![group_key(0)]);
         assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(100)])));
         assert!(c.hash_agg_find(make_row(&[Value::Integer(1), Value::Integer(200)])));
-        assert!(c.rewind());
-        assert_eq!(c.column(1).unwrap(), Value::Integer(100));
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(1).unwrap().unwrap(), Value::Integer(100));
     }
 
     #[test]
@@ -1968,25 +2074,31 @@ mod tests {
         )
         .unwrap();
 
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Text("x".to_string().into()));
+        assert!(c.rewind().unwrap());
+        assert_eq!(
+            c.column(0).unwrap().unwrap(),
+            Value::Text("x".to_string().into())
+        );
         assert_eq!(
             c.hash_agg_group_accumulators(),
             Some([Some(AggState::Count(2))].as_slice())
         );
-        assert!(c.next());
-        assert_eq!(c.column(0).unwrap(), Value::Text("y".to_string().into()));
+        assert!(c.next().unwrap());
+        assert_eq!(
+            c.column(0).unwrap().unwrap(),
+            Value::Text("y".to_string().into())
+        );
         assert_eq!(
             c.hash_agg_group_accumulators(),
             Some([Some(AggState::Count(1))].as_slice())
         );
-        assert!(!c.next());
+        assert!(!c.next().unwrap());
     }
 
     #[test]
     fn hash_agg_cursor_empty_rewind_reports_no_row() {
         let mut c = HashAggCursor::new(vec![group_key(0)]);
-        assert!(!c.rewind());
+        assert!(!c.rewind().unwrap());
         assert!(c.current_blob().is_none());
     }
 
@@ -2002,28 +2114,28 @@ mod tests {
     #[test]
     fn in_memory_index_cursor_seek_eq_finds_an_exact_key() {
         let mut c = InMemoryIndexCursor::new(vec![asc_key(0)]);
-        c.insert(1, vec![Value::Integer(10)]);
-        c.insert(2, vec![Value::Integer(20)]);
-        assert!(c.seek_index_eq(&[Value::Integer(20)], &[]));
+        c.insert(1, vec![Value::Integer(10)]).unwrap();
+        c.insert(2, vec![Value::Integer(20)]).unwrap();
+        assert!(c.seek_index_eq(&[Value::Integer(20)], &[]).unwrap());
         assert_eq!(c.idx_rowid(), Some(2));
-        assert!(!c.seek_index_eq(&[Value::Integer(99)], &[]));
+        assert!(!c.seek_index_eq(&[Value::Integer(99)], &[]).unwrap());
     }
 
     #[test]
     fn in_memory_index_cursor_seek_ge_positions_at_the_first_not_less_key() {
         let mut c = InMemoryIndexCursor::new(vec![asc_key(0)]);
-        c.insert(1, vec![Value::Integer(10)]);
-        c.insert(2, vec![Value::Integer(30)]);
-        assert!(c.seek_index_ge(&[Value::Integer(20)], &[]));
-        assert_eq!(c.column(0).unwrap(), Value::Integer(30));
-        assert!(!c.seek_index_ge(&[Value::Integer(999)], &[]));
+        c.insert(1, vec![Value::Integer(10)]).unwrap();
+        c.insert(2, vec![Value::Integer(30)]).unwrap();
+        assert!(c.seek_index_ge(&[Value::Integer(20)], &[]).unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(30));
+        assert!(!c.seek_index_ge(&[Value::Integer(999)], &[]).unwrap());
     }
 
     #[test]
     fn in_memory_index_cursor_idx_compare_reports_current_vs_given_key() {
         let mut c = InMemoryIndexCursor::new(vec![asc_key(0)]);
-        c.insert(1, vec![Value::Integer(10)]);
-        c.rewind();
+        c.insert(1, vec![Value::Integer(10)]).unwrap();
+        c.rewind().unwrap();
         assert_eq!(
             c.idx_compare(&[Value::Integer(5)], &[]),
             Some(std::cmp::Ordering::Greater)
@@ -2082,12 +2194,15 @@ mod tests {
             TextEncoding::Utf8,
         );
         let mut c = PseudoCursor::new(&blob).unwrap();
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(7));
-        assert_eq!(c.column(1).unwrap(), Value::Text("x".to_string().into()));
-        assert!(!c.next());
-        assert!(c.rewind());
-        assert_eq!(c.column(0).unwrap(), Value::Integer(7));
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(7));
+        assert_eq!(
+            c.column(1).unwrap().unwrap(),
+            Value::Text("x".to_string().into())
+        );
+        assert!(!c.next().unwrap());
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap().unwrap(), Value::Integer(7));
     }
 
     #[test]
@@ -2103,11 +2218,11 @@ mod tests {
             crate::value::Collation::Binary,
         )
         .unwrap();
-        assert!(c.rewind());
-        assert_eq!(c.column(1).unwrap(), Value::Integer(1));
-        assert!(c.next());
-        assert_eq!(c.column(1).unwrap(), Value::Integer(2));
-        assert!(!c.next());
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(1).unwrap().unwrap(), Value::Integer(1));
+        assert!(c.next().unwrap());
+        assert_eq!(c.column(1).unwrap().unwrap(), Value::Integer(2));
+        assert!(!c.next().unwrap());
     }
 
     /// The hash index must agree with `compare`: values `compare` calls
@@ -2390,8 +2505,10 @@ mod tests {
         // Key on column 1; a one-column row cannot be indexed -- before,
         // it was indexed under NULL.
         let mut c = InMemoryIndexCursor::new(vec![ascending_key(1)]);
-        assert!(!c.insert(1, vec![Value::Integer(1)]));
-        assert!(c.insert(2, vec![Value::Integer(1), Value::Integer(2)]));
+        assert!(!c.insert(1, vec![Value::Integer(1)]).unwrap());
+        assert!(c
+            .insert(2, vec![Value::Integer(1), Value::Integer(2)])
+            .unwrap());
     }
 
     // #254 tagged MC/DC vectors (obligation `vm_row_cursor_next_664e4c8e`): `next()`'s
@@ -2400,7 +2517,7 @@ mod tests {
     fn ephemeral_1_2_3() -> EphemeralTableCursor {
         let mut c = EphemeralTableCursor::new();
         for r in 1..=3 {
-            c.insert(r, vec![Value::Integer(r * 10)]);
+            c.insert(r, vec![Value::Integer(r * 10)]).unwrap();
         }
         c
     }
@@ -2409,20 +2526,20 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__vm_row_cursor_next_664e4c8e__v1_valid_hint_steps_to_the_following_row() {
         let mut c = ephemeral_1_2_3();
-        assert!(c.rewind());
-        assert!(c.next());
+        assert!(c.rewind().unwrap());
+        assert!(c.next().unwrap());
         assert_eq!(c.rowid(), Some(2));
-        assert_eq!(c.column(0), Some(Value::Integer(20)));
+        assert_eq!(c.column(0).unwrap(), Some(Value::Integer(20)));
     }
 
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__vm_row_cursor_next_664e4c8e__v2_after_a_delete_next_resumes_past_the_deleted_rowid() {
         let mut c = ephemeral_1_2_3();
-        assert!(c.rewind());
-        assert!(c.next());
-        assert!(c.delete()); // rowid 2 gone; at_row is now false
-        assert!(c.next());
+        assert!(c.rewind().unwrap());
+        assert!(c.next().unwrap());
+        assert!(c.delete().unwrap()); // rowid 2 gone; at_row is now false
+        assert!(c.next().unwrap());
         assert_eq!(c.rowid(), Some(3));
     }
 
@@ -2431,12 +2548,12 @@ mod tests {
     fn mcdc__vm_row_cursor_next_664e4c8e__v3_stale_hint_after_a_sibling_insert_falls_back_to_search(
     ) {
         let mut c = ephemeral_1_2_3();
-        assert!(c.rewind());
-        assert!(c.next()); // at rowid 2, index 1
+        assert!(c.rewind().unwrap());
+        assert!(c.next().unwrap()); // at rowid 2, index 1
         let mut sibling = c.dup().unwrap();
-        assert!(sibling.insert(0, vec![Value::Integer(0)])); // shifts every index by one
-        assert!(c.next());
+        assert!(sibling.insert(0, vec![Value::Integer(0)]).unwrap()); // shifts every index by one
+        assert!(c.next().unwrap());
         assert_eq!(c.rowid(), Some(3));
-        assert_eq!(c.column(0), Some(Value::Integer(30)));
+        assert_eq!(c.column(0).unwrap(), Some(Value::Integer(30)));
     }
 }

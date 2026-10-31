@@ -1,10 +1,8 @@
 //! Flexible timestamp parsing shared by JSONL and logfmt (#319/#320):
 //! ISO 8601 with fractional seconds and zone, or a bare epoch number
-//! disambiguated by digit count (s/ms/us/ns). Same simplified epoch/leap-
-//! year approximation as `ClfParser`/`SyslogParser` (no leap-second
-//! handling, years before 1970 unsupported).
-
-const DAYS_BEFORE_MONTH: [u32; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+//! disambiguated by digit count (s/ms/us/ns). [`epoch_nanos`] is also the
+//! date arithmetic behind `ClfParser`/`SyslogParser` (#882): Gregorian
+//! leap years, no leap-second handling, years before 1970 unsupported.
 
 /// Compose `Y-M-D H:M:S` (+ optional nanosecond fraction, UTC) into
 /// nanoseconds since Unix epoch.
@@ -23,21 +21,11 @@ pub fn epoch_nanos(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32, nanos: u32)
         return None;
     }
 
-    let month_idx = m.saturating_sub(1) as usize;
-    let days_before = *DAYS_BEFORE_MONTH.get(month_idx)?;
+    if d > days_in_month(y, m) {
+        return None;
+    }
 
-    let years_since_epoch = y.saturating_sub(1970);
-    let leap_years = years_since_epoch / 4;
-    #[allow(clippy::cast_sign_loss)]
-    let days_from_years = (years_since_epoch as u32)
-        .saturating_mul(365)
-        .saturating_add(leap_years as u32);
-
-    let total_days = days_from_years
-        .saturating_add(days_before)
-        .saturating_add(d.saturating_sub(1));
-
-    let total_seconds = i64::from(total_days)
+    let total_seconds = days_from_civil(y, m, d)?
         .saturating_mul(86400)
         .saturating_add(i64::from(h).saturating_mul(3600))
         .saturating_add(i64::from(min).saturating_mul(60))
@@ -48,6 +36,46 @@ pub fn epoch_nanos(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32, nanos: u32)
             .saturating_mul(1_000_000_000)
             .saturating_add(i64::from(nanos)),
     )
+}
+
+/// Whether `y` is a Gregorian leap year.
+fn is_leap_year(y: i32) -> bool {
+    y.rem_euclid(4) == 0 && (y.rem_euclid(100) != 0 || y.rem_euclid(400) == 0)
+}
+
+/// Days in month `m` (1..=12) of year `y`.
+fn days_in_month(y: i32, m: u32) -> u32 {
+    match m {
+        2 if is_leap_year(y) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// Days from 1970-01-01 to the Gregorian date `y-m-d` (`m`/`d` already
+/// validated): Howard Hinnant's `days_from_civil`, which counts from a
+/// March-based year so Feb 29 is the last day of its year. The `/ 4`
+/// approximation it replaces (#882) put most dates a day early.
+fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i64> {
+    let y = i64::from(y).checked_sub(i64::from(m <= 2))?;
+    let era = y.checked_div_euclid(400)?;
+    let year_of_era = y.checked_rem_euclid(400)?;
+    let march_month = i64::from(m.checked_add(9)?.checked_rem(12)?);
+    let day_of_year = march_month
+        .checked_mul(153)?
+        .checked_add(2)?
+        .checked_div(5)?
+        .checked_add(i64::from(d))?
+        .checked_sub(1)?;
+    let day_of_era = year_of_era
+        .checked_mul(365)?
+        .checked_add(year_of_era.checked_div(4)?)?
+        .checked_sub(year_of_era.checked_div(100)?)?
+        .checked_add(day_of_year)?;
+    era.checked_mul(146_097)?
+        .checked_add(day_of_era)?
+        .checked_sub(719_468)
 }
 
 /// Parse a `+HHMM`/`-HHMM`/`Z` UTC offset suffix and apply it to a UTC
@@ -138,14 +166,19 @@ pub fn parse_epoch(s: &str) -> Option<i64> {
         return None;
     }
     let value: i64 = s.parse().ok()?;
-    let scale: i64 = match digits.len() {
-        10 => 1_000_000_000,
-        13 => 1_000_000,
-        16 => 1_000,
-        19 => 1,
-        _ => return None,
-    };
-    value.checked_mul(scale)
+    value.checked_mul(epoch_unit_nanos(digits.len())?)
+}
+
+/// Nanoseconds per unit of an epoch number with `digits` integer digits:
+/// 10 is seconds, 13 milliseconds, 16 microseconds, 19 nanoseconds.
+pub(crate) fn epoch_unit_nanos(digits: usize) -> Option<i64> {
+    match digits {
+        10 => Some(1_000_000_000),
+        13 => Some(1_000_000),
+        16 => Some(1_000),
+        19 => Some(1),
+        _ => None,
+    }
 }
 
 /// Parse a flexible timestamp: ISO 8601 first, then a bare epoch number.
@@ -323,5 +356,56 @@ mod tests {
         assert!(parse_flexible("2026-09-10T08:00:05Z").is_some());
         assert_eq!(parse_flexible("1700000000"), parse_epoch("1700000000"));
         assert_eq!(parse_flexible("garbage"), None);
+    }
+
+    /// #882: every valid date from 1970-01-01 to 2200-12-31 is exactly one
+    /// day after the one before (the `/ 4` leap approximation skipped or
+    /// repeated days), and every invalid day of a month is rejected.
+    #[test]
+    fn every_date_from_1970_to_2200_is_one_day_after_the_last() {
+        const DAY: i64 = 86_400 * 1_000_000_000;
+        let mut expected = 0_i64;
+        for y in 1970..=2200 {
+            for m in 1..=12 {
+                for d in 1..=31 {
+                    let got = epoch_nanos(y, m, d, 0, 0, 0, 0);
+                    if d > days_in_month(y, m) {
+                        assert_eq!(got, None, "{y}-{m}-{d} is not a date");
+                        continue;
+                    }
+                    assert_eq!(got, Some(expected), "{y}-{m}-{d}");
+                    expected += DAY;
+                }
+            }
+        }
+        // (date(2201, 1, 1) - date(1970, 1, 1)).days in Python.
+        assert_eq!(expected / DAY, 84_371);
+    }
+
+    /// #882: dates the old approximation put a day early, and leap-day
+    /// edge cases, against Python's `calendar.timegm`.
+    #[test]
+    fn dates_match_the_gregorian_calendar() {
+        for (iso, epoch_s) in [
+            ("1970-01-01T00:00:00Z", 0),
+            ("1972-02-29T00:00:00Z", 68_169_600),
+            ("1973-06-01T00:00:00Z", 107_740_800),
+            ("2000-02-29T00:00:00Z", 951_782_400),
+            ("2024-02-29T00:00:00Z", 1_709_164_800),
+            ("2024-03-01T00:00:00Z", 1_709_251_200),
+            ("2025-01-01T00:00:00Z", 1_735_689_600),
+            ("2026-10-30T00:00:00Z", 1_793_318_400),
+            ("2100-03-01T00:00:00Z", 4_107_542_400),
+        ] {
+            assert_eq!(parse_flexible(iso), Some(epoch_s * 1_000_000_000), "{iso}");
+        }
+        for not_a_date in [
+            "2023-02-29T00:00:00Z",
+            "2023-02-31T00:00:00Z",
+            "2023-04-31T00:00:00Z",
+            "2100-02-29T00:00:00Z",
+        ] {
+            assert_eq!(parse_flexible(not_a_date), None, "{not_a_date}");
+        }
     }
 }

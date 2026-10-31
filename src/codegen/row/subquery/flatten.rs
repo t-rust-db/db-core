@@ -209,9 +209,29 @@ fn rewrite_alias_in_select(
                         return false;
                     }
                 }
-                ResultColumn::Expr { expr, .. } => {
+                ResultColumn::Expr {
+                    expr,
+                    alias: column_alias,
+                } => {
+                    let named = match &expr.kind {
+                        ExprKind::Column { name, .. } => Some(name.clone()),
+                        _ => None,
+                    };
                     if !rewrite_expr(expr, alias, column_map, require_qualified) {
                         return false;
+                    }
+                    // A bare column is its result column's name. Rewriting
+                    // `v` to the subquery's `a` (from `a AS v`) renamed this
+                    // output column to `a`, so an enclosing `s.v` no longer
+                    // resolved (#887): keep the name it had.
+                    if let (None, Some(name)) = (&column_alias, named) {
+                        let renamed = !matches!(
+                            &expr.kind,
+                            ExprKind::Column { name: now, .. } if now.eq_ignore_ascii_case(&name)
+                        );
+                        if renamed {
+                            *column_alias = Some(name);
+                        }
                     }
                 }
             }

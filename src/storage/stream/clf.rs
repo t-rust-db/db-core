@@ -254,8 +254,7 @@ impl ClfParser {
     }
 
     /// Convert an absolute date/time to nanoseconds since Unix epoch
-    /// (simplified: no leap-second handling; leap years approximated as
-    /// one every four years, same as `SyslogParser::to_epoch_nanos`).
+    /// ([`super::timestamp::epoch_nanos`]'s calendar, #882).
     fn epoch_nanos(
         year: i32,
         month: u32,
@@ -264,42 +263,7 @@ impl ClfParser {
         minute: u32,
         second: u32,
     ) -> Option<i64> {
-        const DAYS_BEFORE_MONTH: [u32; 12] =
-            [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-
-        if year < 1970
-            || month == 0
-            || month > 12
-            || day == 0
-            || day > 31
-            || hour > 23
-            || minute > 59
-            || second > 59
-        {
-            return None;
-        }
-
-        let month_idx = month.saturating_sub(1) as usize;
-        let days_before = DAYS_BEFORE_MONTH.get(month_idx).copied()?;
-
-        let years_since_epoch = year.saturating_sub(1970);
-        let leap_years = years_since_epoch / 4;
-        #[allow(clippy::cast_sign_loss)]
-        let days_from_years = (years_since_epoch as u32)
-            .saturating_mul(365)
-            .saturating_add(leap_years as u32);
-
-        let total_days = days_from_years
-            .saturating_add(days_before)
-            .saturating_add(day.saturating_sub(1));
-
-        let total_seconds = i64::from(total_days)
-            .saturating_mul(86400)
-            .saturating_add(i64::from(hour).saturating_mul(3600))
-            .saturating_add(i64::from(minute).saturating_mul(60))
-            .saturating_add(i64::from(second));
-
-        Some(total_seconds.saturating_mul(1_000_000_000))
+        super::timestamp::epoch_nanos(year, month, day, hour, minute, second, 0)
     }
 }
 
@@ -395,6 +359,26 @@ mod tests {
         let (batch, consumed) = parser.parse_batch(source, input, 10);
         assert_eq!(consumed, input.len());
         batch
+    }
+
+    /// #882: the CLF date used a `/ 4` leap-year approximation that put
+    /// 2025 dates a day early.
+    #[test]
+    fn timestamp_uses_the_gregorian_calendar() {
+        let ts = |stamp: &str| {
+            let line = format!("10.0.0.1 - - [{stamp}] \"GET / HTTP/1.1\" 200 1\n");
+            let line: &'static str = Box::leak(line.into_boxed_str());
+            parse_one(line).timestamp_ns.first().copied().flatten()
+        };
+        assert_eq!(
+            ts("01/Jan/2025:00:00:00 +0000"),
+            Some(1_735_689_600_000_000_000)
+        );
+        assert_eq!(
+            ts("29/Feb/2024:00:00:00 +0000"),
+            Some(1_709_164_800_000_000_000)
+        );
+        assert_eq!(ts("29/Feb/2023:00:00:00 +0000"), None);
     }
 
     #[test]
@@ -574,62 +558,5 @@ mod tests {
         assert_eq!(batch.len(), 1);
         assert_eq!(batch.message.first(), Some(&None));
         assert_eq!(batch.severity.first(), Some(&None));
-    }
-}
-
-#[cfg(test)]
-#[allow(non_snake_case)]
-mod mcdc_vectors {
-    //! Tagged MC/DC vectors for this file's multi-leaf decisions
-    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
-    //! by `make test-mcdc`; db-core#299 MC/DC backfill).
-
-    use super::ClfParser;
-
-    // storage_stream_clf_epoch_nanos_c3b66372: `year < 1970 || month == 0 || month > 12 || day == 0
-    //   || day > 31 || hour > 23 || minute > 59 || second > 59`
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v1_year_before_epoch() {
-        assert_eq!(ClfParser::epoch_nanos(1969, 1, 1, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v2_month_zero() {
-        assert_eq!(ClfParser::epoch_nanos(2026, 0, 1, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v3_month_over_twelve() {
-        assert_eq!(ClfParser::epoch_nanos(2026, 13, 1, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v4_day_zero() {
-        assert_eq!(ClfParser::epoch_nanos(2026, 1, 0, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v5_day_over_thirty_one() {
-        assert_eq!(ClfParser::epoch_nanos(2026, 1, 32, 0, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v6_hour_over_twenty_three() {
-        assert_eq!(ClfParser::epoch_nanos(2026, 1, 1, 24, 0, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v7_minute_over_fifty_nine() {
-        assert_eq!(ClfParser::epoch_nanos(2026, 1, 1, 0, 60, 0), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v8_second_over_fifty_nine() {
-        assert_eq!(ClfParser::epoch_nanos(2026, 1, 1, 0, 0, 60), None);
-    }
-
-    #[test]
-    fn mcdc__storage_stream_clf_epoch_nanos_c3b66372__v9_all_false_is_valid() {
-        assert!(ClfParser::epoch_nanos(2026, 1, 1, 0, 0, 0).is_some());
     }
 }

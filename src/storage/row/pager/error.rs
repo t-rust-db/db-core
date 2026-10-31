@@ -41,6 +41,10 @@ pub enum PagerError {
     /// back-fills the WAL into the main file first; the checkpoint left
     /// frames behind.
     CheckpointIncomplete,
+
+    /// Allocating a page would take the database past `u32::MAX` pages
+    /// (#874; sqlite3's `SQLITE_FULL`).
+    DatabaseFull,
 }
 
 impl std::fmt::Display for PagerError {
@@ -64,6 +68,7 @@ impl std::fmt::Display for PagerError {
                 f,
                 "checkpoint did not fully back-fill the WAL while switching journal_mode out of WAL"
             ),
+            PagerError::DatabaseFull => write!(f, "database or disk is full"),
         }
     }
 }
@@ -131,6 +136,18 @@ mod tests {
         assert_eq!(
             PagerError::CheckpointIncomplete.to_string(),
             "checkpoint did not fully back-fill the WAL while switching journal_mode out of WAL"
+        );
+        assert_eq!(
+            PagerError::DatabaseFull.to_string(),
+            "database or disk is full"
+        );
+        assert_eq!(
+            PagerError::Freelist(FreelistError::PageOutOfRange {
+                page: 1,
+                page_count: 4
+            })
+            .to_string(),
+            "freelist names page 1, outside 2..=4: database disk image is malformed"
         );
     }
 
