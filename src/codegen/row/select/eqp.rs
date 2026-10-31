@@ -262,13 +262,29 @@ pub fn explain_query_plan(
                     }
                 })
                 .or_else(|| {
-                    // #915: `rowid IN (...)` is one rowid seek per member.
+                    // #915: `rowid IN (...)` is one rowid seek per member,
+                    // in a single-table scan only (a join does not seek it).
+                    if !from.joins.is_empty() {
+                        return None;
+                    }
                     let operands = select
                         .where_clause
                         .as_ref()
                         .and_then(|w| rowid_in_list_operands(&binding.schema, w))?;
                     operands.into_iter().next().map(JoinAccess::Rowid)
                 })
+        } else if from.joins.is_empty()
+            && dispatch == ScanDispatch::Aggregate
+            && super::aggregate::collect_aggregates(select)
+                .is_ok_and(|aggs| aggs.iter().all(|(_, _, _, distinct)| !*distinct))
+        {
+            // #915: the direct aggregate scan seeks `rowid IN (...)` too.
+            select
+                .where_clause
+                .as_ref()
+                .and_then(|w| rowid_in_list_operands(&binding.schema, w))
+                .and_then(|operands| operands.into_iter().next())
+                .map(JoinAccess::Rowid)
         } else {
             on_expr.and_then(|e| choose_join_access(binding, e, prior_bindings))
         };
@@ -1392,5 +1408,38 @@ mod mcdc_vectors {
         let d = eqp_details("SELECT a FROM t WHERE b = (SELECT max(u.b) FROM u WHERE u.b = t.a)");
         assert_eq!(d[1], "CORRELATED SCALAR SUBQUERY 1", "{d:?}");
         assert_eq!(d[2], "SCAN u", "{d:?}");
+    }
+    // #915: the direct aggregate scan reports its `rowid IN (...)` seeks:
+    // `joins.is_empty() && dispatch == Aggregate && no DISTINCT aggregate`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_92ecbaaf__v1_a_plain_aggregate_reports_the_rowid_seek(
+    ) {
+        assert_eq!(
+            eqp_details("SELECT count(*) FROM t WHERE rowid IN (1, 2)"),
+            vec!["SEARCH t USING INTEGER PRIMARY KEY (rowid=?)".to_string()]
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_92ecbaaf__v2_a_joined_aggregate_takes_the_join_access(
+    ) {
+        let d = eqp_details("SELECT count(*) FROM t JOIN u ON u.b = t.a WHERE t.rowid IN (1, 2)");
+        assert!(d.iter().all(|l| !l.contains("PRIMARY KEY")), "{d:?}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_92ecbaaf__v3_a_group_by_scans() {
+        let d = eqp_details("SELECT b, count(*) FROM t WHERE rowid IN (1, 2) GROUP BY b");
+        assert!(d.iter().all(|l| !l.contains("PRIMARY KEY")), "{d:?}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_select_eqp_explain_query_plan_92ecbaaf__v4_a_distinct_aggregate_scans() {
+        let d = eqp_details("SELECT count(DISTINCT b) FROM t WHERE rowid IN (1, 2)");
+        assert!(d.iter().all(|l| !l.contains("PRIMARY KEY")), "{d:?}");
     }
 }

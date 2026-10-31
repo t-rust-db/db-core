@@ -437,3 +437,26 @@ fn long_integer_in_list_as_a_set_matches_the_member_by_member_comparison() {
     );
     assert_eq!(count, vec![vec![Cell::Int(6)]]);
 }
+
+/// #915: an aggregate over `rowid IN (...)` seeks each member too, and
+/// reports it.
+#[test]
+fn aggregate_over_a_rowid_in_list_seeks_and_matches_the_scan() {
+    let (_db, mut e) = seeded("agg-rowid-in");
+    let sql = "SELECT COUNT(*), SUM(k), MIN(tag) FROM s WHERE id IN (6, 2, 2, 4, 99)";
+    assert_eq!(
+        plan(&e, sql),
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+    );
+    assert_eq!(
+        rows(&mut e, sql),
+        rows(
+            &mut e,
+            "SELECT COUNT(*), SUM(k), MIN(tag) FROM s WHERE id + 0 IN (6, 2, 2, 4, 99)"
+        )
+    );
+    assert_eq!(
+        rows(&mut e, "SELECT COUNT(*) FROM s WHERE id IN (98, 99)"),
+        vec![vec![Cell::Int(0)]]
+    );
+}

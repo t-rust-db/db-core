@@ -694,6 +694,71 @@ fn flush_timing_invariance(kind: Kind) {
     }
 }
 
+/// #914: a single-key `ORDER BY ... LIMIT` that also selects its filter
+/// columns, over archive files, live files and the WAL tail of a tiered
+/// table, answers as the two-key form (`id` is unique, so the second key
+/// changes nothing) -- which sorts the whole result instead of taking the
+/// late-materializing top-N. The filtered columns came back NULL.
+#[test]
+fn a_single_key_top_n_keeps_its_filter_columns_over_every_tier() {
+    let queries = [
+        ("id, kind, n", "kind = 'k1'", "DESC", 5),
+        ("id, kind", "kind LIKE 'k%'", "DESC", 5),
+        ("id, n, amount", "n > 0 AND amount >= 1", "DESC", 6),
+        ("kind, u, id", "u IS NOT NULL AND kind <> 'k0'", "ASC", 4),
+        ("n, id", "n BETWEEN -5 AND 50", "DESC", 3),
+        (
+            "u, kind, n, id",
+            "u > 10 AND kind = 'k2' AND n < 90",
+            "DESC",
+            50,
+        ),
+    ];
+    for seed in 0..6u64 {
+        let mut rng = Rng::new(seed);
+        let t = TempTable::new();
+        let mut w = t.writer_with(TableOptions {
+            layout: Layout::Tiered(TierOptions {
+                sort_key: vec!["kind".to_string()],
+                row_group_max_rows: 1 + rng.below(20) as usize,
+                ..TierOptions::default()
+            }),
+            clock,
+            schema: Some(record_schema()),
+            ..TableOptions::default()
+        });
+        for i in 0..400u64 {
+            if i % 40 == 39 {
+                advance_clock(if i == 199 { 2 * DAY_NS } else { HOUR_NS });
+                w.flush().unwrap();
+                w.compact().unwrap();
+            }
+            w.append_row(random_row(&mut rng, i), Ack::Durable).unwrap();
+        }
+        let areas: Vec<_> = w.manifest().files.iter().map(|f| f.area).collect();
+        assert!(
+            areas.contains(&crate::storage::ingest::Area::Archive),
+            "seed {seed}: {areas:?}"
+        );
+        assert!(
+            areas
+                .iter()
+                .any(|a| *a != crate::storage::ingest::Area::Archive),
+            "seed {seed}: no live file: {areas:?}"
+        );
+        for (cols, filter, dir, limit) in queries {
+            let one =
+                format!("SELECT {cols} FROM logs WHERE {filter} ORDER BY id {dir} LIMIT {limit}");
+            let two = format!(
+                "SELECT {cols} FROM logs WHERE {filter} ORDER BY id {dir}, n LIMIT {limit}"
+            );
+            let got = rows(&w, &one);
+            assert!(!got.is_empty(), "seed {seed}: {one} matched nothing");
+            assert_eq!(got, rows(&w, &two), "seed {seed}: {one}");
+        }
+    }
+}
+
 #[test]
 fn the_engine_sees_new_records_on_every_query() {
     let t = TempTable::new();
