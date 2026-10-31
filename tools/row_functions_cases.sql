@@ -115,3 +115,20 @@ SELECT CASE WHEN 1 THEN 1 ELSE 2.5 END, CASE WHEN 0 THEN 1 ELSE 2.5 END, typeof(
 SELECT coalesce(NULL, NULL, 3), coalesce(NULL, 'a', 1), ifnull(NULL, 2.5), ifnull(1, 1 / 0)
 SELECT nullif(1, 1), nullif(1, 2), nullif('a', 'A'), nullif(NULL, 1), nullif(1, NULL), nullif(1, 1.0)
 SELECT coalesce(1, abs(-9223372036854775807 - 2)), CASE WHEN 1 THEN 1 ELSE abs(-9223372036854775807 - 2) END
+-- #650: statements the fuzzer found we accepted and sqlite3 refuses, as table-free shapes (an error must be an error on both sides)
+SELECT b.* FROM (SELECT 1 AS a) AS b
+SELECT B.* FROM (SELECT 1 AS a) AS B
+SELECT zzz.* FROM (SELECT 1 AS a) AS b
+SELECT t.* FROM (SELECT 1 AS a) AS b
+SELECT 1 IN (), 1 NOT IN (), NULL IN (), NULL NOT IN ()
+SELECT nosuch(1) IN ()
+SELECT nosuch(1) NOT IN ()
+SELECT 1 WHERE nosuch(1) IN ()
+SELECT 1 WHERE 0 AND nosuch(1) IN ()
+CREATE VIEW v650a AS SELECT ?
+CREATE VIEW v650b AS SELECT 1 LIMIT :n
+CREATE VIEW v650c(x) AS SELECT 1 WHERE 1 = ?2
+CREATE VIEW v650d AS SELECT * FROM UNNEST(1) AS t(r)
+CREATE VIEW v650e AS SELECT * FROM UNNEST(1) t(r)
+CREATE VIEW v650f AS SELECT * FROM (SELECT * FROM UNNEST(1) AS t(r))
+CREATE VIEW v650g AS SELECT 1

@@ -1147,6 +1147,10 @@ mod already_exists_tests {
             ("UPDATE t SET a = b()", "no such function: b"),
             // #650: overridden by the later assignment, never compiled.
             ("UPDATE t SET a = b(), a = 1", "no such function: b"),
+            // #650: an empty IN list drops its left operand from the program.
+            ("DELETE FROM t WHERE s() IN ()", "no such function: s"),
+            ("DELETE FROM t WHERE s() NOT IN ()", "no such function: s"),
+            ("SELECT s() IN () FROM t", "no such function: s"),
             (
                 "INSERT INTO t(a) SELECT a FROM t GROUP BY nosuch(1)",
                 "no such function: nosuch",
@@ -1225,6 +1229,20 @@ mod already_exists_tests {
                 "{sql}"
             );
         }
+    }
+
+    /// #650: sqlite3 has no column list after a table alias, so the row
+    /// dialect refuses `UNNEST(x) AS t(r)` (a column-dialect form) even in
+    /// a view body, which is stored without being compiled.
+    #[test]
+    fn create_view_refuses_unnest_alias_column_list() {
+        let err = compile_statement(
+            "CREATE VIEW nv AS SELECT * FROM UNNEST(1) AS t(r)",
+            &schemas(),
+            &views(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("syntax error"), "{err}");
     }
 
     /// #650: a view has no bind step, so every parameter form is refused.

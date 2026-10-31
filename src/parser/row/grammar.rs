@@ -2008,6 +2008,10 @@ impl Parser {
         let alias = self.opt_alias()?;
         let mut column = None;
         if alias.is_some() && matches!(self.peek().kind, TokenKind::LParen) {
+            // sqlite3 has no column list after a table alias (#650).
+            if !self.column {
+                return self.invalid("near \"(\": syntax error");
+            }
             self.advance();
             column = Some(self.identifier()?.0);
             if matches!(self.peek().kind, TokenKind::Comma) {
@@ -3303,12 +3307,38 @@ mod tests {
         assert!(parser("generate_series(1, 3)").table_ref().is_err());
     }
 
+    // parser_row_grammar_unnest_ref_d9e96fdf (`!self.column`) (#650).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_unnest_ref_d9e96fdf__v1_row_dialect_refuses_an_alias_column_list() {
+        for sql in ["UNNEST(x) AS l(label)", "UNNEST(x) l(label)"] {
+            let err = parser(sql).table_ref().unwrap_err();
+            assert!(
+                matches!(err, ParseFail::Invalid { ref message, .. }
+                    if message == "near \"(\": syntax error"),
+                "{sql}"
+            );
+        }
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_unnest_ref_d9e96fdf__v2_column_dialect_reads_it() {
+        let table = parser("UNNEST(x) AS l(label)")
+            .column_dialect()
+            .table_ref()
+            .unwrap();
+        assert!(matches!(table.kind, TableRefKind::Unnest { .. }));
+    }
+
     // parser_row_grammar_unnest_ref_74b9a9cc (`unnest_ref`):
     // `alias.is_some() && matches!(self.peek().kind, TokenKind::LParen)` (#802).
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__parser_row_grammar_unnest_ref_74b9a9cc__v1_alias_with_column_list() {
-        let table = parser("UNNEST(x) AS l(label)").table_ref().unwrap();
+        let table = parser("UNNEST(x) AS l(label)")
+            .column_dialect()
+            .table_ref()
+            .unwrap();
         assert!(matches!(
             table.kind,
             TableRefKind::Unnest { column: Some(c), .. } if c == "label"

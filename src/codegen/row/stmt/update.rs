@@ -40,7 +40,6 @@
 //! text is only tokenized/parsed once across however many
 //! INSERT/UPDATE compiles reuse the same schema.
 
-use crate::codegen::row::ddl::any_node;
 use crate::codegen::row::expr::{column_index, compile_cond, compile_value, emit_column_read};
 use crate::codegen::row::first_reg;
 use crate::codegen::row::index_maintenance::{
@@ -57,9 +56,7 @@ use crate::codegen::row::stmt::insert::{
 };
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, Label, NullTarget, RegAlloc, Scope, Target};
-use crate::parser::ast::{
-    ConflictAction, Expr, ExprKind, FunctionArgs, Literal, ParamKind, Update,
-};
+use crate::parser::ast::{ConflictAction, Expr, ExprKind, Literal, ParamKind, Update};
 use crate::vm::row::{affinity_of, Instruction, Opcode, Program, OPFLAG_NCHANGE, P4};
 
 const TABLE_CURSOR: i32 = 0;
@@ -106,7 +103,6 @@ pub fn compile_update_with_catalog(
         ..schema.clone()
     };
 
-    refuse_unknown_functions(update)?;
     let mut assigned: Vec<Option<&Expr>> = vec![None; schema.columns.len()];
     for assignment in &update.assignments {
         for name in &assignment.columns {
@@ -148,6 +144,7 @@ pub fn compile_update_with_catalog(
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
     let scope = crate::codegen::row::Scope::single(schema, TABLE_CURSOR).with_catalog(catalog);
+    check_overridden_assignments(update, &assigned, &scope)?;
     let end_label = em.new_label();
 
     let rowid_seek_operand = update
@@ -474,7 +471,6 @@ fn compile_update_without_rowid(
         rowid_alias: None,
         ..schema.clone()
     };
-    refuse_unknown_functions(update)?;
     let mut assigned: Vec<Option<&Expr>> = vec![None; schema.columns.len()];
     for assignment in &update.assignments {
         for name in &assignment.columns {
@@ -501,6 +497,7 @@ fn compile_update_without_rowid(
         0,
     ));
     let scope = Scope::single(schema, TABLE_CURSOR).with_catalog(catalog);
+    check_overridden_assignments(update, &assigned, &scope)?;
     emit_two_pass(
         &mut em,
         &mut reg,
@@ -531,26 +528,30 @@ fn compile_update_without_rowid(
     Ok(em.finish())
 }
 
-/// sqlite3 prepares every `SET` expression, so an unknown function is an
-/// error even in an assignment a later one to the same column overrides --
-/// which codegen never compiles (#650).
-fn refuse_unknown_functions(update: &Update) -> Result<(), CodegenError> {
+/// sqlite3 prepares every `SET` expression, also one a later assignment to
+/// the same column overrides -- which `assigned` leaves out, so codegen
+/// never compiles it. Compile those into a scratch emitter so their
+/// compile-time errors (an unknown function, `SELECT *` without a table)
+/// still surface (#650).
+fn check_overridden_assignments(
+    update: &Update,
+    assigned: &[Option<&Expr>],
+    scope: &Scope,
+) -> Result<(), CodegenError> {
     for assignment in &update.assignments {
-        let mut problem = None;
-        any_node(&assignment.value, &mut |e| {
-            let ExprKind::FunctionCall { name, args, .. } = &e.kind else {
-                return false;
-            };
-            let arity = match args {
-                FunctionArgs::Star => 0,
-                FunctionArgs::List(list) => list.len(),
-            };
-            problem = crate::functions::prepare_error(name, arity);
-            problem.is_some()
-        });
-        if let Some(message) = problem {
-            return Err(CodegenError::Rejected(message));
+        if assigned
+            .iter()
+            .flatten()
+            .any(|kept| std::ptr::eq(*kept, &assignment.value))
+        {
+            continue;
         }
+        compile_value(
+            &mut Emitter::new(),
+            &mut RegAlloc::new(),
+            scope,
+            &assignment.value,
+        )?;
     }
     Ok(())
 }
@@ -1196,20 +1197,31 @@ mod unknown_function_tests {
             .map_err(|e| e.to_string())
     }
 
-    // codegen_row_stmt_update_refuse_unknown_functions_7b72c790: `problem`
+    // codegen_row_stmt_update_check_overridden_assignments_c7b85ee6: the
+    // `assigned ... .any(ptr::eq)` decision -- kept (true) or overridden (false).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_row_stmt_update_refuse_unknown_functions_7b72c790__v1_overridden_unknown_function_is_refused(
+    fn mcdc__codegen_row_stmt_update_check_overridden_assignments_c7b85ee6__v1_overridden_value_is_compiled_and_refused(
     ) {
-        assert_eq!(
-            compile("UPDATE t SET a = nosuch(1), a = 2").unwrap_err(),
-            "no such function: nosuch"
-        );
+        for (sql, message) in [
+            (
+                "UPDATE t SET a = nosuch(1), a = 2",
+                "no such function: nosuch",
+            ),
+            (
+                "UPDATE t SET a = EXISTS (SELECT *), a = 2",
+                "requires a FROM clause",
+            ),
+        ] {
+            let err = compile(sql).unwrap_err();
+            assert!(err.contains(message), "{sql}: {err}");
+        }
     }
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__codegen_row_stmt_update_refuse_unknown_functions_7b72c790__v2_known_functions_compile()
-    {
+    fn mcdc__codegen_row_stmt_update_check_overridden_assignments_c7b85ee6__v2_kept_and_valid_overridden_values_compile(
+    ) {
+        compile("UPDATE t SET a = abs(1)").unwrap();
         compile("UPDATE t SET a = abs(1), a = upper(2)").unwrap();
     }
 }
