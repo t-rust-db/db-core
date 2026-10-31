@@ -15,7 +15,22 @@
 //! both have; not a bare multiplicative hash, which never brings a key's
 //! high-bit entropy (timestamps, shifted ids) down to the index bits.
 
+use std::hash::{BuildHasher, Hasher, RandomState};
+
 use super::batch::{Result, VmError};
+
+/// A fresh random seed for one hash table's slot choice (#891).
+/// [`murmur_finalize`] is a fixed bijection, so without a seed anyone who
+/// controls the data can invert it and send keys that all land in one
+/// slot, turning linear probing quadratic (hash flooding). XOR-ing a
+/// per-table secret into the key before the finalizer stops those
+/// precomputed collisions. It is a practical defence, not a
+/// cryptographic one: SipHash-grade resistance would cost every probe
+/// row. The seed comes from std's per-process random keys, which each
+/// `RandomState::new()` steps, so tables in one process differ too.
+pub(crate) fn slot_seed() -> u64 {
+    RandomState::new().build_hasher().finish()
+}
 
 /// MurmurHash3's 64-bit finalizer -- what DuckDB and ClickHouse hash
 /// integer keys with. Not a bare multiplicative hash: real ids carry
@@ -47,6 +62,8 @@ pub(crate) struct IntKeyTable {
     /// Index into `keys`, or [`EMPTY`].
     slots: Vec<u32>,
     mask: usize,
+    /// Mixed into every key before the finalizer: [`slot_seed`].
+    seed: u64,
     /// `(key, group id)` in insertion order.
     keys: Vec<(i64, u32)>,
     null_group: Option<usize>,
@@ -64,6 +81,7 @@ impl IntKeyTable {
         IntKeyTable {
             slots: vec![EMPTY; capacity],
             mask: capacity.wrapping_sub(1),
+            seed: slot_seed(),
             keys: Vec::with_capacity(expected_groups),
             null_group: None,
         }
@@ -89,13 +107,13 @@ impl IntKeyTable {
     }
 
     /// The home slot of `key`: its bit pattern (not a sign-converted
-    /// magnitude) through the finalizer, masked into `slots`.
+    /// magnitude), seeded, through the finalizer, masked into `slots`.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "masked to `< slots.len()`, which is a `usize`, before use"
     )]
     fn slot_of(&self, key: i64) -> usize {
-        (murmur_finalize(u64::from_ne_bytes(key.to_ne_bytes())) as usize) & self.mask
+        (murmur_finalize(u64::from_ne_bytes(key.to_ne_bytes()) ^ self.seed) as usize) & self.mask
     }
 
     /// The group id for `key`, inserting it as group `next_id` when unseen
@@ -163,6 +181,8 @@ pub(crate) struct HashGroupTable {
     /// Index into `entries`, or [`EMPTY`].
     slots: Vec<u32>,
     mask: usize,
+    /// Mixed into every hash before the finalizer: [`slot_seed`].
+    seed: u64,
     /// `(key hash, group id)` in insertion order.
     entries: Vec<(u64, u32)>,
 }
@@ -178,6 +198,7 @@ impl HashGroupTable {
         HashGroupTable {
             slots: vec![EMPTY; capacity],
             mask: capacity.wrapping_sub(1),
+            seed: slot_seed(),
             entries: Vec::with_capacity(expected_groups),
         }
     }
@@ -188,14 +209,14 @@ impl HashGroupTable {
         self.slots.len()
     }
 
-    /// The home slot of `hash`: re-finalized so a caller's fold (whose low
-    /// bits may be weak) still spreads over the slot index.
+    /// The home slot of `hash`: seeded and re-finalized so a caller's fold
+    /// (whose low bits may be weak) still spreads over the slot index.
     #[allow(
         clippy::cast_possible_truncation,
         reason = "masked to `< slots.len()`, which is a `usize`, before use"
     )]
     fn slot_of(&self, hash: u64) -> usize {
-        (murmur_finalize(hash) as usize) & self.mask
+        (murmur_finalize(hash ^ self.seed) as usize) & self.mask
     }
 
     /// The group whose key hashes to `hash` and for which `same_key` holds,
@@ -257,8 +278,62 @@ impl HashGroupTable {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The inverse of [`murmur_finalize`]: what an attacker computes to
+    /// pick keys whose unseeded slots collide (#891).
+    pub(crate) fn inverse_murmur_finalize(mut x: u64) -> u64 {
+        x ^= x >> 33;
+        x = x.wrapping_mul(0x9CB4_B2F8_1293_37DB);
+        x ^= x >> 33;
+        x = x.wrapping_mul(0x4F74_430C_22A5_4005);
+        x ^ (x >> 33)
+    }
+
+    /// 2,000 keys whose unseeded finalizer output is `i << 32`: every one
+    /// has home slot 0 in any table under 2^32 slots.
+    pub(crate) fn flooding_keys() -> Vec<u64> {
+        (0..2_000u64)
+            .map(|i| inverse_murmur_finalize(i << 32))
+            .collect()
+    }
+
+    #[test]
+    fn flooding_keys_collide_without_a_seed() {
+        for k in flooding_keys() {
+            assert_eq!(murmur_finalize(k) & 0xFFFF, 0);
+        }
+    }
+
+    #[test]
+    fn seeded_int_key_table_spreads_keys_built_to_collide() {
+        let mut table = IntKeyTable::with_capacity(2_000);
+        let keys = flooding_keys();
+        for (id, &k) in keys.iter().enumerate() {
+            table
+                .get_or_insert(i64::from_ne_bytes(k.to_ne_bytes()), id)
+                .unwrap();
+        }
+        let homes: std::collections::HashSet<usize> = keys
+            .iter()
+            .map(|&k| table.slot_of(i64::from_ne_bytes(k.to_ne_bytes())))
+            .collect();
+        // Uniform hashing of 2,000 keys into 4,096 slots fills ~1,600.
+        assert!(homes.len() > 1_000, "only {} home slots", homes.len());
+    }
+
+    #[test]
+    fn seeded_hash_group_table_spreads_hashes_built_to_collide() {
+        let mut table = HashGroupTable::with_capacity(2_000);
+        let hashes = flooding_keys();
+        for (id, &h) in hashes.iter().enumerate() {
+            table.find_or_insert(h, id, |_| false).unwrap();
+        }
+        let homes: std::collections::HashSet<usize> =
+            hashes.iter().map(|&h| table.slot_of(h)).collect();
+        assert!(homes.len() > 1_000, "only {} home slots", homes.len());
+    }
 
     #[test]
     fn int_key_table_grows_and_keeps_every_key_findable() {
