@@ -6621,7 +6621,7 @@ impl Vm {
                 // #621: map functions read `Value::Map`, which the row
                 // functions' values cannot carry.
                 let result: Vec<Value> = if super::map_fns::is_map_function(name) {
-                    super::map_fns::call_column(name, &arg_regs, num_rows)
+                    super::map_fns::call_column(name, &arg_regs, num_rows)?
                 } else {
                     let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];
                     let mut result = Vec::with_capacity(num_rows);

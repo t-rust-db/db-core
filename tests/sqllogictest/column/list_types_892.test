@@ -1,0 +1,95 @@
+# #892: a list function given the wrong type is an error, as in DuckDB,
+# not NULL; `len` of a string is its length; integer text casts to a list
+# index or slice bound. Table events: six rows; labels is NULL (4), empty
+# (3), holds a NULL element and a repeated one (5); source is VARCHAR.
+# Expected results come from DuckDB (make refresh-column-sqllogictest).
+
+# 1. Wrong types are errors.
+
+statement error
+SELECT list_has_any(labels, 'x') FROM events
+
+statement error
+SELECT list_contains(source, 'a') FROM events
+
+statement error
+SELECT list_extract(labels, 1.0) FROM events
+
+statement error
+SELECT list_extract(labels, 'x') FROM events
+
+statement error
+SELECT cardinality(labels) FROM events
+
+statement error
+SELECT array_to_string(source, ',') FROM events
+
+# 2. `len` of a string counts its characters.
+
+query II nosort
+SELECT event_id, len(source) FROM events ORDER BY event_id
+----
+1
+1
+2
+1
+3
+1
+4
+1
+5
+1
+6
+1
+
+# 3. Integer text casts to a slice bound or an index; a float bound rounds.
+# A list result is read through array_to_string (DuckDB prints lists in
+# its own syntax).
+
+query IT nosort
+SELECT event_id, array_to_string(list_slice(labels, '1', '2'), '|') FROM events ORDER BY event_id
+----
+1
+x|y
+2
+y
+3
+(empty)
+4
+NULL
+5
+x
+6
+z|y
+
+query IT nosort
+SELECT event_id, array_to_string(list_slice(labels, 1.5, 3), '|') FROM events ORDER BY event_id
+----
+1
+y
+2
+(empty)
+3
+(empty)
+4
+NULL
+5
+x
+6
+y
+
+query IT nosort
+SELECT event_id, list_extract(labels, '1') FROM events ORDER BY event_id
+----
+1
+x
+2
+y
+3
+NULL
+4
+NULL
+5
+x
+6
+z

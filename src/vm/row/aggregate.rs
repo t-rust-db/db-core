@@ -28,10 +28,9 @@ pub enum AggregateError {
         /// The aggregate name that failed to resolve.
         name: String,
     },
-    /// A `sum()` accumulation overflowed `i64` in a way that can't be
-    /// represented (should not occur in practice: overflow promotes to
-    /// REAL during `step`, matching sqlite-rs's own `checked_add`-style
-    /// promotion elsewhere in this VM).
+    /// An all-integer `sum()` overflowed `i64` at some step (#892): sqlite3's
+    /// `integer overflow`, even when later rows bring the total back in
+    /// range. A REAL input after the overflow makes the sum REAL instead.
     IntegerOverflow,
 }
 
@@ -73,7 +72,9 @@ pub enum AggState {
     /// a REAL input is seen, after which the whole running total moves
     /// to `real_total` -- mirrors SQLite's own `sum()` promotion rule
     /// (an all-integer sum stays exact; one REAL input makes the
-    /// result REAL).
+    /// result REAL). An integer step that overflows `i64` moves the total
+    /// to `real_total` too, but marks it `overflowed`: unless a REAL input
+    /// follows, `finalize` reports sqlite3's `integer overflow` (#892).
     Sum {
         /// Exact running total while every input has been an integer.
         int_total: i128,
@@ -83,6 +84,9 @@ pub enum AggState {
         saw_real: bool,
         /// Whether any non-NULL input has been seen (`sum()` of no rows is NULL).
         saw_any: bool,
+        /// Whether an integer step overflowed `i64` with no REAL input
+        /// since -- the sum is then an `integer overflow` error.
+        overflowed: bool,
     },
     /// `avg(x)`: same integer/real promotion as `Sum`, plus a row
     /// count so `finalize` can divide -- `avg()` is always REAL (or
@@ -116,6 +120,7 @@ impl AggState {
                 real_total: 0.0,
                 saw_real: false,
                 saw_any: false,
+                overflowed: false,
             }),
             "avg" => Ok(AggState::Avg {
                 int_total: 0,
@@ -158,6 +163,7 @@ pub fn step(
             real_total,
             saw_real,
             saw_any,
+            overflowed,
         } => match numeric_arg(args.first()) {
             None => {}
             Some(Value::Integer(i)) => {
@@ -165,11 +171,26 @@ pub fn step(
                 if *saw_real {
                     *real_total += i as f64;
                 } else {
-                    *int_total = int_total.saturating_add(i128::from(i));
+                    // `int_total` stays inside `i64` until a step overflows
+                    // it; sqlite3 then keeps summing approximately and
+                    // fails at the end unless a REAL input follows.
+                    match i64::try_from(*int_total)
+                        .ok()
+                        .and_then(|t| t.checked_add(i))
+                    {
+                        Some(total) => *int_total = i128::from(total),
+                        None => {
+                            *real_total += *int_total as f64 + i as f64;
+                            *int_total = 0;
+                            *saw_real = true;
+                            *overflowed = true;
+                        }
+                    }
                 }
             }
             Some(Value::Real(r)) => {
                 *saw_any = true;
+                *overflowed = false;
                 if !*saw_real {
                     *real_total += *int_total as f64;
                     *int_total = 0;
@@ -248,9 +269,13 @@ pub fn finalize(name: &str, state: Option<&AggState>) -> Result<Value, Aggregate
             real_total,
             saw_real,
             saw_any,
+            overflowed,
         }) => {
             if !saw_any {
                 return Ok(Value::Null);
+            }
+            if *overflowed {
+                return Err(AggregateError::IntegerOverflow);
             }
             #[allow(clippy::cast_precision_loss)]
             if *saw_real {
@@ -314,6 +339,45 @@ mod tests {
     #[test]
     fn count_with_zero_rows_finalizes_to_zero() {
         assert_eq!(finalize("count", None).unwrap(), Value::Integer(0));
+    }
+
+    /// sqlite3's `sum()` over `values` (#892): `Err` for its
+    /// `integer overflow`.
+    fn sum_of(values: &[Value]) -> Result<Value, AggregateError> {
+        let mut state = None;
+        for v in values {
+            state = Some(step("sum", state, std::slice::from_ref(v), Collation::Binary).unwrap());
+        }
+        finalize("sum", state.as_ref())
+    }
+
+    #[test]
+    fn sum_overflow_at_any_step_is_an_error_unless_a_real_follows() {
+        let max = Value::Integer(i64::MAX);
+        let min = Value::Integer(i64::MIN);
+        let int = Value::Integer;
+        // Overflow mid-sum is an error even though the total comes back.
+        assert_eq!(
+            sum_of(&[max.clone(), int(1), int(-5)]),
+            Err(AggregateError::IntegerOverflow)
+        );
+        assert_eq!(
+            sum_of(&[min.clone(), int(-1), int(5)]),
+            Err(AggregateError::IntegerOverflow)
+        );
+        // A REAL after the overflow makes the sum REAL; one before it
+        // means the integers never overflow.
+        assert!(matches!(
+            sum_of(&[max.clone(), int(1), Value::Real(1.5)]),
+            Ok(Value::Real(_))
+        ));
+        assert!(matches!(
+            sum_of(&[Value::Real(1.5), max.clone(), int(1)]),
+            Ok(Value::Real(_))
+        ));
+        // Reaching the bounds exactly is fine.
+        assert_eq!(sum_of(&[max.clone(), int(-1), int(1)]), Ok(max));
+        assert_eq!(sum_of(&[int(1), min.clone(), int(-1)]), Ok(min));
     }
 
     #[test]

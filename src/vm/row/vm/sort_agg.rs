@@ -150,12 +150,7 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
                 .and_then(Option::as_mut)
                 .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;
             let args = vm.registers.get(start..end).unwrap_or(&[]);
-            let handled = cursor
-                .hash_agg_step(slot, name, args, collation)
-                .map_err(|e| ExecError::MalformedInstruction {
-                    opcode: "HashAggStep",
-                    reason: e.to_string(),
-                })?;
+            let handled = cursor.hash_agg_step(slot, name, args, collation)?;
             if !handled {
                 return Err(ExecError::MalformedInstruction {
                     opcode: "HashAggStep",
@@ -225,12 +220,7 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
             } else {
                 None
             };
-            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {
-                ExecError::MalformedInstruction {
-                    opcode: "AggStep",
-                    reason: e.to_string(),
-                }
-            })?;
+            let updated = aggregate::step(name, current, &args, collation)?;
             vm.set_agg_context(instr.p1, updated)?;
             Ok(Step::Next)
         }
@@ -251,11 +241,7 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
                 }
             })?;
             let state = vm.agg_context(instr.p1)?;
-            let result =
-                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {
-                    opcode: "AggFinal",
-                    reason: e.to_string(),
-                })?;
+            let result = aggregate::finalize(name, state)?;
             vm.set_register(instr.p3, result)?;
             vm.clear_agg_context(instr.p1)?;
             Ok(Step::Next)

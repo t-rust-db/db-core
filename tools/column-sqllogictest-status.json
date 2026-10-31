@@ -12,6 +12,7 @@
     {"file": "list_index_826.test", "pass": 7, "skip": 0, "fail": 0},
     {"file": "list_literal_827.test", "pass": 9, "skip": 0, "fail": 0},
     {"file": "list_transforms_828.test", "pass": 17, "skip": 0, "fail": 0},
+    {"file": "list_types_892.test", "pass": 10, "skip": 0, "fail": 0},
     {"file": "oracle.test", "pass": 21, "skip": 0, "fail": 0},
     {"file": "order_by_645.test", "pass": 8, "skip": 1, "fail": 0},
     {"file": "order_by_ordinal_752.test", "pass": 9, "skip": 0, "fail": 0},
@@ -23,5 +24,5 @@
     {"file": "unnest_filters_812.test", "pass": 7, "skip": 2, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 335, "skip": 7, "fail": 0}
+  "total": {"pass": 345, "skip": 7, "fail": 0}
 }

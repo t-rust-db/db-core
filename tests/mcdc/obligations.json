@@ -56620,10 +56620,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_batch_step_73a52cde",
+    "id": "vm_batch_step_60c3e5a9",
     "file": "src/vm/batch.rs",
     "line": 6508,
-    "decision": "match op {\n            Opcode::LoadColumn { reg, column } => {\n                if let Some(typed) = batch.typed_columns.get(column.as_ref()) {\n                    // #482: no longer eagerly materializes into\n                    // `registers` -- only `typed_registers` is populated\n                    // here. `Vm::ensure_materialized` lazily builds the\n                    // `Vec<Value>` copy, only when something actually\n                    // reads this register that way (an opcode not yet\n                    // ported to `Column` dispatch, or a typed fast-path\n                    // miss) -- this is why a bare `SUM(amount)` (typed\n                    // `Reduce`'s fast path never touches `registers` at\n                    // all) no longer burns the cost of a copy nothing\n                    // reads. `registers.remove` invalidates any stale\n                    // materialization left over from a previous segment\n                    // reusing this same register number (`NextSegment`\n                    // doesn't clear `registers` between iterations).\n                    self.registers.remove(reg);\n                    self.typed_registers.insert(*reg, Arc::clone(typed));\n                } else {\n                    let values = batch.columns.get(column.as_ref()).ok_or_else(|| {\n                        VmError::UnknownColumn {\n                            opcode,\n                            column: column.to_string(),\n                        }\n                    })?;\n                    self.registers.insert(*reg, Arc::clone(values));\n                    self.typed_registers.remove(reg);\n                }\n            }\n            Opcode::LoadConst { reg, value } => {\n                // As long as the live rows: a pending selection's base\n                // (compacted with everything else when it resolves), or\n                // the already-filtered row count -- not the batch's, which\n                // a constant loaded after a `Map` resolved the selection\n                // (`id * 3 - 1 ... WHERE`) would outgrow.\n                let len = match &self.selection {\n                    Some(selection) => selection.base_len,\n                    None => self.selected_rows.unwrap_or(batch.num_rows),\n                };\n                // #681: one value, broadcast lazily by\n                // `ensure_materialized` only if something reads it as rows.\n                self.registers.remove(reg);\n                self.typed_registers.remove(reg);\n                self.take_const(*reg);\n                self.const_registers.push((*reg, value.clone(), len));\n            }\n            Opcode::Map { dst, op, a, b } => {\n                // #265: reads registers elementwise (no row-index\n                // concept), so any pending selection must be resolved\n                // (compacted) first rather than taught to this opcode.\n                self.resolve_selection(opcode)?;\n                if let Some(result) = self.dict_literal_compare(*op, *a, *b, opcode)? {\n                    self.registers.insert(*dst, Arc::new(result));\n                    self.typed_registers.remove(dst);\n                } else if let Some(column) = self.typed_like(*op, *a, *b, opcode)? {\n                    // #743: typed-only, like `LoadColumn` (#482) --\n                    // `Filter` reads the `Bool` buffer directly, and\n                    // `ensure_materialized` builds the `Value`s only\n                    // for a reader that needs them.\n                    self.registers.remove(dst);\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else if let Some(column) = self\n                    .typed_compare(*op, *a, *b)\n                    .or_else(|| self.typed_bool_op(*op, *a, *b))\n                    .or_else(|| self.typed_list_null_test(*op, *a))\n                {\n                    // #748: typed-only, as `typed_like` above.\n                    self.registers.remove(dst);\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else if let Some(column) = self.typed_arithmetic(*op, *a, *b, opcode)? {\n                    // #431: a genuine typed Column result -- also\n                    // materialize into `registers` (same pattern as\n                    // `LoadColumn`, #429) so a downstream un-migrated\n                    // opcode keeps working unchanged.\n                    let materialized: Vec<Value> =\n                        (0..column.len()).map(|i| column.get(i)).collect();\n                    self.registers.insert(*dst, Arc::new(materialized));\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else {\n                    self.ensure_materialized(*a);\n                    self.ensure_materialized(*b);\n                    let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);\n                    if a_vals.len() != b_vals.len() {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                    let result: Vec<Value> = a_vals\n                        .iter()\n                        .zip(b_vals.iter())\n                        .map(|(x, y)| apply_map_op(*op, x, y))\n                        .collect::<Result<_>>()?;\n                    self.registers.insert(*dst, Arc::new(result));\n                    self.typed_registers.remove(dst);\n                }\n            }\n            Opcode::Call { dst, name, args } => {\n                // Elementwise, like `Map`: resolve any pending selection\n                // first (see the comment on that arm).\n                self.resolve_selection(opcode)?;\n                for &a in args.iter() {\n                    self.ensure_materialized(a);\n                }\n                let arg_regs: Vec<&[Value]> = args\n                    .iter()\n                    .map(|&a| self.reg(a, opcode))\n                    .collect::<Result<_>>()?;\n                // A call with no arguments (`list_value()`, #827) has the\n                // filtered row count, as a constant does.\n                let num_rows = arg_regs\n                    .first()\n                    .map_or(self.selected_rows.unwrap_or(batch.num_rows), |r| r.len());\n                if arg_regs.iter().any(|r| r.len() != num_rows) {\n                    return Err(VmError::RegisterLengthMismatch { opcode });\n                }\n                // #621: map functions read `Value::Map`, which the row\n                // functions' values cannot carry.\n                let result: Vec<Value> = if super::map_fns::is_map_function(name) {\n                    super::map_fns::call_column(name, &arg_regs, num_rows)\n                } else {\n                    let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];\n                    let mut result = Vec::with_capacity(num_rows);\n                    // The late-parse `json_extract` (#307) and\n                    // `json_extract_string` (#839), not the row engine's\n                    // sqlite3 ones.\n                    let late_json_extract = name.eq_ignore_ascii_case(\"json_extract\");\n                    let late_json_string = name.eq_ignore_ascii_case(\"json_extract_string\");\n                    for row in 0..num_rows {\n                        for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {\n                            *slot = to_scalar_value(&reg[row]);\n                        }\n                        let value = if late_json_extract {\n                            crate::functions::late_json_extract(&call_args)\n                        } else if late_json_string {\n                            crate::functions::late_json_extract_string(&call_args)\n                        } else {\n                            crate::functions::call(name, &call_args)\n                        }\n                        .map_or(Value::Null, from_scalar_value);\n                        result.push(value);\n                    }\n                    result\n                };\n                self.registers.insert(*dst, Arc::new(result));\n            }\n            Opcode::InList {\n                dst,\n                src,\n                list,\n                negated,\n            } => {\n                // Elementwise, like `Map`: resolve any pending selection\n                // first (see the comment on that arm).\n                self.resolve_selection(opcode)?;\n                if let Some(column) = self.typed_in_list(*src, list, *negated) {\n                    // Typed-only, as `typed_like`'s result (#743).\n                    self.registers.remove(dst);\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else {\n                    self.ensure_materialized(*src);\n                    let result = in_list_values(self.reg(*src, opcode)?, list, *negated)?;\n                    self.registers.insert(*dst, Arc::new(result));\n                    self.typed_registers.remove(dst);\n                }\n            }\n            Opcode::Select {\n                dst,\n                cond,\n                then,\n                else_,\n            } => {\n                // Elementwise, like `Map`: resolve any pending selection\n                // first (see the comment on that arm).\n                self.resolve_selection(opcode)?;\n                self.ensure_materialized(*cond);\n                let (then_rows, else_rows): (Vec<usize>, Vec<usize>) = {\n                    let truths = self\n                        .reg(*cond, opcode)?\n                        .iter()\n                        .map(predicate_truth)\n                        .collect::<Result<Vec<bool>>>()?;\n                    let (then_rows, else_rows): (Vec<_>, Vec<_>) =\n                        truths.iter().enumerate().partition(|(_, keep)| **keep);\n                    (\n                        then_rows.into_iter().map(|(i, _)| i).collect(),\n                        else_rows.into_iter().map(|(i, _)| i).collect(),\n                    )\n                };\n                let num_rows = then_rows.len().saturating_add(else_rows.len());\n                let (then_values, then_kind) = self.run_branch(opcode, then, &then_rows)?;\n                let (else_values, else_kind) = self.run_branch(opcode, else_, &else_rows)?;\n                let kind = match (then_kind, else_kind) {\n                    (Some(a), Some(b)) => Some(a.common(b).ok_or(VmError::BranchTypes {\n                        opcode,\n                        left: a.name(),\n                        right: b.name(),\n                    })?),\n                    (kind, None) | (None, kind) => kind,\n                };\n                let result = merge_branches(\n                    opcode,\n                    num_rows,\n                    (&then_rows, &then_values),\n                    (&else_rows, &else_values),\n                    kind,\n                )?;\n                self.registers.insert(*dst, Arc::new(result));\n                self.typed_registers.remove(dst);\n            }\n            Opcode::Filter { predicate } => self.filter(opcode, predicate)?,\n            Opcode::Reduce { func, src, dst } => self.reduce(batch, opcode, func, src, dst)?,\n            Opcode::GroupReduce {\n                group_by,\n                aggs,\n                agg_dst,\n            } => self.group_reduce(batch, opcode, group_by, aggs, agg_dst)?,\n            Opcode::HashBuild {\n                key_cols,\n                payload_cols,\n                table,\n            } => self.hash_build(opcode, key_cols, payload_cols, table)?,\n            Opcode::HashProbe {\n                key_cols,\n                table,\n                payload_dst,\n                kind,\n            } => self.hash_probe(opcode, key_cols, table, payload_dst, kind)?,\n            Opcode::Unnest { src, dst } => self.unnest(opcode, *src, *dst)?,\n            Opcode::HashProbeGroupReduce {\n                key_cols,\n                table,\n                kind,\n                group_by,\n                aggs,\n                agg_dst,\n            } => self\n                .hash_probe_group_reduce(opcode, key_cols, table, kind, group_by, aggs, agg_dst)?,\n            Opcode::Window {\n                func,\n                arg,\n                offset,\n                partition_by,\n                order_by,\n                dst,\n            } => self.window(\n                batch,\n                opcode,\n                func,\n                arg,\n                offset,\n                partition_by,\n                order_by,\n                dst,\n            )?,\n            Opcode::Emit { registers } => self.emit(opcode, registers)?,\n            // Meaningful only as loop markers interpreted by `run` --\n            // and `Combine`/`Sort`/`Limit` are the cross-segment\n            // sequential phase applied once by `crate::vm::engine::run`,\n            // never inside a single segment. `ScanSource` is likewise a\n            // no-op here: resolving it into a `Batch` happens above the\n            // per-segment `Vm`, in `crate::vm::engine` (#385) -- this\n            // ticket (#384) only defines the opcode/type, no emitted\n            // program references it yet.\n            Opcode::Scan\n            | Opcode::NextSegment { .. }\n            | Opcode::Halt\n            | Opcode::Combine { .. }\n            | Opcode::Sort { .. }\n            | Opcode::Limit { .. }\n            | Opcode::ScanSource { .. } => {}\n        }",
+    "decision": "match op {\n            Opcode::LoadColumn { reg, column } => {\n                if let Some(typed) = batch.typed_columns.get(column.as_ref()) {\n                    // #482: no longer eagerly materializes into\n                    // `registers` -- only `typed_registers` is populated\n                    // here. `Vm::ensure_materialized` lazily builds the\n                    // `Vec<Value>` copy, only when something actually\n                    // reads this register that way (an opcode not yet\n                    // ported to `Column` dispatch, or a typed fast-path\n                    // miss) -- this is why a bare `SUM(amount)` (typed\n                    // `Reduce`'s fast path never touches `registers` at\n                    // all) no longer burns the cost of a copy nothing\n                    // reads. `registers.remove` invalidates any stale\n                    // materialization left over from a previous segment\n                    // reusing this same register number (`NextSegment`\n                    // doesn't clear `registers` between iterations).\n                    self.registers.remove(reg);\n                    self.typed_registers.insert(*reg, Arc::clone(typed));\n                } else {\n                    let values = batch.columns.get(column.as_ref()).ok_or_else(|| {\n                        VmError::UnknownColumn {\n                            opcode,\n                            column: column.to_string(),\n                        }\n                    })?;\n                    self.registers.insert(*reg, Arc::clone(values));\n                    self.typed_registers.remove(reg);\n                }\n            }\n            Opcode::LoadConst { reg, value } => {\n                // As long as the live rows: a pending selection's base\n                // (compacted with everything else when it resolves), or\n                // the already-filtered row count -- not the batch's, which\n                // a constant loaded after a `Map` resolved the selection\n                // (`id * 3 - 1 ... WHERE`) would outgrow.\n                let len = match &self.selection {\n                    Some(selection) => selection.base_len,\n                    None => self.selected_rows.unwrap_or(batch.num_rows),\n                };\n                // #681: one value, broadcast lazily by\n                // `ensure_materialized` only if something reads it as rows.\n                self.registers.remove(reg);\n                self.typed_registers.remove(reg);\n                self.take_const(*reg);\n                self.const_registers.push((*reg, value.clone(), len));\n            }\n            Opcode::Map { dst, op, a, b } => {\n                // #265: reads registers elementwise (no row-index\n                // concept), so any pending selection must be resolved\n                // (compacted) first rather than taught to this opcode.\n                self.resolve_selection(opcode)?;\n                if let Some(result) = self.dict_literal_compare(*op, *a, *b, opcode)? {\n                    self.registers.insert(*dst, Arc::new(result));\n                    self.typed_registers.remove(dst);\n                } else if let Some(column) = self.typed_like(*op, *a, *b, opcode)? {\n                    // #743: typed-only, like `LoadColumn` (#482) --\n                    // `Filter` reads the `Bool` buffer directly, and\n                    // `ensure_materialized` builds the `Value`s only\n                    // for a reader that needs them.\n                    self.registers.remove(dst);\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else if let Some(column) = self\n                    .typed_compare(*op, *a, *b)\n                    .or_else(|| self.typed_bool_op(*op, *a, *b))\n                    .or_else(|| self.typed_list_null_test(*op, *a))\n                {\n                    // #748: typed-only, as `typed_like` above.\n                    self.registers.remove(dst);\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else if let Some(column) = self.typed_arithmetic(*op, *a, *b, opcode)? {\n                    // #431: a genuine typed Column result -- also\n                    // materialize into `registers` (same pattern as\n                    // `LoadColumn`, #429) so a downstream un-migrated\n                    // opcode keeps working unchanged.\n                    let materialized: Vec<Value> =\n                        (0..column.len()).map(|i| column.get(i)).collect();\n                    self.registers.insert(*dst, Arc::new(materialized));\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else {\n                    self.ensure_materialized(*a);\n                    self.ensure_materialized(*b);\n                    let (a_vals, b_vals) = (self.reg(*a, opcode)?, self.reg(*b, opcode)?);\n                    if a_vals.len() != b_vals.len() {\n                        return Err(VmError::RegisterLengthMismatch { opcode });\n                    }\n                    let result: Vec<Value> = a_vals\n                        .iter()\n                        .zip(b_vals.iter())\n                        .map(|(x, y)| apply_map_op(*op, x, y))\n                        .collect::<Result<_>>()?;\n                    self.registers.insert(*dst, Arc::new(result));\n                    self.typed_registers.remove(dst);\n                }\n            }\n            Opcode::Call { dst, name, args } => {\n                // Elementwise, like `Map`: resolve any pending selection\n                // first (see the comment on that arm).\n                self.resolve_selection(opcode)?;\n                for &a in args.iter() {\n                    self.ensure_materialized(a);\n                }\n                let arg_regs: Vec<&[Value]> = args\n                    .iter()\n                    .map(|&a| self.reg(a, opcode))\n                    .collect::<Result<_>>()?;\n                // A call with no arguments (`list_value()`, #827) has the\n                // filtered row count, as a constant does.\n                let num_rows = arg_regs\n                    .first()\n                    .map_or(self.selected_rows.unwrap_or(batch.num_rows), |r| r.len());\n                if arg_regs.iter().any(|r| r.len() != num_rows) {\n                    return Err(VmError::RegisterLengthMismatch { opcode });\n                }\n                // #621: map functions read `Value::Map`, which the row\n                // functions' values cannot carry.\n                let result: Vec<Value> = if super::map_fns::is_map_function(name) {\n                    super::map_fns::call_column(name, &arg_regs, num_rows)?\n                } else {\n                    let mut call_args = vec![crate::value::Value::Null; arg_regs.len()];\n                    let mut result = Vec::with_capacity(num_rows);\n                    // The late-parse `json_extract` (#307) and\n                    // `json_extract_string` (#839), not the row engine's\n                    // sqlite3 ones.\n                    let late_json_extract = name.eq_ignore_ascii_case(\"json_extract\");\n                    let late_json_string = name.eq_ignore_ascii_case(\"json_extract_string\");\n                    for row in 0..num_rows {\n                        for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {\n                            *slot = to_scalar_value(&reg[row]);\n                        }\n                        let value = if late_json_extract {\n                            crate::functions::late_json_extract(&call_args)\n                        } else if late_json_string {\n                            crate::functions::late_json_extract_string(&call_args)\n                        } else {\n                            crate::functions::call(name, &call_args)\n                        }\n                        .map_or(Value::Null, from_scalar_value);\n                        result.push(value);\n                    }\n                    result\n                };\n                self.registers.insert(*dst, Arc::new(result));\n            }\n            Opcode::InList {\n                dst,\n                src,\n                list,\n                negated,\n            } => {\n                // Elementwise, like `Map`: resolve any pending selection\n                // first (see the comment on that arm).\n                self.resolve_selection(opcode)?;\n                if let Some(column) = self.typed_in_list(*src, list, *negated) {\n                    // Typed-only, as `typed_like`'s result (#743).\n                    self.registers.remove(dst);\n                    self.typed_registers.insert(*dst, Arc::new(column));\n                } else {\n                    self.ensure_materialized(*src);\n                    let result = in_list_values(self.reg(*src, opcode)?, list, *negated)?;\n                    self.registers.insert(*dst, Arc::new(result));\n                    self.typed_registers.remove(dst);\n                }\n            }\n            Opcode::Select {\n                dst,\n                cond,\n                then,\n                else_,\n            } => {\n                // Elementwise, like `Map`: resolve any pending selection\n                // first (see the comment on that arm).\n                self.resolve_selection(opcode)?;\n                self.ensure_materialized(*cond);\n                let (then_rows, else_rows): (Vec<usize>, Vec<usize>) = {\n                    let truths = self\n                        .reg(*cond, opcode)?\n                        .iter()\n                        .map(predicate_truth)\n                        .collect::<Result<Vec<bool>>>()?;\n                    let (then_rows, else_rows): (Vec<_>, Vec<_>) =\n                        truths.iter().enumerate().partition(|(_, keep)| **keep);\n                    (\n                        then_rows.into_iter().map(|(i, _)| i).collect(),\n                        else_rows.into_iter().map(|(i, _)| i).collect(),\n                    )\n                };\n                let num_rows = then_rows.len().saturating_add(else_rows.len());\n                let (then_values, then_kind) = self.run_branch(opcode, then, &then_rows)?;\n                let (else_values, else_kind) = self.run_branch(opcode, else_, &else_rows)?;\n                let kind = match (then_kind, else_kind) {\n                    (Some(a), Some(b)) => Some(a.common(b).ok_or(VmError::BranchTypes {\n                        opcode,\n                        left: a.name(),\n                        right: b.name(),\n                    })?),\n                    (kind, None) | (None, kind) => kind,\n                };\n                let result = merge_branches(\n                    opcode,\n                    num_rows,\n                    (&then_rows, &then_values),\n                    (&else_rows, &else_values),\n                    kind,\n                )?;\n                self.registers.insert(*dst, Arc::new(result));\n                self.typed_registers.remove(dst);\n            }\n            Opcode::Filter { predicate } => self.filter(opcode, predicate)?,\n            Opcode::Reduce { func, src, dst } => self.reduce(batch, opcode, func, src, dst)?,\n            Opcode::GroupReduce {\n                group_by,\n                aggs,\n                agg_dst,\n            } => self.group_reduce(batch, opcode, group_by, aggs, agg_dst)?,\n            Opcode::HashBuild {\n                key_cols,\n                payload_cols,\n                table,\n            } => self.hash_build(opcode, key_cols, payload_cols, table)?,\n            Opcode::HashProbe {\n                key_cols,\n                table,\n                payload_dst,\n                kind,\n            } => self.hash_probe(opcode, key_cols, table, payload_dst, kind)?,\n            Opcode::Unnest { src, dst } => self.unnest(opcode, *src, *dst)?,\n            Opcode::HashProbeGroupReduce {\n                key_cols,\n                table,\n                kind,\n                group_by,\n                aggs,\n                agg_dst,\n            } => self\n                .hash_probe_group_reduce(opcode, key_cols, table, kind, group_by, aggs, agg_dst)?,\n            Opcode::Window {\n                func,\n                arg,\n                offset,\n                partition_by,\n                order_by,\n                dst,\n            } => self.window(\n                batch,\n                opcode,\n                func,\n                arg,\n                offset,\n                partition_by,\n                order_by,\n                dst,\n            )?,\n            Opcode::Emit { registers } => self.emit(opcode, registers)?,\n            // Meaningful only as loop markers interpreted by `run` --\n            // and `Combine`/`Sort`/`Limit` are the cross-segment\n            // sequential phase applied once by `crate::vm::engine::run`,\n            // never inside a single segment. `ScanSource` is likewise a\n            // no-op here: resolving it into a `Batch` happens above the\n            // per-segment `Vm`, in `crate::vm::engine` (#385) -- this\n            // ticket (#384) only defines the opcode/type, no emitted\n            // program references it yet.\n            Opcode::Scan\n            | Opcode::NextSegment { .. }\n            | Opcode::Halt\n            | Opcode::Combine { .. }\n            | Opcode::Sort { .. }\n            | Opcode::Limit { .. }\n            | Opcode::ScanSource { .. } => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -61332,7 +61332,7 @@
   {
     "id": "vm_map_fns_call_column_fe1c886e",
     "file": "src/vm/map_fns.rs",
-    "line": 140,
+    "line": 146,
     "decision": "name.eq_ignore_ascii_case(\"string_split\") || name.eq_ignore_ascii_case(\"str_split\")",
     "conditions": 2,
     "vectors_required": 3,
@@ -61342,7 +61342,7 @@
   {
     "id": "vm_map_fns_call_column_ba76ac14",
     "file": "src/vm/map_fns.rs",
-    "line": 141,
+    "line": 147,
     "decision": "let [strings, seps] = columns",
     "conditions": 1,
     "vectors_required": 2,
@@ -61352,7 +61352,7 @@
   {
     "id": "vm_map_fns_call_column_dbd8535e",
     "file": "src/vm/map_fns.rs",
-    "line": 148,
+    "line": 154,
     "decision": "match pair {\n                    (Value::Str(s), Value::Str(sep)) => memo\n                        .entry((s.as_ref(), sep.as_ref()))\n                        .or_insert_with(|| string_split(pair.0, pair.1))\n                        .clone(),\n                    (s, sep) => string_split(s, sep),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61362,7 +61362,7 @@
   {
     "id": "vm_map_fns_call_fe1c886e",
     "file": "src/vm/map_fns.rs",
-    "line": 168,
+    "line": 174,
     "decision": "name.eq_ignore_ascii_case(\"string_split\") || name.eq_ignore_ascii_case(\"str_split\")",
     "conditions": 2,
     "vectors_required": 3,
@@ -61370,10 +61370,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_call_11338d85",
+    "id": "vm_map_fns_call_071ad6ab",
     "file": "src/vm/map_fns.rs",
-    "line": 169,
-    "decision": "match args {\n            [s, sep] => string_split(s, sep),\n            _ => Value::Null,\n        }",
+    "line": 175,
+    "decision": "match args {\n            [s, sep] => Ok(string_split(s, sep)),\n            _ => Err(arity(name, args)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -61382,7 +61382,7 @@
   {
     "id": "vm_map_fns_call_48d84f83",
     "file": "src/vm/map_fns.rs",
-    "line": 174,
+    "line": 180,
     "decision": "name.eq_ignore_ascii_case(\"list_value\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -61392,7 +61392,7 @@
   {
     "id": "vm_map_fns_call_4fadd3ad",
     "file": "src/vm/map_fns.rs",
-    "line": 177,
+    "line": 183,
     "decision": "is_list_concat(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -61400,10 +61400,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_call_2b96a3ec",
+    "id": "vm_map_fns_call_1238a6c7",
     "file": "src/vm/map_fns.rs",
-    "line": 178,
-    "decision": "match args {\n            [a, b] => list_concat(a, b),\n            _ => Value::Null,\n        }",
+    "line": 184,
+    "decision": "match args {\n            [a, b] => list_concat(a, b),\n            _ => Err(arity(name, args)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -61412,7 +61412,7 @@
   {
     "id": "vm_map_fns_call_d5832a8b",
     "file": "src/vm/map_fns.rs",
-    "line": 183,
+    "line": 189,
     "decision": "is_list_contains(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -61420,10 +61420,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_call_604dfbea",
+    "id": "vm_map_fns_call_4c5dc693",
     "file": "src/vm/map_fns.rs",
-    "line": 184,
-    "decision": "match args {\n            [list, value] => list_contains(list, value),\n            _ => Value::Null,\n        }",
+    "line": 190,
+    "decision": "match args {\n            [list, value] => list_contains(list, value),\n            _ => Err(arity(name, args)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -61432,7 +61432,7 @@
   {
     "id": "vm_map_fns_call_b5f34732",
     "file": "src/vm/map_fns.rs",
-    "line": 189,
+    "line": 195,
     "decision": "name.eq_ignore_ascii_case(\"json_keys\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -61442,7 +61442,7 @@
   {
     "id": "vm_map_fns_call_9d7e2454",
     "file": "src/vm/map_fns.rs",
-    "line": 192,
+    "line": 198,
     "decision": "name.eq_ignore_ascii_case(\"json_array_elements_text\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -61450,39 +61450,59 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_call_40032768",
+    "id": "vm_map_fns_call_5623ca9b",
     "file": "src/vm/map_fns.rs",
-    "line": 195,
-    "decision": "let Some((Value::List(items), rest)) = args.split_first()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_map_fns_call_5dc5a553",
-    "file": "src/vm/map_fns.rs",
-    "line": 201,
-    "decision": "match key {\n        Some(Value::Str(k)) => Some(k.as_ref()),\n        Some(_) => return Value::Null,\n        None => None,\n    }",
+    "line": 204,
+    "decision": "match first {\n        Value::Null => return Ok(Value::Null),\n        Value::List(items) => return list_call(name, first, items, rest),\n        Value::Str(s) if name.eq_ignore_ascii_case(\"len\") && rest.is_empty() => {\n            return Ok(Value::Int(\n                i64::try_from(s.chars().count()).unwrap_or(i64::MAX),\n            ));\n        }\n        Value::Map(entries) => entries,\n        other => return Err(not_a(other, wanted_type(name))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_call_acb47a0a",
+    "id": "vm_map_fns_call_95857d66",
     "file": "src/vm/map_fns.rs",
-    "line": 206,
-    "decision": "match (name.to_ascii_lowercase().as_str(), key) {\n        (\"map_extract_value\", Some(k)) => value_of(lookup(entries, |e| e == k)),\n        (\"map_get_ci\", Some(k)) => {\n            let k = k.to_lowercase();\n            value_of(lookup(entries, |e| e.to_lowercase() == k))\n        }\n        (\"element_at\", Some(k)) => {\n            let text = match lookup(entries, |e| e == k) {\n                None => \"[]\".to_string(),\n                Some(Some(v)) => format!(\"[{v}]\"),\n                Some(None) => \"[NULL]\".to_string(),\n            };\n            Value::Str(text.into())\n        }\n        (\"map_keys\", None) => {\n            let keys: Vec<&str> = entries.iter().map(|(k, _)| &**k).collect();\n            Value::Str(format!(\"[{}]\", keys.join(\", \")).into())\n        }\n        (\"cardinality\", None) => Value::Int(i64::try_from(entries.len()).unwrap_or(i64::MAX)),\n        _ => Value::Null,\n    }",
+    "line": 207,
+    "decision": "name.eq_ignore_ascii_case(\"len\") && rest.is_empty()",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_map_fns_call_8d912fab",
+    "file": "src/vm/map_fns.rs",
+    "line": 215,
+    "decision": "match rest {\n        [] => None,\n        [Value::Str(k)] => Some(k.as_ref()),\n        [Value::Null] => return Ok(Value::Null),\n        [other] => return Err(not_a(other, \"VARCHAR\")),\n        _ => return Err(arity(name, args)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
+    "id": "vm_map_fns_call_ed03c902",
+    "file": "src/vm/map_fns.rs",
+    "line": 222,
+    "decision": "match (name.to_ascii_lowercase().as_str(), key) {\n        (\"map_extract_value\", Some(k)) => value_of(lookup(entries, |e| e == k)),\n        (\"map_get_ci\", Some(k)) => {\n            let k = k.to_lowercase();\n            value_of(lookup(entries, |e| e.to_lowercase() == k))\n        }\n        (\"element_at\", Some(k)) => {\n            let text = match lookup(entries, |e| e == k) {\n                None => \"[]\".to_string(),\n                Some(Some(v)) => format!(\"[{v}]\"),\n                Some(None) => \"[NULL]\".to_string(),\n            };\n            Value::Str(text.into())\n        }\n        (\"map_keys\", None) => {\n            let keys: Vec<&str> = entries.iter().map(|(k, _)| &**k).collect();\n            Value::Str(format!(\"[{}]\", keys.join(\", \")).into())\n        }\n        (\"cardinality\", None) => Value::Int(i64::try_from(entries.len()).unwrap_or(i64::MAX)),\n        // A map function with the wrong argument count; any other\n        // function here reads a list, not a map.\n        _ if wanted_type(name) == \"MAP\" || name.eq_ignore_ascii_case(\"map_extract_value\") => {\n            return Err(arity(name, args))\n        }\n        _ => return Err(not_a(first, \"VARCHAR[]\")),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "vm_map_fns_call_b8ba15a0",
+    "file": "src/vm/map_fns.rs",
+    "line": 243,
+    "decision": "wanted_type(name) == \"MAP\" || name.eq_ignore_ascii_case(\"map_extract_value\")",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "vm_map_fns_call_598fd811",
     "file": "src/vm/map_fns.rs",
-    "line": 213,
+    "line": 229,
     "decision": "match lookup(entries, |e| e == k) {\n                None => \"[]\".to_string(),\n                Some(Some(v)) => format!(\"[{v}]\"),\n                Some(None) => \"[NULL]\".to_string(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61490,20 +61510,90 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_json_keys_72b67bea",
+    "id": "vm_map_fns_wanted_type_16d7ed93",
     "file": "src/vm/map_fns.rs",
-    "line": 238,
-    "decision": "match path {\n        None => \"$\",\n        Some(Value::Str(p)) => p.as_ref(),\n        Some(_) => return Value::Null,\n    }",
+    "line": 254,
+    "decision": "map_only.iter().any(|f| f.eq_ignore_ascii_case(name))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_map_fns_not_a_dfe46baf",
+    "file": "src/vm/map_fns.rs",
+    "line": 265,
+    "decision": "match value {\n        Value::Float(f) => format!(\"{f:?}\"),\n        other => other.to_string(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_json_array_elements_text_72b67bea",
+    "id": "vm_map_fns_list_arg_128af836",
     "file": "src/vm/map_fns.rs",
-    "line": 272,
-    "decision": "match path {\n        None => \"$\",\n        Some(Value::Str(p)) => p.as_ref(),\n        Some(_) => return Value::Null,\n    }",
+    "line": 282,
+    "decision": "match value {\n        Value::Null => Ok(None),\n        Value::List(items) => Ok(Some(items)),\n        other => Err(not_a(other, \"VARCHAR[]\")),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_map_fns_index_arg_8b65bd4a",
+    "file": "src/vm/map_fns.rs",
+    "line": 292,
+    "decision": "match value {\n        Value::Null => Ok(None),\n        Value::Int(i) => Ok(Some(*i)),\n        Value::Str(s) => s\n            .trim()\n            .parse()\n            .map(Some)\n            .map_err(|_| not_a(value, \"INT64\")),\n        other => Err(not_a(other, \"INT64\")),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_map_fns_bound_arg_2bff5b9f",
+    "file": "src/vm/map_fns.rs",
+    "line": 309,
+    "decision": "match value {\n        Value::Float(f) => {\n            let r = f.round();\n            if r.is_finite() && r > -LIMIT && r < LIMIT {\n                #[allow(\n                    clippy::cast_possible_truncation,\n                    reason = \"`r` is integral and inside `i64`'s range, checked above\"\n                )]\n                Ok(Some(r as i64))\n            } else {\n                Err(not_a(value, \"INT64\"))\n            }\n        }\n        other => index_arg(other),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_map_fns_bound_arg_6e257dc1",
+    "file": "src/vm/map_fns.rs",
+    "line": 312,
+    "decision": "r.is_finite() && r > -LIMIT && r < LIMIT",
+    "conditions": 3,
+    "vectors_required": 4,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_map_fns_json_args_fff65920",
+    "file": "src/vm/map_fns.rs",
+    "line": 359,
+    "decision": "match v {\n        Value::Null => Ok(None),\n        Value::Str(s) => Ok(Some(s.to_string())),\n        other => Err(not_a(other, \"VARCHAR\")),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_map_fns_json_args_6578381d",
+    "file": "src/vm/map_fns.rs",
+    "line": 364,
+    "decision": "match args.first() {\n        Some(doc) => text(doc)?,\n        None => return Err(arity(\"json\", args)),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_map_fns_json_args_3cad19fc",
+    "file": "src/vm/map_fns.rs",
+    "line": 368,
+    "decision": "match args.get(1) {\n        Some(path) => text(path)?,\n        None => Some(\"$\".to_string()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -61512,7 +61602,7 @@
   {
     "id": "vm_map_fns_json_array_elements_text_6454b03a",
     "file": "src/vm/map_fns.rs",
-    "line": 287,
+    "line": 396,
     "decision": "!is_array",
     "conditions": 1,
     "vectors_required": 2,
@@ -61522,7 +61612,7 @@
   {
     "id": "vm_map_fns_json_array_elements_text_f8203f39",
     "file": "src/vm/map_fns.rs",
-    "line": 293,
+    "line": 402,
     "decision": "match crate::functions::call(\"json_extract\", &[text(doc), at]) {\n                Ok(Scalar::Text(t)) => Some(Arc::from(&*t)),\n                Ok(Scalar::Integer(n)) => Some(Arc::from(n.to_string())),\n                Ok(Scalar::Real(r)) => Some(Arc::from(r.to_string())),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61532,7 +61622,7 @@
   {
     "id": "vm_map_fns_string_split_36b63a93",
     "file": "src/vm/map_fns.rs",
-    "line": 305,
+    "line": 414,
     "decision": "matches!(s, Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -61542,7 +61632,7 @@
   {
     "id": "vm_map_fns_string_split_b3aaf14d",
     "file": "src/vm/map_fns.rs",
-    "line": 309,
+    "line": 418,
     "decision": "match sep {\n        Value::Null => vec![Some(s.as_str().into())],\n        sep => match sep.to_string() {\n            sep if sep.is_empty() && s.is_empty() => vec![Some(\"\".into())],\n            sep if sep.is_empty() => s.chars().map(|c| Some(c.to_string().into())).collect(),\n            sep => s\n                .split(sep.as_str())\n                .map(|part| Some(part.into()))\n                .collect(),\n        },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61552,7 +61642,7 @@
   {
     "id": "vm_map_fns_string_split_294a599b",
     "file": "src/vm/map_fns.rs",
-    "line": 311,
+    "line": 420,
     "decision": "match sep.to_string() {\n            sep if sep.is_empty() && s.is_empty() => vec![Some(\"\".into())],\n            sep if sep.is_empty() => s.chars().map(|c| Some(c.to_string().into())).collect(),\n            sep => s\n                .split(sep.as_str())\n                .map(|part| Some(part.into()))\n                .collect(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61562,7 +61652,7 @@
   {
     "id": "vm_map_fns_string_split_e1a5eb72",
     "file": "src/vm/map_fns.rs",
-    "line": 312,
+    "line": 421,
     "decision": "sep.is_empty() && s.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -61572,7 +61662,7 @@
   {
     "id": "vm_map_fns_string_split_8eaf47fa",
     "file": "src/vm/map_fns.rs",
-    "line": 313,
+    "line": 422,
     "decision": "sep.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -61580,50 +61670,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_list_call_f74af700",
+    "id": "vm_map_fns_list_call_df8809aa",
     "file": "src/vm/map_fns.rs",
-    "line": 325,
-    "decision": "match (name.to_ascii_lowercase().as_str(), rest) {\n        (\"map_extract_value\" | \"list_extract\" | \"list_element\", [index]) => {\n            list_element(items, index)\n        }\n        (\"len\" | \"array_length\", []) => Value::Int(i64::try_from(items.len()).unwrap_or(i64::MAX)),\n        (\"list_has_any\" | \"array_has_any\", [Value::List(wanted)]) => {\n            Value::Bool(wanted.iter().flatten().any(|w| has(items, w)))\n        }\n        (\"list_has_all\" | \"array_has_all\", [Value::List(wanted)]) => {\n            Value::Bool(wanted.iter().flatten().all(|w| has(items, w)))\n        }\n        (\"list_position\" | \"list_indexof\" | \"array_position\" | \"array_indexof\", [value]) => {\n            list_position(items, value)\n        }\n        (\"array_to_string\", [sep]) => join(items, sep),\n        (\"list_aggr\" | \"list_aggregate\", [Value::Str(agg), sep @ ..]) => {\n            aggregate(items, agg, sep.first().copied().unwrap_or(&Value::Null))\n        }\n        (\"list_distinct\" | \"array_distinct\", []) => Value::List(std::sync::Arc::new(\n            distinct(items)\n                .into_iter()\n                .map(|s| Some(s.clone()))\n                .collect(),\n        )),\n        (\"list_unique\" | \"array_unique\", []) => {\n            Value::Int(i64::try_from(distinct(items).len()).unwrap_or(i64::MAX))\n        }\n        (\"list_sort\" | \"array_sort\", order) => match sort_order(order) {\n            Some((desc, nulls_first)) => sorted(items, desc, nulls_first),\n            None => Value::Null,\n        },\n        (\"list_reverse_sort\" | \"array_reverse_sort\", nulls) => {\n            match sort_order(&[\n                &Value::Str(\"DESC\".into()),\n                nulls.first().copied().unwrap_or(&Value::Null),\n            ]) {\n                Some((desc, nulls_first)) => sorted(items, desc, nulls_first),\n                None => Value::Null,\n            }\n        }\n        (\"list_reverse\" | \"array_reverse\", []) => {\n            Value::List(std::sync::Arc::new(items.iter().rev().cloned().collect()))\n        }\n        (\"list_slice\" | \"array_slice\", [Value::Int(begin), Value::Int(end)]) => {\n            slice(items, *begin, *end)\n        }\n        _ => Value::Null,\n    }",
+    "line": 435,
+    "decision": "match (name.to_ascii_lowercase().as_str(), rest) {\n        (\"map_extract_value\" | \"list_extract\" | \"list_element\", [index]) => {\n            index_arg(index)?.map_or(Value::Null, |i| list_element(items, i))\n        }\n        (\"len\" | \"array_length\", []) => Value::Int(i64::try_from(items.len()).unwrap_or(i64::MAX)),\n        (\"list_has_any\" | \"array_has_any\", [wanted]) => list_arg(wanted)?\n            .map_or(Value::Null, |w| {\n                Value::Bool(w.iter().flatten().any(|w| has(items, w)))\n            }),\n        (\"list_has_all\" | \"array_has_all\", [wanted]) => list_arg(wanted)?\n            .map_or(Value::Null, |w| {\n                Value::Bool(w.iter().flatten().all(|w| has(items, w)))\n            }),\n        (\"list_position\" | \"list_indexof\" | \"array_position\" | \"array_indexof\", [value]) => {\n            list_position(items, value)\n        }\n        (\"array_to_string\", [sep]) => join(items, sep),\n        (\"list_aggr\" | \"list_aggregate\", [agg, sep @ ..]) => {\n            aggregate(items, agg, sep.first().copied().unwrap_or(&Value::Null))?\n        }\n        (\"list_distinct\" | \"array_distinct\", []) => Value::List(std::sync::Arc::new(\n            distinct(items)\n                .into_iter()\n                .map(|s| Some(s.clone()))\n                .collect(),\n        )),\n        (\"list_unique\" | \"array_unique\", []) => {\n            Value::Int(i64::try_from(distinct(items).len()).unwrap_or(i64::MAX))\n        }\n        (\"list_sort\" | \"array_sort\", order) => {\n            let (desc, nulls_first) = sort_order(order)?;\n            sorted(items, desc, nulls_first)\n        }\n        (\"list_reverse_sort\" | \"array_reverse_sort\", nulls) => {\n            let (desc, nulls_first) = sort_order(&[\n                &Value::Str(\"DESC\".into()),\n                nulls.first().copied().unwrap_or(&Value::Null),\n            ])?;\n            sorted(items, desc, nulls_first)\n        }\n        (\"list_reverse\" | \"array_reverse\", []) => {\n            Value::List(std::sync::Arc::new(items.iter().rev().cloned().collect()))\n        }\n        (\"list_slice\" | \"array_slice\", [begin, end]) => {\n            match (bound_arg(begin)?, bound_arg(end)?) {\n                (Some(begin), Some(end)) => slice(items, begin, end),\n                _ => Value::Null,\n            }\n        }\n        _ => return Err(not_a(list, \"MAP\")),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "vm_map_fns_list_call_5d4aadbc",
+    "id": "vm_map_fns_list_call_e16b7456",
     "file": "src/vm/map_fns.rs",
-    "line": 352,
-    "decision": "match sort_order(order) {\n            Some((desc, nulls_first)) => sorted(items, desc, nulls_first),\n            None => Value::Null,\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_map_fns_list_call_99ca593a",
-    "file": "src/vm/map_fns.rs",
-    "line": 357,
-    "decision": "match sort_order(&[\n                &Value::Str(\"DESC\".into()),\n                nulls.first().copied().unwrap_or(&Value::Null),\n            ]) {\n                Some((desc, nulls_first)) => sorted(items, desc, nulls_first),\n                None => Value::Null,\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "vm_map_fns_list_concat_e6ff5765",
-    "file": "src/vm/map_fns.rs",
-    "line": 384,
-    "decision": "match (list_part(a), list_part(b)) {\n        (Some(a), Some(b)) => {\n            Value::List(std::sync::Arc::new(a.iter().chain(b).cloned().collect()))\n        }\n        _ => Value::Null,\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": true
-  },
-  {
-    "id": "vm_map_fns_list_part_361a2d4d",
-    "file": "src/vm/map_fns.rs",
-    "line": 394,
-    "decision": "match v {\n        Value::List(items) => Some(items.as_slice()),\n        Value::Null => Some(&[]),\n        _ => None,\n    }",
+    "line": 479,
+    "decision": "match (bound_arg(begin)?, bound_arg(end)?) {\n                (Some(begin), Some(end)) => slice(items, begin, end),\n                _ => Value::Null,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -61632,7 +61692,7 @@
   {
     "id": "vm_map_fns_separator_519502f7",
     "file": "src/vm/map_fns.rs",
-    "line": 403,
+    "line": 511,
     "decision": "match sep {\n        Value::Null => \",\".to_string(),\n        sep => sep.to_string(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61640,10 +61700,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_aggregate_0fb50a0e",
+    "id": "vm_map_fns_aggregate_1afbf593",
     "file": "src/vm/map_fns.rs",
-    "line": 422,
-    "decision": "match agg.to_ascii_lowercase().as_str() {\n        // Like the `string_agg` aggregate: nothing to join is NULL, where\n        // `array_to_string` gives ''.\n        \"string_agg\" if items.iter().all(Option::is_none) => Value::Null,\n        \"string_agg\" => join(items, sep),\n        \"count\" => Value::Int(i64::try_from(values.count()).unwrap_or(i64::MAX)),\n        \"min\" => text(values.min()),\n        \"max\" => text(values.max()),\n        \"first\" => text(items.first().and_then(Option::as_ref)),\n        \"last\" => text(items.last().and_then(Option::as_ref)),\n        _ => Value::Null,\n    }",
+    "line": 539,
+    "decision": "match name.to_ascii_lowercase().as_str() {\n        // Like the `string_agg` aggregate: nothing to join is NULL, where\n        // `array_to_string` gives ''.\n        \"string_agg\" if items.iter().all(Option::is_none) => Value::Null,\n        \"string_agg\" => join(items, sep),\n        \"count\" => Value::Int(i64::try_from(values.count()).unwrap_or(i64::MAX)),\n        \"min\" => text(values.min()),\n        \"max\" => text(values.max()),\n        \"first\" => text(items.first().and_then(Option::as_ref)),\n        \"last\" => text(items.last().and_then(Option::as_ref)),\n        _ => return Err(unknown()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -61652,7 +61712,7 @@
   {
     "id": "vm_map_fns_aggregate_bc50d6da",
     "file": "src/vm/map_fns.rs",
-    "line": 425,
+    "line": 542,
     "decision": "items.iter().all(Option::is_none)",
     "conditions": 1,
     "vectors_required": 2,
@@ -61660,30 +61720,30 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_sort_order_dacf0364",
+    "id": "vm_map_fns_sort_order_f4c8897c",
     "file": "src/vm/map_fns.rs",
-    "line": 449,
-    "decision": "match args.get(i) {\n        None | Some(Value::Null) => Some(None),\n        Some(Value::Str(s)) => Some(Some(s.trim().to_ascii_uppercase())),\n        Some(_) => None,\n    }",
+    "line": 567,
+    "decision": "match args.get(i) {\n        None | Some(Value::Null) => Ok(None),\n        Some(Value::Str(s)) => Ok(Some(s.trim().to_ascii_uppercase())),\n        Some(other) => Err(not_a(other, \"sort order\")),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_sort_order_b3d7ef8a",
+    "id": "vm_map_fns_sort_order_1217d05b",
     "file": "src/vm/map_fns.rs",
-    "line": 454,
-    "decision": "match word(0)?.as_deref() {\n        None | Some(\"ASC\") => false,\n        Some(\"DESC\") => true,\n        Some(_) => return None,\n    }",
+    "line": 576,
+    "decision": "match word(0)?.as_deref() {\n        None | Some(\"ASC\") => false,\n        Some(\"DESC\") => true,\n        Some(w) => return Err(unknown(w)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "vm_map_fns_sort_order_6de7c7e4",
+    "id": "vm_map_fns_sort_order_40e215e3",
     "file": "src/vm/map_fns.rs",
-    "line": 459,
-    "decision": "match word(1)?.as_deref() {\n        None | Some(\"NULLS LAST\") => false,\n        Some(\"NULLS FIRST\") => true,\n        Some(_) => return None,\n    }",
+    "line": 581,
+    "decision": "match word(1)?.as_deref() {\n        None | Some(\"NULLS LAST\") => false,\n        Some(\"NULLS FIRST\") => true,\n        Some(w) => return Err(unknown(w)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -61692,7 +61752,7 @@
   {
     "id": "vm_map_fns_sorted_e79648e7",
     "file": "src/vm/map_fns.rs",
-    "line": 470,
+    "line": 592,
     "decision": "desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -61702,7 +61762,7 @@
   {
     "id": "vm_map_fns_sorted_c46c2af7",
     "file": "src/vm/map_fns.rs",
-    "line": 475,
+    "line": 597,
     "decision": "nulls_first",
     "conditions": 1,
     "vectors_required": 2,
@@ -61712,7 +61772,7 @@
   {
     "id": "vm_map_fns_slice_2ac45ae8",
     "file": "src/vm/map_fns.rs",
-    "line": 487,
+    "line": 609,
     "decision": "i < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -61722,7 +61782,7 @@
   {
     "id": "vm_map_fns_literal_arg_error_ce4f22af",
     "file": "src/vm/map_fns.rs",
-    "line": 513,
+    "line": 635,
     "decision": "match (name.to_ascii_lowercase().as_str(), position) {\n        (\"list_aggr\" | \"list_aggregate\", 1) => {\n            &[\"string_agg\", \"count\", \"min\", \"max\", \"first\", \"last\"]\n        }\n        (\"list_sort\" | \"array_sort\", 1) => &[\"asc\", \"desc\"],\n        (\"list_sort\" | \"array_sort\", 2) | (\"list_reverse_sort\" | \"array_reverse_sort\", 1) => {\n            &[\"nulls first\", \"nulls last\"]\n        }\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61732,7 +61792,7 @@
   {
     "id": "vm_map_fns_list_position_2ac8fe48",
     "file": "src/vm/map_fns.rs",
-    "line": 541,
+    "line": 663,
     "decision": "match value {\n        Value::Null => None,\n        v => Some(v.to_string()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61742,7 +61802,7 @@
   {
     "id": "vm_map_fns_list_value_dc5af0d4",
     "file": "src/vm/map_fns.rs",
-    "line": 558,
+    "line": 680,
     "decision": "match v {\n                Value::Str(s) => Some(s.as_ref().into()),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61750,10 +61810,10 @@
     "wildcard_risk": true
   },
   {
-    "id": "vm_map_fns_list_element_b0e8ba49",
+    "id": "vm_map_fns_list_element_2ac45ae8",
     "file": "src/vm/map_fns.rs",
-    "line": 572,
-    "decision": "*i < 0",
+    "line": 691,
+    "decision": "i < 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -61762,7 +61822,7 @@
   {
     "id": "vm_map_fns_list_element_7f3f6a9f",
     "file": "src/vm/map_fns.rs",
-    "line": 577,
+    "line": 696,
     "decision": "match usize::try_from(at).ok().and_then(|at| items.get(at)) {\n        Some(Some(item)) => Value::Str(item.to_string().into()),\n        _ => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -61772,7 +61832,7 @@
   {
     "id": "vm_map_fns_list_contains_d241cc06",
     "file": "src/vm/map_fns.rs",
-    "line": 594,
+    "line": 713,
     "decision": "matches!(value, Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -61782,7 +61842,7 @@
   {
     "id": "vm_map_fns_value_of_52ce65b7",
     "file": "src/vm/map_fns.rs",
-    "line": 616,
+    "line": 735,
     "decision": "match found {\n        Some(Some(v)) => Value::Str(v.to_string().into()),\n        _ => Value::Null,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -62012,7 +62072,7 @@
   {
     "id": "vm_row_aggregate_fmt_2c8037e3",
     "file": "src/vm/row/aggregate.rs",
-    "line": 40,
+    "line": 39,
     "decision": "match self {\n            AggregateError::Unknown { name } => write!(f, \"no such aggregate function: {name}\"),\n            AggregateError::IntegerOverflow => write!(f, \"integer overflow\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -62022,7 +62082,7 @@
   {
     "id": "vm_row_aggregate_numeric_arg_87c89f73",
     "file": "src/vm/row/aggregate.rs",
-    "line": 55,
+    "line": 54,
     "decision": "match arg {\n        None | Some(Value::Null) => None,\n        Some(v @ (Value::Integer(_) | Value::Real(_))) => Some(v.clone()),\n        Some(Value::Text(s)) => Some(coerce_text_to_numeric(s)),\n        Some(Value::Blob(b)) => Some(coerce_text_to_numeric(&String::from_utf8_lossy(b))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -62030,10 +62090,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_aggregate_initial_698c9e99",
+    "id": "vm_row_aggregate_initial_97826116",
     "file": "src/vm/row/aggregate.rs",
-    "line": 112,
-    "decision": "match name.to_ascii_lowercase().as_str() {\n            \"count\" => Ok(AggState::Count(0)),\n            \"sum\" => Ok(AggState::Sum {\n                int_total: 0,\n                real_total: 0.0,\n                saw_real: false,\n                saw_any: false,\n            }),\n            \"avg\" => Ok(AggState::Avg {\n                int_total: 0,\n                real_total: 0.0,\n                saw_real: false,\n                count: 0,\n            }),\n            \"min\" => Ok(AggState::Min(None)),\n            \"max\" => Ok(AggState::Max(None)),\n            other => Err(AggregateError::Unknown {\n                name: other.to_string(),\n            }),\n        }",
+    "line": 116,
+    "decision": "match name.to_ascii_lowercase().as_str() {\n            \"count\" => Ok(AggState::Count(0)),\n            \"sum\" => Ok(AggState::Sum {\n                int_total: 0,\n                real_total: 0.0,\n                saw_real: false,\n                saw_any: false,\n                overflowed: false,\n            }),\n            \"avg\" => Ok(AggState::Avg {\n                int_total: 0,\n                real_total: 0.0,\n                saw_real: false,\n                count: 0,\n            }),\n            \"min\" => Ok(AggState::Min(None)),\n            \"max\" => Ok(AggState::Max(None)),\n            other => Err(AggregateError::Unknown {\n                name: other.to_string(),\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -62042,7 +62102,7 @@
   {
     "id": "vm_row_aggregate_step_3bb12470",
     "file": "src/vm/row/aggregate.rs",
-    "line": 146,
+    "line": 151,
     "decision": "match state {\n        Some(s) => s,\n        None => AggState::initial(name)?,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -62050,10 +62110,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_aggregate_step_e0707e33",
+    "id": "vm_row_aggregate_step_49fe24b0",
     "file": "src/vm/row/aggregate.rs",
-    "line": 150,
-    "decision": "match &mut state {\n        AggState::Count(n) => {\n            if args.first().is_none_or(|v| !matches!(v, Value::Null)) {\n                *n = n.saturating_add(1);\n            }\n        }\n        AggState::Sum {\n            int_total,\n            real_total,\n            saw_real,\n            saw_any,\n        } => match numeric_arg(args.first()) {\n            None => {}\n            Some(Value::Integer(i)) => {\n                *saw_any = true;\n                if *saw_real {\n                    *real_total += i as f64;\n                } else {\n                    *int_total = int_total.saturating_add(i128::from(i));\n                }\n            }\n            Some(Value::Real(r)) => {\n                *saw_any = true;\n                if !*saw_real {\n                    *real_total += *int_total as f64;\n                    *int_total = 0;\n                    *saw_real = true;\n                }\n                *real_total += r;\n            }\n            Some(Value::Null | Value::Text(_) | Value::Blob(_)) => {}\n        },\n        AggState::Avg {\n            int_total,\n            real_total,\n            saw_real,\n            count,\n        } => match numeric_arg(args.first()) {\n            None => {}\n            Some(Value::Integer(i)) => {\n                *count = count.saturating_add(1);\n                if *saw_real {\n                    *real_total += i as f64;\n                } else {\n                    *int_total = int_total.saturating_add(i128::from(i));\n                }\n            }\n            Some(Value::Real(r)) => {\n                *count = count.saturating_add(1);\n                if !*saw_real {\n                    *real_total += *int_total as f64;\n                    *int_total = 0;\n                    *saw_real = true;\n                }\n                *real_total += r;\n            }\n            Some(Value::Null | Value::Text(_) | Value::Blob(_)) => {}\n        },\n        AggState::Min(current) => {\n            if let Some(v) = args.first().filter(|v| !matches!(v, Value::Null)) {\n                if current\n                    .as_ref()\n                    .is_none_or(|c| compare(v, c, collation) == Ordering::Less)\n                {\n                    *current = Some(v.clone());\n                }\n            }\n        }\n        AggState::Max(current) => {\n            if let Some(v) = args.first().filter(|v| !matches!(v, Value::Null)) {\n                if current\n                    .as_ref()\n                    .is_none_or(|c| compare(v, c, collation) == Ordering::Greater)\n                {\n                    *current = Some(v.clone());\n                }\n            }\n        }\n    }",
+    "line": 155,
+    "decision": "match &mut state {\n        AggState::Count(n) => {\n            if args.first().is_none_or(|v| !matches!(v, Value::Null)) {\n                *n = n.saturating_add(1);\n            }\n        }\n        AggState::Sum {\n            int_total,\n            real_total,\n            saw_real,\n            saw_any,\n            overflowed,\n        } => match numeric_arg(args.first()) {\n            None => {}\n            Some(Value::Integer(i)) => {\n                *saw_any = true;\n                if *saw_real {\n                    *real_total += i as f64;\n                } else {\n                    // `int_total` stays inside `i64` until a step overflows\n                    // it; sqlite3 then keeps summing approximately and\n                    // fails at the end unless a REAL input follows.\n                    match i64::try_from(*int_total)\n                        .ok()\n                        .and_then(|t| t.checked_add(i))\n                    {\n                        Some(total) => *int_total = i128::from(total),\n                        None => {\n                            *real_total += *int_total as f64 + i as f64;\n                            *int_total = 0;\n                            *saw_real = true;\n                            *overflowed = true;\n                        }\n                    }\n                }\n            }\n            Some(Value::Real(r)) => {\n                *saw_any = true;\n                *overflowed = false;\n                if !*saw_real {\n                    *real_total += *int_total as f64;\n                    *int_total = 0;\n                    *saw_real = true;\n                }\n                *real_total += r;\n            }\n            Some(Value::Null | Value::Text(_) | Value::Blob(_)) => {}\n        },\n        AggState::Avg {\n            int_total,\n            real_total,\n            saw_real,\n            count,\n        } => match numeric_arg(args.first()) {\n            None => {}\n            Some(Value::Integer(i)) => {\n                *count = count.saturating_add(1);\n                if *saw_real {\n                    *real_total += i as f64;\n                } else {\n                    *int_total = int_total.saturating_add(i128::from(i));\n                }\n            }\n            Some(Value::Real(r)) => {\n                *count = count.saturating_add(1);\n                if !*saw_real {\n                    *real_total += *int_total as f64;\n                    *int_total = 0;\n                    *saw_real = true;\n                }\n                *real_total += r;\n            }\n            Some(Value::Null | Value::Text(_) | Value::Blob(_)) => {}\n        },\n        AggState::Min(current) => {\n            if let Some(v) = args.first().filter(|v| !matches!(v, Value::Null)) {\n                if current\n                    .as_ref()\n                    .is_none_or(|c| compare(v, c, collation) == Ordering::Less)\n                {\n                    *current = Some(v.clone());\n                }\n            }\n        }\n        AggState::Max(current) => {\n            if let Some(v) = args.first().filter(|v| !matches!(v, Value::Null)) {\n                if current\n                    .as_ref()\n                    .is_none_or(|c| compare(v, c, collation) == Ordering::Greater)\n                {\n                    *current = Some(v.clone());\n                }\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -62062,7 +62122,7 @@
   {
     "id": "vm_row_aggregate_step_a31b13c1",
     "file": "src/vm/row/aggregate.rs",
-    "line": 152,
+    "line": 157,
     "decision": "args.first().is_none_or(|v| !matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -62070,10 +62130,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_aggregate_step_f24e8549",
+    "id": "vm_row_aggregate_step_039c29b6",
     "file": "src/vm/row/aggregate.rs",
-    "line": 161,
-    "decision": "match numeric_arg(args.first()) {\n            None => {}\n            Some(Value::Integer(i)) => {\n                *saw_any = true;\n                if *saw_real {\n                    *real_total += i as f64;\n                } else {\n                    *int_total = int_total.saturating_add(i128::from(i));\n                }\n            }\n            Some(Value::Real(r)) => {\n                *saw_any = true;\n                if !*saw_real {\n                    *real_total += *int_total as f64;\n                    *int_total = 0;\n                    *saw_real = true;\n                }\n                *real_total += r;\n            }\n            Some(Value::Null | Value::Text(_) | Value::Blob(_)) => {}\n        }",
+    "line": 167,
+    "decision": "match numeric_arg(args.first()) {\n            None => {}\n            Some(Value::Integer(i)) => {\n                *saw_any = true;\n                if *saw_real {\n                    *real_total += i as f64;\n                } else {\n                    // `int_total` stays inside `i64` until a step overflows\n                    // it; sqlite3 then keeps summing approximately and\n                    // fails at the end unless a REAL input follows.\n                    match i64::try_from(*int_total)\n                        .ok()\n                        .and_then(|t| t.checked_add(i))\n                    {\n                        Some(total) => *int_total = i128::from(total),\n                        None => {\n                            *real_total += *int_total as f64 + i as f64;\n                            *int_total = 0;\n                            *saw_real = true;\n                            *overflowed = true;\n                        }\n                    }\n                }\n            }\n            Some(Value::Real(r)) => {\n                *saw_any = true;\n                *overflowed = false;\n                if !*saw_real {\n                    *real_total += *int_total as f64;\n                    *int_total = 0;\n                    *saw_real = true;\n                }\n                *real_total += r;\n            }\n            Some(Value::Null | Value::Text(_) | Value::Blob(_)) => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -62082,7 +62142,7 @@
   {
     "id": "vm_row_aggregate_step_7a1a3847",
     "file": "src/vm/row/aggregate.rs",
-    "line": 165,
+    "line": 171,
     "decision": "*saw_real",
     "conditions": 1,
     "vectors_required": 2,
@@ -62090,9 +62150,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "vm_row_aggregate_step_6a5895d5",
+    "file": "src/vm/row/aggregate.rs",
+    "line": 177,
+    "decision": "match i64::try_from(*int_total)\n                        .ok()\n                        .and_then(|t| t.checked_add(i))\n                    {\n                        Some(total) => *int_total = i128::from(total),\n                        None => {\n                            *real_total += *int_total as f64 + i as f64;\n                            *int_total = 0;\n                            *saw_real = true;\n                            *overflowed = true;\n                        }\n                    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "vm_row_aggregate_step_01214aa4",
     "file": "src/vm/row/aggregate.rs",
-    "line": 173,
+    "line": 194,
     "decision": "!*saw_real",
     "conditions": 1,
     "vectors_required": 2,
@@ -62102,7 +62172,7 @@
   {
     "id": "vm_row_aggregate_step_7f117bdd",
     "file": "src/vm/row/aggregate.rs",
-    "line": 187,
+    "line": 208,
     "decision": "match numeric_arg(args.first()) {\n            None => {}\n            Some(Value::Integer(i)) => {\n                *count = count.saturating_add(1);\n                if *saw_real {\n                    *real_total += i as f64;\n                } else {\n                    *int_total = int_total.saturating_add(i128::from(i));\n                }\n            }\n            Some(Value::Real(r)) => {\n                *count = count.saturating_add(1);\n                if !*saw_real {\n                    *real_total += *int_total as f64;\n                    *int_total = 0;\n                    *saw_real = true;\n                }\n                *real_total += r;\n            }\n            Some(Value::Null | Value::Text(_) | Value::Blob(_)) => {}\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -62112,7 +62182,7 @@
   {
     "id": "vm_row_aggregate_step_7a1a3847_2",
     "file": "src/vm/row/aggregate.rs",
-    "line": 191,
+    "line": 212,
     "decision": "*saw_real",
     "conditions": 1,
     "vectors_required": 2,
@@ -62122,7 +62192,7 @@
   {
     "id": "vm_row_aggregate_step_01214aa4_2",
     "file": "src/vm/row/aggregate.rs",
-    "line": 199,
+    "line": 220,
     "decision": "!*saw_real",
     "conditions": 1,
     "vectors_required": 2,
@@ -62132,7 +62202,7 @@
   {
     "id": "vm_row_aggregate_step_922fbc1b",
     "file": "src/vm/row/aggregate.rs",
-    "line": 209,
+    "line": 230,
     "decision": "let Some(v) = args.first().filter(|v| !matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -62142,7 +62212,7 @@
   {
     "id": "vm_row_aggregate_step_d287c7ca",
     "file": "src/vm/row/aggregate.rs",
-    "line": 210,
+    "line": 231,
     "decision": "current\n                    .as_ref()\n                    .is_none_or(|c| compare(v, c, collation) == Ordering::Less)",
     "conditions": 1,
     "vectors_required": 2,
@@ -62152,7 +62222,7 @@
   {
     "id": "vm_row_aggregate_step_922fbc1b_2",
     "file": "src/vm/row/aggregate.rs",
-    "line": 219,
+    "line": 240,
     "decision": "let Some(v) = args.first().filter(|v| !matches!(v, Value::Null))",
     "conditions": 1,
     "vectors_required": 2,
@@ -62162,7 +62232,7 @@
   {
     "id": "vm_row_aggregate_step_712ed2b6",
     "file": "src/vm/row/aggregate.rs",
-    "line": 220,
+    "line": 241,
     "decision": "current\n                    .as_ref()\n                    .is_none_or(|c| compare(v, c, collation) == Ordering::Greater)",
     "conditions": 1,
     "vectors_required": 2,
@@ -62170,10 +62240,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_aggregate_finalize_8efa7097",
+    "id": "vm_row_aggregate_finalize_d759275b",
     "file": "src/vm/row/aggregate.rs",
-    "line": 237,
-    "decision": "match state {\n        None => match name.to_ascii_lowercase().as_str() {\n            \"count\" => Ok(Value::Integer(0)),\n            \"sum\" | \"avg\" | \"min\" | \"max\" => Ok(Value::Null),\n            other => Err(AggregateError::Unknown {\n                name: other.to_string(),\n            }),\n        },\n        Some(AggState::Count(n)) => Ok(Value::Integer(*n)),\n        Some(AggState::Sum {\n            int_total,\n            real_total,\n            saw_real,\n            saw_any,\n        }) => {\n            if !saw_any {\n                return Ok(Value::Null);\n            }\n            #[allow(clippy::cast_precision_loss)]\n            if *saw_real {\n                Ok(Value::Real(*real_total + *int_total as f64))\n            } else {\n                i64::try_from(*int_total)\n                    .map(Value::Integer)\n                    .map_err(|_| AggregateError::IntegerOverflow)\n            }\n        }\n        Some(AggState::Avg {\n            int_total,\n            real_total,\n            saw_real,\n            count,\n        }) => {\n            if *count == 0 {\n                return Ok(Value::Null);\n            }\n            #[allow(clippy::cast_precision_loss)]\n            let total = if *saw_real {\n                *real_total + *int_total as f64\n            } else {\n                *int_total as f64\n            };\n            #[allow(clippy::cast_precision_loss)]\n            Ok(Value::Real(total / *count as f64))\n        }\n        Some(AggState::Min(v)) | Some(AggState::Max(v)) => Ok(v.clone().unwrap_or(Value::Null)),\n    }",
+    "line": 258,
+    "decision": "match state {\n        None => match name.to_ascii_lowercase().as_str() {\n            \"count\" => Ok(Value::Integer(0)),\n            \"sum\" | \"avg\" | \"min\" | \"max\" => Ok(Value::Null),\n            other => Err(AggregateError::Unknown {\n                name: other.to_string(),\n            }),\n        },\n        Some(AggState::Count(n)) => Ok(Value::Integer(*n)),\n        Some(AggState::Sum {\n            int_total,\n            real_total,\n            saw_real,\n            saw_any,\n            overflowed,\n        }) => {\n            if !saw_any {\n                return Ok(Value::Null);\n            }\n            if *overflowed {\n                return Err(AggregateError::IntegerOverflow);\n            }\n            #[allow(clippy::cast_precision_loss)]\n            if *saw_real {\n                Ok(Value::Real(*real_total + *int_total as f64))\n            } else {\n                i64::try_from(*int_total)\n                    .map(Value::Integer)\n                    .map_err(|_| AggregateError::IntegerOverflow)\n            }\n        }\n        Some(AggState::Avg {\n            int_total,\n            real_total,\n            saw_real,\n            count,\n        }) => {\n            if *count == 0 {\n                return Ok(Value::Null);\n            }\n            #[allow(clippy::cast_precision_loss)]\n            let total = if *saw_real {\n                *real_total + *int_total as f64\n            } else {\n                *int_total as f64\n            };\n            #[allow(clippy::cast_precision_loss)]\n            Ok(Value::Real(total / *count as f64))\n        }\n        Some(AggState::Min(v)) | Some(AggState::Max(v)) => Ok(v.clone().unwrap_or(Value::Null)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -62182,7 +62252,7 @@
   {
     "id": "vm_row_aggregate_finalize_6223b026",
     "file": "src/vm/row/aggregate.rs",
-    "line": 238,
+    "line": 259,
     "decision": "match name.to_ascii_lowercase().as_str() {\n            \"count\" => Ok(Value::Integer(0)),\n            \"sum\" | \"avg\" | \"min\" | \"max\" => Ok(Value::Null),\n            other => Err(AggregateError::Unknown {\n                name: other.to_string(),\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -62192,8 +62262,18 @@
   {
     "id": "vm_row_aggregate_finalize_67e405ae",
     "file": "src/vm/row/aggregate.rs",
-    "line": 252,
+    "line": 274,
     "decision": "!saw_any",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "vm_row_aggregate_finalize_e955c8c1",
+    "file": "src/vm/row/aggregate.rs",
+    "line": 277,
+    "decision": "*overflowed",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -62202,7 +62282,7 @@
   {
     "id": "vm_row_aggregate_finalize_7a1a3847",
     "file": "src/vm/row/aggregate.rs",
-    "line": 256,
+    "line": 281,
     "decision": "*saw_real",
     "conditions": 1,
     "vectors_required": 2,
@@ -62212,7 +62292,7 @@
   {
     "id": "vm_row_aggregate_finalize_9bdb15a1",
     "file": "src/vm/row/aggregate.rs",
-    "line": 270,
+    "line": 295,
     "decision": "*count == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -62222,7 +62302,7 @@
   {
     "id": "vm_row_aggregate_finalize_7a1a3847_2",
     "file": "src/vm/row/aggregate.rs",
-    "line": 274,
+    "line": 299,
     "decision": "*saw_real",
     "conditions": 1,
     "vectors_required": 2,
@@ -63490,10 +63570,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_vm_fmt_9fdc68fc",
+    "id": "vm_row_vm_fmt_553db3dd",
     "file": "src/vm/row/vm.rs",
-    "line": 187,
-    "decision": "match self {\n            ExecError::RegisterOutOfRange { opcode, index } => {\n                write!(f, \"{opcode}: register index {index} is out of range\")\n            }\n            ExecError::RegisterRangeTooLarge { opcode, count } => write!(\n                f,\n                \"{opcode}: register range count {count} exceeds the maximum ({MAX_REGISTERS})\"\n            ),\n            ExecError::TypeMismatch { opcode, found } => {\n                write!(\n                    f,\n                    \"{opcode}: expected a different value type, found {found}\"\n                )\n            }\n            ExecError::MustBeInt => write!(\n                f,\n                \"MustBeInt: value cannot be converted to an integer without data loss\"\n            ),\n            ExecError::MalformedInstruction { opcode, reason } => {\n                write!(f, \"{opcode}: malformed instruction ({reason})\")\n            }\n            ExecError::Unimplemented { opcode } => {\n                write!(f, \"opcode {opcode:?} is not yet implemented by this VM\")\n            }\n            ExecError::CursorNotOpen { slot } => write!(f, \"cursor slot {slot} is not open\"),\n            ExecError::RecordDecode { opcode, source } => {\n                write!(f, \"{opcode}: record blob does not decode: {source}\")\n            }\n            ExecError::NoCurrentRow { opcode, slot } => {\n                write!(f, \"{opcode}: cursor slot {slot} has no current row\")\n            }\n            ExecError::ProgramCounterOutOfRange { pc } => {\n                write!(f, \"program counter {pc} is out of range\")\n            }\n            ExecError::StepLimitExceeded => write!(\n                f,\n                \"program exceeded the maximum step count ({MAX_STEPS}) without halting\"\n            ),\n            ExecError::Halted { code, message } => write!(\n                f,\n                \"statement halted with result code {code}{}\",\n                message\n                    .as_deref()\n                    .map(|m| format!(\": {m}\"))\n                    .unwrap_or_default()\n            ),\n            ExecError::JournalModeChangeDuringTransaction => write!(\n                f,\n                \"SetJournalMode: cannot change journal mode within a transaction\"\n            ),\n            ExecError::TooBig => write!(f, \"string or blob too big\"),\n            ExecError::SynchronousChangeDuringTransaction => {\n                write!(f, \"Safety level may not be changed inside a transaction\")\n            }\n            ExecError::CheckpointDuringTransaction => {\n                write!(f, \"database table is locked\")\n            }\n            ExecError::TransactionAlreadyActive => {\n                write!(f, \"cannot start a transaction within a transaction\")\n            }\n            ExecError::NoActiveTransactionToCommit => {\n                write!(f, \"cannot commit - no transaction is active\")\n            }\n            ExecError::NoActiveTransactionToRollback => {\n                write!(f, \"cannot rollback - no transaction is active\")\n            }\n            ExecError::TransactionFailed(err) => write!(f, \"transaction hook failed: {err}\"),\n            ExecError::AttachedDatabasesUnsupported => {\n                write!(f, \"attached databases are not supported\")\n            }\n            ExecError::CursorFactoryFailed(err) => write!(f, \"cursor factory failed: {err}\"),\n            ExecError::CursorFailed(err) => write!(f, \"cursor failed: {err}\"),\n            ExecError::SchemaStorageMissing { opcode } => {\n                write!(f, \"{opcode}: no schema storage hook is installed\")\n            }\n            ExecError::SchemaStorageFailed(err) => write!(f, \"schema storage failed: {err}\"),\n        }",
+    "line": 195,
+    "decision": "match self {\n            ExecError::RegisterOutOfRange { opcode, index } => {\n                write!(f, \"{opcode}: register index {index} is out of range\")\n            }\n            ExecError::RegisterRangeTooLarge { opcode, count } => write!(\n                f,\n                \"{opcode}: register range count {count} exceeds the maximum ({MAX_REGISTERS})\"\n            ),\n            ExecError::TypeMismatch { opcode, found } => {\n                write!(\n                    f,\n                    \"{opcode}: expected a different value type, found {found}\"\n                )\n            }\n            ExecError::MustBeInt => write!(\n                f,\n                \"MustBeInt: value cannot be converted to an integer without data loss\"\n            ),\n            ExecError::MalformedInstruction { opcode, reason } => {\n                write!(f, \"{opcode}: malformed instruction ({reason})\")\n            }\n            ExecError::Unimplemented { opcode } => {\n                write!(f, \"opcode {opcode:?} is not yet implemented by this VM\")\n            }\n            ExecError::CursorNotOpen { slot } => write!(f, \"cursor slot {slot} is not open\"),\n            ExecError::RecordDecode { opcode, source } => {\n                write!(f, \"{opcode}: record blob does not decode: {source}\")\n            }\n            ExecError::NoCurrentRow { opcode, slot } => {\n                write!(f, \"{opcode}: cursor slot {slot} has no current row\")\n            }\n            ExecError::ProgramCounterOutOfRange { pc } => {\n                write!(f, \"program counter {pc} is out of range\")\n            }\n            ExecError::StepLimitExceeded => write!(\n                f,\n                \"program exceeded the maximum step count ({MAX_STEPS}) without halting\"\n            ),\n            ExecError::Halted { code, message } => write!(\n                f,\n                \"statement halted with result code {code}{}\",\n                message\n                    .as_deref()\n                    .map(|m| format!(\": {m}\"))\n                    .unwrap_or_default()\n            ),\n            ExecError::JournalModeChangeDuringTransaction => write!(\n                f,\n                \"SetJournalMode: cannot change journal mode within a transaction\"\n            ),\n            ExecError::TooBig => write!(f, \"string or blob too big\"),\n            ExecError::SynchronousChangeDuringTransaction => {\n                write!(f, \"Safety level may not be changed inside a transaction\")\n            }\n            ExecError::CheckpointDuringTransaction => {\n                write!(f, \"database table is locked\")\n            }\n            ExecError::TransactionAlreadyActive => {\n                write!(f, \"cannot start a transaction within a transaction\")\n            }\n            ExecError::NoActiveTransactionToCommit => {\n                write!(f, \"cannot commit - no transaction is active\")\n            }\n            ExecError::NoActiveTransactionToRollback => {\n                write!(f, \"cannot rollback - no transaction is active\")\n            }\n            ExecError::TransactionFailed(err) => write!(f, \"transaction hook failed: {err}\"),\n            ExecError::AttachedDatabasesUnsupported => {\n                write!(f, \"attached databases are not supported\")\n            }\n            ExecError::CursorFactoryFailed(err) => write!(f, \"cursor factory failed: {err}\"),\n            ExecError::CursorFailed(err) => write!(f, \"cursor failed: {err}\"),\n            // sqlite3's own words, as its shell prints them.\n            ExecError::AggregateFailed(err) => write!(f, \"{err}\"),\n            ExecError::FunctionFailed(err) => write!(f, \"{err}\"),\n            ExecError::SchemaStorageMissing { opcode } => {\n                write!(f, \"{opcode}: no schema storage hook is installed\")\n            }\n            ExecError::SchemaStorageFailed(err) => write!(f, \"schema storage failed: {err}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -63502,7 +63582,7 @@
   {
     "id": "vm_row_vm_value_kind_0069b953",
     "file": "src/vm/row/vm.rs",
-    "line": 299,
+    "line": 322,
     "decision": "match v {\n        Value::Null => \"NULL\",\n        Value::Integer(_) => \"INTEGER\",\n        Value::Real(_) => \"REAL\",\n        Value::Text(_) => \"TEXT\",\n        Value::Blob(_) => \"BLOB\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63512,7 +63592,7 @@
   {
     "id": "vm_row_vm_is_falsy_51199886",
     "file": "src/vm/row/vm.rs",
-    "line": 312,
+    "line": 335,
     "decision": "match v {\n        Value::Integer(i) => *i == 0,\n        Value::Real(r) => *r == 0.0,\n        Value::Null => false,\n        Value::Text(s) => match coerce::coerce_text_to_numeric(s) {\n            Value::Integer(i) => i == 0,\n            Value::Real(r) => r == 0.0,\n            _ => true,\n        },\n        // A blob reads as the text of its bytes, as in sqlite3\n        // (`sqlite3VdbeBooleanValue`): `x'31'` is true (#651).\n        Value::Blob(b) => is_falsy(&Value::Text(String::from_utf8_lossy(b).as_ref().into())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63522,7 +63602,7 @@
   {
     "id": "vm_row_vm_is_falsy_2aa6b5a4",
     "file": "src/vm/row/vm.rs",
-    "line": 316,
+    "line": 339,
     "decision": "match coerce::coerce_text_to_numeric(s) {\n            Value::Integer(i) => i == 0,\n            Value::Real(r) => r == 0.0,\n            _ => true,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63532,7 +63612,7 @@
   {
     "id": "vm_row_vm_connection_state_7ddf9d32",
     "file": "src/vm/row/vm.rs",
-    "line": 502,
+    "line": 525,
     "decision": "counts_changes",
     "conditions": 1,
     "vectors_required": 2,
@@ -63542,7 +63622,7 @@
   {
     "id": "vm_row_vm_count_change_9f88b343",
     "file": "src/vm/row/vm.rs",
-    "line": 517,
+    "line": 540,
     "decision": "p5 & super::program::OPFLAG_NCHANGE != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -63552,7 +63632,7 @@
   {
     "id": "vm_row_vm_set_null_row_4b6b8fc7",
     "file": "src/vm/row/vm.rs",
-    "line": 538,
+    "line": 561,
     "decision": "idx >= self.null_rows.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -63562,7 +63642,7 @@
   {
     "id": "vm_row_vm_set_null_row_90284c31",
     "file": "src/vm/row/vm.rs",
-    "line": 541,
+    "line": 564,
     "decision": "let Some(cell) = self.null_rows.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63572,7 +63652,7 @@
   {
     "id": "vm_row_vm_clear_null_row_90284c31",
     "file": "src/vm/row/vm.rs",
-    "line": 552,
+    "line": 575,
     "decision": "let Some(cell) = self.null_rows.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63582,7 +63662,7 @@
   {
     "id": "vm_row_vm_next_sequence_f0807909",
     "file": "src/vm/row/vm.rs",
-    "line": 572,
+    "line": 595,
     "decision": "idx >= self.sequences.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -63592,7 +63672,7 @@
   {
     "id": "vm_row_vm_set_cursor_root_5774e099",
     "file": "src/vm/row/vm.rs",
-    "line": 596,
+    "line": 619,
     "decision": "idx >= self.cursor_roots.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -63602,7 +63682,7 @@
   {
     "id": "vm_row_vm_set_cursor_root_5d72ca14",
     "file": "src/vm/row/vm.rs",
-    "line": 599,
+    "line": 622,
     "decision": "let Some(cell) = self.cursor_roots.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63612,7 +63692,7 @@
   {
     "id": "vm_row_vm_index_7f3b3636",
     "file": "src/vm/row/vm.rs",
-    "line": 630,
+    "line": 653,
     "decision": "reg < 0 || reg as usize > MAX_REGISTERS",
     "conditions": 2,
     "vectors_required": 3,
@@ -63622,7 +63702,7 @@
   {
     "id": "vm_row_vm_bounded_count_ac8b20ca",
     "file": "src/vm/row/vm.rs",
-    "line": 637,
+    "line": 660,
     "decision": "match usize::try_from(count) {\n            Ok(n) if n <= MAX_REGISTERS => Ok(n),\n            _ => Err(ExecError::RegisterRangeTooLarge { opcode, count }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63632,7 +63712,7 @@
   {
     "id": "vm_row_vm_bounded_count_13c66d0a",
     "file": "src/vm/row/vm.rs",
-    "line": 638,
+    "line": 661,
     "decision": "n <= MAX_REGISTERS",
     "conditions": 1,
     "vectors_required": 2,
@@ -63642,7 +63722,7 @@
   {
     "id": "vm_row_vm_set_register_083d4851",
     "file": "src/vm/row/vm.rs",
-    "line": 653,
+    "line": 676,
     "decision": "idx >= self.registers.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -63652,7 +63732,7 @@
   {
     "id": "vm_row_vm_set_register_f1a403e1",
     "file": "src/vm/row/vm.rs",
-    "line": 656,
+    "line": 679,
     "decision": "let Some(slot) = self.registers.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63662,7 +63742,7 @@
   {
     "id": "vm_row_vm_take_register_e4b67a1e",
     "file": "src/vm/row/vm.rs",
-    "line": 666,
+    "line": 689,
     "decision": "match self.registers.get_mut(idx) {\n            Some(slot) => std::mem::replace(slot, Value::Null),\n            None => Value::Null,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63672,7 +63752,7 @@
   {
     "id": "vm_row_vm_set_pseudo_reg_4638687e",
     "file": "src/vm/row/vm.rs",
-    "line": 680,
+    "line": 703,
     "decision": "idx >= self.pseudo_regs.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -63682,7 +63762,7 @@
   {
     "id": "vm_row_vm_set_pseudo_reg_6e8c6a40",
     "file": "src/vm/row/vm.rs",
-    "line": 683,
+    "line": 706,
     "decision": "let Some(cell) = self.pseudo_regs.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63692,7 +63772,7 @@
   {
     "id": "vm_row_vm_set_pseudo_reg_b28c7ddf",
     "file": "src/vm/row/vm.rs",
-    "line": 686,
+    "line": 709,
     "decision": "let Some(cache) = self.pseudo_headers.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63702,7 +63782,7 @@
   {
     "id": "vm_row_vm_pseudo_column_dbda7ff1",
     "file": "src/vm/row/vm.rs",
-    "line": 713,
+    "line": 736,
     "decision": "match self.register(reg)? {\n            Value::Blob(bytes) => Rc::clone(bytes),\n            Value::Null => return Ok(Value::Null),\n            other => {\n                return Err(ExecError::MalformedInstruction {\n                    opcode,\n                    reason: format!(\"pseudo-cursor register holds {other:?}, not a record blob\"),\n                })\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63712,7 +63792,7 @@
   {
     "id": "vm_row_vm_pseudo_column_4e63ee9c",
     "file": "src/vm/row/vm.rs",
-    "line": 724,
+    "line": 747,
     "decision": "idx >= self.pseudo_headers.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -63722,7 +63802,7 @@
   {
     "id": "vm_row_vm_pseudo_column_ef462e9a",
     "file": "src/vm/row/vm.rs",
-    "line": 737,
+    "line": 760,
     "decision": "!hit",
     "conditions": 1,
     "vectors_required": 2,
@@ -63732,7 +63812,7 @@
   {
     "id": "vm_row_vm_open_cursor_1d26a3c0",
     "file": "src/vm/row/vm.rs",
-    "line": 755,
+    "line": 778,
     "decision": "idx >= self.cursors.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -63742,7 +63822,7 @@
   {
     "id": "vm_row_vm_open_cursor_afea3b97",
     "file": "src/vm/row/vm.rs",
-    "line": 758,
+    "line": 781,
     "decision": "let Some(cell) = self.cursors.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63752,7 +63832,7 @@
   {
     "id": "vm_row_vm_set_agg_context_77141b09",
     "file": "src/vm/row/vm.rs",
-    "line": 795,
+    "line": 818,
     "decision": "idx >= self.agg_contexts.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -63762,7 +63842,7 @@
   {
     "id": "vm_row_vm_set_agg_context_acce5e57",
     "file": "src/vm/row/vm.rs",
-    "line": 799,
+    "line": 822,
     "decision": "let Some(cell) = self.agg_contexts.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63772,7 +63852,7 @@
   {
     "id": "vm_row_vm_clear_agg_context_acce5e57",
     "file": "src/vm/row/vm.rs",
-    "line": 821,
+    "line": 844,
     "decision": "let Some(cell) = self.agg_contexts.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63782,7 +63862,7 @@
   {
     "id": "vm_row_vm_reserve_registers_b7e776e8",
     "file": "src/vm/row/vm.rs",
-    "line": 853,
+    "line": 876,
     "decision": "len <= MAX_REGISTERS && len > self.registers.len()",
     "conditions": 2,
     "vectors_required": 3,
@@ -63792,7 +63872,7 @@
   {
     "id": "vm_row_vm_compare_jump_0e991c46",
     "file": "src/vm/row/vm.rs",
-    "line": 871,
+    "line": 894,
     "decision": "matches!(a, Value::Null) || matches!(b, Value::Null)",
     "conditions": 2,
     "vectors_required": 3,
@@ -63802,7 +63882,7 @@
   {
     "id": "vm_row_vm_compare_jump_23d213e7",
     "file": "src/vm/row/vm.rs",
-    "line": 874,
+    "line": 897,
     "decision": "match &instr.p4 {\n        P4::CollSeq {\n            collation,\n            affinity,\n        } => (*collation, Affinity::from_p4_byte(*affinity)),\n        _ => (Collation::Binary, Affinity::Blob),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63812,7 +63892,7 @@
   {
     "id": "vm_row_vm_compare_jump_cd694948",
     "file": "src/vm/row/vm.rs",
-    "line": 884,
+    "line": 907,
     "decision": "matches!(affinity, Affinity::Blob)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63822,7 +63902,7 @@
   {
     "id": "vm_row_vm_compare_jump_cd7ca58b",
     "file": "src/vm/row/vm.rs",
-    "line": 891,
+    "line": 914,
     "decision": "holds(ord)",
     "conditions": 1,
     "vectors_required": 2,
@@ -63832,7 +63912,7 @@
   {
     "id": "vm_row_vm_with_affinity_7d59aaf4",
     "file": "src/vm/row/vm.rs",
-    "line": 903,
+    "line": 926,
     "decision": "match affinity {\n        Affinity::Blob => false,\n        Affinity::Text => matches!(value, Value::Integer(_) | Value::Real(_)),\n        Affinity::Numeric | Affinity::Integer => matches!(value, Value::Text(_)),\n        Affinity::Real => matches!(value, Value::Text(_) | Value::Integer(_)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63842,7 +63922,7 @@
   {
     "id": "vm_row_vm_with_affinity_6276e00e",
     "file": "src/vm/row/vm.rs",
-    "line": 909,
+    "line": 932,
     "decision": "may_change",
     "conditions": 1,
     "vectors_required": 2,
@@ -63852,7 +63932,7 @@
   {
     "id": "vm_row_vm_binary_op_0e991c46",
     "file": "src/vm/row/vm.rs",
-    "line": 941,
+    "line": 964,
     "decision": "matches!(a, Value::Null) || matches!(b, Value::Null)",
     "conditions": 2,
     "vectors_required": 3,
@@ -63862,7 +63942,7 @@
   {
     "id": "vm_row_vm_binary_op_reversed_0e991c46",
     "file": "src/vm/row/vm.rs",
-    "line": 961,
+    "line": 984,
     "decision": "matches!(a, Value::Null) || matches!(b, Value::Null)",
     "conditions": 2,
     "vectors_required": 3,
@@ -63872,7 +63952,7 @@
   {
     "id": "vm_row_vm_arith_not_c701bad6",
     "file": "src/vm/row/vm.rs",
-    "line": 972,
+    "line": 995,
     "decision": "match vm.register(instr.p1)? {\n        Value::Null => Value::Null,\n        other => Value::Integer(i64::from(is_falsy(other))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63882,7 +63962,7 @@
   {
     "id": "vm_row_vm_bit_not_df16c880",
     "file": "src/vm/row/vm.rs",
-    "line": 981,
+    "line": 1004,
     "decision": "match vm.register(instr.p1)? {\n        Value::Null => Value::Null,\n        other => coerce::bit_not(other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63892,7 +63972,7 @@
   {
     "id": "vm_row_vm_count_rows_9b493d1b",
     "file": "src/vm/row/vm.rs",
-    "line": 992,
+    "line": 1015,
     "decision": "let Some(n) = cursor.count()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -63902,7 +63982,7 @@
   {
     "id": "vm_row_vm_count_rows_9d5359fa",
     "file": "src/vm/row/vm.rs",
-    "line": 997,
+    "line": 1020,
     "decision": "has_row",
     "conditions": 1,
     "vectors_required": 2,
@@ -63912,7 +63992,7 @@
   {
     "id": "vm_row_vm_register_as_i64_9cb12e00",
     "file": "src/vm/row/vm.rs",
-    "line": 1005,
+    "line": 1028,
     "decision": "match vm.register(reg)? {\n        Value::Integer(i) => Ok(*i),\n        other => Err(ExecError::TypeMismatch {\n            opcode: \"control counter\",\n            found: value_kind(other),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63922,7 +64002,7 @@
   {
     "id": "vm_row_vm_seek_key_collations_210b25cb",
     "file": "src/vm/row/vm.rs",
-    "line": 1027,
+    "line": 1050,
     "decision": "match p4 {\n        P4::SeekKey(collations) => Ok(Cow::Borrowed(collations.as_slice())),\n        P4::Int(n) => {\n            let count = Vm::bounded_count(\n                opcode,\n                i32::try_from(*n).map_err(|_| ExecError::MalformedInstruction {\n                    opcode,\n                    reason: format!(\"key count {n} does not fit in p4\"),\n                })?,\n            )?;\n            Ok(Cow::Owned(vec![Collation::Binary; count]))\n        }\n        other => Err(ExecError::MalformedInstruction {\n            opcode,\n            reason: format!(\"expected a SeekKey or Int P4 (key columns), got {other:?}\"),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63932,7 +64012,7 @@
   {
     "id": "vm_row_vm_try_to_integer_0b94056e",
     "file": "src/vm/row/vm.rs",
-    "line": 1094,
+    "line": 1117,
     "decision": "match v {\n        Value::Integer(i) => Some(*i),\n        #[allow(clippy::cast_possible_truncation)]\n        Value::Real(r) if r.fract() == 0.0 && r.is_finite() && in_i64_range(*r) => Some(*r as i64),\n        Value::Text(s) => s.trim().parse::<i64>().ok(),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63942,7 +64022,7 @@
   {
     "id": "vm_row_vm_try_to_integer_260fb969",
     "file": "src/vm/row/vm.rs",
-    "line": 1097,
+    "line": 1120,
     "decision": "r.fract() == 0.0 && r.is_finite() && in_i64_range(*r)",
     "conditions": 3,
     "vectors_required": 4,
@@ -63952,7 +64032,7 @@
   {
     "id": "vm_row_vm_parse_function_descriptor_67681780",
     "file": "src/vm/row/vm.rs",
-    "line": 1107,
+    "line": 1130,
     "decision": "!descriptor.ends_with(')')",
     "conditions": 1,
     "vectors_required": 2,
@@ -63962,7 +64042,7 @@
   {
     "id": "vm_row_vm_step_486d7c04",
     "file": "src/vm/row/vm.rs",
-    "line": 1138,
+    "line": 1161,
     "decision": "match instr.opcode {\n        Opcode::Init\n        | Opcode::Goto\n        | Opcode::Once\n        | Opcode::BeginSubrtn\n        | Opcode::Gosub\n        | Opcode::Return\n        | Opcode::Halt\n        | Opcode::IsNull\n        | Opcode::NotNull\n        | Opcode::IfNot\n        | Opcode::MustBeInt\n        | Opcode::OffsetLimit\n        | Opcode::IfPos\n        | Opcode::IfNotZero\n        | Opcode::DecrJumpZero => step_control(vm, pc, instr),\n        Opcode::Eq\n        | Opcode::Ge\n        | Opcode::Gt\n        | Opcode::Le\n        | Opcode::Lt\n        | Opcode::RealAffinity\n        | Opcode::Cast\n        | Opcode::Add\n        | Opcode::Subtract\n        | Opcode::Multiply\n        | Opcode::Divide\n        | Opcode::Remainder\n        | Opcode::Not\n        | Opcode::BitAnd\n        | Opcode::BitOr\n        | Opcode::ShiftLeft\n        | Opcode::ShiftRight\n        | Opcode::BitNot\n        | Opcode::Concat\n        | Opcode::Function => step_expr(vm, instr),\n        Opcode::Integer\n        | Opcode::Int64\n        | Opcode::Real\n        | Opcode::Blob\n        | Opcode::Null\n        | Opcode::String8\n        | Opcode::Variable\n        | Opcode::Copy\n        | Opcode::MakeRecord\n        | Opcode::ResultRow => step_value(vm, instr),\n        Opcode::Next => step_next(vm, instr),\n        Opcode::Column => step_column(vm, instr),\n        Opcode::Rewind\n        | Opcode::Last\n        | Opcode::Rowid\n        | Opcode::SeekRowid\n        | Opcode::NullRow\n        | Opcode::Sequence\n        | Opcode::Count\n        | Opcode::AutoIndexInsert\n        | Opcode::AutoIndexSeek\n        | Opcode::AutoIndexRowid\n        | Opcode::AutoIndexNext\n        | Opcode::OpenRead\n        | Opcode::OpenWrite\n        | Opcode::OpenDup\n        | Opcode::OpenPseudo\n        | Opcode::OpenEphemeral\n        | Opcode::IdxRewind\n        | Opcode::IdxLast\n        | Opcode::IdxNext\n        | Opcode::IdxPrev\n        | Opcode::IdxRowid\n        | Opcode::SeekIndexEq\n        | Opcode::SeekIndexGE\n        | Opcode::IdxCompareGT\n        | Opcode::IdxCompareGE\n        | Opcode::IdxLE\n        | Opcode::Found\n        | Opcode::Filter\n        | Opcode::FilterAdd\n        | Opcode::NoConflict => step_cursor_ops(vm, instr),\n        Opcode::SorterOpen\n        | Opcode::SorterInsert\n        | Opcode::SorterSort\n        | Opcode::Sort\n        | Opcode::HashAggRewind\n        | Opcode::SorterNext\n        | Opcode::HashAggNext\n        | Opcode::SorterData\n        | Opcode::HashAggOpen\n        | Opcode::HashAggFind\n        | Opcode::HashAggStep\n        | Opcode::HashAggData\n        | Opcode::AggStep\n        | Opcode::AggFinal\n        | Opcode::AggReset => step_sort_agg(vm, instr),\n        Opcode::Insert\n        | Opcode::Update\n        | Opcode::Delete\n        | Opcode::NewRowid\n        | Opcode::IdxInsert\n        | Opcode::IdxDelete => step_write(vm, instr),\n        Opcode::Transaction\n        | Opcode::AutoCommit\n        | Opcode::SetJournalMode\n        | Opcode::Synchronous\n        | Opcode::Checkpoint\n        | Opcode::WalAutocheckpoint\n        | Opcode::IntegrityCheck\n        | Opcode::CreateTable\n        | Opcode::CreateView\n        | Opcode::DropView\n        | Opcode::CreateIndex\n        | Opcode::DropTable\n        | Opcode::DropIndex\n        | Opcode::Analyze => step_schema(vm, instr),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -63972,7 +64052,7 @@
   {
     "id": "vm_row_vm_step_next_9d5359fa",
     "file": "src/vm/row/vm.rs",
-    "line": 1260,
+    "line": 1283,
     "decision": "has_row",
     "conditions": 1,
     "vectors_required": 2,
@@ -63982,7 +64062,7 @@
   {
     "id": "vm_row_vm_step_column_cfdb8da9",
     "file": "src/vm/row/vm.rs",
-    "line": 1277,
+    "line": 1300,
     "decision": "vm.is_null_row(instr.p1)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -63992,7 +64072,7 @@
   {
     "id": "vm_row_vm_step_column_9f4dc610",
     "file": "src/vm/row/vm.rs",
-    "line": 1279,
+    "line": 1302,
     "decision": "let Some(reg) = vm.pseudo_reg(instr.p1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -64002,7 +64082,7 @@
   {
     "id": "vm_row_vm_execute_92c2e200",
     "file": "src/vm/row/vm.rs",
-    "line": 1317,
+    "line": 1340,
     "decision": "steps > MAX_STEPS",
     "conditions": 1,
     "vectors_required": 2,
@@ -64012,7 +64092,7 @@
   {
     "id": "vm_row_vm_execute_de5b92a8",
     "file": "src/vm/row/vm.rs",
-    "line": 1320,
+    "line": 1343,
     "decision": "match step(vm, pc, instr)? {\n            Step::Next => pc = pc.saturating_add(1),\n            Step::Jump(target) => pc = target,\n            Step::Halt { code: 0, .. } => return Ok(vm.take_rows()),\n            Step::Halt { code, message } => return Err(ExecError::Halted { code, message }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -64490,10 +64570,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_vm_expr_step_expr_3cf27c78",
+    "id": "vm_row_vm_expr_step_expr_e61826c6",
     "file": "src/vm/row/vm/expr.rs",
     "line": 11,
-    "decision": "match instr.opcode {\n        Opcode::Eq => compare_jump(vm, instr, |o| o == Ordering::Equal),\n        Opcode::Ge => compare_jump(vm, instr, |o| o != Ordering::Less),\n        Opcode::Gt => compare_jump(vm, instr, |o| o == Ordering::Greater),\n        Opcode::Le => compare_jump(vm, instr, |o| o != Ordering::Greater),\n        Opcode::Lt => compare_jump(vm, instr, |o| o == Ordering::Less),\n        Opcode::RealAffinity => real_affinity(vm, instr),\n        Opcode::Cast => cast(vm, instr),\n\n        Opcode::Add => binary_op(vm, instr, coerce::checked_add),\n        Opcode::Subtract => binary_op_reversed(vm, instr, coerce::checked_sub),\n        Opcode::Multiply => binary_op(vm, instr, coerce::checked_mul),\n        Opcode::Divide => binary_op_reversed(vm, instr, coerce::checked_div),\n        Opcode::Remainder => binary_op_reversed(vm, instr, coerce::checked_rem),\n        Opcode::Not => arith_not(vm, instr),\n        Opcode::BitAnd => binary_op(vm, instr, coerce::bit_and),\n        Opcode::BitOr => binary_op(vm, instr, coerce::bit_or),\n        Opcode::ShiftLeft => binary_op_reversed(vm, instr, coerce::shift_left),\n        Opcode::ShiftRight => binary_op_reversed(vm, instr, coerce::shift_right),\n        Opcode::BitNot => bit_not(vm, instr),\n        Opcode::Concat => binary_op_reversed(vm, instr, coerce::concat),\n\n        Opcode::Function => {\n            let descriptor = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Function\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            };\n            // `name(arity);json=0,2`: the arguments at those positions\n            // carry sqlite3's JSON subtype (#651).\n            let (descriptor, json) = match descriptor.split_once(\";json=\") {\n                Some((call, positions)) => (call, Some(positions)),\n                None => (descriptor, None),\n            };\n            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {\n                ExecError::MalformedInstruction {\n                    opcode: \"Function\",\n                    reason: format!(\"malformed function descriptor {descriptor:?}\"),\n                }\n            })?;\n            // The connection's counters live in the VM, not the pure\n            // function registry (#651). `total_changes` includes this\n            // statement's writes so far, as in sqlite3.\n            let connection = match (name.to_ascii_lowercase().as_str(), arity) {\n                (\"changes\", 0) => Some(vm.connection.changes),\n                (\"total_changes\", 0) => Some(vm.connection_state(false).total_changes),\n                (\"last_insert_rowid\", 0) => Some(vm.connection.last_insert_rowid),\n                _ => None,\n            };\n            if let Some(n) = connection {\n                vm.set_register(instr.p3, Value::Integer(n))?;\n                return Ok(Step::Next);\n            }\n            let mut args = Vec::with_capacity(arity);\n            for i in 0..arity {\n                let reg = instr\n                    .p2\n                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"Function\",\n                        index: instr.p2,\n                    })?;\n                args.push(vm.register(reg)?.clone());\n            }\n            let result = match json {\n                Some(positions) => {\n                    let positions = positions\n                        .split(',')\n                        .map(|p| p.parse::<usize>().ok().filter(|&p| p < arity))\n                        .collect::<Option<Vec<usize>>>()\n                        .ok_or_else(|| ExecError::MalformedInstruction {\n                            opcode: \"Function\",\n                            reason: format!(\"malformed JSON argument positions {positions:?}\"),\n                        })?;\n                    crate::functions::call_marked(name, &args, &positions)\n                }\n                None => functions::call_at(name, &args, vm.statement_now_ns),\n            };\n            let result = result.map_err(|e| match e {\n                // A limit sqlite3 reports in its own words (#659).\n                functions::FunctionError::TooBig => ExecError::TooBig,\n                e => ExecError::MalformedInstruction {\n                    opcode: \"Function\",\n                    reason: e.to_string(),\n                },\n            })?;\n            vm.set_register(instr.p3, result)?;\n            Ok(Step::Next)\n        }\n\n        other => Err(ExecError::MalformedInstruction {\n            opcode: \"step\",\n            reason: format!(\"{other:?} dispatched to step_expr\"),\n        }),\n    }",
+    "decision": "match instr.opcode {\n        Opcode::Eq => compare_jump(vm, instr, |o| o == Ordering::Equal),\n        Opcode::Ge => compare_jump(vm, instr, |o| o != Ordering::Less),\n        Opcode::Gt => compare_jump(vm, instr, |o| o == Ordering::Greater),\n        Opcode::Le => compare_jump(vm, instr, |o| o != Ordering::Greater),\n        Opcode::Lt => compare_jump(vm, instr, |o| o == Ordering::Less),\n        Opcode::RealAffinity => real_affinity(vm, instr),\n        Opcode::Cast => cast(vm, instr),\n\n        Opcode::Add => binary_op(vm, instr, coerce::checked_add),\n        Opcode::Subtract => binary_op_reversed(vm, instr, coerce::checked_sub),\n        Opcode::Multiply => binary_op(vm, instr, coerce::checked_mul),\n        Opcode::Divide => binary_op_reversed(vm, instr, coerce::checked_div),\n        Opcode::Remainder => binary_op_reversed(vm, instr, coerce::checked_rem),\n        Opcode::Not => arith_not(vm, instr),\n        Opcode::BitAnd => binary_op(vm, instr, coerce::bit_and),\n        Opcode::BitOr => binary_op(vm, instr, coerce::bit_or),\n        Opcode::ShiftLeft => binary_op_reversed(vm, instr, coerce::shift_left),\n        Opcode::ShiftRight => binary_op_reversed(vm, instr, coerce::shift_right),\n        Opcode::BitNot => bit_not(vm, instr),\n        Opcode::Concat => binary_op_reversed(vm, instr, coerce::concat),\n\n        Opcode::Function => {\n            let descriptor = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"Function\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            };\n            // `name(arity);json=0,2`: the arguments at those positions\n            // carry sqlite3's JSON subtype (#651).\n            let (descriptor, json) = match descriptor.split_once(\";json=\") {\n                Some((call, positions)) => (call, Some(positions)),\n                None => (descriptor, None),\n            };\n            let (name, arity) = parse_function_descriptor(descriptor).ok_or_else(|| {\n                ExecError::MalformedInstruction {\n                    opcode: \"Function\",\n                    reason: format!(\"malformed function descriptor {descriptor:?}\"),\n                }\n            })?;\n            // The connection's counters live in the VM, not the pure\n            // function registry (#651). `total_changes` includes this\n            // statement's writes so far, as in sqlite3.\n            let connection = match (name.to_ascii_lowercase().as_str(), arity) {\n                (\"changes\", 0) => Some(vm.connection.changes),\n                (\"total_changes\", 0) => Some(vm.connection_state(false).total_changes),\n                (\"last_insert_rowid\", 0) => Some(vm.connection.last_insert_rowid),\n                _ => None,\n            };\n            if let Some(n) = connection {\n                vm.set_register(instr.p3, Value::Integer(n))?;\n                return Ok(Step::Next);\n            }\n            let mut args = Vec::with_capacity(arity);\n            for i in 0..arity {\n                let reg = instr\n                    .p2\n                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"Function\",\n                        index: instr.p2,\n                    })?;\n                args.push(vm.register(reg)?.clone());\n            }\n            let result = match json {\n                Some(positions) => {\n                    let positions = positions\n                        .split(',')\n                        .map(|p| p.parse::<usize>().ok().filter(|&p| p < arity))\n                        .collect::<Option<Vec<usize>>>()\n                        .ok_or_else(|| ExecError::MalformedInstruction {\n                            opcode: \"Function\",\n                            reason: format!(\"malformed JSON argument positions {positions:?}\"),\n                        })?;\n                    crate::functions::call_marked(name, &args, &positions)\n                }\n                None => functions::call_at(name, &args, vm.statement_now_ns),\n            };\n            let result = result.map_err(|e| match e {\n                // A limit sqlite3 reports in its own words (#659).\n                functions::FunctionError::TooBig => ExecError::TooBig,\n                e => ExecError::FunctionFailed(e),\n            })?;\n            vm.set_register(instr.p3, result)?;\n            Ok(Step::Next)\n        }\n\n        other => Err(ExecError::MalformedInstruction {\n            opcode: \"step\",\n            reason: format!(\"{other:?} dispatched to step_expr\"),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -64550,10 +64630,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_vm_expr_step_expr_a535cb49",
+    "id": "vm_row_vm_expr_step_expr_442676c6",
     "file": "src/vm/row/vm/expr.rs",
     "line": 93,
-    "decision": "match e {\n                // A limit sqlite3 reports in its own words (#659).\n                functions::FunctionError::TooBig => ExecError::TooBig,\n                e => ExecError::MalformedInstruction {\n                    opcode: \"Function\",\n                    reason: e.to_string(),\n                },\n            }",
+    "decision": "match e {\n                // A limit sqlite3 reports in its own words (#659).\n                functions::FunctionError::TooBig => ExecError::TooBig,\n                e => ExecError::FunctionFailed(e),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -64562,7 +64642,7 @@
   {
     "id": "vm_row_vm_family_tests_an_update_through_delete_and_insert_refuses_a_bad_record_or_insert_cbd4575a",
     "file": "src/vm/row/vm/family_tests.rs",
-    "line": 364,
+    "line": 369,
     "decision": "match step_write(&mut vm, &instr(Opcode::Update, 0, 1, 2)) {\n            Err(ExecError::MalformedInstruction {\n                opcode: \"Update\",\n                reason,\n            }) => {\n                assert!(!reason.contains(\"deletion\"), \"{name}: {reason}\");\n                assert_eq!(\n                    reason.contains(\"does not support update\"),\n                    name == \"uninsertable\",\n                    \"{name}: {reason}\"\n                );\n            }\n            other => panic!(\"{name}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -64740,10 +64820,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "vm_row_vm_sort_agg_step_sort_agg_6fda7958",
+    "id": "vm_row_vm_sort_agg_step_sort_agg_528d2a3e",
     "file": "src/vm/row/vm/sort_agg.rs",
     "line": 11,
-    "decision": "match instr.opcode {\n        Opcode::SorterOpen => {\n            let keys = match &instr.p4 {\n                P4::SortKey(keys) => keys.clone(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"SorterOpen\",\n                        reason: format!(\"expected a SortKey P4, got {other:?}\"),\n                    })\n                }\n            };\n            let bound = if instr.p5 == 0 {\n                None\n            } else {\n                // `LIMIT -1` (any negative) means \"no limit\" in SQLite, and a\n                // non-integer limit register is unbounded too.\n                match vm.register(instr.p2)? {\n                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),\n                    _ => None,\n                }\n            };\n            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(keys, bound)))?;\n            Ok(Step::Next)\n        }\n        Opcode::SorterInsert => {\n            let blob = match vm.register(instr.p2)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"SorterInsert\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let inserted = vm.cursor_mut(instr.p1)?.sorter_insert(blob);\n            if !inserted {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"SorterInsert\",\n                    reason: \"cursor slot is not a sorter, or the record blob does not decode\"\n                        .to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::SorterSort | Opcode::Sort | Opcode::HashAggRewind => {\n            let has_row = vm.cursor_mut(instr.p1)?.rewind()?;\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::SorterNext | Opcode::HashAggNext => {\n            let has_row = vm.cursor_mut(instr.p1)?.next()?;\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::SorterData => {\n            let blob =\n                vm.cursor(instr.p1)?\n                    .current_blob()\n                    .ok_or(ExecError::MalformedInstruction {\n                        opcode: \"SorterData\",\n                        reason: \"sorter has not been sorted yet, or has no current row\".to_string(),\n                    })?;\n            vm.set_register(instr.p2, blob)?;\n            Ok(Step::Next)\n        }\n        Opcode::HashAggOpen => {\n            let keys = match &instr.p4 {\n                P4::GroupKey(keys) => keys.clone(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"HashAggOpen\",\n                        reason: format!(\"expected a GroupKey P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.open_cursor(instr.p1, Box::new(HashAggCursor::new(keys)))?;\n            Ok(Step::Next)\n        }\n        Opcode::HashAggFind => {\n            let blob = match vm.register(instr.p2)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"HashAggFind\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let found = vm.cursor_mut(instr.p1)?.hash_agg_find(blob);\n            if !found {\n                return Err(ExecError::MalformedInstruction {\n                opcode: \"HashAggFind\",\n                reason:\n                    \"cursor slot is not a hash-aggregation cursor, or the record blob does not decode\"\n                        .to_string(),\n            });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::HashAggStep => {\n            let (name, arity, collation) = match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"HashAggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            };\n            let start = Vm::index(\"HashAggStep\", instr.p2)?;\n            let end = start\n                .checked_add(arity)\n                .filter(|&end| end <= MAX_REGISTERS)\n                .ok_or(ExecError::RegisterOutOfRange {\n                    opcode: \"HashAggStep\",\n                    index: instr.p2,\n                })?;\n            if vm.registers.len() < end {\n                vm.registers.resize(end, Value::Null);\n            }\n            #[allow(clippy::cast_sign_loss)]\n            let slot = instr.p1.max(0) as usize;\n            // Borrow the argument registers in place (no per-row `Vec` +\n            // `Value` clones, #486): `registers` and `cursors` are\n            // disjoint fields, so both borrows coexist.\n            let cursor_idx = Vm::index(\"cursor slot write\", instr.p3)?;\n            let cursor = vm\n                .cursors\n                .get_mut(cursor_idx)\n                .and_then(Option::as_mut)\n                .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;\n            let args = vm.registers.get(start..end).unwrap_or(&[]);\n            let handled = cursor\n                .hash_agg_step(slot, name, args, collation)\n                .map_err(|e| ExecError::MalformedInstruction {\n                    opcode: \"HashAggStep\",\n                    reason: e.to_string(),\n                })?;\n            if !handled {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"HashAggStep\",\n                    reason: \"cursor slot has no current group\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::HashAggData => {\n            let blob =\n                vm.cursor(instr.p1)?\n                    .current_blob()\n                    .ok_or(ExecError::MalformedInstruction {\n                    opcode: \"HashAggData\",\n                    reason:\n                        \"hash-aggregation cursor has not been rewound yet, or has no current group\"\n                            .to_string(),\n                })?;\n            let accumulators: Vec<Option<AggState>> = vm\n                .cursor(instr.p1)?\n                .hash_agg_group_accumulators()\n                .map(<[_]>::to_vec)\n                .ok_or_else(|| ExecError::MalformedInstruction {\n                    opcode: \"HashAggData\",\n                    reason: \"cursor slot is not a hash-aggregation cursor\".to_string(),\n                })?;\n            for (slot, state) in accumulators.into_iter().enumerate() {\n                // Saturation is unreachable (slots are bounded by\n                // MAX_REGISTERS) and would be caught by set_agg_context's\n                // own range check anyway.\n                let slot = i32::try_from(slot).unwrap_or(i32::MAX);\n                match state {\n                    Some(state) => vm.set_agg_context(slot, state)?,\n                    None => vm.clear_agg_context(slot)?,\n                }\n            }\n            vm.set_register(instr.p2, blob)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggStep => {\n            let (name, arity, collation) = match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            };\n            let mut args = Vec::with_capacity(arity);\n            for i in 0..arity {\n                let reg = instr\n                    .p2\n                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"AggStep\",\n                        index: instr.p2,\n                    })?;\n                args.push(vm.register(reg)?.clone());\n            }\n            let current = if instr.p5 == 0 {\n                vm.take_agg_context(instr.p1)?\n            } else {\n                None\n            };\n            let updated = aggregate::step(name, current, &args, collation).map_err(|e| {\n                ExecError::MalformedInstruction {\n                    opcode: \"AggStep\",\n                    reason: e.to_string(),\n                }\n            })?;\n            vm.set_agg_context(instr.p1, updated)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggFinal => {\n            let descriptor = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggFinal\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            };\n            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {\n                ExecError::MalformedInstruction {\n                    opcode: \"AggFinal\",\n                    reason: format!(\"malformed aggregate descriptor {descriptor:?}\"),\n                }\n            })?;\n            let state = vm.agg_context(instr.p1)?;\n            let result =\n                aggregate::finalize(name, state).map_err(|e| ExecError::MalformedInstruction {\n                    opcode: \"AggFinal\",\n                    reason: e.to_string(),\n                })?;\n            vm.set_register(instr.p3, result)?;\n            vm.clear_agg_context(instr.p1)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggReset => {\n            vm.clear_agg_context(instr.p1)?;\n            Ok(Step::Next)\n        }\n\n        other => Err(ExecError::MalformedInstruction {\n            opcode: \"step\",\n            reason: format!(\"{other:?} dispatched to step_sort_agg\"),\n        }),\n    }",
+    "decision": "match instr.opcode {\n        Opcode::SorterOpen => {\n            let keys = match &instr.p4 {\n                P4::SortKey(keys) => keys.clone(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"SorterOpen\",\n                        reason: format!(\"expected a SortKey P4, got {other:?}\"),\n                    })\n                }\n            };\n            let bound = if instr.p5 == 0 {\n                None\n            } else {\n                // `LIMIT -1` (any negative) means \"no limit\" in SQLite, and a\n                // non-integer limit register is unbounded too.\n                match vm.register(instr.p2)? {\n                    Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),\n                    _ => None,\n                }\n            };\n            vm.open_cursor(instr.p1, Box::new(SorterCursor::new(keys, bound)))?;\n            Ok(Step::Next)\n        }\n        Opcode::SorterInsert => {\n            let blob = match vm.register(instr.p2)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"SorterInsert\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let inserted = vm.cursor_mut(instr.p1)?.sorter_insert(blob);\n            if !inserted {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"SorterInsert\",\n                    reason: \"cursor slot is not a sorter, or the record blob does not decode\"\n                        .to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::SorterSort | Opcode::Sort | Opcode::HashAggRewind => {\n            let has_row = vm.cursor_mut(instr.p1)?.rewind()?;\n            Ok(if has_row {\n                Step::Next\n            } else {\n                Step::Jump(to_pc(instr.p2))\n            })\n        }\n        Opcode::SorterNext | Opcode::HashAggNext => {\n            let has_row = vm.cursor_mut(instr.p1)?.next()?;\n            Ok(if has_row {\n                Step::Jump(to_pc(instr.p2))\n            } else {\n                Step::Next\n            })\n        }\n        Opcode::SorterData => {\n            let blob =\n                vm.cursor(instr.p1)?\n                    .current_blob()\n                    .ok_or(ExecError::MalformedInstruction {\n                        opcode: \"SorterData\",\n                        reason: \"sorter has not been sorted yet, or has no current row\".to_string(),\n                    })?;\n            vm.set_register(instr.p2, blob)?;\n            Ok(Step::Next)\n        }\n        Opcode::HashAggOpen => {\n            let keys = match &instr.p4 {\n                P4::GroupKey(keys) => keys.clone(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"HashAggOpen\",\n                        reason: format!(\"expected a GroupKey P4, got {other:?}\"),\n                    })\n                }\n            };\n            vm.open_cursor(instr.p1, Box::new(HashAggCursor::new(keys)))?;\n            Ok(Step::Next)\n        }\n        Opcode::HashAggFind => {\n            let blob = match vm.register(instr.p2)? {\n                Value::Blob(bytes) => bytes.clone(),\n                other => {\n                    return Err(ExecError::TypeMismatch {\n                        opcode: \"HashAggFind\",\n                        found: value_kind(other),\n                    })\n                }\n            };\n            let found = vm.cursor_mut(instr.p1)?.hash_agg_find(blob);\n            if !found {\n                return Err(ExecError::MalformedInstruction {\n                opcode: \"HashAggFind\",\n                reason:\n                    \"cursor slot is not a hash-aggregation cursor, or the record blob does not decode\"\n                        .to_string(),\n            });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::HashAggStep => {\n            let (name, arity, collation) = match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"HashAggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            };\n            let start = Vm::index(\"HashAggStep\", instr.p2)?;\n            let end = start\n                .checked_add(arity)\n                .filter(|&end| end <= MAX_REGISTERS)\n                .ok_or(ExecError::RegisterOutOfRange {\n                    opcode: \"HashAggStep\",\n                    index: instr.p2,\n                })?;\n            if vm.registers.len() < end {\n                vm.registers.resize(end, Value::Null);\n            }\n            #[allow(clippy::cast_sign_loss)]\n            let slot = instr.p1.max(0) as usize;\n            // Borrow the argument registers in place (no per-row `Vec` +\n            // `Value` clones, #486): `registers` and `cursors` are\n            // disjoint fields, so both borrows coexist.\n            let cursor_idx = Vm::index(\"cursor slot write\", instr.p3)?;\n            let cursor = vm\n                .cursors\n                .get_mut(cursor_idx)\n                .and_then(Option::as_mut)\n                .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;\n            let args = vm.registers.get(start..end).unwrap_or(&[]);\n            let handled = cursor.hash_agg_step(slot, name, args, collation)?;\n            if !handled {\n                return Err(ExecError::MalformedInstruction {\n                    opcode: \"HashAggStep\",\n                    reason: \"cursor slot has no current group\".to_string(),\n                });\n            }\n            Ok(Step::Next)\n        }\n        Opcode::HashAggData => {\n            let blob =\n                vm.cursor(instr.p1)?\n                    .current_blob()\n                    .ok_or(ExecError::MalformedInstruction {\n                    opcode: \"HashAggData\",\n                    reason:\n                        \"hash-aggregation cursor has not been rewound yet, or has no current group\"\n                            .to_string(),\n                })?;\n            let accumulators: Vec<Option<AggState>> = vm\n                .cursor(instr.p1)?\n                .hash_agg_group_accumulators()\n                .map(<[_]>::to_vec)\n                .ok_or_else(|| ExecError::MalformedInstruction {\n                    opcode: \"HashAggData\",\n                    reason: \"cursor slot is not a hash-aggregation cursor\".to_string(),\n                })?;\n            for (slot, state) in accumulators.into_iter().enumerate() {\n                // Saturation is unreachable (slots are bounded by\n                // MAX_REGISTERS) and would be caught by set_agg_context's\n                // own range check anyway.\n                let slot = i32::try_from(slot).unwrap_or(i32::MAX);\n                match state {\n                    Some(state) => vm.set_agg_context(slot, state)?,\n                    None => vm.clear_agg_context(slot)?,\n                }\n            }\n            vm.set_register(instr.p2, blob)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggStep => {\n            let (name, arity, collation) = match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            };\n            let mut args = Vec::with_capacity(arity);\n            for i in 0..arity {\n                let reg = instr\n                    .p2\n                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))\n                    .ok_or(ExecError::RegisterOutOfRange {\n                        opcode: \"AggStep\",\n                        index: instr.p2,\n                    })?;\n                args.push(vm.register(reg)?.clone());\n            }\n            let current = if instr.p5 == 0 {\n                vm.take_agg_context(instr.p1)?\n            } else {\n                None\n            };\n            let updated = aggregate::step(name, current, &args, collation)?;\n            vm.set_agg_context(instr.p1, updated)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggFinal => {\n            let descriptor = match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggFinal\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            };\n            let (name, _arity) = parse_function_descriptor(descriptor).ok_or_else(|| {\n                ExecError::MalformedInstruction {\n                    opcode: \"AggFinal\",\n                    reason: format!(\"malformed aggregate descriptor {descriptor:?}\"),\n                }\n            })?;\n            let state = vm.agg_context(instr.p1)?;\n            let result = aggregate::finalize(name, state)?;\n            vm.set_register(instr.p3, result)?;\n            vm.clear_agg_context(instr.p1)?;\n            Ok(Step::Next)\n        }\n        Opcode::AggReset => {\n            vm.clear_agg_context(instr.p1)?;\n            Ok(Step::Next)\n        }\n\n        other => Err(ExecError::MalformedInstruction {\n            opcode: \"step\",\n            reason: format!(\"{other:?} dispatched to step_sort_agg\"),\n        }),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -64882,7 +64962,7 @@
   {
     "id": "vm_row_vm_sort_agg_step_sort_agg_00abfb0b",
     "file": "src/vm/row/vm/sort_agg.rs",
-    "line": 159,
+    "line": 154,
     "decision": "!handled",
     "conditions": 1,
     "vectors_required": 2,
@@ -64892,7 +64972,7 @@
   {
     "id": "vm_row_vm_sort_agg_step_sort_agg_ba47471a",
     "file": "src/vm/row/vm/sort_agg.rs",
-    "line": 190,
+    "line": 185,
     "decision": "match state {\n                    Some(state) => vm.set_agg_context(slot, state)?,\n                    None => vm.clear_agg_context(slot)?,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -64902,7 +64982,7 @@
   {
     "id": "vm_row_vm_sort_agg_step_sort_agg_675fbbdb",
     "file": "src/vm/row/vm/sort_agg.rs",
-    "line": 199,
+    "line": 194,
     "decision": "match &instr.p4 {\n                P4::AggFunc {\n                    name,\n                    arity,\n                    collation,\n                } => (name.as_str(), *arity, *collation),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggStep\",\n                        reason: format!(\"expected an AggFunc P4, got {other:?}\"),\n                    })\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -64912,7 +64992,7 @@
   {
     "id": "vm_row_vm_sort_agg_step_sort_agg_fa39891d_2",
     "file": "src/vm/row/vm/sort_agg.rs",
-    "line": 223,
+    "line": 218,
     "decision": "instr.p5 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -64922,7 +65002,7 @@
   {
     "id": "vm_row_vm_sort_agg_step_sort_agg_964eb448",
     "file": "src/vm/row/vm/sort_agg.rs",
-    "line": 238,
+    "line": 228,
     "decision": "match &instr.p4 {\n                P4::Str(s) => s.as_str(),\n                other => {\n                    return Err(ExecError::MalformedInstruction {\n                        opcode: \"AggFinal\",\n                        reason: format!(\"expected a \\\"name(arity)\\\" string P4, got {other:?}\"),\n                    })\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
