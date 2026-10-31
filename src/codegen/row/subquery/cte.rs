@@ -454,6 +454,31 @@ mod tests {
         assert!(subqueries.iter().all(|s| reads_a_cte(s)));
     }
 
+    /// #885: the walker reaches a subquery in every clause and expression
+    /// form -- no reference to the CTE survives expansion anywhere.
+    #[test]
+    fn every_clause_and_expression_form_sees_the_cte() {
+        let q = "(SELECT v FROM zz_cte)";
+        let sql = format!(
+            "WITH zz_cte AS (SELECT 1 AS v) \
+             SELECT -{q}, {q} IS NULL, CAST({q} AS TEXT), {q} COLLATE NOCASE, ({q}), \
+                    abs({q}), count(*) FILTER (WHERE a = {q}), \
+                    CASE {q} WHEN {q} THEN {q} ELSE {q} END, \
+                    a BETWEEN {q} AND {q}, a IN (1, {q}), 'x' LIKE {q} ESCAPE {q}, \
+                    a IS {q}, (a, a) IN (SELECT v, v FROM zz_cte) \
+             FROM t JOIN u ON u.a = {q} \
+             WHERE NOT EXISTS (SELECT 1 FROM zz_cte) \
+             GROUP BY a HAVING a > {q} \
+             UNION ALL SELECT {q}, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 FROM t \
+                 WHERE a = {q} GROUP BY a HAVING a < {q} \
+             ORDER BY 1 LIMIT {q} OFFSET {q}"
+        );
+        let select = sel(&sql);
+        let expanded = expand_with_clause(&select).unwrap();
+        let debug = format!("{expanded:?}");
+        assert!(!debug.contains("Name(\"zz_cte\")"), "{debug}");
+    }
+
     /// #885: sqlite3 refuses a non-recursive CTE that reads its own name
     /// and a column list of the wrong width; both used to pass silently.
     #[test]

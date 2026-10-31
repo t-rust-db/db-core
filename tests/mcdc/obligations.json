@@ -13752,7 +13752,7 @@
   {
     "id": "codegen_row_subquery_cte_views_that_reference_each_view_twice_are_refused_acb70138",
     "file": "src/codegen/row/subquery/cte.rs",
-    "line": 498,
+    "line": 523,
     "decision": "i == 0",
     "conditions": 1,
     "vectors_required": 2,
