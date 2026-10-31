@@ -469,6 +469,21 @@ pub(crate) fn compile_in_subquery(
         );
     };
 
+    emit_hoisted_in_probe(em, reg, outer_scope, lhs, eph_cursor, negated, targets)
+}
+
+/// Tests `lhs` for membership in the already-materialized ephemeral set
+/// `eph_cursor` and routes to `targets`: what a hoisted `IN (SELECT ...)`
+/// and a hoisted `IN (<integer literals>)` (#915) both do per row.
+pub(crate) fn emit_hoisted_in_probe(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    outer_scope: &Scope,
+    lhs: &Expr,
+    eph_cursor: i32,
+    negated: bool,
+    targets: CondTargets,
+) -> Result<(), CodegenError> {
     let l = compile_value(em, reg, outer_scope, lhs)?;
 
     let (true_label, true_is_new) = crate::codegen::row::expr::ensure_label(em, targets.on_true);
@@ -514,6 +529,38 @@ pub(crate) fn compile_in_subquery(
         em.place(true_label);
     }
     Ok(())
+}
+
+/// Materializes the literal members of `x IN (<literals>)` into a fresh
+/// ephemeral membership index, returning the cursor (#915): the set is
+/// built once before the scan and probed with `Found` per row, instead of
+/// one comparison per member per row.
+pub(super) fn materialize_in_literal_set(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    outer_scope: &Scope,
+    list: &[Expr],
+) -> Result<i32, CodegenError> {
+    let eph_cursor = reg.alloc_cursor();
+    em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
+    for item in list {
+        let v = compile_value(em, reg, outer_scope, item)?;
+        em.emit(Instruction::with_p4(
+            Opcode::FilterAdd,
+            eph_cursor,
+            0,
+            v,
+            P4::Int(1),
+        ));
+        em.emit(Instruction::with_p4(
+            Opcode::IdxInsert,
+            eph_cursor,
+            v,
+            0,
+            P4::Int(1),
+        ));
+    }
+    Ok(eph_cursor)
 }
 
 /// Materializes a single-column `IN`-subquery's result column into a

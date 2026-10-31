@@ -33,6 +33,7 @@ use crate::storage::row::header::{DatabaseHeader, HEADER_LEN};
 use crate::storage::row::pager::Pager;
 use crate::storage::row::schema::read_schema_and_views;
 use crate::storage::row::vfs::{PageSource, UnixVfs, Vfs};
+use crate::value::Value;
 use crate::vm::row::{execute, explain, ConnectionState, Opcode, Program, Vm, OPFLAG_NCHANGE};
 
 use super::{
@@ -46,6 +47,37 @@ pub mod stats;
 use adapter::{BtreeSchemaStorage, PagerTransaction, StorageFactory};
 
 type Catalog = (Vec<TableSchema>, Vec<ViewSchema>);
+
+/// Journal mode of a database file made by [`RowEngine::create`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateJournal {
+    /// Write-ahead log: what `PRAGMA journal_mode=WAL` leaves in the header.
+    Wal,
+    /// Rollback journal, deleted on commit (SQLite's default).
+    Delete,
+}
+
+/// How [`RowEngine::create`] lays out a new database file (#915).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CreateOptions {
+    /// Bytes per page: a power of two from 512 to 65536.
+    pub page_size: u32,
+    /// Journal mode written into the header.
+    pub journal: CreateJournal,
+    /// Bytes reserved at the end of every page (header byte 20), below
+    /// `page_size`.
+    pub reserved_bytes: u8,
+}
+
+impl Default for CreateOptions {
+    fn default() -> Self {
+        CreateOptions {
+            page_size: crate::storage::row::header::DEFAULT_PAGE_SIZE,
+            journal: CreateJournal::Delete,
+            reserved_bytes: 0,
+        }
+    }
+}
 
 /// One open SQLite-format file.
 pub struct RowEngine {
@@ -62,6 +94,72 @@ pub struct RowEngine {
     connection: ConnectionState,
 }
 
+/// `stmt` with every bare `?` rewritten to `?N` in source order, `N` one
+/// past the largest index seen so far (sqlite3's numbering). Codegen
+/// numbers a bare `?` as it compiles it, and it compiles an `UPDATE`'s
+/// `WHERE` before its `SET`, so `SET n = ? WHERE v = ?` bound the two
+/// values the wrong way round.
+fn number_anonymous_params(stmt: &str) -> String {
+    use crate::parser::row::tokenizer::{Param, TokenKind, Tokenizer};
+    let mut out = String::with_capacity(stmt.len());
+    let mut copied = 0usize;
+    let mut largest = 0u32;
+    for token in Tokenizer::tokenize(stmt) {
+        let TokenKind::Param(param) = &token.kind else {
+            continue;
+        };
+        match **param {
+            Param::Numbered(n) => largest = largest.max(n),
+            Param::Anonymous => {
+                let start = token.span.offset as usize;
+                let end = start.saturating_add(token.span.len as usize);
+                let (Some(before), true) = (stmt.get(copied..start), stmt.is_char_boundary(end))
+                else {
+                    continue;
+                };
+                largest = largest.saturating_add(1);
+                out.push_str(before);
+                out.push_str(&format!("?{largest}"));
+                copied = end;
+            }
+            _ => {}
+        }
+    }
+    out.push_str(stmt.get(copied..).unwrap_or_default());
+    out
+}
+
+/// Binds `params` to `vm` for `program`, or does nothing for `None`. A
+/// count that differs from the program's parameter count -- its highest
+/// `Variable` slot -- is an error, before the program runs.
+fn bind_params(
+    vm: &mut Vm,
+    program: &Program,
+    params: Option<&[Value]>,
+) -> Result<(), EngineError> {
+    let Some(params) = params else {
+        return Ok(());
+    };
+    let expected = program
+        .instructions
+        .iter()
+        .filter(|i| i.opcode == Opcode::Variable)
+        .map(|i| i.p1)
+        .max()
+        .map_or(0, |slot| usize::try_from(slot).unwrap_or(0));
+    if expected != params.len() {
+        return Err(EngineError::new(
+            ErrorKind::Execute,
+            format!(
+                "the statement has {expected} parameter(s) but {} value(s) were supplied",
+                params.len()
+            ),
+        ));
+    }
+    vm.bind_params(params.to_vec());
+    Ok(())
+}
+
 impl std::fmt::Debug for RowEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RowEngine")
@@ -74,6 +172,115 @@ impl std::fmt::Debug for RowEngine {
 }
 
 impl RowEngine {
+    /// Creates the database file `path` and opens it (#915): an empty
+    /// schema in the layout `options` asks for, then `schema` -- zero or
+    /// more `;`-separated statements, typically `CREATE TABLE`/`CREATE
+    /// INDEX` -- run against it. Fails with [`ErrorKind::Open`], leaving
+    /// the file untouched, when `path` already exists or `options` is not
+    /// a valid layout. When `schema` fails the new file is removed again.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Open`] for an existing file, invalid options or an
+    /// I/O failure; the error of the first `schema` statement that fails.
+    pub fn create(path: &Path, options: CreateOptions, schema: &str) -> Result<Self, EngineError> {
+        let page_size = options.page_size;
+        if !page_size.is_power_of_two() || !(512..=65536).contains(&page_size) {
+            return Err(EngineError::new(
+                ErrorKind::Open,
+                format!("page size {page_size} is not a power of two from 512 to 65536"),
+            ));
+        }
+        if u32::from(options.reserved_bytes) >= page_size {
+            return Err(EngineError::new(
+                ErrorKind::Open,
+                format!(
+                    "{} reserved bytes leave no usable bytes in a {page_size}-byte page",
+                    options.reserved_bytes
+                ),
+            ));
+        }
+        let mut page1 = DatabaseHeader::new_empty_page1(page_size);
+        if let Some(byte) = page1.get_mut(20) {
+            *byte = options.reserved_bytes;
+        }
+        if options.reserved_bytes > 0 {
+            // The empty schema leaf's cell content area ends where the
+            // reserved tail starts, not at the end of the page.
+            let content_start =
+                u16::try_from(page_size.saturating_sub(u32::from(options.reserved_bytes)))
+                    .unwrap_or(0);
+            for (slot, byte) in page1
+                .get_mut(HEADER_LEN + 5..HEADER_LEN + 7)
+                .into_iter()
+                .flatten()
+                .zip(content_start.to_be_bytes())
+            {
+                *slot = byte;
+            }
+        }
+        if options.journal == CreateJournal::Wal {
+            for byte in page1.get_mut(18..20).into_iter().flatten() {
+                *byte = 2;
+            }
+        }
+        // `create_new` fails on an existing file without touching it.
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())))?;
+        let written = std::io::Write::write_all(&mut file, &page1)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", path.display())));
+        drop(file);
+        let engine = written
+            .and_then(|()| <Self as Engine>::open(path))
+            .and_then(|mut engine| {
+                if schema.trim().is_empty() {
+                    return Ok(engine);
+                }
+                engine.run_query(schema)?;
+                Ok(engine)
+            });
+        if engine.is_err() {
+            std::fs::remove_file(path).ok();
+            for suffix in ["-wal", "-shm", "-journal"] {
+                std::fs::remove_file(format!("{}{suffix}", path.display())).ok();
+            }
+        }
+        engine
+    }
+
+    /// Runs one statement with `?`/`?N` parameters bound to `params`
+    /// (#915): a value is data, never SQL text, so a `'` or `;` in a text
+    /// parameter cannot change the statement. `params` must hold exactly
+    /// as many values as the statement has parameters (the highest `?N`),
+    /// checked before anything runs.
+    ///
+    /// # Errors
+    /// [`ErrorKind::Unsupported`] unless `sql` is exactly one statement;
+    /// [`ErrorKind::Execute`] for a wrong parameter count; otherwise as
+    /// [`Engine::run_query`].
+    pub fn run_query_with(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+    ) -> Result<QueryResult, EngineError> {
+        let stmt = number_anonymous_params(&single_statement(sql)?);
+        let catalog = self.catalog()?;
+        let result = if Self::is_select(&stmt) {
+            let select = Self::parse_select_or_err(&stmt)?;
+            self.run_select(&select, &stmt, &catalog, Some(params))?
+        } else {
+            let program = self.compile_one(&stmt, &catalog)?;
+            self.run_statement(&program, Some(params))?
+        };
+        if Self::is_schema_changing(&stmt) {
+            *self.catalog.borrow_mut() = None;
+        }
+        Ok(result)
+    }
+
     /// The 100-byte header as read at open time. Not refreshed after
     /// writes; `stats()` reports it as-is.
     #[must_use]
@@ -198,6 +405,7 @@ impl RowEngine {
         select: &Select,
         sql: &str,
         catalog: &Catalog,
+        params: Option<&[Value]>,
     ) -> Result<QueryResult, EngineError> {
         let (schemas, views) = catalog;
         let stats_by_table = self.stats_by_table(schemas);
@@ -205,6 +413,7 @@ impl RowEngine {
             .map_err(|e| EngineError::new(ErrorKind::Compile, e))?;
         let columns = result_column_names(select, sql, schemas, views);
         let mut vm = self.read_only_vm();
+        bind_params(&mut vm, &program, params)?;
         let rows =
             execute(&mut vm, &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
         Ok(QueryResult {
@@ -222,8 +431,13 @@ impl RowEngine {
     /// explicit transaction a clean `Halt` flushes the pager (every
     /// statement is its own transaction); inside `BEGIN ... COMMIT` the
     /// `AutoCommit` opcode flushes instead.
-    fn run_statement(&mut self, program: &Program) -> Result<QueryResult, EngineError> {
+    fn run_statement(
+        &mut self,
+        program: &Program,
+        params: Option<&[Value]>,
+    ) -> Result<QueryResult, EngineError> {
         let mut vm = self.writable_vm();
+        bind_params(&mut vm, program, params)?;
         let rows = match execute(&mut vm, program) {
             Ok(rows) => rows,
             Err(e) => {
@@ -299,7 +513,7 @@ impl RowEngine {
         let sql = format!("SELECT COUNT(*) FROM \"{}\"", table.replace('"', "\"\""));
         let select = Self::parse_select_or_err(&sql)?;
         match self
-            .run_select(&select, &sql, &catalog)?
+            .run_select(&select, &sql, &catalog, None)?
             .rows
             .first()
             .and_then(|r| r.first())
@@ -368,10 +582,10 @@ impl Engine for RowEngine {
             let catalog = self.catalog()?;
             let result = if Self::is_select(&stmt) {
                 let select = Self::parse_select_or_err(&stmt)?;
-                self.run_select(&select, &stmt, &catalog)?
+                self.run_select(&select, &stmt, &catalog, None)?
             } else {
                 let program = self.compile_one(&stmt, &catalog)?;
-                self.run_statement(&program)?
+                self.run_statement(&program, None)?
             };
             if Self::is_schema_changing(&stmt) {
                 *self.catalog.borrow_mut() = None;
@@ -449,5 +663,48 @@ impl Engine for RowEngine {
                     .collect(),
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case, clippy::unwrap_used, clippy::unwrap_in_result)]
+mod mcdc_vectors {
+    //! Tagged MC/DC vectors for this file's multi-leaf decisions
+    //! (`mcdc__<id>__vN`, joined to `tests/mcdc/obligations.json`
+    //! by `make test-mcdc`).
+
+    use super::{CreateOptions, RowEngine};
+
+    fn create_with_page_size(page_size: u32) -> Result<RowEngine, super::EngineError> {
+        let path = std::env::temp_dir().join(format!(
+            "db-core-create-mcdc-{}-{page_size}.db",
+            std::process::id()
+        ));
+        std::fs::remove_file(&path).ok();
+        let result = RowEngine::create(
+            &path,
+            CreateOptions {
+                page_size,
+                ..CreateOptions::default()
+            },
+            "",
+        );
+        std::fs::remove_file(&path).ok();
+        result
+    }
+
+    #[test]
+    fn mcdc__engine_row_create_4b191083__v1_a_power_of_two_in_range_is_a_valid_page_size() {
+        assert!(create_with_page_size(2048).is_ok());
+    }
+
+    #[test]
+    fn mcdc__engine_row_create_4b191083__v2_a_size_that_is_not_a_power_of_two_is_refused() {
+        assert!(create_with_page_size(1000).is_err());
+    }
+
+    #[test]
+    fn mcdc__engine_row_create_4b191083__v3_a_power_of_two_outside_the_range_is_refused() {
+        assert!(create_with_page_size(256).is_err());
     }
 }

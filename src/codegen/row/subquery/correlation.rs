@@ -6,12 +6,16 @@
 use std::collections::HashMap;
 
 use super::from_clause::resolve_subquery_schema;
-use super::scalar::{compile_scalar_subquery, materialize_in_subquery_index};
+use super::scalar::{
+    compile_scalar_subquery, materialize_in_literal_set, materialize_in_subquery_index,
+};
 use super::{select_id, HoistedSubquery};
+use crate::codegen::row::expr::expr_affinity;
 use crate::codegen::row::select::CodegenError;
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{Emitter, RegAlloc, Scope};
-use crate::parser::ast::{BinaryOp, Expr, ExprKind, FunctionArgs, ResultColumn, Select};
+use crate::parser::ast::{BinaryOp, Expr, ExprKind, FunctionArgs, Literal, ResultColumn, Select};
+use crate::vm::row::Affinity;
 
 /// Whether `subselect` is correlated — references a column that isn't
 /// one of its own `own_schema`'s columns (#306). `own_schema: None`
@@ -238,8 +242,35 @@ fn try_hoist_conjunct(
             }
             Ok(None)
         }
+        // #915: a long `x IN (<integer literals>)` over an integer column
+        // becomes one set built here and a `Found` per row, not a
+        // comparison per member per row (a 1,000-member list over 250k
+        // rows ran past the VM step limit).
+        ExprKind::In { expr, list, .. }
+            if list.len() >= IN_LIST_SET_MIN
+                && list
+                    .iter()
+                    .all(|item| matches!(item.kind, ExprKind::Literal(Literal::Integer(_))))
+                && expr_affinity(outer_scope, expr) == Some(Affinity::Integer) =>
+        {
+            let eph_cursor = materialize_in_literal_set(em, reg, outer_scope, list)?;
+            Ok(Some((
+                in_list_id(conjunct),
+                HoistedSubquery::In { eph_cursor },
+            )))
+        }
         _ => Ok(None),
     }
+}
+
+/// Members from which an integer-literal `IN` list is probed as a set
+/// rather than compared member by member.
+const IN_LIST_SET_MIN: usize = 8;
+
+/// Key of a hoisted `IN (<literals>)` in [`Scope::hoisted`]: the
+/// expression's own address, as [`select_id`] does for a subquery.
+pub(crate) fn in_list_id(expr: &Expr) -> usize {
+    std::ptr::from_ref(expr) as usize
 }
 
 /// Hoists every uncorrelated `IN`/scalar subquery found as a top-level
@@ -358,5 +389,47 @@ mod mcdc_vectors {
     ) {
         let p = compile_tu("SELECT a FROM t WHERE a = (SELECT b FROM u WHERE u.b = 1)").unwrap();
         assert!(subquery_open_precedes_outer_rewind(&p), "{p:?}");
+    }
+    // codegen_row_subquery_correlation_try_hoist_conjunct_1ae2d49a: `list.len() >=
+    // IN_LIST_SET_MIN && every member an integer literal && integer-affinity
+    // left side` (#915): the three together build the membership set once,
+    // before the scan; each alone missing leaves the per-member comparisons.
+    fn builds_in_set(sql: &str) -> bool {
+        let mut catalog = t_and_u();
+        catalog[0].column_types[1] = "TEXT".to_string();
+        let p = compile_select_with_catalog(&sel(sql), &catalog[0], &catalog).unwrap();
+        p.instructions
+            .iter()
+            .any(|i| i.opcode == Opcode::OpenEphemeral)
+    }
+
+    #[test]
+    fn mcdc__codegen_row_subquery_correlation_try_hoist_conjunct_1ae2d49a__v1_a_long_integer_list_on_an_integer_column_builds_a_set(
+    ) {
+        assert!(builds_in_set(
+            "SELECT a FROM t WHERE a IN (1, 2, 3, 4, 5, 6, 7, 8)"
+        ));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_subquery_correlation_try_hoist_conjunct_1ae2d49a__v2_a_short_list_keeps_the_member_comparisons(
+    ) {
+        assert!(!builds_in_set("SELECT a FROM t WHERE a IN (1, 2, 3)"));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_subquery_correlation_try_hoist_conjunct_1ae2d49a__v3_a_text_member_keeps_the_member_comparisons(
+    ) {
+        assert!(!builds_in_set(
+            "SELECT a FROM t WHERE a IN (1, 2, 3, 4, 5, 6, 7, 'x')"
+        ));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_subquery_correlation_try_hoist_conjunct_1ae2d49a__v4_a_text_column_keeps_the_member_comparisons(
+    ) {
+        assert!(!builds_in_set(
+            "SELECT a FROM t WHERE b IN (1, 2, 3, 4, 5, 6, 7, 8)"
+        ));
     }
 }

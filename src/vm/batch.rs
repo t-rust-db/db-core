@@ -2883,6 +2883,11 @@ fn scan_segment_late<S: Segment>(
             .map(|(j, name)| {
                 if j == spec.col {
                     item.key.clone()
+                } else if plan.key_columns.contains(name) {
+                    // A predicate column that is also selected (#914): it
+                    // was loaded with the key, not deferred, so `gathered`
+                    // does not hold it.
+                    batch_cell(&batch, name, item.position as usize)
                 } else {
                     batch_cell(&gathered, name, k)
                 }
@@ -13869,6 +13874,52 @@ mod tests {
         for segment in &segments {
             let loads = segment.loads.lock().unwrap();
             assert_eq!(*loads, vec![vec!["flag".to_string(), "key".to_string()]]);
+        }
+    }
+
+    #[test]
+    fn late_top_n_keeps_a_filtered_column_that_is_also_selected() {
+        // `SELECT payload, flag, key ... WHERE flag ORDER BY key LIMIT`:
+        // `flag` is a predicate column, loaded with the key rather than
+        // gathered, and used to come back NULL (#914).
+        let batches = vec![late_fixture(1_000, 0), late_fixture(1_000, 400)];
+        let program = vec![
+            Opcode::LoadColumn {
+                reg: 2,
+                column: "flag".into(),
+            },
+            Opcode::Filter { predicate: 2 },
+            Opcode::LoadColumn {
+                reg: 0,
+                column: "payload".into(),
+            },
+            Opcode::LoadColumn {
+                reg: 1,
+                column: "key".into(),
+            },
+            Opcode::Emit {
+                registers: vec![0, 2, 1].into(),
+            },
+        ];
+        let spec = TopN {
+            col: 2,
+            descending: true,
+            limit: 7,
+        };
+        for can_gather in [true, false] {
+            let segments: Vec<LateSegment> = batches
+                .iter()
+                .cloned()
+                .map(|b| LateSegment::new(b, can_gather))
+                .collect();
+            let rows = run_parallel_top_n(&segments, &program, &spec)
+                .unwrap()
+                .into_rows();
+            assert_eq!(rows, eager_rows(&batches, &program, &spec));
+            assert_eq!(rows.len(), 7);
+            for row in &rows {
+                assert_eq!(row[1], Value::Bool(true), "can_gather={can_gather}");
+            }
         }
     }
 

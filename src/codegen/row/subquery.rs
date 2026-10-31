@@ -60,7 +60,7 @@ pub(crate) use views::reject_unparsable_view_refs;
 pub use views::{resolve_views, ExpandViews, ResolvedView};
 
 pub(crate) use correlation::{
-    hoist_uncorrelated_where_subqueries, is_comparison_op, subquery_hoistable,
+    hoist_uncorrelated_where_subqueries, in_list_id, is_comparison_op, subquery_hoistable,
     subquery_is_correlated, top_level_and_conjuncts,
 };
 pub(crate) use from_clause::materialize_from_subquery;
@@ -68,6 +68,7 @@ pub(crate) use from_clause::resolve_subquery_schema;
 pub(crate) use memoize::{compile_memoized_scalar_subquery, memoize_correlated_where_subqueries};
 pub(crate) use scalar::{
     compile_exists, compile_in_subquery, compile_in_subquery_multi, compile_scalar_subquery,
+    emit_hoisted_in_probe,
 };
 
 /// Identifies a subquery's own `Select` AST node by pointer identity —

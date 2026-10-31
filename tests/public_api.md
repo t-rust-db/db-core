@@ -962,10 +962,39 @@ pub fn db_core::engine::row::stats::estimate_scan_cost(&db_core::codegen::row::p
 pub fn db_core::engine::row::stats::is_automatic_index_worthwhile(&db_core::codegen::row::planner::Stats) -> bool
 pub fn db_core::engine::row::stats::is_skip_scan_worthwhile(&str, &db_core::codegen::row::planner::Stats) -> bool
 pub fn db_core::engine::row::stats::load_stats<P: db_core::storage::row::vfs::PageSource + core::marker::Copy>(P, &db_core::storage::row::header::DatabaseHeader, &[db_core::schema::TableSchema]) -> std::collections::hash::map::HashMap<alloc::string::String, db_core::codegen::row::planner::Stats>
+pub enum db_core::engine::row::CreateJournal
+pub db_core::engine::row::CreateJournal::Delete
+pub db_core::engine::row::CreateJournal::Wal
+impl core::clone::Clone for db_core::engine::row::CreateJournal
+pub fn db_core::engine::row::CreateJournal::clone(&self) -> Self
+impl core::cmp::Eq for db_core::engine::row::CreateJournal
+impl core::cmp::PartialEq for db_core::engine::row::CreateJournal
+pub fn db_core::engine::row::CreateJournal::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::engine::row::CreateJournal
+pub fn db_core::engine::row::CreateJournal::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::engine::row::CreateJournal
+impl core::marker::StructuralPartialEq for db_core::engine::row::CreateJournal
+pub struct db_core::engine::row::CreateOptions
+pub db_core::engine::row::CreateOptions::journal: db_core::engine::row::CreateJournal
+pub db_core::engine::row::CreateOptions::page_size: u32
+pub db_core::engine::row::CreateOptions::reserved_bytes: u8
+impl core::clone::Clone for db_core::engine::row::CreateOptions
+pub fn db_core::engine::row::CreateOptions::clone(&self) -> Self
+impl core::cmp::Eq for db_core::engine::row::CreateOptions
+impl core::cmp::PartialEq for db_core::engine::row::CreateOptions
+pub fn db_core::engine::row::CreateOptions::eq(&self, &Self) -> bool
+impl core::default::Default for db_core::engine::row::CreateOptions
+pub fn db_core::engine::row::CreateOptions::default() -> Self
+impl core::fmt::Debug for db_core::engine::row::CreateOptions
+pub fn db_core::engine::row::CreateOptions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for db_core::engine::row::CreateOptions
+impl core::marker::StructuralPartialEq for db_core::engine::row::CreateOptions
 pub struct db_core::engine::row::RowEngine
 impl db_core::engine::row::RowEngine
+pub fn db_core::engine::row::RowEngine::create(&std::path::Path, db_core::engine::row::CreateOptions, &str) -> core::result::Result<Self, db_core::engine::EngineError>
 pub fn db_core::engine::row::RowEngine::header(&self) -> &db_core::storage::row::header::DatabaseHeader
 pub fn db_core::engine::row::RowEngine::path(&self) -> &std::path::Path
+pub fn db_core::engine::row::RowEngine::run_query_with(&mut self, &str, &[db_core::value::Value]) -> core::result::Result<db_core::engine::QueryResult, db_core::engine::EngineError>
 impl core::fmt::Debug for db_core::engine::row::RowEngine
 pub fn db_core::engine::row::RowEngine::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::engine::Engine for db_core::engine::row::RowEngine

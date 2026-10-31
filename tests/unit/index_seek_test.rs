@@ -354,3 +354,109 @@ fn non_binary_collated_index_is_never_seeked_and_results_match_the_oracle() {
         plan(&e, "SELECT id FROM n WHERE id = 2").starts_with("SEARCH n USING INTEGER PRIMARY KEY")
     );
 }
+
+/// #915: `rowid IN (literals)` is one `SeekRowid` per member, not a scan
+/// that tests every literal per row (which ran past the VM step limit at 25
+/// ids over 250k rows). Rows come back in ascending rowid order, a repeated
+/// literal answers once, and a missing id answers nothing.
+#[test]
+fn rowid_in_list_seeks_each_member_and_matches_the_scan() {
+    let (_db, mut e) = seeded("rowid-in");
+    assert_eq!(
+        plan(&e, "SELECT tag FROM s WHERE id IN (5, 2, 5, 99)"),
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+    );
+    let seek = rows(&mut e, "SELECT id, tag FROM s WHERE id IN (5, 2, 5, 99, 1)");
+    let scan = rows(
+        &mut e,
+        "SELECT id, tag FROM s WHERE id + 0 IN (5, 2, 5, 99, 1) ORDER BY id",
+    );
+    assert_eq!(seek.len(), 3);
+    assert_eq!(seek, scan);
+    let limited = rows(
+        &mut e,
+        "SELECT id FROM s WHERE id IN (6, 3, 1) LIMIT 2 OFFSET 1",
+    );
+    assert_eq!(limited, rows(&mut e, "SELECT id FROM s WHERE id IN (3, 6)"));
+    // NOT IN keeps scanning.
+    assert!(plan(&e, "SELECT tag FROM s WHERE id NOT IN (1, 2)").starts_with("SCAN"));
+}
+
+#[test]
+fn rowid_in_list_of_a_thousand_literals_runs_within_the_step_limit() {
+    let (_db, mut e) = seeded("rowid-in-1000");
+    let mut seed = String::from("CREATE TABLE big(id INTEGER PRIMARY KEY, v TEXT); BEGIN;");
+    for i in 1..=5000 {
+        seed.push_str(&format!("INSERT INTO big VALUES ({i}, 'v{i}');"));
+    }
+    seed.push_str("COMMIT");
+    e.run_query(&seed).expect("seed big");
+    let ids: Vec<String> = (0..1000).map(|i| (i * 5 + 1).to_string()).collect();
+    let sql = format!("SELECT COUNT(*) FROM big WHERE id IN ({})", ids.join(","));
+    assert_eq!(rows(&mut e, &sql), vec![vec![Cell::Int(1000)]]);
+}
+
+/// #915: a long integer-literal list on an unindexed integer column is
+/// probed as a set; it answers exactly as the member-by-member comparison
+/// does (`a + 0` keeps that path), for NULLs, text, reals and `NOT IN`.
+#[test]
+fn long_integer_in_list_as_a_set_matches_the_member_by_member_comparison() {
+    let (_db, mut e) = seeded("in-set");
+    e.run_query(
+        "CREATE TABLE z(id INTEGER PRIMARY KEY, a INTEGER, b TEXT); \
+         INSERT INTO z(a, b) VALUES (1, 'x'), (5, 'x'), (NULL, 'x'), ('abc', 'x'), \
+           (5.5, 'x'), (7, 'x'), ('7', 'x'), (20, 'x'), (-3, 'x'), (9223372036854775807, 'x')",
+    )
+    .expect("seed z");
+    let list = "1, 2, 3, 5, 7, 9, 11, -3, 9223372036854775807, 100";
+    for (set, members) in [
+        (format!("a IN ({list})"), format!("a + 0 IN ({list})")),
+        (
+            format!("a NOT IN ({list})"),
+            format!("a + 0 NOT IN ({list})"),
+        ),
+        (
+            format!("NOT (a IN ({list}))"),
+            format!("NOT (a + 0 IN ({list}))"),
+        ),
+        (
+            format!("b = 'x' AND a IN ({list})"),
+            format!("b = 'x' AND a + 0 IN ({list})"),
+        ),
+    ] {
+        let got = rows(&mut e, &format!("SELECT id FROM z WHERE {set} ORDER BY id"));
+        let want = rows(
+            &mut e,
+            &format!("SELECT id FROM z WHERE {members} ORDER BY id"),
+        );
+        assert_eq!(got, want, "{set}");
+    }
+    let count = rows(
+        &mut e,
+        &format!("SELECT COUNT(*) FROM z WHERE a IN ({list})"),
+    );
+    assert_eq!(count, vec![vec![Cell::Int(6)]]);
+}
+
+/// #915: an aggregate over `rowid IN (...)` seeks each member too, and
+/// reports it.
+#[test]
+fn aggregate_over_a_rowid_in_list_seeks_and_matches_the_scan() {
+    let (_db, mut e) = seeded("agg-rowid-in");
+    let sql = "SELECT COUNT(*), SUM(k), MIN(tag) FROM s WHERE id IN (6, 2, 2, 4, 99)";
+    assert_eq!(
+        plan(&e, sql),
+        "SEARCH s USING INTEGER PRIMARY KEY (rowid=?)"
+    );
+    assert_eq!(
+        rows(&mut e, sql),
+        rows(
+            &mut e,
+            "SELECT COUNT(*), SUM(k), MIN(tag) FROM s WHERE id + 0 IN (6, 2, 2, 4, 99)"
+        )
+    );
+    assert_eq!(
+        rows(&mut e, "SELECT COUNT(*) FROM s WHERE id IN (98, 99)"),
+        vec![vec![Cell::Int(0)]]
+    );
+}

@@ -399,16 +399,24 @@ where
     }
 
     let table_scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
+    // #915: `rowid IN (...)` seeks each member below, so its list is
+    // never built as a set.
+    let rowid_seeks = select
+        .where_clause
+        .as_ref()
+        .and_then(|where_expr| super::limit_scan::rowid_in_list_operands(schema, where_expr));
     // #322: hoist any uncorrelated WHERE-clause subquery once, up
     // front — see `compile_grouped_scan`'s identical comment.
     let hoisted = match &select.where_clause {
-        Some(where_expr) => crate::codegen::row::subquery::hoist_uncorrelated_where_subqueries(
-            em,
-            reg,
-            &table_scope,
-            where_expr,
-        )?,
-        None => std::collections::HashMap::new(),
+        Some(where_expr) if rowid_seeks.is_none() => {
+            crate::codegen::row::subquery::hoist_uncorrelated_where_subqueries(
+                em,
+                reg,
+                &table_scope,
+                where_expr,
+            )?
+        }
+        _ => std::collections::HashMap::new(),
     };
     let table_scope = table_scope.with_hoisted(std::rc::Rc::new(hoisted));
 
@@ -541,6 +549,31 @@ where
     // sort cursor number for the range seek's index cursor.
     let range_index_cursor = cursors.sort;
     let used_range_seek = match (&select.where_clause, covering) {
+        // #915: one `SeekRowid` per member, as the non-aggregate scan does.
+        _ if rowid_seeks.is_some() => {
+            for operand in rowid_seeks.iter().flatten() {
+                let value_reg = compile_value(em, reg, &table_scope, operand)?;
+                let not_found = em.new_label();
+                let seek_addr = em.emit(Instruction::new(
+                    Opcode::SeekRowid,
+                    cursors.table,
+                    0,
+                    value_reg,
+                ));
+                em.patch_p2(seek_addr, not_found);
+                accumulate_row(
+                    em,
+                    reg,
+                    &table_scope,
+                    schema,
+                    cursors.table,
+                    &identity_positions,
+                )?;
+                em.place(not_found);
+            }
+            em.goto(tail_label);
+            true
+        }
         (Some(where_expr), Some(key_order)) => {
             let index_schema = Rc::new(compact_schema(schema, &key_order)?);
             let index_scope = Scope::single_shared(&index_schema, range_index_cursor)
