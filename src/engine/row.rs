@@ -146,12 +146,16 @@ impl RowEngine {
     /// `load_stats` keeps failing to find that table and every
     /// `ANALYZE`-driven cost decision (auto-index probe, index-vs-scan
     /// choice) stays silently switched off for the rest of the session.
+    /// `ROLLBACK` counts as well: it undoes the DDL of its transaction, and
+    /// the cache would keep the schema the transaction left behind (#650).
     fn is_schema_changing(stmt: &str) -> bool {
         let head = stmt.trim_start();
-        ["CREATE", "DROP", "ALTER", "ANALYZE"].iter().any(|kw| {
-            head.get(..kw.len())
-                .is_some_and(|h| h.eq_ignore_ascii_case(kw))
-        })
+        ["CREATE", "DROP", "ALTER", "ANALYZE", "ROLLBACK"]
+            .iter()
+            .any(|kw| {
+                head.get(..kw.len())
+                    .is_some_and(|h| h.eq_ignore_ascii_case(kw))
+            })
     }
 
     fn read_only_vm(&self) -> Vm {

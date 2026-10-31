@@ -166,6 +166,13 @@ pub fn row_order(sql: &str) -> RowOrder {
     }
 }
 
+/// A statement that starts with `EXPLAIN` (also `EXPLAIN QUERY PLAN`).
+fn is_explain(sql: &str) -> bool {
+    sql.trim_start()
+        .get(.."EXPLAIN".len())
+        .is_some_and(|head| head.eq_ignore_ascii_case("EXPLAIN"))
+}
+
 fn floats_close(a: &str, b: &str) -> bool {
     match (a.parse::<f64>(), b.parse::<f64>()) {
         (Ok(x), Ok(y)) => {
@@ -231,6 +238,13 @@ pub fn compare(
             cmp.ours = our_rows.map(render_rows).unwrap_or_default();
             cmp.oracle_message = Some(msg.clone());
             cmp.verdict = Verdict::OverPermissive;
+        }
+        // EXPLAIN output is each engine's own plan -- ours are plan rows, the
+        // CLI prints a text tree -- so only acceptance is comparable (#650);
+        // plan text is checked against the oracle in tests/unit/eqp_test.rs.
+        (Outcome::Ok, OracleOutcome::Rows(_)) if is_explain(sql) => {
+            cmp.mode = "explain: acceptance only";
+            cmp.verdict = Verdict::Pass;
         }
         (Outcome::Ok, OracleOutcome::Rows(rows)) => {
             let mut ours_r = our_rows.map(render_rows).unwrap_or_default();

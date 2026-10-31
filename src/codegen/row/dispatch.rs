@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use crate::codegen::row::planner::Stats;
+use crate::codegen::row::select::{check_having_clauses, check_table_star_qualifiers};
 use crate::codegen::row::{Emitter, RegAlloc, TableSchema, ViewSchema};
 use crate::parser::ast::{InsertSource, Select, TableRef, TableRefKind};
 use crate::parser::row::error::ParseOutcome;
@@ -606,6 +607,7 @@ fn rewrite_select(select: &Select, views: &[ViewSchema]) -> Result<Select, Dispa
     let resolved_views = resolve_views(views);
     let expanded = cte_expanded.expand_views(&resolved_views)?;
     super::subquery::reject_unparsable_view_refs(&expanded, views)?;
+    check_having_clauses(&expanded)?;
     let mut expanded = expanded.into_owned();
     flatten_from_subqueries(&mut expanded);
     push_down_where_predicates(&mut expanded);
@@ -702,6 +704,9 @@ pub fn explain_select_statement(
     let Some(from) = &select.from else {
         return Err(DispatchError::NoFromClause);
     };
+    if from.joins.is_empty() {
+        check_table_star_qualifiers(&select, &from.first)?;
+    }
     let mut joined_schemas = vec![resolve_from_table_schema(&from.first, schemas)?];
     for join in &from.joins {
         joined_schemas.push(resolve_from_table_schema(&join.table, schemas)?);
@@ -1243,6 +1248,52 @@ mod already_exists_tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("syntax error"), "{err}");
+    }
+
+    fn explain(sql: &str) -> Result<(), String> {
+        let select = match crate::parser::row::error::parse_select(sql) {
+            crate::parser::row::error::ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql}: {other:?}"),
+        };
+        crate::codegen::row::dispatch::explain_select_statement(
+            &select,
+            &schemas(),
+            &views(),
+            &std::collections::HashMap::new(),
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    // codegen_row_dispatch_explain_select_statement_8a16b420:
+    // `from.joins.is_empty()` (#650): EXPLAIN QUERY PLAN checks `tbl.*`
+    // like the statement itself does.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_dispatch_explain_select_statement_8a16b420__v1_a_single_from_item_has_its_star_qualifier_checked(
+    ) {
+        for (sql, table) in [
+            ("SELECT *, t.* FROM (VALUES (1))", "t"),
+            ("SELECT zzz.* FROM t", "zzz"),
+            ("SELECT t.* FROM t AS b", "t"),
+        ] {
+            assert_eq!(
+                explain(sql),
+                Err(format!("no such table: {table}")),
+                "{sql}"
+            );
+        }
+        assert_eq!(explain("SELECT t.* FROM t"), Ok(()));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_dispatch_explain_select_statement_8a16b420__v2_a_join_is_left_to_the_joined_planner(
+    ) {
+        let outcome = explain("SELECT * FROM t AS a JOIN t AS b ON 1");
+        assert!(
+            !matches!(&outcome, Err(m) if m == "no such table: a" || m == "no such table: b"),
+            "{outcome:?}"
+        );
     }
 
     /// #650: a view has no bind step, so every parameter form is refused.

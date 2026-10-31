@@ -12,11 +12,11 @@ use crate::codegen::row::planner::Stats;
 use crate::codegen::row::{key_index, record_width};
 use std::rc::Rc;
 
-pub(crate) use accum::select_has_aggregate;
 pub(super) use accum::{
     collect_aggregates, emit_agg_step, find_aggregates, flush_group, map_subexprs,
     read_pseudo_column, read_row_columns_into, AggSlot,
 };
+pub(crate) use accum::{columns_have_aggregate, select_has_aggregate};
 pub(crate) use join::compile_joined_grouped_scan;
 
 /// The index-only `count(*)` plan [`try_compile_index_only_count`]

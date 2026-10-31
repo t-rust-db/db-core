@@ -140,13 +140,57 @@ pub fn compile_select_with_catalog_and_stats(
 /// name otherwise; sqlite3 refuses any other qualifier with `no such
 /// table` (#650). The joined path resolves it per binding; here the one
 /// FROM item is checked once, before codegen treats every `x.*` as `*`.
-fn check_table_star_qualifiers(select: &Select, item: &TableRef) -> Result<(), CodegenError> {
+pub(crate) fn check_table_star_qualifiers(
+    select: &Select,
+    item: &TableRef,
+) -> Result<(), CodegenError> {
     let qualifier = item.alias.as_deref().or(item.name()).unwrap_or("");
     for col in &select.columns {
         if let ResultColumn::TableStar { table } = col {
             if !table.eq_ignore_ascii_case(qualifier) {
                 return Err(CodegenError::Rejected(format!("no such table: {table}")));
             }
+        }
+    }
+    Ok(())
+}
+
+/// sqlite3 refuses `HAVING` without `GROUP BY` unless a result column of
+/// the same `SELECT` is an aggregate (one only in the `HAVING`, in an
+/// `ORDER BY` or in a subquery does not count): `HAVING clause on a
+/// non-aggregate query`. Checks `select`, its compound arms and every
+/// `FROM` subquery, which is where CTEs and views have been expanded to
+/// by now (#650).
+pub(crate) fn check_having_clauses(select: &Select) -> Result<(), CodegenError> {
+    check_having(select.having.as_ref(), &select.group_by, &select.columns)?;
+    check_from_having(select.from.as_ref())?;
+    for arm in &select.compound {
+        check_having(arm.having.as_ref(), &arm.group_by, &arm.columns)?;
+        check_from_having(arm.from.as_ref())?;
+    }
+    Ok(())
+}
+
+fn check_having(
+    having: Option<&Expr>,
+    group_by: &[Expr],
+    columns: &[ResultColumn],
+) -> Result<(), CodegenError> {
+    if having.is_some() && group_by.is_empty() && !columns_have_aggregate(columns) {
+        return Err(CodegenError::Rejected(
+            "HAVING clause on a non-aggregate query".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn check_from_having(from: Option<&FromClause>) -> Result<(), CodegenError> {
+    let Some(from) = from else {
+        return Ok(());
+    };
+    for item in std::iter::once(&from.first).chain(from.joins.iter().map(|j| &j.table)) {
+        if let TableRefKind::Subquery(inner) = &item.kind {
+            check_having_clauses(inner)?;
         }
     }
     Ok(())
@@ -896,6 +940,84 @@ mod mcdc_vectors {
             ParseOutcome::Accepted(s) => *s,
             other => panic!("{sql}: {other:?}"),
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // check_having (#650): `having.is_some() && group_by.is_empty() &&
+    // !columns_have_aggregate(columns)`.
+    // ---------------------------------------------------------------------
+
+    fn having_message(sql: &str) -> Option<String> {
+        super::check_having_clauses(&parsed(sql))
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    const HAVING_REFUSED: &str = "HAVING clause on a non-aggregate query";
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_check_having_6bb9dd67__v1_having_without_group_by_or_aggregate_is_refused(
+    ) {
+        for sql in [
+            "SELECT a FROM t HAVING a > 1",
+            "SELECT 1 HAVING 1",
+            // An aggregate only in the HAVING does not make it one.
+            "SELECT a FROM t HAVING count(*) > 0",
+            // Nor does one in a subquery, or a window function.
+            "SELECT (SELECT count(*) FROM u) FROM t HAVING 1",
+        ] {
+            assert_eq!(
+                having_message(sql).as_deref(),
+                Some(HAVING_REFUSED),
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_check_having_6bb9dd67__v2_no_having_is_fine() {
+        assert_eq!(having_message("SELECT a FROM t"), None);
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_check_having_6bb9dd67__v3_group_by_allows_having() {
+        assert_eq!(
+            having_message("SELECT a FROM t GROUP BY a HAVING a > 1"),
+            None
+        );
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_check_having_6bb9dd67__v4_an_aggregate_column_allows_having()
+    {
+        for sql in [
+            "SELECT count(*) FROM t HAVING 1",
+            "SELECT a, max(b) FROM t HAVING 1",
+        ] {
+            assert_eq!(having_message(sql), None, "{sql}");
+        }
+    }
+
+    // check_from_having (#650): `let TableRefKind::Subquery(inner) = ..`.
+    #[test]
+    fn mcdc__codegen_row_select_entry_check_from_having_149e8fd0__v1_a_from_subquery_is_checked() {
+        for sql in [
+            "SELECT * FROM (SELECT a FROM t HAVING a) AS s",
+            "SELECT * FROM t JOIN (SELECT b FROM u HAVING 1) AS s ON 1",
+            "SELECT * FROM (SELECT * FROM (VALUES (1)) HAVING 1)",
+        ] {
+            assert_eq!(
+                having_message(sql).as_deref(),
+                Some(HAVING_REFUSED),
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_check_from_having_149e8fd0__v2_a_table_is_not() {
+        assert_eq!(having_message("SELECT * FROM t JOIN u ON 1"), None);
+        assert_eq!(having_message("SELECT * FROM (SELECT a FROM t) AS s"), None);
     }
 
     // ---------------------------------------------------------------------
