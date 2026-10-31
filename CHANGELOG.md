@@ -4,6 +4,29 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.218.0] - 2026-10-31
+
+### Changed
+
+- Breaking, pre-1.0: the `Cursor` trait's storage methods return `Result` (`CursorError`); `ExecError::CursorFailed` is new. `expand_with_clause` returns `Result`.
+- New error variants: `FreelistError::PageOutOfRange`, `PagerError::DatabaseFull`, `BtreeError::TreeTooDeep`, `CodegenError::ExpansionTooLarge`, `FileError::RowGroupTooLarge`; new `parquet_file::MAX_ROW_GROUP_ROWS`.
+
+### Fixed
+
+- LIKE/GLOB no longer overflow the stack or take exponential time; sqlite3's pattern-length and ESCAPE errors (#871).
+- A huge `LIMIT` in top-N no longer panics or aborts (#889).
+- Log timestamps were one day early for most years; impossible dates are rejected (#882).
+- Freelist page numbers out of range are refused; corrupt freelists no longer hand out live pages (#874).
+- Cyclic b-tree pages are an error instead of a stack-overflow abort (#872).
+- A 200-byte CTE or view query no longer uses gigabytes of memory (#876).
+- `count(*)` over a derived table works; flattened subquery column names are kept (#887).
+- CTEs are visible inside `IN`/`EXISTS`/scalar subqueries (#885).
+- Column engine: `HAVING` with an aggregate inside `CASE` returned no rows (#886).
+- Column engine: `WHERE 1`, `WHERE ts`, `NOT ts` and similar non-boolean predicates were silently false (#886).
+- Top-N returned wrong rows for integers above 2^53 (#890).
+- Corrupt table pages returned zero rows or a zero count instead of an error (#873).
+- Parquet footers that claim more than 64 Mi rows per row group are refused; a string dictionary with more entries than its bytes can hold is refused (#881).
+
 ## [0.217.4] - 2026-10-31
 
 ### Fixed
