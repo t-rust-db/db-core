@@ -1,0 +1,213 @@
+# #869: GROUP BY <expression> and GROUP BY <position>. A select item
+# written the same way as an expression key is that key (spans and
+# redundant parentheses aside); a position names the select item's
+# expression, 1-based. NULL keys form their own group. Out of range, an
+# aggregate (directly or by position) and a column read outside its key
+# are refused.
+
+query II rowsort
+SELECT id > 2500, count(*) FROM production GROUP BY id > 2500
+----
+0
+2500
+1
+2500
+
+query II rowsort
+SELECT (id > 2500), sum(amount) > 0 FROM production GROUP BY id > 2500
+----
+0
+1
+1
+1
+
+query TI rowsort
+SELECT regexp_extract(region, '(n)', 1), count(*) FROM production GROUP BY regexp_extract(region, '(n)', 1)
+----
+(empty)
+3750
+n
+1250
+
+query TTI rowsort
+SELECT CASE WHEN amount > 6000 THEN 'big' ELSE 'small' END AS size, region, count(*) FROM production GROUP BY 2, 1
+----
+big
+east
+650
+big
+north
+650
+big
+south
+650
+big
+west
+650
+small
+east
+600
+small
+north
+600
+small
+south
+600
+small
+west
+600
+
+query TI rowsort
+SELECT region, count(*) FROM production GROUP BY 1
+----
+east
+1250
+north
+1250
+south
+1250
+west
+1250
+
+query IT rowsort
+SELECT count(*), region FROM production GROUP BY 2
+----
+1250
+east
+1250
+north
+1250
+south
+1250
+west
+
+query II rowsort
+SELECT id > 2500 AS hi, count(*) FROM production GROUP BY id > 2500 HAVING id > 2500
+----
+1
+2500
+
+query II rowsort
+SELECT id > 2500 AS hi, count(*) FROM production GROUP BY 1 HAVING count(*) > 2499
+----
+0
+2500
+1
+2500
+
+query TII rowsort
+SELECT region, amount > 6000, count(*) FROM production GROUP BY region, amount > 6000
+----
+east
+0
+600
+east
+1
+650
+north
+0
+600
+north
+1
+650
+south
+0
+600
+south
+1
+650
+west
+0
+600
+west
+1
+650
+
+query II rowsort
+SELECT n > 0, count(*) FROM typed_nulls GROUP BY n > 0
+----
+0
+4294
+1
+4278
+NULL
+1428
+
+query IIII rowsort
+SELECT n IS NULL, count(*), min(n), max(n) FROM typed_nulls GROUP BY n IS NULL
+----
+0
+8572
+-500
+499
+1
+1428
+NULL
+NULL
+
+query ITII rowsort
+SELECT n > 0 AS pos, grp, count(*), sum(n) FROM typed_nulls GROUP BY 1, 2
+----
+0
+NULL
+44
+-10628
+0
+big
+3436
+-858559
+0
+small
+429
+-106496
+0
+tiny
+385
+-97515
+1
+NULL
+42
+11346
+1
+big
+3422
+856252
+1
+small
+428
+107578
+1
+tiny
+386
+94768
+NULL
+NULL
+14
+NULL
+NULL
+big
+1142
+NULL
+NULL
+small
+143
+NULL
+NULL
+tiny
+129
+NULL
+
+statement error
+SELECT region, count(*) FROM production GROUP BY 0
+
+statement error
+SELECT region, count(*) FROM production GROUP BY 3
+
+statement error
+SELECT region, count(*) FROM production GROUP BY 2
+
+statement error
+SELECT region, count(*) FROM production GROUP BY count(*)
+
+statement error
+SELECT id, count(*) FROM production GROUP BY id > 2500

@@ -114,6 +114,13 @@ QUERIES=(
   "SELECT id, id * 3 - 1, id + id FROM __TABLE__ WHERE id > 4995 ORDER BY id|SELECT id, id * 3 - 1, id + id FROM __TABLE__ WHERE id > 4995 ORDER BY id"
   "SELECT region, sum(id) * 10000000000 + max(id) FROM __TABLE__ GROUP BY region ORDER BY region|SELECT region, sum(id) * 10000000000 + max(id) FROM __TABLE__ GROUP BY region ORDER BY region"
   "SELECT id, id / 4 FROM __TABLE__ WHERE id > 4995 ORDER BY id|SELECT id, (id / 4)::DECIMAL(18,2) FROM __TABLE__ WHERE id > 4995 ORDER BY id"
+  # #869: GROUP BY an expression (matched by a select item written the
+  # same way, or a key inside one) and GROUP BY a position (cast: DuckDB
+  # prints a BOOLEAN as true/false).
+  "SELECT regexp_extract(region, '(n)', 1) AS c, count(*) FROM __TABLE__ GROUP BY regexp_extract(region, '(n)', 1) ORDER BY c|SELECT regexp_extract(region, '(n)', 1) AS c, count(*) FROM __TABLE__ GROUP BY regexp_extract(region, '(n)', 1) ORDER BY c"
+  "SELECT amount > 6000 AS big, count(*), sum(id) FROM __TABLE__ GROUP BY amount > 6000 ORDER BY big|SELECT (amount > 6000)::INT AS big, count(*), sum(id) FROM __TABLE__ GROUP BY amount > 6000 ORDER BY big"
+  "SELECT region, count(*) FROM __TABLE__ GROUP BY 1 ORDER BY region|SELECT region, count(*) FROM __TABLE__ GROUP BY 1 ORDER BY region"
+  "SELECT CASE WHEN amount > 6000 THEN 'big' ELSE 'small' END AS size, region, count(*) FROM __TABLE__ GROUP BY 2, 1 ORDER BY region, size|SELECT CASE WHEN amount > 6000 THEN 'big' ELSE 'small' END AS size, region, count(*) FROM __TABLE__ GROUP BY 2, 1 ORDER BY region, size"
 )
 
 echo "building examples/column_oracle (release)..."
