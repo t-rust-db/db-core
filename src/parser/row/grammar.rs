@@ -3354,6 +3354,53 @@ mod tests {
         Parser::new(Tokenizer::tokenize(sql))
     }
 
+    // parser_row_grammar_schema_or_identifier_7e08d90c (#924):
+    // self.at_kw(Keyword::TEMP) && matches!(self.peek_at(1).kind, TokenKind::Dot)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_schema_or_identifier_7e08d90c__v1_temp_dot_is_the_schema() {
+        let r = parser("temp.t").table_ref().unwrap();
+        assert_eq!(r.name(), Some("temp.t"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_schema_or_identifier_7e08d90c__v2_other_word_is_an_identifier() {
+        let r = parser("x.t").table_ref().unwrap();
+        assert_eq!(r.name(), Some("x.t"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_schema_or_identifier_7e08d90c__v3_temp_without_dot_is_not_a_schema()
+    {
+        // `temp` alone is the keyword, not a table name, as in sqlite3.
+        assert!(parser("temp").table_ref().is_err());
+    }
+
+    // parser_row_grammar_table_ref_dcadaafb (#924):
+    // alias.is_none() && schema.is_none() -- an attached table's implied
+    // alias is its bare name.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_dcadaafb__v1_attached_table_is_aliased_by_its_name() {
+        let r = parser("x.t").table_ref().unwrap();
+        assert_eq!(r.alias.as_deref(), Some("t"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_dcadaafb__v2_written_alias_wins() {
+        let r = parser("x.t AS a").table_ref().unwrap();
+        assert_eq!(r.alias.as_deref(), Some("a"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_dcadaafb__v3_column_dialect_schema_gets_no_alias() {
+        // The column dialect keeps the schema apart; a dotted quoted
+        // table name under it is not an attached table.
+        let r = parser("s.\"a.b\"").column_dialect().table_ref().unwrap();
+        assert_eq!(r.schema.as_deref(), Some("s"));
+        assert_eq!(r.alias, None);
+    }
+
     // parser_row_grammar_parse_create_view_stmt_97d82d58 (`has_param`) (#650).
     #[test]
     #[allow(non_snake_case)]
