@@ -6150,6 +6150,43 @@ mod tests {
         }
     }
 
+    /// The `(left_col, right_col)` a `JOIN ... ON` lowers to (tools#108).
+    fn join_keys(sql: &str) -> (String, String) {
+        let q = sql::parse(sql).unwrap();
+        let joins = extract_joins(q.from.as_ref().unwrap()).unwrap();
+        (joins[0].left_col.clone(), joins[0].right_col.clone())
+    }
+
+    // codegen_batch_extract_joins_5ba520da (tools#108): the ON pair is
+    // swapped when its left column is the joined table's and its right is
+    // not -- `owners.0 == Some(table) && owners.1 != Some(table)`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_extract_joins_5ba520da__v1_joined_table_first_is_swapped() {
+        assert_eq!(
+            join_keys("SELECT t.a FROM t JOIN u ON u.k = t.k"),
+            ("t.k".to_string(), "u.k".to_string())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_extract_joins_5ba520da__v2_both_keys_from_the_joined_table_keep_order() {
+        assert_eq!(
+            join_keys("SELECT t.a FROM t JOIN u ON u.k = u.j"),
+            ("u.k".to_string(), "u.j".to_string())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_extract_joins_5ba520da__v3_from_table_first_keeps_order() {
+        assert_eq!(
+            join_keys("SELECT t.a FROM t JOIN u ON t.k = u.k"),
+            ("t.k".to_string(), "u.k".to_string())
+        );
+    }
+
     fn sorted(mut rows: Vec<Vec<Value>>) -> Vec<Vec<Value>> {
         rows.sort_by_key(|r| format!("{r:?}"));
         rows
