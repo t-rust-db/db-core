@@ -24,8 +24,8 @@ use std::rc::Rc;
 use crate::codegen::row::dispatch::{compile_select_statement, explain_select_statement};
 use crate::codegen::row::planner::Stats;
 use crate::codegen::row::{compile_statement, leading_keywords, result_column_names};
-use crate::parser::ast::Select;
-use crate::parser::row::error::{parse_select, ParseOutcome};
+use crate::parser::ast::{ExprKind, Literal, Select};
+use crate::parser::row::error::{parse_attach, parse_detach, parse_select, ParseOutcome};
 use crate::parser::row::tokenizer::split_statements;
 use crate::schema::{TableSchema, ViewSchema};
 use crate::storage::row::btree::TableCursor;
@@ -92,6 +92,18 @@ pub struct RowEngine {
     /// Carried across statements too: what `changes()`,
     /// `total_changes()` and `last_insert_rowid()` report (#651).
     connection: ConnectionState,
+    /// The files `ATTACH` opened (#924, ADR 0043), in attach order: the
+    /// first is database 2 (`main` is 0, `temp` 1).
+    attached: Vec<(String, RowEngine)>,
+}
+
+/// sqlite3's `SQLITE_MAX_ATTACHED` default.
+const MAX_ATTACHED: usize = 10;
+
+/// The database index of the `i`th attached file: sqlite3 numbers them
+/// after `main` (0) and `temp` (1).
+fn attached_index(i: usize) -> u32 {
+    u32::try_from(i).map_or(u32::MAX, |i| i.saturating_add(2))
 }
 
 /// `stmt` with every bare `?` rewritten to `?N` in source order, `N` one
@@ -158,6 +170,30 @@ fn bind_params(
     }
     vm.bind_params(params.to_vec());
     Ok(())
+}
+
+/// The error of a parse that did not accept its statement.
+fn outcome_error<T>(outcome: ParseOutcome<T>) -> EngineError {
+    match outcome {
+        ParseOutcome::Unsupported { message, span } => EngineError::new(
+            ErrorKind::Unsupported,
+            format!(
+                "not yet supported (line {}, column {}): {message}",
+                span.line, span.column
+            ),
+        ),
+        ParseOutcome::Invalid { message, span } => EngineError::new(
+            ErrorKind::Parse,
+            format!(
+                "syntax error (line {}, column {}): {message}",
+                span.line, span.column
+            ),
+        ),
+        ParseOutcome::Accepted(_) => EngineError::new(
+            ErrorKind::Execute,
+            "a parse that succeeded was reported as an error",
+        ),
+    }
 }
 
 impl std::fmt::Debug for RowEngine {
@@ -267,7 +303,10 @@ impl RowEngine {
         params: &[Value],
     ) -> Result<QueryResult, EngineError> {
         let stmt = number_anonymous_params(&single_statement(sql)?);
-        let catalog = self.catalog()?;
+        if let Some(result) = self.run_attach_detach(&stmt) {
+            return result;
+        }
+        let catalog = self.connection_catalog()?;
         let result = if Self::is_select(&stmt) {
             let select = Self::parse_select_or_err(&stmt)?;
             self.run_select(&select, &stmt, &catalog, Some(params))?
@@ -313,23 +352,152 @@ impl RowEngine {
         stats::load_stats(&*borrowed, &self.header, schemas)
     }
 
+    /// The catalog a statement compiles against (#924, ADR 0043): `main`'s
+    /// tables, then every attached file's under its bare name (so a bare
+    /// name finds `main` first, then each file in attach order, sqlite3's
+    /// search order) and again as `name.table`, each carrying its
+    /// database index. An attached file's views are not listed: their
+    /// bodies would resolve against `main`.
+    fn connection_catalog(&self) -> Result<Catalog, EngineError> {
+        let (mut schemas, views) = self.catalog()?;
+        if self.attached.is_empty() {
+            return Ok((schemas, views));
+        }
+        let mut qualified = Vec::new();
+        for (i, (name, engine)) in self.attached.iter().enumerate() {
+            for mut table in engine.catalog()?.0 {
+                table.database = attached_index(i);
+                qualified.push(TableSchema {
+                    name: format!("{name}.{}", table.name),
+                    ..table.clone()
+                });
+                schemas.push(table);
+            }
+        }
+        schemas.extend(qualified);
+        Ok((schemas, views))
+    }
+
+    /// [`Self::stats_by_table`] over `main` and every attached file, an
+    /// attached table's stats under `name.table` and, unless `main` has a
+    /// table of that name, its bare name.
+    fn connection_stats(&self) -> Result<HashMap<String, Stats>, EngineError> {
+        let mut stats = self.stats_by_table(&self.catalog()?.0);
+        for (name, engine) in &self.attached {
+            for (table, table_stats) in engine.stats_by_table(&engine.catalog()?.0) {
+                stats.insert(format!("{name}.{table}"), table_stats.clone());
+                stats.entry(table).or_insert(table_stats);
+            }
+        }
+        Ok(stats)
+    }
+
+    /// `ATTACH [DATABASE] 'file' AS name` (#924, ADR 0043): opens `file`,
+    /// creating an empty database when it does not exist, as sqlite3 does.
+    fn attach(&mut self, stmt: &str) -> Result<(), EngineError> {
+        let attach = match parse_attach(stmt) {
+            ParseOutcome::Accepted(attach) => attach,
+            other => return Err(outcome_error(other)),
+        };
+        let name = attach.name;
+        let in_use = ["main", "temp"]
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(&name))
+            || self
+                .attached
+                .iter()
+                .any(|(n, _)| n.eq_ignore_ascii_case(&name));
+        if in_use {
+            return Err(EngineError::new(
+                ErrorKind::Execute,
+                format!("database {name} is already in use"),
+            ));
+        }
+        if self.attached.len() >= MAX_ATTACHED {
+            return Err(EngineError::new(
+                ErrorKind::Execute,
+                format!("too many attached databases - max {MAX_ATTACHED}"),
+            ));
+        }
+        let ExprKind::Literal(Literal::Str(file)) = attach.file.kind else {
+            return Err(EngineError::new(
+                ErrorKind::Unsupported,
+                "ATTACH takes the file name as a string literal",
+            ));
+        };
+        let path = Path::new(&file);
+        let engine = if path.exists() {
+            <Self as Engine>::open(path)
+        } else {
+            Self::create(path, CreateOptions::default(), "")
+        }
+        .map_err(|e| {
+            EngineError::new(
+                ErrorKind::Execute,
+                format!("unable to open database: {file} ({e})"),
+            )
+        })?;
+        self.attached.push((name, engine));
+        Ok(())
+    }
+
+    /// `DETACH [DATABASE] name` (#924, ADR 0043). Refused inside a
+    /// transaction, whose commit may still have to flush the file.
+    fn detach(&mut self, stmt: &str) -> Result<(), EngineError> {
+        let detach = match parse_detach(stmt) {
+            ParseOutcome::Accepted(detach) => detach,
+            other => return Err(outcome_error(other)),
+        };
+        let name = detach.name;
+        if ["main", "temp"]
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(&name))
+        {
+            return Err(EngineError::new(
+                ErrorKind::Execute,
+                format!("cannot detach database {name}"),
+            ));
+        }
+        let Some(i) = self
+            .attached
+            .iter()
+            .position(|(n, _)| n.eq_ignore_ascii_case(&name))
+        else {
+            return Err(EngineError::new(
+                ErrorKind::Execute,
+                format!("no such database: {name}"),
+            ));
+        };
+        if !self.autocommit {
+            return Err(EngineError::new(
+                ErrorKind::Execute,
+                format!("database {name} is locked"),
+            ));
+        }
+        self.attached.remove(i);
+        Ok(())
+    }
+
+    /// Runs `stmt` when it is an `ATTACH` or `DETACH`, which change the
+    /// connection rather than run a program; `None` for any other.
+    fn run_attach_detach(&mut self, stmt: &str) -> Option<Result<QueryResult, EngineError>> {
+        let result = match leading_keywords(stmt).first().map(String::as_str) {
+            Some("ATTACH") => self.attach(stmt),
+            Some("DETACH") => self.detach(stmt),
+            _ => return None,
+        };
+        Some(result.map(|()| QueryResult::default()))
+    }
+
+    /// Every attached file's pager, in database order.
+    fn attached_pagers(&self) -> impl Iterator<Item = &Rc<RefCell<Pager>>> {
+        self.attached.iter().map(|(_, e)| &e.pager)
+    }
+
     fn parse_select_or_err(sql: &str) -> Result<Select, EngineError> {
         match parse_select(sql) {
             ParseOutcome::Accepted(select) => Ok(*select),
-            ParseOutcome::Unsupported { message, span } => Err(EngineError::new(
-                ErrorKind::Unsupported,
-                format!(
-                    "not yet supported (line {}, column {}): {message}",
-                    span.line, span.column
-                ),
-            )),
-            ParseOutcome::Invalid { message, span } => Err(EngineError::new(
-                ErrorKind::Parse,
-                format!(
-                    "syntax error (line {}, column {}): {message}",
-                    span.line, span.column
-                ),
-            )),
+            other => Err(outcome_error(other)),
         }
     }
 
@@ -370,10 +538,16 @@ impl RowEngine {
         let mut vm = Vm::new();
         vm.set_text_encoding(self.header.text_encoding);
         vm.set_connection_state(self.connection);
-        vm.set_cursor_factory(Box::new(StorageFactory::read_only(
-            Rc::clone(&source),
-            self.header,
-        )));
+        let mut factory = StorageFactory::read_only(Rc::clone(&source), self.header);
+        for (i, (_, engine)) in self.attached.iter().enumerate() {
+            factory = factory.with_database(
+                attached_index(i),
+                Rc::clone(&engine.pager),
+                None,
+                engine.header,
+            );
+        }
+        vm.set_cursor_factory(Box::new(factory));
         vm.set_transaction_hook(Box::new(PagerTransaction::read_only(source, self.header)));
         vm
     }
@@ -384,16 +558,21 @@ impl RowEngine {
         vm.set_text_encoding(self.header.text_encoding);
         vm.set_autocommit(self.autocommit);
         vm.set_connection_state(self.connection);
-        vm.set_cursor_factory(Box::new(StorageFactory::writable(
-            Rc::clone(&pager),
-            Rc::clone(&pager),
-            self.header,
-        )));
-        vm.set_transaction_hook(Box::new(PagerTransaction::writable(
-            Rc::clone(&pager),
-            Rc::clone(&pager),
-            self.header,
-        )));
+        let mut factory =
+            StorageFactory::writable(Rc::clone(&pager), Rc::clone(&pager), self.header);
+        let mut transaction =
+            PagerTransaction::writable(Rc::clone(&pager), Rc::clone(&pager), self.header);
+        for (i, (_, engine)) in self.attached.iter().enumerate() {
+            factory = factory.with_database(
+                attached_index(i),
+                Rc::clone(&engine.pager),
+                Some(Rc::clone(&engine.pager)),
+                engine.header,
+            );
+            transaction = transaction.with_attached(Rc::clone(&engine.pager));
+        }
+        vm.set_cursor_factory(Box::new(factory));
+        vm.set_transaction_hook(Box::new(transaction));
         vm.set_schema_storage(Box::new(BtreeSchemaStorage::new(pager, self.header)));
         vm
     }
@@ -408,7 +587,7 @@ impl RowEngine {
         params: Option<&[Value]>,
     ) -> Result<QueryResult, EngineError> {
         let (schemas, views) = catalog;
-        let stats_by_table = self.stats_by_table(schemas);
+        let stats_by_table = self.connection_stats()?;
         let program = compile_select_statement(select, schemas, views, &stats_by_table)
             .map_err(|e| EngineError::new(ErrorKind::Compile, e))?;
         let columns = result_column_names(select, sql, schemas, views);
@@ -445,23 +624,29 @@ impl RowEngine {
                 // whole: rows it wrote before the error must not be flushed
                 // by the next statement.
                 if vm.autocommit() {
-                    self.pager.borrow_mut().rollback().map_err(|r| {
-                        EngineError::new(
-                            ErrorKind::Execute,
-                            format!("{e}; rollback of the failed statement also failed: {r}"),
-                        )
-                    })?;
+                    for pager in std::iter::once(&self.pager).chain(self.attached_pagers()) {
+                        pager.borrow_mut().rollback().map_err(|r| {
+                            EngineError::new(
+                                ErrorKind::Execute,
+                                format!("{e}; rollback of the failed statement also failed: {r}"),
+                            )
+                        })?;
+                    }
                 }
                 return Err(EngineError::new(ErrorKind::Execute, e));
             }
         };
         if vm.autocommit() {
-            self.pager.borrow_mut().flush().map_err(|e| {
-                EngineError::new(
-                    ErrorKind::Execute,
-                    format!("failed to flush pending writes on statement commit: {e}"),
-                )
-            })?;
+            // One file at a time, `main` first (ADR 0043): each commit is
+            // atomic, the set is not.
+            for pager in std::iter::once(&self.pager).chain(self.attached_pagers()) {
+                pager.borrow_mut().flush().map_err(|e| {
+                    EngineError::new(
+                        ErrorKind::Execute,
+                        format!("failed to flush pending writes on statement commit: {e}"),
+                    )
+                })?;
+            }
         }
         self.autocommit = vm.autocommit();
         // An INSERT/UPDATE/DELETE is a program with a counted write in it,
@@ -539,7 +724,7 @@ impl RowEngine {
         let (schemas, views) = catalog;
         if Self::is_select(stmt) {
             let select = Self::parse_select_or_err(stmt)?;
-            let stats_by_table = self.stats_by_table(schemas);
+            let stats_by_table = self.connection_stats()?;
             compile_select_statement(&select, schemas, views, &stats_by_table)
                 .map_err(|e| EngineError::new(ErrorKind::Compile, e))
         } else {
@@ -569,6 +754,7 @@ impl Engine for RowEngine {
             catalog: RefCell::new(None),
             autocommit: true,
             connection: ConnectionState::default(),
+            attached: Vec::new(),
         })
     }
 
@@ -579,7 +765,11 @@ impl Engine for RowEngine {
     fn run_query(&mut self, sql: &str) -> Result<QueryResult, EngineError> {
         let mut last = QueryResult::default();
         for stmt in split_statements(sql) {
-            let catalog = self.catalog()?;
+            if let Some(result) = self.run_attach_detach(&stmt) {
+                result?;
+                continue;
+            }
+            let catalog = self.connection_catalog()?;
             let result = if Self::is_select(&stmt) {
                 let select = Self::parse_select_or_err(&stmt)?;
                 self.run_select(&select, &stmt, &catalog, None)?
@@ -606,8 +796,8 @@ impl Engine for RowEngine {
             ));
         }
         let select = Self::parse_select_or_err(&stmt)?;
-        let (schemas, views) = self.catalog()?;
-        let stats_by_table = self.stats_by_table(&schemas);
+        let (schemas, views) = self.connection_catalog()?;
+        let stats_by_table = self.connection_stats()?;
         let rows = explain_select_statement(&select, &schemas, &views, &stats_by_table)
             .map_err(|e| EngineError::new(ErrorKind::Compile, e))?;
         Ok(rows
@@ -622,7 +812,7 @@ impl Engine for RowEngine {
 
     fn explain_opcodes(&self, sql: &str) -> Result<Vec<OpcodeSection>, EngineError> {
         let stmt = single_statement(sql)?;
-        let catalog = self.catalog()?;
+        let catalog = self.connection_catalog()?;
         let program = self.compile_one(&stmt, &catalog)?;
         let rows = explain(&program)
             .into_iter()

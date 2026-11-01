@@ -48,6 +48,11 @@ path = "tests/unit/sqlite_parity_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_row_attach"
+path = "tests/unit/row_attach_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_row_functions_oracle"
 path = "tests/unit/row_functions_oracle_test.rs"
 required-features = ["engine-row"]

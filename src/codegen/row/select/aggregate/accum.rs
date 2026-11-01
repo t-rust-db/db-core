@@ -566,6 +566,7 @@ where
     synthetic_types.extend(synthetic_names.iter().map(|_| String::new()));
     let synthetic_schema = std::rc::Rc::new(TableSchema {
         name: schema.name.clone(),
+        database: 0,
         root_page: 0,
         columns: synthetic_columns,
         without_rowid: schema.without_rowid,

@@ -68,6 +68,12 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             // `SELECT count(*)` fast path opens its own cursor); with no
             // cursor factory (in-memory programs) p1 names an open slot.
             let count = if let Some(factory) = vm.cursor_factory.as_deref_mut() {
+                // P3 is the table's database (#924, ADR 0043).
+                let db =
+                    u32::try_from(instr.p3).map_err(|_| ExecError::AttachedDatabasesUnsupported)?;
+                if !factory.use_database(db) {
+                    return Err(ExecError::AttachedDatabasesUnsupported);
+                }
                 #[allow(clippy::cast_sign_loss)]
                 let root = instr.p1 as u32;
                 let mut cursor = factory
@@ -131,16 +137,22 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             })
         }
         Opcode::OpenRead | Opcode::OpenWrite => {
-            if instr.p3 != 0 {
-                return Err(ExecError::AttachedDatabasesUnsupported);
-            }
+            // P3 is the database (#924, ADR 0043): 0 is `main`.
+            let db =
+                u32::try_from(instr.p3).map_err(|_| ExecError::AttachedDatabasesUnsupported)?;
             let Some(factory) = vm.cursor_factory.as_deref_mut() else {
+                if db != 0 {
+                    return Err(ExecError::AttachedDatabasesUnsupported);
+                }
                 // No factory installed -- fall back to the pre-wired
                 // path: assert the caller already wired this slot via
                 // `open_cursor` before running the program.
                 vm.cursor(instr.p1)?;
                 return Ok(Step::Next);
             };
+            if !factory.use_database(db) {
+                return Err(ExecError::AttachedDatabasesUnsupported);
+            }
             #[allow(clippy::cast_sign_loss)]
             let root = instr.p2 as u32;
             // sqlite-rs flags an index cursor with `p5 != 0` (no key
@@ -153,7 +165,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             }
             .map_err(ExecError::CursorFactoryFailed)?;
             vm.open_cursor(instr.p1, cursor)?;
-            vm.set_cursor_root(instr.p1, root)?;
+            vm.set_cursor_root(instr.p1, db, root)?;
             Ok(Step::Next)
         }
         Opcode::OpenDup => {
@@ -162,18 +174,21 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
                 vm.open_cursor(instr.p1, dup)?;
                 return Ok(Step::Next);
             }
-            let root = vm.cursor_root(instr.p2)?;
+            let (db, root) = vm.cursor_root(instr.p2)?;
             let factory =
                 vm.cursor_factory
                     .as_deref_mut()
                     .ok_or(ExecError::CursorFactoryFailed(CursorFactoryError(
                         "OpenDup requires a cursor factory".to_string(),
                     )))?;
+            if !factory.use_database(db) {
+                return Err(ExecError::AttachedDatabasesUnsupported);
+            }
             let cursor = factory
                 .open_read(root)
                 .map_err(ExecError::CursorFactoryFailed)?;
             vm.open_cursor(instr.p1, cursor)?;
-            vm.set_cursor_root(instr.p1, root)?;
+            vm.set_cursor_root(instr.p1, db, root)?;
             Ok(Step::Next)
         }
         Opcode::OpenPseudo => {

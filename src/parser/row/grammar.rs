@@ -60,6 +60,16 @@ const MAX_JOIN_TABLES: usize = 64;
 /// `Drop`) recurses over that tree.
 const MAX_EXPR_HEIGHT: usize = 1000;
 
+/// The name the row engine lists table `table` of schema `schema` under
+/// (#924, ADR 0043): `main` is the default schema, so `main.t` is `t`.
+fn qualified_name(schema: &str, table: String) -> String {
+    if schema.eq_ignore_ascii_case("main") {
+        table
+    } else {
+        format!("{schema}.{table}")
+    }
+}
+
 /// Case-insensitive `SINCE`/`UNTIL` unit name -> `(ScopeUnit, multiplier)`.
 /// Byte units fold their multiplier into the returned amount so
 /// [`ScopeUnit::Bytes`] always means "bytes", not "the unit as written".
@@ -310,7 +320,7 @@ impl Parser {
             None
         };
         self.expect_kw(Keyword::INTO)?;
-        let (table, _) = self.identifier()?;
+        let (table, _) = self.qualified_table_name()?;
 
         let columns = if self.eat_punct(&TokenKind::LParen) {
             let mut cols = vec![self.identifier()?.0];
@@ -426,7 +436,7 @@ impl Parser {
     pub(super) fn parse_delete_stmt(&mut self) -> PResult<Delete> {
         let start = self.expect_kw(Keyword::DELETE)?;
         self.expect_kw(Keyword::FROM)?;
-        let (table, table_span) = self.identifier()?;
+        let (table, table_span) = self.qualified_table_name()?;
 
         let mut end = table_span;
         let where_clause = if self.eat_kw(Keyword::WHERE) {
@@ -480,7 +490,7 @@ impl Parser {
             None
         };
 
-        let (table, _) = self.identifier()?;
+        let (table, _) = self.qualified_table_name()?;
 
         self.expect_kw(Keyword::SET)?;
 
@@ -585,6 +595,61 @@ impl Parser {
         } else {
             false
         }
+    }
+
+    /// `[schema-name "."] table-name` as the row engine names a table
+    /// (#924, ADR 0043): `main.t` is `t`, any other `s.t` is `s.t`.
+    fn qualified_table_name(&mut self) -> PResult<(String, Span)> {
+        let (name, span) = self.schema_or_identifier()?;
+        if !matches!(self.peek().kind, TokenKind::Dot) {
+            return Ok((name, span));
+        }
+        self.advance();
+        let (table, end) = self.identifier()?;
+        Ok((qualified_name(&name, table), join_span(span, end)))
+    }
+
+    /// An identifier, or the keyword `temp` when a `.` follows: sqlite3's
+    /// temp schema name (#924, ADR 0043).
+    fn schema_or_identifier(&mut self) -> PResult<(String, Span)> {
+        if self.at_kw(Keyword::TEMP) && matches!(self.peek_at(1).kind, TokenKind::Dot) {
+            let span = self.expect_kw(Keyword::TEMP)?;
+            return Ok(("temp".to_string(), span));
+        }
+        self.identifier()
+    }
+
+    /// `ATTACH [DATABASE] expr AS schema-name` (#924, ADR 0043).
+    pub(super) fn parse_attach_stmt(&mut self) -> PResult<Attach> {
+        let start = self.expect_kw(Keyword::ATTACH)?;
+        self.eat_kw(Keyword::DATABASE);
+        let file = self.expr()?;
+        self.expect_kw(Keyword::AS)?;
+        // `temp` is a keyword, and a name sqlite3 refuses as in use.
+        if let Some(end) = self.opt_kw_span(Keyword::TEMP) {
+            return Ok(Attach {
+                file,
+                name: "temp".to_string(),
+                span: join_span(start, end),
+            });
+        }
+        let (name, end) = self.identifier()?;
+        Ok(Attach {
+            file,
+            name,
+            span: join_span(start, end),
+        })
+    }
+
+    /// `DETACH [DATABASE] schema-name` (#924, ADR 0043).
+    pub(super) fn parse_detach_stmt(&mut self) -> PResult<Detach> {
+        let start = self.expect_kw(Keyword::DETACH)?;
+        self.eat_kw(Keyword::DATABASE);
+        let (name, end) = self.identifier()?;
+        Ok(Detach {
+            name,
+            span: join_span(start, end),
+        })
     }
 
     /// Bails with `Unsupported` (schema-qualified names not yet supported)
@@ -1972,19 +2037,27 @@ impl Parser {
                 span: join_span(start, end),
             });
         }
-        let (mut name, start) = self.identifier()?;
+        let (mut name, start) = self.schema_or_identifier()?;
         let mut schema = None;
         if matches!(self.peek().kind, TokenKind::Dot) {
-            // The column dialect names a cross-mode engine's SQLite file
-            // this way (#924); the row dialect has no ATTACH yet.
-            if !self.column {
-                return self.unsupported("schema-qualified table names not yet supported");
-            }
             self.advance();
-            schema = Some(std::mem::replace(&mut name, self.identifier()?.0));
+            let table = self.identifier()?.0;
+            // The column dialect names a cross-mode engine's SQLite file
+            // this way (#924); the row dialect folds the schema into the
+            // name, which the engine lists every attached table under.
+            if self.column {
+                schema = Some(std::mem::replace(&mut name, table));
+            } else {
+                name = qualified_name(&name, table);
+            }
         }
         let alias = self.opt_alias()?;
         let end = alias.is_some();
+        // An attached table's columns are qualified by its bare name.
+        let alias = match name.rsplit_once('.') {
+            Some((_, table)) if alias.is_none() && schema.is_none() => Some(table.to_string()),
+            _ => alias,
+        };
         let span = if end {
             join_span(
                 start,

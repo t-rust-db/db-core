@@ -176,7 +176,12 @@ where
     // `SorterOpen`/`SorterInsert` never run on this branch.
     let index_cursor = cursors.sort;
     let root_page = valid_index_root_page(index)?;
-    let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+    let mut open_instr = Instruction::new(
+        Opcode::OpenRead,
+        index_cursor,
+        root_page,
+        schema.database_p3(),
+    );
     open_instr.p5 = 1;
     em.emit(open_instr);
 
@@ -350,7 +355,12 @@ where
 
     let index_cursor = cursors.distinct;
     let root_page = valid_index_root_page(index)?;
-    let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+    let mut open_instr = Instruction::new(
+        Opcode::OpenRead,
+        index_cursor,
+        root_page,
+        schema.database_p3(),
+    );
     open_instr.p5 = 1;
     em.emit(open_instr);
 

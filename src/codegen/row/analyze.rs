@@ -72,6 +72,7 @@ mod tests {
     fn table(name: &str, root_page: u32, indexes: Vec<IndexSchema>) -> TableSchema {
         TableSchema {
             name: name.to_string(),
+            database: 0,
             root_page,
             columns: vec!["a".to_string()],
             without_rowid: false,

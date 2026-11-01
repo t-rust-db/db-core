@@ -76,7 +76,12 @@ pub(super) fn compile_full_join_two_table(
     for (i, (table_ref, schema)) in table_refs.iter().zip(schemas.iter()).enumerate() {
         let cursor = i32::try_from(i).unwrap_or(0);
         let root_page = valid_table_root_page(schema)?;
-        em.emit(Instruction::new(Opcode::OpenRead, cursor, root_page, 0));
+        em.emit(Instruction::new(
+            Opcode::OpenRead,
+            cursor,
+            root_page,
+            schema.database_p3(),
+        ));
         bindings.push(TableBinding {
             alias: table_ref.alias.clone(),
             name: table_binding_name(table_ref),

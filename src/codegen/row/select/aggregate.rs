@@ -142,7 +142,12 @@ where
     match (plan, &select.where_clause) {
         (IndexOnlyCount::TableCount, _) => {
             let root_page = valid_table_root_page(schema)?;
-            em.emit(Instruction::new(Opcode::Count, root_page, count_reg, 0));
+            em.emit(Instruction::new(
+                Opcode::Count,
+                root_page,
+                count_reg,
+                schema.database_p3(),
+            ));
         }
         (IndexOnlyCount::IndexProbe { index_position }, Some(where_expr)) => {
             let (Some(index), Some((_, operand))) = (
@@ -155,7 +160,12 @@ where
                 });
             };
             let root_page = valid_index_root_page(index)?;
-            let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+            let mut open_instr = Instruction::new(
+                Opcode::OpenRead,
+                index_cursor,
+                root_page,
+                schema.database_p3(),
+            );
             open_instr.p5 = 1;
             em.emit(open_instr);
 
@@ -310,7 +320,12 @@ where
 
     let index_cursor = cursors.sort;
     let root_page = valid_index_root_page(index)?;
-    let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+    let mut open_instr = Instruction::new(
+        Opcode::OpenRead,
+        index_cursor,
+        root_page,
+        schema.database_p3(),
+    );
     open_instr.p5 = 1;
     em.emit(open_instr);
 
@@ -891,6 +906,7 @@ fn compact_schema(
     };
     Ok(TableSchema {
         name: schema.name.clone(),
+        database: 0,
         root_page: 0,
         columns: needed_order
             .iter()
@@ -1741,7 +1757,12 @@ where
     // never run on this branch (matching #296's own convention).
     let index_cursor = cursors.sort;
     let root_page = valid_index_root_page(index)?;
-    let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+    let mut open_instr = Instruction::new(
+        Opcode::OpenRead,
+        index_cursor,
+        root_page,
+        schema.database_p3(),
+    );
     open_instr.p5 = 1;
     em.emit(open_instr);
 

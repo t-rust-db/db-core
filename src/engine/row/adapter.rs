@@ -457,7 +457,14 @@ pub struct StorageFactory {
     source: Rc<dyn PageSource>,
     writer: Option<SharedPager>,
     header: DatabaseHeader,
+    /// Every database this factory serves, by sqlite3 index (#924, ADR
+    /// 0043); `use_database` makes one of them the fields above.
+    databases: Vec<FactoryDatabase>,
 }
+
+/// One database a [`StorageFactory`] serves: its sqlite3 index, the source
+/// it reads through, the pager it writes through (if any), its header.
+type FactoryDatabase = (u32, Rc<dyn PageSource>, Option<SharedPager>, DatabaseHeader);
 
 impl StorageFactory {
     /// Cursors over `source` only; `OpenWrite` is refused.
@@ -465,8 +472,10 @@ impl StorageFactory {
         source: Rc<P>,
         header: DatabaseHeader,
     ) -> Self {
+        let source = erase(source);
         StorageFactory {
-            source: erase(source),
+            databases: vec![(0, Rc::clone(&source), None, header)],
+            source,
             writer: None,
             header,
         }
@@ -479,11 +488,27 @@ impl StorageFactory {
         pager: SharedPager,
         header: DatabaseHeader,
     ) -> Self {
+        let source = erase(source);
         StorageFactory {
-            source: erase(source),
+            databases: vec![(0, Rc::clone(&source), Some(Rc::clone(&pager)), header)],
+            source,
             writer: Some(pager),
             header,
         }
+    }
+
+    /// Also serves database `db` (#924): cursors that read through
+    /// `source` and, with `pager`, write through it.
+    #[must_use]
+    pub fn with_database<P: PageSource + ?Sized + 'static>(
+        mut self,
+        db: u32,
+        source: Rc<P>,
+        pager: Option<SharedPager>,
+        header: DatabaseHeader,
+    ) -> Self {
+        self.databases.push((db, erase(source), pager, header));
+        self
     }
 }
 
@@ -516,6 +541,16 @@ impl StorageFactory {
 }
 
 impl CursorFactory for StorageFactory {
+    fn use_database(&mut self, db: u32) -> bool {
+        let Some((_, source, writer, header)) = self.databases.iter().find(|d| d.0 == db) else {
+            return false;
+        };
+        self.source = Rc::clone(source);
+        self.writer = writer.clone();
+        self.header = *header;
+        true
+    }
+
     fn open_read(&mut self, root: u32) -> Result<Box<dyn Cursor>, CursorFactoryError> {
         if let Some(stored_at) = self.without_rowid_layout(root)? {
             let inner = IndexCursorAdapter::new(
@@ -741,6 +776,9 @@ pub struct PagerTransaction {
     source: Rc<dyn PageSource>,
     writer: Option<SharedPager>,
     header: DatabaseHeader,
+    /// The attached files' pagers (#924, ADR 0043): a transaction spans
+    /// them, each committed or rolled back after `main`.
+    attached: Vec<SharedPager>,
 }
 
 impl PagerTransaction {
@@ -754,6 +792,7 @@ impl PagerTransaction {
             source: erase(source),
             writer: None,
             header,
+            attached: Vec::new(),
         }
     }
 
@@ -767,7 +806,20 @@ impl PagerTransaction {
             source: erase(source),
             writer: Some(pager),
             header,
+            attached: Vec::new(),
         }
+    }
+
+    /// Also spans the attached file behind `pager` (#924).
+    #[must_use]
+    pub fn with_attached(mut self, pager: SharedPager) -> Self {
+        self.attached.push(pager);
+        self
+    }
+
+    /// The pagers a transaction spans: `main`'s, then every attached one.
+    fn pagers(&self) -> impl Iterator<Item = &SharedPager> {
+        self.writer.iter().chain(self.attached.iter())
     }
 }
 
@@ -786,23 +838,23 @@ impl Transaction for PagerTransaction {
     }
 
     fn commit(&mut self) -> Result<(), TransactionError> {
-        match self.writer.as_ref() {
-            Some(writer) => writer
+        for pager in self.pagers() {
+            pager
                 .borrow_mut()
                 .flush()
-                .map_err(|e| TransactionError(storage_err(e))),
-            None => Ok(()),
+                .map_err(|e| TransactionError(storage_err(e)))?;
         }
+        Ok(())
     }
 
     fn rollback(&mut self) -> Result<(), TransactionError> {
-        match self.writer.as_ref() {
-            Some(writer) => writer
+        for pager in self.pagers() {
+            pager
                 .borrow_mut()
                 .rollback()
-                .map_err(|e| TransactionError(storage_err(e))),
-            None => Ok(()),
+                .map_err(|e| TransactionError(storage_err(e)))?;
         }
+        Ok(())
     }
 
     fn set_journal_mode(&mut self, mode: i32) -> Result<(), TransactionError> {

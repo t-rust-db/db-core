@@ -139,7 +139,7 @@ pub fn compile_update_with_catalog(
         Opcode::OpenWrite,
         TABLE_CURSOR,
         root_page,
-        0,
+        schema.database_p3(),
     ));
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
@@ -494,7 +494,7 @@ fn compile_update_without_rowid(
         Opcode::OpenWrite,
         TABLE_CURSOR,
         root_page,
-        0,
+        schema.database_p3(),
     ));
     let scope = Scope::single(schema, TABLE_CURSOR).with_catalog(catalog);
     check_overridden_assignments(update, &assigned, &scope)?;

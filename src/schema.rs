@@ -22,6 +22,10 @@
 pub struct TableSchema {
     /// The table's name.
     pub name: String,
+    /// The database the table lives in (#924, ADR 0043): sqlite3's index,
+    /// `0` for `main`, `1` for `temp`, `2..` for attached files -- the P3
+    /// every cursor open on this table or its indexes carries.
+    pub database: u32,
     /// The table's b-tree root page (`sqlite_master.rootpage`).
     pub root_page: u32,
     /// Column names, in declared order.
@@ -69,6 +73,15 @@ impl TableSchema {
             rowid_alias_from_sql(&self.sql)
         };
         self
+    }
+
+    /// [`TableSchema::database`] as the P3 operand of a cursor open on
+    /// this table or one of its indexes. An index past `i32::MAX` names
+    /// no database, so it saturates (and the VM rejects it) rather than
+    /// wrapping onto a real one.
+    #[cfg(feature = "codegen-row")]
+    pub(crate) fn database_p3(&self) -> i32 {
+        i32::try_from(self.database).unwrap_or(i32::MAX)
     }
 }
 
@@ -473,6 +486,13 @@ mod tests {
             Some(0)
         );
     }
+}
+
+/// `name` without the `schema.` an attached table is listed under (#924,
+/// ADR 0043): what a column reference qualifies the table with.
+#[cfg(feature = "codegen-row")]
+pub(crate) fn unqualified(name: &str) -> &str {
+    name.rsplit_once('.').map_or(name, |(_, table)| table)
 }
 
 #[cfg(test)]

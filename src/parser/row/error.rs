@@ -13,8 +13,8 @@
 use super::grammar::Parser;
 use super::tokenizer::Tokenizer;
 use crate::parser::ast::{
-    Analyze, Begin, Commit, CreateIndex, CreateTable, CreateView, Delete, DropIndex, DropTable,
-    DropView, Explain, Expr, Insert, Pragma, Rollback, Select, Update,
+    Analyze, Attach, Begin, Commit, CreateIndex, CreateTable, CreateView, Delete, Detach,
+    DropIndex, DropTable, DropView, Explain, Expr, Insert, Pragma, Rollback, Select, Update,
 };
 use crate::parser::Span;
 
@@ -337,6 +337,44 @@ pub fn parse_begin(src: &str) -> ParseOutcome<Begin> {
     let tokens = Tokenizer::tokenize(src);
     let mut parser = Parser::new(tokens);
     match parser.parse_begin_stmt() {
+        Ok(stmt) => match parser.expect_end() {
+            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),
+            Err(ParseFail::Unsupported { message, span }) => {
+                ParseOutcome::Unsupported { message, span }
+            }
+            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
+        },
+        Err(ParseFail::Unsupported { message, span }) => {
+            ParseOutcome::Unsupported { message, span }
+        }
+        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
+    }
+}
+
+/// Parses an `ATTACH [DATABASE] expr AS schema-name` statement (#924).
+pub fn parse_attach(src: &str) -> ParseOutcome<Attach> {
+    let tokens = Tokenizer::tokenize(src);
+    let mut parser = Parser::new(tokens);
+    match parser.parse_attach_stmt() {
+        Ok(stmt) => match parser.expect_end() {
+            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),
+            Err(ParseFail::Unsupported { message, span }) => {
+                ParseOutcome::Unsupported { message, span }
+            }
+            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
+        },
+        Err(ParseFail::Unsupported { message, span }) => {
+            ParseOutcome::Unsupported { message, span }
+        }
+        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
+    }
+}
+
+/// Parses a `DETACH [DATABASE] schema-name` statement (#924).
+pub fn parse_detach(src: &str) -> ParseOutcome<Detach> {
+    let tokens = Tokenizer::tokenize(src);
+    let mut parser = Parser::new(tokens);
+    match parser.parse_detach_stmt() {
         Ok(stmt) => match parser.expect_end() {
             Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),
             Err(ParseFail::Unsupported { message, span }) => {

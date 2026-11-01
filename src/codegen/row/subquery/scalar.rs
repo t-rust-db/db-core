@@ -120,7 +120,12 @@ pub(crate) fn compile_scalar_subquery(
     let schema = std::rc::Rc::new(schema);
 
     let root_page = valid_table_root_page(&schema)?;
-    em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+    em.emit(Instruction::new(
+        Opcode::OpenRead,
+        sub_cursor,
+        root_page,
+        schema.database_p3(),
+    ));
 
     if select_has_aggregate(subselect) {
         // #304: the subquery's projected expression contains an
@@ -225,7 +230,12 @@ pub(crate) fn compile_scalar_subquery(
             JoinAccess::UniqueIndex { index, .. } => {
                 let index_cursor = reg.alloc_cursor();
                 let root_page = valid_index_root_page(&index)?;
-                let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+                let mut open_instr = Instruction::new(
+                    Opcode::OpenRead,
+                    index_cursor,
+                    root_page,
+                    schema.database_p3(),
+                );
                 open_instr.p5 = 1;
                 em.emit(open_instr);
                 let leading_collation = index
@@ -350,7 +360,12 @@ pub(crate) fn compile_exists(
         let null_addr = em.emit(Instruction::new(Opcode::IsNull, value_reg, 0, 0));
         em.patch_p2(null_addr, not_found);
         let root_page = valid_table_root_page(&schema)?;
-        em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+        em.emit(Instruction::new(
+            Opcode::OpenRead,
+            sub_cursor,
+            root_page,
+            schema.database_p3(),
+        ));
         match access {
             JoinAccess::Rowid(_) => {
                 let seek_addr = em.emit(Instruction::new(
@@ -364,7 +379,12 @@ pub(crate) fn compile_exists(
             JoinAccess::UniqueIndex { index, .. } => {
                 let index_cursor = reg.alloc_cursor();
                 let root_page = valid_index_root_page(&index)?;
-                let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+                let mut open_instr = Instruction::new(
+                    Opcode::OpenRead,
+                    index_cursor,
+                    root_page,
+                    schema.database_p3(),
+                );
                 open_instr.p5 = 1;
                 em.emit(open_instr);
                 let leading_collation = index
@@ -394,7 +414,12 @@ pub(crate) fn compile_exists(
     }
 
     let root_page = valid_table_root_page(&schema)?;
-    em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+    em.emit(Instruction::new(
+        Opcode::OpenRead,
+        sub_cursor,
+        root_page,
+        schema.database_p3(),
+    ));
     let not_found = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
     em.patch_p2(rewind_addr, not_found);
@@ -592,7 +617,12 @@ pub(super) fn materialize_in_subquery_index(
     em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
 
     let root_page = valid_table_root_page(&schema)?;
-    em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+    em.emit(Instruction::new(
+        Opcode::OpenRead,
+        sub_cursor,
+        root_page,
+        schema.database_p3(),
+    ));
     let scan_end = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
     em.patch_p2(rewind_addr, scan_end);
@@ -685,7 +715,12 @@ pub(crate) fn compile_in_subquery_multi(
     em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
 
     let root_page = valid_table_root_page(&schema)?;
-    em.emit(Instruction::new(Opcode::OpenRead, sub_cursor, root_page, 0));
+    em.emit(Instruction::new(
+        Opcode::OpenRead,
+        sub_cursor,
+        root_page,
+        schema.database_p3(),
+    ));
     let scan_end = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
     em.patch_p2(rewind_addr, scan_end);
@@ -784,6 +819,7 @@ mod tests {
     fn table(name: &str, root_page: u32, columns: &[&str], sql: &str) -> TableSchema {
         TableSchema {
             name: name.to_string(),
+            database: 0,
             root_page,
             columns: columns.iter().map(|c| c.to_string()).collect(),
             without_rowid: false,

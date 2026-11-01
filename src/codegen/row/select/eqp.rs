@@ -37,18 +37,22 @@ pub struct EqpRow {
 pub(super) fn eqp_display_name(table_ref: &TableRef) -> String {
     let name = table_ref.name().unwrap_or("(subquery)");
     match &table_ref.alias {
-        Some(alias) => format!("{name} AS {alias}"),
-        None => name.to_string(),
+        // An attached table's implied alias (#924) is not shown, as in sqlite3.
+        Some(alias) if alias != crate::schema::unqualified(name) || alias == name => {
+            format!("{name} AS {alias}")
+        }
+        Some(_) | None => name.to_string(),
     }
 }
 
 /// The identifier a [`TableBinding`] tracks alongside its `alias` —
 /// a subquery-in-FROM (#257) has no catalog name of its own, so this
-/// falls back to its (mandatory) alias.
+/// falls back to its (mandatory) alias. An attached table, listed as
+/// `schema.table` (#924, ADR 0043), is qualified by its bare name.
 pub(super) fn table_binding_name(table_ref: &TableRef) -> String {
     table_ref
         .name()
-        .map(str::to_string)
+        .map(|name| crate::schema::unqualified(name).to_string())
         .or_else(|| table_ref.alias.clone())
         .unwrap_or_default()
 }

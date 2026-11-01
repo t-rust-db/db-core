@@ -209,14 +209,16 @@ pub(super) fn find_leading_index(schema: &TableSchema, col_name: &str) -> Option
 
 /// Opens `index` on `cursors.sort` (reused across every fast path in
 /// this file, mirroring `limit_scan.rs`/`index_scan.rs`'s own reuse of
-/// that cursor slot — none of these paths ever run alongside a sort).
+/// that cursor slot — none of these paths ever run alongside a sort),
+/// in `database` (the indexed table's [`TableSchema::database_p3`]).
 fn open_index_cursor(
     em: &mut Emitter,
     index: &IndexSchema,
     index_cursor: i32,
+    database: i32,
 ) -> Result<(), CodegenError> {
     let root_page = crate::codegen::row::index_maintenance::valid_index_root_page(index)?;
-    let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+    let mut open_instr = Instruction::new(Opcode::OpenRead, index_cursor, root_page, database);
     open_instr.p5 = 1;
     em.emit(open_instr);
     Ok(())
@@ -442,7 +444,7 @@ where
         .map_or(Collation::Binary, |c| c.collation);
 
     let index_cursor = cursors.sort;
-    open_index_cursor(em, index, index_cursor)?;
+    open_index_cursor(em, index, index_cursor, schema.database_p3())?;
 
     let limit = compile_limit_setup(em, reg, &scope, select)?;
     let lo_reg = compile_value(em, reg, &scope, lo)?;
@@ -550,7 +552,7 @@ where
         let Some(index) = schema.indexes.get(plan.index_position) else {
             return Ok(false);
         };
-        open_index_cursor(em, index, index_cursor)?;
+        open_index_cursor(em, index, index_cursor, schema.database_p3())?;
         let keys = compile_conjunct_keys(em, reg, scope, where_expr, &plan, end_label)?;
         emit_conjunct_index_walk(em, &plan, &keys, index_cursor, end_label, |em, row_skip| {
             sink(em, reg, index_cursor, row_skip)
@@ -592,7 +594,7 @@ where
             .columns
             .first()
             .map_or(Collation::Binary, |c| c.collation);
-        open_index_cursor(em, index, index_cursor)?;
+        open_index_cursor(em, index, index_cursor, schema.database_p3())?;
         let lo_reg = compile_value(em, reg, scope, lo)?;
         let hi_reg = if std::ptr::eq(lo, hi) {
             lo_reg
@@ -643,7 +645,7 @@ where
         .first()
         .map_or(Collation::Binary, |c| c.collation);
 
-    open_index_cursor(em, index, index_cursor)?;
+    open_index_cursor(em, index, index_cursor, schema.database_p3())?;
     let bound_reg = compile_value(em, reg, scope, operand)?;
 
     if !is_lower {
@@ -815,7 +817,7 @@ where
         .map_or(Collation::Binary, |c| c.collation);
 
     let index_cursor = cursors.sort;
-    open_index_cursor(em, index, index_cursor)?;
+    open_index_cursor(em, index, index_cursor, schema.database_p3())?;
 
     let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     let limit = compile_limit_setup(em, reg, &scope, select)?;
@@ -957,7 +959,7 @@ where
     }
 
     let index_cursor = cursors.sort;
-    open_index_cursor(em, index, index_cursor)?;
+    open_index_cursor(em, index, index_cursor, schema.database_p3())?;
 
     let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     let limit = compile_limit_setup(em, reg, &scope, select)?;
@@ -1176,7 +1178,7 @@ where
         .map_or(Collation::Binary, |c| c.collation);
 
     let index_cursor = cursors.sort;
-    open_index_cursor(em, index, index_cursor)?;
+    open_index_cursor(em, index, index_cursor, schema.database_p3())?;
 
     let limit = compile_limit_setup(em, reg, &scope, select)?;
     let bound_reg = compile_value(em, reg, &scope, operand)?;
@@ -2007,7 +2009,7 @@ where
     };
     let leading_name = index.columns.first().map_or("", |c| c.name.as_str());
     let index_cursor = cursors.sort;
-    open_index_cursor(em, index, index_cursor)?;
+    open_index_cursor(em, index, index_cursor, schema.database_p3())?;
     let keys = compile_conjunct_keys(em, reg, &scope, where_expr, &plan, end_label)?;
     let limit = compile_limit_setup(em, reg, &scope, select)?;
     let all = conjuncts(where_expr);
@@ -2387,6 +2389,33 @@ mod mcdc_vectors {
             &schema("INTEGER", true, false),
         );
         assert!(seeks(&p));
+    }
+
+    // #924 (ADR 0043): every cursor open on an attached table -- the
+    // table itself and the index a seek probes -- carries the table's
+    // database index in P3.
+    #[test]
+    fn attached_table_opens_carry_its_database_in_p3() {
+        let attached = TableSchema {
+            database: 2,
+            ..schema("INTEGER", true, false)
+        };
+        let opens = |p: &Program, root: i32| {
+            p.instructions
+                .iter()
+                .filter(|i| i.opcode == Opcode::OpenRead && i.p2 == root)
+                .map(|i| i.p3)
+                .collect::<Vec<_>>()
+        };
+
+        let scan = compile("SELECT b FROM t", &attached);
+        assert_eq!(opens(&scan, 2), vec![2], "{scan:?}");
+
+        for sql in ["SELECT b FROM t WHERE a = 5", "SELECT b FROM t WHERE a > 5"] {
+            let seek = compile(sql, &attached);
+            assert_eq!(opens(&seek, INDEX_ROOT), vec![2], "{sql}: {seek:?}");
+            assert_eq!(opens(&seek, 2), vec![2], "{sql}: {seek:?}");
+        }
     }
 
     #[test]

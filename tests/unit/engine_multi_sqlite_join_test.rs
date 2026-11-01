@@ -333,7 +333,8 @@ fn a_qualified_table_outside_a_cross_mode_engine_is_unknown() {
     assert_eq!(err.kind, ErrorKind::Compile);
     assert!(err.to_string().contains("unknown table: m.events"), "{err}");
 
+    // The row engine names its own file `main` (#924, ADR 0043).
     let mut row = RowEngine::open(&f.path("machine.db")).unwrap();
-    let err = row.run_query("SELECT host FROM main.machine").unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
+    let hosts = row.run_query("SELECT host FROM main.machine").unwrap().rows;
+    assert_eq!(hosts.len(), 3);
 }

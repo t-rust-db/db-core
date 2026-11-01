@@ -535,6 +535,7 @@ pub struct db_core::codegen::row::TableSchema
 pub db_core::codegen::row::TableSchema::column_collations: alloc::vec::Vec<db_core::value::Collation>
 pub db_core::codegen::row::TableSchema::column_types: alloc::vec::Vec<alloc::string::String>
 pub db_core::codegen::row::TableSchema::columns: alloc::vec::Vec<alloc::string::String>
+pub db_core::codegen::row::TableSchema::database: u32
 pub db_core::codegen::row::TableSchema::indexes: alloc::vec::Vec<db_core::schema::IndexSchema>
 pub db_core::codegen::row::TableSchema::is_virtual: bool
 pub db_core::codegen::row::TableSchema::name: alloc::string::String
@@ -864,6 +865,7 @@ pub fn db_core::engine::row::adapter::IndexCursorAdapter::update_payload(&mut se
 pub struct db_core::engine::row::adapter::PagerTransaction
 impl db_core::engine::row::adapter::PagerTransaction
 pub fn db_core::engine::row::adapter::PagerTransaction::read_only<P: db_core::storage::row::vfs::PageSource + ?core::marker::Sized + 'static>(alloc::rcs::rc::Rc<P>, db_core::storage::row::header::DatabaseHeader) -> Self
+pub fn db_core::engine::row::adapter::PagerTransaction::with_attached(self, alloc::rcs::rc::Rc<core::cell::RefCell<db_core::storage::row::pager::Pager>>) -> Self
 pub fn db_core::engine::row::adapter::PagerTransaction::writable<P: db_core::storage::row::vfs::PageSource + ?core::marker::Sized + 'static>(alloc::rcs::rc::Rc<P>, alloc::rcs::rc::Rc<core::cell::RefCell<db_core::storage::row::pager::Pager>>, db_core::storage::row::header::DatabaseHeader) -> Self
 impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapter::PagerTransaction
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -878,11 +880,13 @@ pub fn db_core::engine::row::adapter::PagerTransaction::wal_checkpoint(&mut self
 pub struct db_core::engine::row::adapter::StorageFactory
 impl db_core::engine::row::adapter::StorageFactory
 pub fn db_core::engine::row::adapter::StorageFactory::read_only<P: db_core::storage::row::vfs::PageSource + ?core::marker::Sized + 'static>(alloc::rcs::rc::Rc<P>, db_core::storage::row::header::DatabaseHeader) -> Self
+pub fn db_core::engine::row::adapter::StorageFactory::with_database<P: db_core::storage::row::vfs::PageSource + ?core::marker::Sized + 'static>(self, u32, alloc::rcs::rc::Rc<P>, core::option::Option<alloc::rcs::rc::Rc<core::cell::RefCell<db_core::storage::row::pager::Pager>>>, db_core::storage::row::header::DatabaseHeader) -> Self
 pub fn db_core::engine::row::adapter::StorageFactory::writable<P: db_core::storage::row::vfs::PageSource + ?core::marker::Sized + 'static>(alloc::rcs::rc::Rc<P>, alloc::rcs::rc::Rc<core::cell::RefCell<db_core::storage::row::pager::Pager>>, db_core::storage::row::header::DatabaseHeader) -> Self
 impl db_core::vm::row::cursor_factory::CursorFactory for db_core::engine::row::adapter::StorageFactory
 pub fn db_core::engine::row::adapter::StorageFactory::open_index(&mut self, u32, &[db_core::vm::row::program::SortKeyColumn]) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::engine::row::adapter::StorageFactory::open_read(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::engine::row::adapter::StorageFactory::open_write(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
+pub fn db_core::engine::row::adapter::StorageFactory::use_database(&mut self, u32) -> bool
 pub struct db_core::engine::row::adapter::TableCursorAdapter
 impl db_core::vm::row::cursor::Cursor for db_core::engine::row::adapter::TableCursorAdapter
 pub fn db_core::engine::row::adapter::TableCursorAdapter::auto_index_insert(&mut self, alloc::vec::Vec<db_core::value::Value>, &[db_core::value::Collation], i64) -> bool
@@ -1807,6 +1811,17 @@ pub fn db_core::parser::ast::Assignment::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::parser::ast::Assignment
 pub fn db_core::parser::ast::Assignment::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Assignment
+pub struct db_core::parser::ast::Attach
+pub db_core::parser::ast::Attach::file: db_core::parser::ast::Expr
+pub db_core::parser::ast::Attach::name: alloc::string::String
+pub db_core::parser::ast::Attach::span: db_core::parser::Span
+impl core::clone::Clone for db_core::parser::ast::Attach
+pub fn db_core::parser::ast::Attach::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::parser::ast::Attach
+pub fn db_core::parser::ast::Attach::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::parser::ast::Attach
+pub fn db_core::parser::ast::Attach::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::parser::ast::Attach
 pub struct db_core::parser::ast::Begin
 pub db_core::parser::ast::Begin::mode: core::option::Option<db_core::parser::ast::TransactionMode>
 pub db_core::parser::ast::Begin::span: db_core::parser::Span
@@ -1937,6 +1952,16 @@ pub fn db_core::parser::ast::Delete::fmt(&self, &mut core::fmt::Formatter<'_>) -
 impl core::fmt::Display for db_core::parser::ast::Delete
 pub fn db_core::parser::ast::Delete::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::parser::ast::Delete
+pub struct db_core::parser::ast::Detach
+pub db_core::parser::ast::Detach::name: alloc::string::String
+pub db_core::parser::ast::Detach::span: db_core::parser::Span
+impl core::clone::Clone for db_core::parser::ast::Detach
+pub fn db_core::parser::ast::Detach::clone(&self) -> Self
+impl core::cmp::PartialEq for db_core::parser::ast::Detach
+pub fn db_core::parser::ast::Detach::eq(&self, &Self) -> bool
+impl core::fmt::Debug for db_core::parser::ast::Detach
+pub fn db_core::parser::ast::Detach::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for db_core::parser::ast::Detach
 pub struct db_core::parser::ast::DropIndex
 pub db_core::parser::ast::DropIndex::if_exists: bool
 pub db_core::parser::ast::DropIndex::name: alloc::string::String
@@ -2271,6 +2296,7 @@ impl<T: core::cmp::PartialEq> core::marker::StructuralPartialEq for db_core::par
 impl<T: core::fmt::Debug> core::fmt::Debug for db_core::parser::row::error::ParseOutcome<T>
 pub fn db_core::parser::row::error::ParseOutcome<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::parser::row::error::parse_analyze(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Analyze>
+pub fn db_core::parser::row::error::parse_attach(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Attach>
 pub fn db_core::parser::row::error::parse_begin(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Begin>
 pub fn db_core::parser::row::error::parse_bool_expr(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Expr>
 pub fn db_core::parser::row::error::parse_commit(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Commit>
@@ -2278,6 +2304,7 @@ pub fn db_core::parser::row::error::parse_create_index(&str) -> db_core::parser:
 pub fn db_core::parser::row::error::parse_create_table(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::CreateTable>
 pub fn db_core::parser::row::error::parse_create_view(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::CreateView>
 pub fn db_core::parser::row::error::parse_delete(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Delete>
+pub fn db_core::parser::row::error::parse_detach(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Detach>
 pub fn db_core::parser::row::error::parse_drop_index(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropIndex>
 pub fn db_core::parser::row::error::parse_drop_table(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropTable>
 pub fn db_core::parser::row::error::parse_drop_view(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropView>
@@ -2552,6 +2579,7 @@ impl<T: core::fmt::Debug> core::fmt::Debug for db_core::parser::row::error::Pars
 pub fn db_core::parser::row::error::ParseOutcome<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::parser::row::ends_with_semicolon(&str) -> bool
 pub fn db_core::parser::row::parse_analyze(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Analyze>
+pub fn db_core::parser::row::parse_attach(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Attach>
 pub fn db_core::parser::row::parse_begin(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Begin>
 pub fn db_core::parser::row::parse_bool_expr(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Expr>
 pub fn db_core::parser::row::parse_commit(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Commit>
@@ -2559,6 +2587,7 @@ pub fn db_core::parser::row::parse_create_index(&str) -> db_core::parser::row::e
 pub fn db_core::parser::row::parse_create_table(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::CreateTable>
 pub fn db_core::parser::row::parse_create_view(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::CreateView>
 pub fn db_core::parser::row::parse_delete(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Delete>
+pub fn db_core::parser::row::parse_detach(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::Detach>
 pub fn db_core::parser::row::parse_drop_index(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropIndex>
 pub fn db_core::parser::row::parse_drop_table(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropTable>
 pub fn db_core::parser::row::parse_drop_view(&str) -> db_core::parser::row::error::ParseOutcome<db_core::parser::ast::DropView>
@@ -2661,6 +2690,7 @@ pub struct db_core::schema::TableSchema
 pub db_core::schema::TableSchema::column_collations: alloc::vec::Vec<db_core::value::Collation>
 pub db_core::schema::TableSchema::column_types: alloc::vec::Vec<alloc::string::String>
 pub db_core::schema::TableSchema::columns: alloc::vec::Vec<alloc::string::String>
+pub db_core::schema::TableSchema::database: u32
 pub db_core::schema::TableSchema::indexes: alloc::vec::Vec<db_core::schema::IndexSchema>
 pub db_core::schema::TableSchema::is_virtual: bool
 pub db_core::schema::TableSchema::name: alloc::string::String
@@ -6591,6 +6621,7 @@ pub struct db_core::storage::row::schema::TableSchema
 pub db_core::storage::row::schema::TableSchema::column_collations: alloc::vec::Vec<db_core::value::Collation>
 pub db_core::storage::row::schema::TableSchema::column_types: alloc::vec::Vec<alloc::string::String>
 pub db_core::storage::row::schema::TableSchema::columns: alloc::vec::Vec<alloc::string::String>
+pub db_core::storage::row::schema::TableSchema::database: u32
 pub db_core::storage::row::schema::TableSchema::indexes: alloc::vec::Vec<db_core::schema::IndexSchema>
 pub db_core::storage::row::schema::TableSchema::is_virtual: bool
 pub db_core::storage::row::schema::TableSchema::name: alloc::string::String
@@ -9945,10 +9976,12 @@ pub trait db_core::vm::row::cursor_factory::CursorFactory
 pub fn db_core::vm::row::cursor_factory::CursorFactory::open_index(&mut self, u32, &[db_core::vm::row::program::SortKeyColumn]) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::vm::row::cursor_factory::CursorFactory::open_read(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::vm::row::cursor_factory::CursorFactory::open_write(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
+pub fn db_core::vm::row::cursor_factory::CursorFactory::use_database(&mut self, u32) -> bool
 impl db_core::vm::row::cursor_factory::CursorFactory for db_core::engine::row::adapter::StorageFactory
 pub fn db_core::engine::row::adapter::StorageFactory::open_index(&mut self, u32, &[db_core::vm::row::program::SortKeyColumn]) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::engine::row::adapter::StorageFactory::open_read(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::engine::row::adapter::StorageFactory::open_write(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
+pub fn db_core::engine::row::adapter::StorageFactory::use_database(&mut self, u32) -> bool
 pub mod db_core::vm::row::explain
 pub struct db_core::vm::row::explain::ExplainRow
 pub db_core::vm::row::explain::ExplainRow::addr: usize
@@ -11763,10 +11796,12 @@ pub trait db_core::vm::row::CursorFactory
 pub fn db_core::vm::row::CursorFactory::open_index(&mut self, u32, &[db_core::vm::row::program::SortKeyColumn]) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::vm::row::CursorFactory::open_read(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::vm::row::CursorFactory::open_write(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
+pub fn db_core::vm::row::CursorFactory::use_database(&mut self, u32) -> bool
 impl db_core::vm::row::cursor_factory::CursorFactory for db_core::engine::row::adapter::StorageFactory
 pub fn db_core::engine::row::adapter::StorageFactory::open_index(&mut self, u32, &[db_core::vm::row::program::SortKeyColumn]) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::engine::row::adapter::StorageFactory::open_read(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
 pub fn db_core::engine::row::adapter::StorageFactory::open_write(&mut self, u32) -> core::result::Result<alloc::boxed::Box<dyn db_core::vm::row::cursor::Cursor>, db_core::vm::row::cursor_factory::CursorFactoryError>
+pub fn db_core::engine::row::adapter::StorageFactory::use_database(&mut self, u32) -> bool
 pub trait db_core::vm::row::SchemaStorage
 pub fn db_core::vm::row::SchemaStorage::autoincrement_rowid(&mut self, &str, i64) -> core::result::Result<i64, db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::bump_schema_cookie(&mut self) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>

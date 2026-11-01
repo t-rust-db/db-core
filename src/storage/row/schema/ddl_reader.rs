@@ -226,6 +226,7 @@ fn table_schema(values: &[Value]) -> TableSchema {
     if is_virtual_table(sql) {
         return TableSchema {
             name,
+            database: 0,
             root_page: 0,
             columns: Vec::new(),
             without_rowid: false,
@@ -242,6 +243,7 @@ fn table_schema(values: &[Value]) -> TableSchema {
     let parsed = parse_create_table(sql).unwrap_or_default();
     TableSchema {
         name,
+        database: 0,
         root_page,
         columns: parsed.columns,
         without_rowid: parsed.without_rowid,
