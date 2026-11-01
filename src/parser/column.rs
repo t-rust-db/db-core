@@ -551,13 +551,22 @@ fn lower_in_between_expr(expr: &mut AstExpr) -> Result<()> {
 
 /// #828: `list_aggr`'s aggregate and `list_sort`'s order are string
 /// literals from a short list, refused here rather than answered with NULL
-/// per row.
+/// per row. #929: a literal `regexp_extract` pattern is checked here too,
+/// so a bad one is refused even when no row reaches the call.
 fn check_literal_args(name: &str, args: &[AstExpr]) -> Result<()> {
     for (i, arg) in args.iter().enumerate() {
         let value = match &arg.kind {
             ExprKind::Literal(AstLiteral::Str(s)) => Some(s.as_str()),
             _ => None,
         };
+        if let (1, Some(pattern)) = (
+            i,
+            value.filter(|_| name.eq_ignore_ascii_case("regexp_extract")),
+        ) {
+            if let Some(why) = crate::functions::regexp_pattern_error(pattern) {
+                return Err(unsupported(arg.span, why));
+            }
+        }
         if let Some(why) = crate::vm::map_fns::literal_arg_error(name, i, value) {
             return Err(unsupported(arg.span, why));
         }
@@ -2592,6 +2601,28 @@ mod tests {
             .to_string();
         assert!(err.contains("found a subquery"), "{err}");
         assert!(!err.contains("Subquery(") && !err.contains("span"), "{err}");
+    }
+
+    /// #929: a literal `regexp_extract` pattern outside the subset is
+    /// refused at parse time, whether or not a row would reach the call; a
+    /// computed pattern is left to the call itself.
+    #[test]
+    fn regexp_extract_literal_pattern_is_checked_at_parse_time() {
+        for (pattern, reason) in [
+            ("(n|s)", "alternation"),
+            ("[", "missing `]`"),
+            ("\\d", "escape"),
+        ] {
+            let sql =
+                format!("SELECT a FROM t WHERE 1 = 0 AND regexp_extract(a, '{pattern}', 1) = ''");
+            let err = parse(&sql).unwrap_err().to_string();
+            assert!(
+                err.contains("regexp_extract: ") && err.contains(reason),
+                "{sql}: {err}"
+            );
+        }
+        assert!(parse("SELECT regexp_extract(a, '^(n)?x$', 1) FROM t").is_ok());
+        assert!(parse("SELECT regexp_extract(a, b, 1) FROM t").is_ok());
     }
 
     /// #623 review: `LIKE` over an aggregate is an aggregate expression

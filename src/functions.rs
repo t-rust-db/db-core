@@ -880,7 +880,8 @@ fn logfmt_extract(args: &[Value]) -> Result<Value, FunctionError> {
 /// from the first match of `pattern` in `text` (#307); `group` 0 is the
 /// whole match. As in DuckDB (#679), no match, a group that did not take
 /// part in the match and an out-of-range group give `''`; NULL comes only
-/// from a NULL argument (or a malformed pattern).
+/// from a NULL argument. A malformed pattern, or one using syntax outside
+/// [`regex_lite`]'s subset, is an error (#929), never matched literally.
 fn regexp_extract(args: &[Value]) -> Result<Value, FunctionError> {
     if args.iter().any(|v| matches!(v, Value::Null)) {
         return Ok(Value::Null);
@@ -891,23 +892,36 @@ fn regexp_extract(args: &[Value]) -> Result<Value, FunctionError> {
     let Ok(group) = usize::try_from(group) else {
         return Ok(Value::Null);
     };
-    let Some(re) = regex_lite::compile(&pattern) else {
-        return Ok(Value::Null);
-    };
+    let re = regex_lite::compile(&pattern)
+        .map_err(|reason| FunctionError::Sql(format!("regexp_extract: {reason}")))?;
     let found = regex_lite::find(&re, &text).and_then(|m| m.group(group).map(|s| s.to_string()));
     Ok(Value::Text(found.unwrap_or_default().into()))
 }
 
+/// Why `pattern` can't be a `regexp_extract` pattern, if it can't (#929):
+/// the column parser checks a literal pattern before the query reads any
+/// row, as DuckDB does, so the error doesn't depend on the data.
+#[cfg(feature = "parser-column")]
+pub(crate) fn regexp_pattern_error(pattern: &str) -> Option<String> {
+    regex_lite::compile(pattern)
+        .err()
+        .map(|reason| format!("regexp_extract: {reason}"))
+}
+
 /// A small hand-rolled regex subset for `regexp_extract` (#307): literal
-/// characters, `.` (any char), `*`/`+`/`?` quantifiers on the preceding
-/// atom, `[...]`/`[^...]` character classes (with `-` ranges, mirroring
-/// [`glob_class`]'s syntax), `\` to escape a metacharacter, and `(...)`
-/// capture groups numbered by position of the opening paren (group 0 is
-/// the whole match). Deliberately no anchors, alternation, non-capturing
-/// groups, backreferences or `\d`/`\w`/`\s` shorthands, and no
-/// quantifier on a group as a whole -- ADR 0011 keeps `functions`
-/// dependency-free, so this is a matcher, not the `regex` crate, and log
-/// line extraction has not needed any of those yet.
+/// characters, `.` (any char but `\n`, as in RE2), `*`/`+`/`?` quantifiers
+/// on the preceding atom, `[...]`/`[^...]` character classes (with `-`
+/// ranges, mirroring [`glob_class`]'s syntax), `\` to escape a
+/// punctuation character, `^`/`$` anchoring the start/end of the text
+/// (#929; RE2's default, not per line), and `(...)` capture groups
+/// numbered by position of the opening paren (group 0 is the whole match).
+/// ADR 0011 keeps `functions` dependency-free, so this is a matcher, not
+/// the `regex` crate. Syntax outside the subset -- alternation, counted
+/// repetition, letter escapes (`\d`, `\w`, `\n`, ...), `(?` groups, a
+/// quantifier on a group, an anchor or nothing, lazy or doubled
+/// quantifiers, escapes or `[:` inside a class -- is refused by
+/// [`compile`] rather than read as literal characters (#929): DuckDB
+/// supports it, so a literal reading is a wrong answer.
 mod regex_lite {
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum Atom {
@@ -937,8 +951,17 @@ mod regex_lite {
             items: Vec<ClassItem>,
             quant: Quant,
         },
-        GroupOpen,
+        /// `(`; `skip` is set for an optional group `(...)?` (#929): the
+        /// node index just past its `)`, where matching resumes when the
+        /// group is left out.
+        GroupOpen {
+            skip: Option<usize>,
+        },
         GroupClose(usize),
+        /// `^`: the start of the text.
+        Start,
+        /// `$`: the end of the text.
+        End,
     }
 
     /// A compiled pattern: a flat node list plus the number of capture
@@ -948,29 +971,56 @@ mod regex_lite {
         group_count: usize,
     }
 
-    /// Compile `pattern`, or `None` on malformed syntax (unterminated
-    /// class/group, dangling quantifier, trailing backslash).
-    pub fn compile(pattern: &str) -> Option<Compiled> {
+    /// Compile `pattern`, or the reason it can't be: malformed syntax
+    /// (unterminated class or group, unmatched `)`, trailing backslash) or
+    /// syntax outside the subset (see the module docs, #929).
+    pub fn compile(pattern: &str) -> Result<Compiled, String> {
         let chars: Vec<char> = pattern.chars().collect();
         let mut nodes = Vec::new();
-        let mut i = 0;
+        let mut i = 0usize;
         let mut next_group = 1usize;
-        let mut open_groups: Vec<usize> = Vec::new();
-        while i < chars.len() {
-            match chars[i] {
+        let mut open_groups: Vec<(usize, usize)> = Vec::new();
+        let overflow = || "pattern too long".to_string();
+        while let Some(&c) = chars.get(i) {
+            match c {
                 '(' => {
-                    nodes.push(Node::GroupOpen);
-                    open_groups.push(next_group);
-                    next_group = next_group.checked_add(1)?;
-                    i = i.checked_add(1)?;
+                    if chars.get(i.saturating_add(1)) == Some(&'?') {
+                        return Err("`(?` groups are not supported".into());
+                    }
+                    open_groups.push((next_group, nodes.len()));
+                    nodes.push(Node::GroupOpen { skip: None });
+                    next_group = next_group.checked_add(1).ok_or_else(overflow)?;
+                    i = i.saturating_add(1);
                 }
                 ')' => {
-                    let idx = open_groups.pop()?;
+                    let (idx, open_at) = open_groups.pop().ok_or("unmatched `)`")?;
                     nodes.push(Node::GroupClose(idx));
-                    i = i.checked_add(1)?;
+                    i = i.saturating_add(1);
+                    // `(...)?` is an optional group; `*`, `+` on a group
+                    // would need repeated captures, not in the subset.
+                    if chars.get(i) == Some(&'?') {
+                        i = i.saturating_add(1);
+                        let after = nodes.len();
+                        if let Some(Node::GroupOpen { skip }) = nodes.get_mut(open_at) {
+                            *skip = Some(after);
+                        }
+                    }
+                    no_quantifier(&chars, i, "a group")?;
+                }
+                '^' | '$' => {
+                    nodes.push(if c == '^' { Node::Start } else { Node::End });
+                    i = i.saturating_add(1);
+                    no_quantifier(&chars, i, "an anchor")?;
+                }
+                '|' => return Err("alternation `|` is not supported".into()),
+                '{' => return Err("counted repetition `{...}` is not supported".into()),
+                '*' | '+' | '?' => {
+                    return Err(format!(
+                    "`{c}` has nothing to repeat (lazy and doubled quantifiers are not supported)"
+                ))
                 }
                 '.' => {
-                    i = i.checked_add(1)?;
+                    i = i.saturating_add(1);
                     let quant = take_quant(&chars, &mut i);
                     nodes.push(Node::Atom {
                         atom: Atom::Any,
@@ -989,8 +1039,11 @@ mod regex_lite {
                     });
                 }
                 '\\' => {
-                    let c = *chars.get(i.checked_add(1)?)?;
-                    i = i.checked_add(2)?;
+                    let c = *chars.get(i.saturating_add(1)).ok_or("trailing backslash")?;
+                    if c.is_ascii_alphanumeric() {
+                        return Err(format!("escape `\\{c}` is not supported"));
+                    }
+                    i = i.saturating_add(2);
                     let quant = take_quant(&chars, &mut i);
                     nodes.push(Node::Atom {
                         atom: Atom::Lit(c),
@@ -999,7 +1052,7 @@ mod regex_lite {
                     });
                 }
                 c => {
-                    i = i.checked_add(1)?;
+                    i = i.saturating_add(1);
                     let quant = take_quant(&chars, &mut i);
                     nodes.push(Node::Atom {
                         atom: Atom::Lit(c),
@@ -1010,12 +1063,23 @@ mod regex_lite {
             }
         }
         if !open_groups.is_empty() {
-            return None; // unterminated group
+            return Err("missing `)`".into());
         }
-        Some(Compiled {
+        Ok(Compiled {
             nodes,
             group_count: next_group.saturating_sub(1),
         })
+    }
+
+    /// Refuses a quantifier at `chars[i]`, right after `what` (a group or
+    /// an anchor), which the subset can't repeat.
+    fn no_quantifier(chars: &[char], i: usize, what: &str) -> Result<(), String> {
+        match chars.get(i) {
+            Some(q @ ('*' | '+' | '?' | '{')) => {
+                Err(format!("a quantifier `{q}` on {what} is not supported"))
+            }
+            _ => Ok(()),
+        }
     }
 
     fn take_quant(chars: &[char], i: &mut usize) -> Quant {
@@ -1038,31 +1102,37 @@ mod regex_lite {
 
     /// Parses a `[...]`/`[^...]` class starting at `chars[start]`
     /// (`chars[start] == '['`); returns `(negate, items, index just past
-    /// the closing ']')`, or `None` if unterminated.
-    fn parse_class(chars: &[char], start: usize) -> Option<(bool, Vec<ClassItem>, usize)> {
-        let mut i = start.checked_add(1)?;
+    /// the closing ']')`, or why it can't: unterminated, or an escape or
+    /// `[:` inside it, which RE2 reads as a shorthand or a named class.
+    fn parse_class(chars: &[char], start: usize) -> Result<(bool, Vec<ClassItem>, usize), String> {
+        let mut i = start.saturating_add(1);
         let negate = chars.get(i) == Some(&'^');
         if negate {
-            i = i.checked_add(1)?;
+            i = i.saturating_add(1);
         }
         let class_start = i;
         let mut items = Vec::new();
         loop {
-            if i >= chars.len() {
-                return None;
+            let c = *chars.get(i).ok_or("missing `]`")?;
+            if c == ']' && i > class_start {
+                return Ok((negate, items, i.saturating_add(1)));
             }
-            if chars[i] == ']' && i > class_start {
-                return Some((negate, items, i.checked_add(1)?));
+            if c == '\\' {
+                return Err("an escape inside `[...]` is not supported".into());
             }
-            if i.checked_add(2)? < chars.len()
-                && chars[i.checked_add(1)?] == '-'
-                && chars[i.checked_add(2)?] != ']'
+            if c == '[' && chars.get(i.saturating_add(1)) == Some(&':') {
+                return Err("a named class `[:...:]` is not supported".into());
+            }
+            let hi = chars.get(i.saturating_add(2)).copied();
+            if i.saturating_add(2) < chars.len()
+                && chars.get(i.saturating_add(1)) == Some(&'-')
+                && hi != Some(']')
             {
-                items.push(ClassItem::Range(chars[i], chars[i.checked_add(2)?]));
-                i = i.checked_add(3)?;
+                items.push(ClassItem::Range(c, hi.unwrap_or(c)));
+                i = i.saturating_add(3);
             } else {
-                items.push(ClassItem::Char(chars[i]));
-                i = i.checked_add(1)?;
+                items.push(ClassItem::Char(c));
+                i = i.saturating_add(1);
             }
         }
     }
@@ -1078,7 +1148,7 @@ mod regex_lite {
     fn atom_matches(atom: Atom, items: &[ClassItem], c: char) -> bool {
         match atom {
             Atom::Lit(x) => x == c,
-            Atom::Any => true,
+            Atom::Any => c != '\n',
             Atom::Class { negate } => class_matches(items, negate, c),
         }
     }
@@ -1107,8 +1177,8 @@ mod regex_lite {
     }
 
     /// Find the first match of `re` anywhere in `text`, trying every
-    /// start offset left to right (unanchored search -- no anchors
-    /// exist in this subset, so "first match" needs an explicit scan).
+    /// start offset left to right (an unanchored search; a `^` node fails
+    /// at every offset but 0).
     pub fn find(re: &Compiled, text: &str) -> Option<Match> {
         let chars: Vec<char> = text.chars().collect();
         for start in 0..=chars.len() {
@@ -1137,14 +1207,26 @@ mod regex_lite {
             return Some(ti);
         };
         match node {
-            Node::GroupOpen => {
+            Node::GroupOpen { skip } => {
                 open.push(ti);
                 let r = match_seq(nodes, ni.saturating_add(1), text, ti, groups, open);
                 if r.is_none() {
                     open.pop();
                 }
-                r
+                // An optional group is tried first (greedy), then left
+                // out: its captures stay unset, so they extract as `''`.
+                match (r, skip) {
+                    (None, Some(after)) => match_seq(nodes, *after, text, ti, groups, open),
+                    (r, _) => r,
+                }
             }
+            Node::Start if ti == 0 => {
+                match_seq(nodes, ni.saturating_add(1), text, ti, groups, open)
+            }
+            Node::End if ti == text.len() => {
+                match_seq(nodes, ni.saturating_add(1), text, ti, groups, open)
+            }
+            Node::Start | Node::End => None,
             Node::GroupClose(idx) => {
                 let start = *open.last()?;
                 open.pop();
@@ -1256,7 +1338,7 @@ mod regex_lite {
         use super::*;
 
         fn extract(pattern: &str, text: &str, group: usize) -> Option<String> {
-            find(&compile(pattern)?, text)?.group(group)
+            find(&compile(pattern).ok()?, text)?.group(group)
         }
 
         #[test]
@@ -1321,82 +1403,102 @@ mod regex_lite {
 
         #[test]
         fn unterminated_group_fails_to_compile() {
-            assert!(compile("(abc").is_none());
+            assert_eq!(compile("(abc").err().as_deref(), Some("missing `)`"));
         }
 
         #[test]
         fn unterminated_class_fails_to_compile() {
-            assert!(compile("[abc").is_none());
+            assert_eq!(compile("[abc").err().as_deref(), Some("missing `]`"));
         }
 
-        /// MC/DC vector (obligation `functions_parse_class_d7d31f3a`, `parse_class`'s
+        /// MC/DC vector (obligation `functions_parse_class_ef4a98fa`, `parse_class`'s
         /// terminator check `chars[i] == ']' && i > class_start`): leaf A
         /// false (not a `]`) -- an ordinary class member, scanning
         /// continues.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_parse_class_d7d31f3a__v1_non_bracket_continues() {
+        fn mcdc__functions_parse_class_ef4a98fa__v1_non_bracket_continues() {
             assert_eq!(extract("[ab]", "xaz", 0), Some("a".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_parse_class_d7d31f3a`): leaf A true, leaf B
+        /// MC/DC vector (obligation `functions_parse_class_ef4a98fa`): leaf A true, leaf B
         /// (past the class start) false -- a `]` as the very first class
         /// character is a literal member, not the terminator.
-        /// Independence pair for B against `mcdc__functions_parse_class_d7d31f3a__
+        /// Independence pair for B against `mcdc__functions_parse_class_ef4a98fa__
         /// v3_bracket_past_start_terminates`.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_parse_class_d7d31f3a__v2_leading_bracket_is_literal_member() {
+        fn mcdc__functions_parse_class_ef4a98fa__v2_leading_bracket_is_literal_member() {
             assert_eq!(extract("[]a]", "x]z", 0), Some("]".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_parse_class_d7d31f3a`): both leaves true --
+        /// MC/DC vector (obligation `functions_parse_class_ef4a98fa`): both leaves true --
         /// a `]` past the class start terminates the class. Independence
-        /// pair for A against `mcdc__functions_parse_class_d7d31f3a__v1_non_bracket_
+        /// pair for A against `mcdc__functions_parse_class_ef4a98fa__v1_non_bracket_
         /// continues`.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_parse_class_d7d31f3a__v3_bracket_past_start_terminates() {
+        fn mcdc__functions_parse_class_ef4a98fa__v3_bracket_past_start_terminates() {
             assert_eq!(extract("[a]b", "xay", 0), None);
             assert_eq!(extract("[a]b", "xaby", 0), Some("ab".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_parse_class_328d12a6`, `parse_class`'s
+        /// MC/DC vector (obligation `functions_parse_class_65753e42`, `parse_class`'s
         /// range-detection decision `i+2 < chars.len() && chars[i+1] ==
         /// '-' && chars[i+2] != ']'`, 3 conditions): all leaves true -- a
         /// real range like `a-z`.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_parse_class_328d12a6__v1_all_true_is_range() {
+        fn mcdc__functions_parse_class_65753e42__v1_all_true_is_range() {
             assert_eq!(extract("[a-z]", "XmY", 0), Some("m".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_parse_class_328d12a6`): leaves A and B
+        /// MC/DC vector (obligation `functions_parse_class_65753e42`): leaves A and B
         /// true, leaf C (`chars[i+2] != ']'`) false -- `-` immediately
         /// followed by the class terminator is not a range, so `-` is a
         /// literal member.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_parse_class_328d12a6__v2_dash_before_terminator_is_literal() {
+        fn mcdc__functions_parse_class_65753e42__v2_dash_before_terminator_is_literal() {
             assert_eq!(extract("[a-]", "x-y", 0), Some("-".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_parse_class_328d12a6`): leaf A true, leaf B
+        /// MC/DC vector (obligation `functions_parse_class_65753e42`): leaf A true, leaf B
         /// (`chars[i+1] == '-'`) false -- no dash follows, so it's a
         /// plain class member, not a range.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_parse_class_328d12a6__v3_no_dash_is_not_range() {
+        fn mcdc__functions_parse_class_65753e42__v3_no_dash_is_not_range() {
             assert_eq!(extract("[ab]", "xbz", 0), Some("b".to_string()));
         }
 
-        /// MC/DC vector (obligation `functions_parse_class_328d12a6`): leaf A
+        /// MC/DC vector (obligation `functions_parse_class_65753e42`): leaf A
         /// (`i+2 < chars.len()`) false -- too close to the end of the
         /// class for a range, so treated as a literal member.
         #[test]
         #[allow(non_snake_case)]
-        fn mcdc__functions_parse_class_328d12a6__v4_too_short_for_range() {
+        fn mcdc__functions_parse_class_65753e42__v4_too_short_for_range() {
             assert_eq!(extract("[a]", "xay", 0), Some("a".to_string()));
+        }
+
+        // MC/DC vectors (obligation `functions_parse_class_88962881`, #929):
+        // `c == '[' && chars.get(i + 1) == Some(&':')` -- a named class.
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_parse_class_88962881__v1_named_class_is_refused() {
+            assert!(compile("[[:alpha:]]").is_err());
+        }
+
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_parse_class_88962881__v2_other_member_continues() {
+            assert_eq!(extract("[a:]", "x:y", 0), Some(":".to_string()));
+        }
+
+        #[test]
+        #[allow(non_snake_case)]
+        fn mcdc__functions_parse_class_88962881__v3_bracket_member_is_literal() {
+            assert_eq!(extract("[[a]", "x[y", 0), Some("[".to_string()));
         }
 
         /// MC/DC vector (obligation `functions_try_repeat_d84b03c5`, `try_repeat`'s
@@ -1764,6 +1866,78 @@ mod tests {
             ),
             Value::Null
         );
+    }
+
+    /// #929: `^` and `$` anchor the whole text, and `.` stops at a
+    /// newline, as in RE2 (DuckDB 1.5.6's answers).
+    #[test]
+    fn regexp_extract_anchors_and_dot_follow_re2() {
+        let t = |s: &str| Value::Text(s.to_string().into());
+        let r = |s: &str, p: &str, g: i64| v("regexp_extract", &[t(s), t(p), Value::Integer(g)]);
+        assert_eq!(r("north5", "^(.)", 1), t("n"));
+        assert_eq!(r("north5", "(.)$", 1), t("5"));
+        assert_eq!(r("north5", "^north5$", 0), t("north5"));
+        assert_eq!(r("north5", "a$b", 0), t(""));
+        assert_eq!(r("x\ny", "^y", 0), t(""));
+        assert_eq!(r("x\ny", "x$", 0), t(""));
+        assert_eq!(r("ab", "^$", 0), t(""));
+        assert_eq!(r("a\nb", "a.b", 0), t(""));
+        assert_eq!(r("a\nb", "a[^x]b", 0), t("a\nb"));
+        assert_eq!(r("a.b", "a[.]b", 0), t("a.b"));
+        assert_eq!(r("a]b", "[]]", 0), t("]"));
+        assert_eq!(r("a.b", "a\\.b", 0), t("a.b"));
+        assert_eq!(r("a}b", "}", 0), t("}"));
+    }
+
+    /// #929: `(...)?` is an optional group, tried first; left out, its
+    /// captures extract as `''` (DuckDB 1.5.6's answers).
+    #[test]
+    fn regexp_extract_optional_group() {
+        let t = |s: &str| Value::Text(s.to_string().into());
+        let r = |s: &str, p: &str, g: i64| v("regexp_extract", &[t(s), t(p), Value::Integer(g)]);
+        assert_eq!(r("axb", "a(x)?b", 1), t("x"));
+        assert_eq!(r("axb", "a(x)?b", 0), t("axb"));
+        assert_eq!(r("ab", "a(x(y))?b", 2), t(""));
+        assert_eq!(r("axyb", "a(x(y))?b", 2), t("y"));
+        assert_eq!(r("a=1 b", "a=([0-9]+)( b)?", 2), t(" b"));
+        assert_eq!(r("a=1", "^a=([0-9]+)( b)?$", 1), t("1"));
+        // Tried, then dropped when the rest fails: its capture is unset.
+        assert_eq!(r("axc", "a(x)?xc", 1), t(""));
+        assert_eq!(r("axc", "a(x)?xc", 0), t("axc"));
+    }
+
+    /// #929: syntax outside the subset, and a malformed pattern, is an
+    /// error naming it -- never a literal reading, never NULL.
+    #[test]
+    fn regexp_extract_refuses_syntax_outside_the_subset() {
+        let t = |s: &str| Value::Text(s.to_string().into());
+        for (pattern, reason) in [
+            ("(n|s)", "alternation `|`"),
+            ("o{2}", "counted repetition"),
+            ("\\d", "escape `\\d`"),
+            ("\\n", "escape `\\n`"),
+            ("(?:n)", "`(?` groups"),
+            ("(ab)*", "on a group"),
+            ("^*", "on an anchor"),
+            ("*a", "nothing to repeat"),
+            ("a**", "nothing to repeat"),
+            ("a*?", "nothing to repeat"),
+            ("[\\d]", "escape inside `[...]`"),
+            ("[[:alpha:]]", "named class"),
+            ("[ab", "missing `]`"),
+            ("(ab", "missing `)`"),
+            ("ab)", "unmatched `)`"),
+            ("ab\\", "trailing backslash"),
+        ] {
+            let err = call(
+                "regexp_extract",
+                &[t("north5"), t(pattern), Value::Integer(0)],
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(err.starts_with("regexp_extract: "), "{pattern}: {err}");
+            assert!(err.contains(reason), "{pattern}: {err}");
+        }
     }
 
     /// #651: `call_at` hands its instant to the date/time functions.
