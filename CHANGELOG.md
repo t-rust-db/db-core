@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.224.0] - 2026-11-01
+
+### Added
+
+- Column engine: `GROUP BY` an expression, or a select-list position (`GROUP BY 1`); a select item written the same way as a key is that key (#869)
+- Column engine: `ORDER BY` a computed select item, by position or by writing the expression out (#930)
+
+### Changed
+
+- Column engine: a refused `GROUP BY`/`ORDER BY` term's error names the term and the reason, without dumping the AST (#869)
+
 ## [0.223.0] - 2026-11-01
 
 ### Added
