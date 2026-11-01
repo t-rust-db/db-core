@@ -30040,40 +30040,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "parser_row_error_parse_attach_9059be00",
+    "id": "parser_row_error_whole_statement_5a134177",
     "file": "src/parser/row/error.rs",
-    "line": 358,
-    "decision": "match parser.parse_attach_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "parser_row_error_parse_attach_de654af5",
-    "file": "src/parser/row/error.rs",
-    "line": 359,
-    "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "parser_row_error_parse_detach_379e7cf6",
-    "file": "src/parser/row/error.rs",
-    "line": 377,
-    "decision": "match parser.parse_detach_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "parser_row_error_parse_detach_de654af5",
-    "file": "src/parser/row/error.rs",
-    "line": 378,
-    "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
+    "line": 370,
+    "decision": "match stmt.and_then(|stmt| parser.expect_end().map(|()| stmt)) {\n        Ok(stmt) => ParseOutcome::Accepted(Box::new(stmt)),\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -30082,7 +30052,7 @@
   {
     "id": "parser_row_error_parse_commit_15328f84",
     "file": "src/parser/row/error.rs",
-    "line": 398,
+    "line": 385,
     "decision": "match parser.parse_commit_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30092,7 +30062,7 @@
   {
     "id": "parser_row_error_parse_commit_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 399,
+    "line": 386,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30102,7 +30072,7 @@
   {
     "id": "parser_row_error_parse_rollback_f9ded0f0",
     "file": "src/parser/row/error.rs",
-    "line": 419,
+    "line": 406,
     "decision": "match parser.parse_rollback_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30112,7 +30082,7 @@
   {
     "id": "parser_row_error_parse_rollback_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 420,
+    "line": 407,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30122,7 +30092,7 @@
   {
     "id": "parser_row_error_parse_pragma_82d0e065",
     "file": "src/parser/row/error.rs",
-    "line": 442,
+    "line": 429,
     "decision": "match parser.parse_pragma_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30132,7 +30102,7 @@
   {
     "id": "parser_row_error_parse_pragma_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 443,
+    "line": 430,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30142,7 +30112,7 @@
   {
     "id": "parser_row_error_parse_analyze_0dcf4796",
     "file": "src/parser/row/error.rs",
-    "line": 464,
+    "line": 451,
     "decision": "match parser.parse_analyze_stmt() {\n        Ok(stmt) => match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        },\n        Err(ParseFail::Unsupported { message, span }) => {\n            ParseOutcome::Unsupported { message, span }\n        }\n        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30152,7 +30122,7 @@
   {
     "id": "parser_row_error_parse_analyze_de654af5",
     "file": "src/parser/row/error.rs",
-    "line": 465,
+    "line": 452,
     "decision": "match parser.expect_end() {\n            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),\n            Err(ParseFail::Unsupported { message, span }) => {\n                ParseOutcome::Unsupported { message, span }\n            }\n            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30162,7 +30132,7 @@
   {
     "id": "parser_row_error_assert_accepted_d2cdaf5e",
     "file": "src/parser/row/error.rs",
-    "line": 484,
+    "line": 471,
     "decision": "match outcome {\n            ParseOutcome::Accepted(_) => {}\n            other => panic!(\"expected accepted for {src:?}, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30172,7 +30142,7 @@
   {
     "id": "parser_row_error_assert_unsupported_3220e95d",
     "file": "src/parser/row/error.rs",
-    "line": 491,
+    "line": 478,
     "decision": "match outcome {\n            ParseOutcome::Unsupported { .. } => {}\n            other => panic!(\"expected unsupported for {src:?}, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30182,7 +30152,7 @@
   {
     "id": "parser_row_error_assert_invalid_05ebdda7",
     "file": "src/parser/row/error.rs",
-    "line": 498,
+    "line": 485,
     "decision": "match outcome {\n            ParseOutcome::Invalid { .. } => {}\n            other => panic!(\"expected invalid for {src:?}, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30192,7 +30162,7 @@
   {
     "id": "parser_row_error_explain_accepts_update_and_delete_bodies_70698f55",
     "file": "src/parser/row/error.rs",
-    "line": 544,
+    "line": 531,
     "decision": "match parse_explain(\"EXPLAIN UPDATE t SET a = 1 WHERE b = 2\") {\n            ParseOutcome::Accepted(explain) => {\n                assert!(!explain.query_plan);\n                assert!(matches!(explain.body, ExplainBody::Update(_)));\n            }\n            other => panic!(\"expected accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -30202,7 +30172,7 @@
   {
     "id": "parser_row_error_explain_accepts_update_and_delete_bodies_efab1e0e",
     "file": "src/parser/row/error.rs",
-    "line": 552,
+    "line": 539,
     "decision": "match parse_explain(\"EXPLAIN DELETE FROM t WHERE b = 2\") {\n            ParseOutcome::Accepted(explain) => {\n                assert!(!explain.query_plan);\n                assert!(matches!(explain.body, ExplainBody::Delete(_)));\n            }\n            other => panic!(\"expected accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
