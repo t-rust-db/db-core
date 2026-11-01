@@ -4,6 +4,19 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.222.0] - 2026-11-01
+
+### Added
+
+- Date/time: `end of day|month|year` and `weekday -N` modifiers; `24:00` is midnight of the next day
+
+### Changed
+
+- sqlite3 oracle pinned to 3.54.1; `sqlite_version()` reports 3.54.1
+- A scalar subquery no longer passes the JSON subtype on, as in sqlite3 3.54
+- `printf()` returns `''` rather than NULL for an empty result
+- List-mode output prints a whole blob and escapes control characters as `^X`, as the sqlite3 3.54 shell does
+
 ## [0.221.0] - 2026-11-01
 
 ### Added
