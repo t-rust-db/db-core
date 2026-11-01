@@ -636,12 +636,13 @@ fn group_term_label(term: &AstExpr) -> String {
 }
 
 /// Whether `item_expr` is the `GROUP BY` key `term`: the same column by
-/// name, or the very expression [`expand_star`] copied into `GROUP BY`
-/// from a `SELECT`-list alias (#307), so equal including its spans.
+/// name, or the same expression as written, wherever it was parsed from
+/// (#869): a `GROUP BY id / 2` written out beside a select item `id / 2`,
+/// or the expression copied in from an alias (#307) or a position.
 fn is_group_term(item_expr: &AstExpr, term: &AstExpr) -> bool {
     match (expr_column_name(item_expr), expr_column_name(term)) {
         (Some(a), Some(b)) => a == b,
-        _ => item_expr == term,
+        _ => crate::parser::ast::same_expr(item_expr, term),
     }
 }
 
