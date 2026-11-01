@@ -4,6 +4,14 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.224.1] - 2026-11-01
+
+### Fixed
+
+- `regexp_extract`: `^`/`$` anchors and `(...)?` optional groups; `.` does not match a newline (RE2/DuckDB semantics) (#929)
+- `regexp_extract`: a malformed pattern, or syntax outside the supported subset (`|`, `{n}`, `\d`, `(?:`, …), is an error instead of a literal match or NULL (#929)
+- Column engine: a scalar function error (a bad pattern, an integer overflow, …) fails the query instead of returning NULL (#929)
+
 ## [0.224.0] - 2026-11-01
 
 ### Added

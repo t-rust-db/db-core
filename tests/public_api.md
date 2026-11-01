@@ -8736,6 +8736,9 @@ pub db_core::vm::batch::VmError::Conversion::to: &'static str
 pub db_core::vm::batch::VmError::Conversion::value: alloc::string::String
 pub db_core::vm::batch::VmError::DecimalOverflow
 pub db_core::vm::batch::VmError::DecimalOverflow::opcode: &'static str
+pub db_core::vm::batch::VmError::Function
+pub db_core::vm::batch::VmError::Function::message: alloc::string::String
+pub db_core::vm::batch::VmError::Function::opcode: &'static str
 pub db_core::vm::batch::VmError::IntegerOverflow
 pub db_core::vm::batch::VmError::IntegerOverflow::opcode: &'static str
 pub db_core::vm::batch::VmError::MalformedProgram
