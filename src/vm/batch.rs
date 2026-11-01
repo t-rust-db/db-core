@@ -3177,6 +3177,15 @@ pub enum VmError {
         /// The type it was converted to.
         to: &'static str,
     },
+    /// A scalar function raised an error (#929): a malformed or
+    /// unsupported `regexp_extract` pattern, an integer overflow, ... --
+    /// a query error, as in DuckDB, where it used to become NULL.
+    Function {
+        /// Name of the [`Opcode`] variant that failed.
+        opcode: &'static str,
+        /// The function's message.
+        message: String,
+    },
 }
 
 /// A value as a boolean, as DuckDB casts a `WHERE`/`HAVING`/`CASE WHEN`/
@@ -3252,6 +3261,7 @@ impl fmt::Display for VmError {
                     "conversion error: could not convert string '{value}' to {to}"
                 )
             }
+            VmError::Function { opcode, message } => write!(f, "{opcode}: {message}"),
         }
     }
 }
@@ -6646,8 +6656,12 @@ impl Vm {
                         } else {
                             crate::functions::call(name, &call_args)
                         }
-                        .map_or(Value::Null, from_scalar_value);
-                        result.push(value);
+                        // #929: an error is the query's, not a NULL.
+                        .map_err(|e| VmError::Function {
+                            opcode,
+                            message: e.to_string(),
+                        })?;
+                        result.push(from_scalar_value(value));
                     }
                     result
                 };
