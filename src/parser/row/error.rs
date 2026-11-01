@@ -353,35 +353,22 @@ pub fn parse_begin(src: &str) -> ParseOutcome<Begin> {
 
 /// Parses an `ATTACH [DATABASE] expr AS schema-name` statement (#924).
 pub fn parse_attach(src: &str) -> ParseOutcome<Attach> {
-    let tokens = Tokenizer::tokenize(src);
-    let mut parser = Parser::new(tokens);
-    match parser.parse_attach_stmt() {
-        Ok(stmt) => match parser.expect_end() {
-            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),
-            Err(ParseFail::Unsupported { message, span }) => {
-                ParseOutcome::Unsupported { message, span }
-            }
-            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
-        },
-        Err(ParseFail::Unsupported { message, span }) => {
-            ParseOutcome::Unsupported { message, span }
-        }
-        Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
-    }
+    let mut parser = Parser::new(Tokenizer::tokenize(src));
+    let stmt = parser.parse_attach_stmt();
+    whole_statement(&mut parser, stmt)
 }
 
 /// Parses a `DETACH [DATABASE] schema-name` statement (#924).
 pub fn parse_detach(src: &str) -> ParseOutcome<Detach> {
-    let tokens = Tokenizer::tokenize(src);
-    let mut parser = Parser::new(tokens);
-    match parser.parse_detach_stmt() {
-        Ok(stmt) => match parser.expect_end() {
-            Ok(()) => ParseOutcome::Accepted(Box::new(stmt)),
-            Err(ParseFail::Unsupported { message, span }) => {
-                ParseOutcome::Unsupported { message, span }
-            }
-            Err(ParseFail::Invalid { message, span }) => ParseOutcome::Invalid { message, span },
-        },
+    let mut parser = Parser::new(Tokenizer::tokenize(src));
+    let stmt = parser.parse_detach_stmt();
+    whole_statement(&mut parser, stmt)
+}
+
+/// `stmt` as a [`ParseOutcome`], accepted only when nothing follows it.
+fn whole_statement<T>(parser: &mut Parser, stmt: Result<T, ParseFail>) -> ParseOutcome<T> {
+    match stmt.and_then(|stmt| parser.expect_end().map(|()| stmt)) {
+        Ok(stmt) => ParseOutcome::Accepted(Box::new(stmt)),
         Err(ParseFail::Unsupported { message, span }) => {
             ParseOutcome::Unsupported { message, span }
         }
@@ -692,6 +679,31 @@ mod tests {
             parse_begin("BEGIN TRANSACTION EXTRA"),
             "BEGIN TRANSACTION EXTRA",
         );
+    }
+
+    #[test]
+    fn attach_three_way_outcome() {
+        assert_accepted(parse_attach("ATTACH 'x.db' AS x"), "ATTACH 'x.db' AS x");
+        assert_accepted(
+            parse_attach("ATTACH DATABASE 'x.db' AS temp"),
+            "ATTACH DATABASE 'x.db' AS temp",
+        );
+        assert_unsupported(parse_attach("ATTACH a -> 'b' AS x"), "ATTACH a -> 'b' AS x");
+        assert_unsupported(
+            parse_attach("ATTACH 'x.db' AS x UNION SELECT 1"),
+            "ATTACH 'x.db' AS x UNION SELECT 1",
+        );
+        assert_invalid(parse_attach("ATTACH 'x.db'"), "ATTACH 'x.db'");
+    }
+
+    #[test]
+    fn detach_three_way_outcome() {
+        assert_accepted(parse_detach("DETACH DATABASE x"), "DETACH DATABASE x");
+        assert_unsupported(
+            parse_detach("DETACH x UNION SELECT 1"),
+            "DETACH x UNION SELECT 1",
+        );
+        assert_invalid(parse_detach("DETACH"), "DETACH");
     }
 
     #[test]
