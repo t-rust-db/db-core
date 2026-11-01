@@ -1187,9 +1187,11 @@ fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
                         PlanError::UnknownColumn("JOIN ON must be col = col".into())
                     })?;
                     // `ON j.k = f.k` names the joined table first: the
-                    // pair is `(FROM column, joined column)` either way.
+                    // pair is `(other column, joined column)` either way,
+                    // the other being the FROM table's or, in a chain
+                    // (tools#108), an earlier joined table's.
                     let owners = (split_qualified(&left).0, split_qualified(&right).0);
-                    if owners == (Some(table.as_str()), Some(from_name)) {
+                    if owners.0 == Some(table.as_str()) && owners.1 != Some(table.as_str()) {
                         (right, left)
                     } else {
                         (left, right)
@@ -3028,10 +3030,11 @@ fn try_fuse_group_by(
 /// joined to N SQLite lookup tables, one per `JOIN` clause, e.g. `log JOIN
 /// hosts ON log.host_id = hosts.id JOIN users ON log.user_id = users.id`.
 /// Unlike [`compile_join`]/[`compile_join_build_side`], the driving side
-/// never swaps position and always probes: every join key must be a column
-/// of the driving table (`engine::resolve::resolve_multi_sides` enforces
-/// this before calling in), so every SQLite lookup builds independently --
-/// no lookup table is ever joined against another lookup table's payload.
+/// never swaps position and always probes. Every lookup builds
+/// independently; a `JOIN`'s probe key is a column of the driving table
+/// or, in a chain (tools#108: `events JOIN sessions ON ... JOIN machine ON
+/// machine.id = sessions.machine_id`), of a lookup joined before it, whose
+/// payload the earlier `HashProbe` has already put in a register.
 /// `lookup_tables` names each `JOIN` target's table, in query/`JOIN` order
 /// (one entry per join; `resolve_multi_sides` has already confirmed each is
 /// a known SQLite table).
@@ -3104,24 +3107,13 @@ pub fn compile_cross_mode_multi_join(
         }
     }
 
-    // Which of `left_col`/`right_col` belongs to the driving side (the
-    // probe key) vs. this join's own table (the build key) -- checked by
-    // membership rather than assumed lhs/rhs order, since each join's `ON`
-    // may write either side first.
-    fn owner_of(col: &str, from_name: &str, join_table: &str) -> Result<&'static str> {
-        let (prefix, _) = split_qualified(col);
-        match prefix {
-            None => Ok("from"),
-            Some(p) if p == from_name => Ok("from"),
-            Some(p) if p == join_table => Ok("join"),
-            Some(_) => Err(PlanError::UnknownColumn(col.to_string())),
-        }
-    }
-
-    let probe_reg_of: HashMap<&str, usize> = from_columns
+    // The register each probe-side column is in: the driving table's
+    // columns from the start, and each lookup's payload once its
+    // `HashProbe` has run, for a later join of a chain to key on.
+    let mut probe_reg_of: HashMap<String, usize> = from_columns
         .iter()
         .enumerate()
-        .map(|(i, n)| (n.as_str(), i))
+        .map(|(i, n)| (n.clone(), i))
         .collect();
 
     let mut builds = Vec::with_capacity(joins.len());
@@ -3136,14 +3128,16 @@ pub fn compile_cross_mode_multi_join(
     let mut next_payload_reg = from_columns.len();
 
     for (i, join) in joins.iter().enumerate() {
-        let left_owner = owner_of(&join.left_col, from_name, &join.table)?;
-        let right_owner = owner_of(&join.right_col, from_name, &join.table)?;
-        let (probe_key, build_key) = match (left_owner, right_owner) {
-            ("from", "join") => (&join.left_col, &join.right_col),
-            ("join", "from") => (&join.right_col, &join.left_col),
+        // Which of `left_col`/`right_col` is this join's own table (the
+        // build key): by qualifier, since each `ON` may write either side
+        // first. The other is the probe key.
+        let is_own = |col: &str| split_qualified(col).0 == Some(join.table.as_str());
+        let (probe_key, build_key) = match (is_own(&join.left_col), is_own(&join.right_col)) {
+            (false, true) => (&join.left_col, &join.right_col),
+            (true, false) => (&join.right_col, &join.left_col),
             _ => {
                 return Err(PlanError::UnknownColumn(format!(
-                    "JOIN ON must equate the driving table to `{}`",
+                    "JOIN ON must equate `{}` to a table joined before it",
                     join.table
                 )))
             }
@@ -3180,13 +3174,19 @@ pub fn compile_cross_mode_multi_join(
                 })),
         );
 
-        let probe_key_reg = *probe_reg_of
-            .get(probe_key.as_str())
-            .ok_or_else(|| PlanError::UnknownColumn(probe_key.clone()))?;
+        let probe_key_reg = *probe_reg_of.get(probe_key.as_str()).ok_or_else(|| {
+            PlanError::UnknownColumn(format!(
+                "{probe_key}: JOIN ON must equate `{}` to a table joined before it",
+                join.table
+            ))
+        })?;
         let payload_dst: Vec<usize> = (0..build_columns.len())
             .map(|k| next_payload_reg.saturating_add(k))
             .collect();
         next_payload_reg = next_payload_reg.saturating_add(build_columns.len());
+        for (name, reg) in build_columns.iter().zip(&payload_dst) {
+            probe_reg_of.insert(name.clone(), *reg);
+        }
 
         let join_kind = match join.op {
             JoinOp::Inner => crate::vm::batch::JoinKind::Inner,
@@ -3660,9 +3660,13 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
         (Some(cols), true) => cols.clone(),
         (None, _) => referenced_columns(select)?,
     };
-    // Every join's key on the driving side (a star, #782, has several).
+    // Every join's key on the driving side (a star, #782, has several); a
+    // chain's key on an earlier joined table is listed under that table.
+    let on_driving = |col: &str| split_qualified(col).0.is_none_or(|t| t == from_name);
     for j in &joins {
-        push_unique(&mut main_cols, j.left_col.clone());
+        if on_driving(&j.left_col) {
+            push_unique(&mut main_cols, j.left_col.clone());
+        }
     }
     if let Some(AstExpr {
         kind: ExprKind::InSubquery { expr, .. },
@@ -3718,6 +3722,11 @@ pub fn explain(select: &Select, stats: impl Fn(&str) -> TableStats) -> Result<Ve
                 })
                 .unwrap_or_default();
             push_unique(&mut right_cols, join.right_col.clone());
+            for chained in &joins {
+                if split_qualified(&chained.left_col).0 == Some(join.table.as_str()) {
+                    push_unique(&mut right_cols, chained.left_col.clone());
+                }
+            }
             let right_scan = b.push(0, scan_detail(&join.table, stats(&join.table)));
             if !right_cols.is_empty() {
                 b.push(

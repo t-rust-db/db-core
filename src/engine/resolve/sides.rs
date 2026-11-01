@@ -9,10 +9,12 @@
 //! from the order the query is written in, and rewrites the `FROM` clause
 //! so the chosen table is first, the shape the star-join planner takes.
 //!
-//! The query must be a star around the probe: every other table joined to
-//! it directly, by an `ON a.x = b.y` or a `USING`. A `LEFT JOIN` keeps the
-//! rows of its left side, so with one in the query the `FROM` table alone
-//! may probe and nothing is rewritten.
+//! Every other table must be joined to the probe, directly or through a
+//! chain of other tables (tools#108: `events JOIN sessions ON ... JOIN
+//! machine ON machine.id = sessions.machine_id`), by an `ON a.x = b.y`, or
+//! by a `USING` to the probe. A `LEFT JOIN` keeps the rows of its left
+//! side, so with one in the query the `FROM` table alone may probe and
+//! nothing is rewritten.
 
 use super::ColumnSource;
 use crate::engine::{EngineError, ErrorKind};
@@ -22,8 +24,8 @@ use crate::parser::ast::{
 
 /// The index into `tables` of the Parquet table that probes `select`, and
 /// `select` with that table first in its `FROM`. A query that names one
-/// Parquet table is returned as it is unless it is an inner star join
-/// written with a SQLite table first, which is rewritten probe-first (#919).
+/// Parquet table is returned as it is unless it is an inner join written
+/// with a SQLite table first, which is rewritten probe-first (#919).
 pub(super) fn choose_probe(
     select: Select,
     tables: &[ColumnSource<'_>],
@@ -50,7 +52,7 @@ pub(super) fn choose_probe(
             // A left join keeps its left side's rows, so only the `FROM`
             // table can probe.
             let allowed = only_inner || name.eq_ignore_ascii_case(first);
-            if !allowed || !is_star_around(from, &named, name) {
+            if !allowed || !reaches_all_from(from, &named, name) {
                 continue;
             }
             let rows = table.table_stats().rows;
@@ -70,7 +72,7 @@ pub(super) fn choose_probe(
             .get(probe)
             .map(|t| t.table_name().to_string())
             .unwrap_or_default();
-        if !only_inner || !is_star_around(from, &named, &name) {
+        if !only_inner || !reaches_all_from(from, &named, &name) {
             return Ok((select, probe));
         }
         return Ok((with_probe_first(select, &name)?, probe));
@@ -79,8 +81,9 @@ pub(super) fn choose_probe(
         return Err(EngineError::new(
             ErrorKind::Unsupported,
             if only_inner {
-                "a join of several Parquet tables must be a star: every other table \
-                 joined directly to the probe table by `ON a.x = b.y` or `USING`"
+                "a join of several Parquet tables must join every other table to the \
+                 probe table, directly or through another table, by `ON a.x = b.y` or \
+                 `USING`"
             } else {
                 "a join of several Parquet tables with a LEFT JOIN must probe with its \
                  FROM table, joined directly to every other table"
@@ -105,13 +108,44 @@ fn named_tables(from: &FromClause) -> Vec<String> {
         .collect()
 }
 
-/// Whether every table of `named` other than `centre` is joined to it
-/// directly.
-fn is_star_around(from: &FromClause, named: &[String], centre: &str) -> bool {
-    named
-        .iter()
-        .filter(|n| !n.eq_ignore_ascii_case(centre))
-        .all(|other| from.joins.iter().any(|j| links(from, j, centre, other)))
+/// Whether every table of `named` is joined to `centre`, directly or
+/// through tables joined to it ([`join_order`]).
+fn reaches_all_from(from: &FromClause, named: &[String], centre: &str) -> bool {
+    join_order(from, centre).is_some_and(|order| order.len() == named.len().saturating_sub(1))
+}
+
+/// The tables of `from` other than `centre`, each with the clause that
+/// joins it to `centre` or to a table before it, in the order that makes
+/// that so (written order where it can). `None` when a table is not
+/// reached. A `USING` joins its table to the `FROM` table, so it only
+/// links a table to `centre`, the `FROM` table once rewritten.
+fn join_order(from: &FromClause, centre: &str) -> Option<Vec<(TableRef, Join)>> {
+    let mut rest: Vec<TableRef> = std::iter::once(&from.first)
+        .chain(from.joins.iter().map(|j| &j.table))
+        .filter(|t| !t.name().is_some_and(|n| n.eq_ignore_ascii_case(centre)))
+        .cloned()
+        .collect();
+    let mut placed: Vec<String> = vec![centre.to_string()];
+    let mut order = Vec::with_capacity(rest.len());
+    while !rest.is_empty() {
+        let found = rest.iter().enumerate().find_map(|(i, table)| {
+            let name = table.name()?;
+            from.joins
+                .iter()
+                .find(|j| {
+                    placed.iter().any(|p| {
+                        let using = matches!(j.constraint, Some(JoinConstraint::Using(_)));
+                        (!using || p.eq_ignore_ascii_case(centre)) && links(from, j, p, name)
+                    })
+                })
+                .map(|j| (i, j.clone()))
+        })?;
+        let (i, clause) = found;
+        let table = rest.remove(i);
+        placed.push(table.name().unwrap_or_default().to_string());
+        order.push((table, clause));
+    }
+    Some(order)
 }
 
 /// Whether `join` joins `a` and `b` to each other: an `ON` equating a column
@@ -154,40 +188,30 @@ fn table_of(expr: &Expr) -> Option<&str> {
 }
 
 /// `select` with `probe` as its `FROM` table and every other table joined
-/// to it by the clause that linked the two. Inner joins only, which the
-/// caller guarantees: swapping the sides of an inner join changes nothing.
+/// by the clause that linked it to `probe` or to a table before it
+/// ([`join_order`]). Inner joins only, which the caller guarantees:
+/// reordering inner joins changes nothing.
 fn with_probe_first(mut select: Select, probe: &str) -> Result<Select, EngineError> {
     let Some(from) = select.from.take() else {
         return Ok(select);
     };
-    let mut refs: Vec<TableRef> = std::iter::once(from.first.clone())
-        .chain(from.joins.iter().map(|j| j.table.clone()))
-        .collect();
-    let at = refs
-        .iter()
-        .position(|t| t.name().is_some_and(|n| n.eq_ignore_ascii_case(probe)))
+    let probe_ref = std::iter::once(&from.first)
+        .chain(from.joins.iter().map(|j| &j.table))
+        .find(|t| t.name().is_some_and(|n| n.eq_ignore_ascii_case(probe)))
+        .cloned()
         .ok_or_else(|| {
             EngineError::new(ErrorKind::Compile, format!("`{probe}` is not in the FROM"))
         })?;
-    let probe_ref = refs.remove(at);
-    let mut joins = Vec::with_capacity(refs.len());
-    for other in refs {
-        let other_name = other.name().unwrap_or_default().to_string();
-        let clause = from
-            .joins
-            .iter()
-            .find(|j| links(&from, j, probe, &other_name))
-            .ok_or_else(|| {
-                EngineError::new(
-                    ErrorKind::Compile,
-                    format!("`{other_name}` is not joined to `{probe}`"),
-                )
-            })?;
-        joins.push(Join {
-            table: other,
-            ..clause.clone()
-        });
-    }
+    let order = join_order(&from, probe).ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Compile,
+            format!("a table is not joined to `{probe}`, directly or through another table"),
+        )
+    })?;
+    let joins = order
+        .into_iter()
+        .map(|(table, clause)| Join { table, ..clause })
+        .collect();
     select.from = Some(FromClause {
         first: probe_ref,
         joins,
@@ -208,26 +232,30 @@ mod tests {
     }
 
     #[test]
-    fn a_star_is_found_through_on_in_either_order() {
+    fn a_star_is_reached_through_on_in_either_order() {
         let s = select(
             "SELECT 1 FROM events JOIN transactions ON transactions.sid = events.sid \
              JOIN channels ON events.cid = channels.cid",
         );
         let from = from_of(&s);
         let named = named_tables(from);
-        assert!(is_star_around(from, &named, "events"));
-        assert!(!is_star_around(from, &named, "transactions"));
-        assert!(!is_star_around(from, &named, "channels"));
+        // Each table reaches the others, `events` directly.
+        for centre in ["events", "transactions", "channels"] {
+            assert!(reaches_all_from(from, &named, centre), "{centre}");
+        }
     }
 
     #[test]
-    fn a_chain_is_not_a_star() {
+    fn a_chain_reaches_every_table_from_either_end() {
         let s = select("SELECT 1 FROM a JOIN b ON a.k = b.k JOIN c ON b.j = c.j");
         let from = from_of(&s);
         let named = named_tables(from);
-        assert!(is_star_around(from, &named, "b"));
-        assert!(!is_star_around(from, &named, "a"));
-        assert!(!is_star_around(from, &named, "c"));
+        for centre in ["a", "b", "c"] {
+            assert!(reaches_all_from(from, &named, centre), "{centre}");
+        }
+        let apart = select("SELECT 1 FROM a JOIN b ON a.k = b.k JOIN c ON c.j = d.j");
+        let from = from_of(&apart);
+        assert!(!reaches_all_from(from, &named_tables(from), "a"));
     }
 
     #[test]
@@ -235,8 +263,8 @@ mod tests {
         let s = select("SELECT 1 FROM a JOIN b USING (k) JOIN c USING (j)");
         let from = from_of(&s);
         let named = named_tables(from);
-        assert!(is_star_around(from, &named, "a"));
-        assert!(!is_star_around(from, &named, "b"));
+        assert!(reaches_all_from(from, &named, "a"));
+        assert!(!reaches_all_from(from, &named, "b"));
     }
 
     #[test]
@@ -265,8 +293,27 @@ mod tests {
     }
 
     #[test]
-    fn a_table_the_probe_is_not_joined_to_cannot_be_moved_under_it() {
-        let s = select("SELECT 1 FROM a JOIN b ON a.k = b.k JOIN c ON b.j = c.j");
+    fn a_chain_is_rewritten_outward_from_the_probe() {
+        let s = select("SELECT 1 FROM b JOIN c ON b.j = c.j JOIN a ON a.k = b.k");
+        let swapped = with_probe_first(s, "a").unwrap();
+        let from = from_of(&swapped);
+        assert_eq!(from.first.name(), Some("a"));
+        let names: Vec<_> = from.joins.iter().filter_map(|j| j.table.name()).collect();
+        assert_eq!(names, ["b", "c"]);
+    }
+
+    #[test]
+    fn a_table_joined_to_nothing_cannot_be_moved_under_the_probe() {
+        let s = select("SELECT 1 FROM a JOIN b ON a.k = b.k JOIN c ON c.j = d.j");
         assert!(with_probe_first(s, "a").is_err());
+    }
+
+    #[test]
+    fn a_using_links_only_to_the_probe() {
+        // `b JOIN c USING (j)` joins c to b, the FROM table; with `a`
+        // first it would join c to `a` instead.
+        let s = select("SELECT 1 FROM b JOIN c USING (j) JOIN a ON a.k = b.k");
+        let from = from_of(&s);
+        assert!(!reaches_all_from(from, &named_tables(from), "a"));
     }
 }
