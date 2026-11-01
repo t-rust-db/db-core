@@ -1,6 +1,6 @@
 # #752: ORDER BY <ordinal> names a select item, 1-based: grouped with an
 # aggregate, on a plain projection, mixed with names and aliases. Out of
-# range, or naming `*` or an unaliased computed expression, is refused.
+# range, or naming `*`, is refused; an unaliased computed item is its position (#930).
 
 query TI nosort
 SELECT region, count(*) FROM production GROUP BY region ORDER BY 2 DESC, 1 LIMIT 3
@@ -80,8 +80,16 @@ SELECT id, region FROM production ORDER BY 0
 statement error
 SELECT id, region FROM production ORDER BY 3
 
-statement error
-SELECT id, amount * 2 FROM production ORDER BY 2
+# #930: an unaliased computed item is sorted on by its position.
+query IR nosort
+SELECT id, amount * 2 FROM production ORDER BY 2 DESC, 1 LIMIT 3
+----
+5000
+25000.0
+4999
+24995.0
+4998
+24990.0
 
 statement error
 SELECT * FROM production ORDER BY 1 LIMIT 1

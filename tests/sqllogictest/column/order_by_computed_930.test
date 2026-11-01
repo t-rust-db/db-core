@@ -1,0 +1,95 @@
+# #930: a computed select item is sorted on by its position, written as a
+# number or as the same expression (parentheses and function-name case
+# aside), grouped or not, ascending or descending, with LIMIT/OFFSET. An
+# expression that is not in the select list is refused.
+
+query TI nosort
+SELECT regexp_extract(region, '(n)', 1), count(*) FROM production GROUP BY 1 ORDER BY 1
+----
+(empty)
+3750
+n
+1250
+
+query TI nosort
+SELECT regexp_extract(region, '(n)', 1), count(*) FROM production GROUP BY 1 ORDER BY REGEXP_EXTRACT(region, '(n)', 1) DESC
+----
+n
+1250
+(empty)
+3750
+
+query II nosort
+SELECT id > 2500, count(*) FROM production GROUP BY id > 2500 ORDER BY id > 2500 DESC
+----
+1
+2500
+0
+2500
+
+query IT nosort
+SELECT id * 2, region FROM production WHERE id > 4990 ORDER BY 2, 1 DESC
+----
+10000
+east
+9992
+east
+9984
+east
+9996
+north
+9988
+north
+9998
+south
+9990
+south
+9982
+south
+9994
+west
+9986
+west
+
+query IT nosort
+SELECT id * 2, region FROM production ORDER BY (id * 2) DESC LIMIT 3 OFFSET 1
+----
+9998
+south
+9996
+north
+9994
+west
+
+query TI nosort
+SELECT region, count(*) * 2 FROM production GROUP BY region ORDER BY count(*) * 2 DESC, region
+----
+east
+2500
+north
+2500
+south
+2500
+west
+2500
+
+query I nosort
+SELECT DISTINCT id - id + n FROM typed_nulls WHERE n BETWEEN 0 AND 3 ORDER BY 1 DESC
+----
+3
+2
+1
+0
+
+query II nosort
+SELECT n * 2, count(*) FROM typed_nulls WHERE n IS NULL OR n BETWEEN 1 AND 2 GROUP BY 1 ORDER BY 1
+----
+2
+9
+4
+9
+NULL
+1428
+
+statement error
+SELECT id, region FROM production ORDER BY id * 2
