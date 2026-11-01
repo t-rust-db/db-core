@@ -1451,8 +1451,8 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 return Err(unsupported(
                     term.expr.span,
                     format!(
-                        "expected a column reference or aggregate, found {:?}",
-                        term.expr.kind
+                        "expected a column reference or aggregate, found {}",
+                        kind_name(&term.expr.kind)
                     ),
                 ))
             }
@@ -2548,6 +2548,16 @@ mod tests {
                 "{sql}: {err}"
             );
         }
+    }
+
+    /// #869: a refused ORDER BY term names its kind, not its `Debug` tree.
+    #[test]
+    fn order_by_refusal_has_no_ast_dump() {
+        let err = parse("SELECT region FROM t ORDER BY (SELECT 1)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("found a subquery"), "{err}");
+        assert!(!err.contains("Subquery(") && !err.contains("span"), "{err}");
     }
 
     /// #623 review: `LIKE` over an aggregate is an aggregate expression
