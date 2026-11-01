@@ -806,12 +806,12 @@ fn a_uint64_column_outside_the_join_key_still_errors_above_i64_max() {
 }
 
 // MC/DC vectors for `sides::choose_probe`'s single-Parquet-table rewrite
-// (obligation `engine_resolve_sides_choose_probe_580d7052`,
-// `!only_inner || !is_star_around`, #919).
+// (obligation `engine_resolve_sides_choose_probe_e7f7bdf6`,
+// `!only_inner || !reaches_all_from`, #919).
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__engine_resolve_sides_choose_probe_580d7052__v1_a_left_join_is_not_rewritten() {
+fn mcdc__engine_resolve_sides_choose_probe_e7f7bdf6__v1_a_left_join_is_not_rewritten() {
     let db = LookupDb::new("mcdc-580d-v1");
     let mut e = db.engine();
     let got = rows(
@@ -824,7 +824,7 @@ fn mcdc__engine_resolve_sides_choose_probe_580d7052__v1_a_left_join_is_not_rewri
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__engine_resolve_sides_choose_probe_580d7052__v2_an_inner_star_moves_the_probe_first() {
+fn mcdc__engine_resolve_sides_choose_probe_e7f7bdf6__v2_an_inner_star_moves_the_probe_first() {
     let db = LookupDb::new("mcdc-580d-v2");
     let mut e = db.engine();
     let got = rows(
@@ -837,14 +837,26 @@ fn mcdc__engine_resolve_sides_choose_probe_580d7052__v2_an_inner_star_moves_the_
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__engine_resolve_sides_choose_probe_580d7052__v3_an_inner_chain_is_not_rewritten() {
-    let db = LookupDb::new("mcdc-580d-v3");
+fn mcdc__engine_resolve_sides_choose_probe_e7f7bdf6__v3_an_unlinked_join_is_not_rewritten() {
+    let db = LookupDb::new("mcdc-e7f7-v3");
     let mut e = db.engine();
-    let sql = "SELECT COUNT(*) FROM labels JOIN production ON labels.id = production.id \
+    // `production` joined to itself links to nothing, so the query stays
+    // as written and the multi-way join keeps its probe-first refusal.
+    let sql = "SELECT COUNT(*) FROM labels JOIN production ON production.id = production.id \
                JOIN tiers ON tiers.id = labels.id";
-    // Not a star around `production`, so it stays where it is written and
-    // the multi-way join keeps its probe-first refusal.
-    let err = e.run_query(sql).unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
-    assert!(err.message.contains("`production` written first"), "{err}");
+    assert!(e.run_query(sql).is_err());
+}
+
+/// tools#108: a chain written SQLite-first (`labels`, then the Parquet
+/// table, then `tiers` joined to `labels`) is rewritten probe-first and
+/// matches its star form.
+#[test]
+fn a_chain_written_sqlite_first_matches_its_star_form() {
+    let db = LookupDb::new("chain-first");
+    let mut e = db.engine();
+    let chain = "SELECT COUNT(*) FROM labels JOIN production ON labels.id = production.id \
+                 JOIN tiers ON tiers.id = labels.id";
+    let star = "SELECT COUNT(*) FROM production JOIN labels ON labels.id = production.id \
+                JOIN tiers ON tiers.id = production.id";
+    assert_eq!(rows(&mut e, chain), rows(&mut e, star));
 }

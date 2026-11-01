@@ -16,6 +16,14 @@
 //! Only conjuncts of the `WHERE` that name one build table's columns
 //! (qualified) and nothing else are used, and a `LEFT JOIN`'s table is
 //! never used: its unmatched probe rows must survive.
+//!
+//! In a chain (tools#108: `events JOIN sessions ON events.sid = sessions.id
+//! JOIN machine ON machine.id = sessions.mid WHERE machine.customers >= 3`)
+//! a build table joined to another build table filters that one: the keys
+//! of the `machine` rows that pass become a filter `sessions.mid = k ...`
+//! on `sessions`, whose keys then prune `events`. The joins come outward
+//! from the probe (`sides`), so walking them backwards reaches a table's
+//! chained tables before the table itself.
 
 use std::borrow::Cow;
 
@@ -57,11 +65,12 @@ pub(super) fn probe_pruning(
     };
     let mut conjuncts = Vec::new();
     split_and(where_clause, &mut conjuncts);
-    for join in from.joins.iter().filter(|j| j.op == JoinOp::Inner) {
+    let probe = from.first.name().unwrap_or_default();
+    for join in from.joins.iter().rev().filter(|j| j.op == JoinOp::Inner) {
         let TableRefKind::Name(table) = &join.table.kind else {
             continue;
         };
-        let Some((probe_col, lookup_col)) = join_keys(join, table) else {
+        let Some((partner, partner_col, lookup_col)) = join_keys(join, table, probe) else {
             continue;
         };
         let filters: Vec<&Expr> = conjuncts
@@ -72,9 +81,13 @@ pub(super) fn probe_pruning(
             continue;
         }
         let keys = lookup_keys(select, load, table, &lookup_col, &filters)?;
-        match key_predicate(&probe_col, &keys) {
+        let chained = !partner.eq_ignore_ascii_case(probe);
+        let qualifier = chained.then_some(partner.as_str());
+        match key_predicate(qualifier, &partner_col, &keys) {
             KeyPredicate::Empty => pruning.empty = true,
             KeyPredicate::Unknown => {}
+            // A chained table's keys filter the table it joins.
+            KeyPredicate::Expr(e) if chained => conjuncts.push(e),
             KeyPredicate::Expr(e) => {
                 pruning.predicate = Some(match pruning.predicate.take() {
                     Some(prev) => binary(BinaryOp::And, prev, e),
@@ -136,15 +149,18 @@ fn references_only(expr: &Expr, table: &str) -> bool {
     }
 }
 
-/// `(probe column, lookup column)` of `join`'s `ON a.x = b.y` (the lookup
-/// column is the one qualified with `table`) or `USING (k)`.
-fn join_keys(join: &Join, table: &str) -> Option<(String, String)> {
+/// `(partner table, partner column, lookup column)` of `join`'s `ON a.x =
+/// b.y` (the lookup column is the one qualified with `table`; an
+/// unqualified partner is `probe`'s) or `USING (k)`, which joins `probe`.
+fn join_keys(join: &Join, table: &str, probe: &str) -> Option<(String, String, String)> {
     let on = match &join.constraint {
         Some(JoinConstraint::On(on)) => on,
         // `USING (k)` names the same column on both sides.
         // The first column keys the hash join; any one key prunes.
         Some(JoinConstraint::Using(columns)) => {
-            return columns.first().map(|key| (key.clone(), key.clone()));
+            return columns
+                .first()
+                .map(|key| (probe.to_string(), key.clone(), key.clone()));
         }
         None => return None,
     };
@@ -158,9 +174,16 @@ fn join_keys(join: &Join, table: &str) -> Option<(String, String)> {
     };
     let (a, b) = (column_of(lhs)?, column_of(rhs)?);
     let is_lookup = |c: &(Option<&str>, &str)| c.0.is_some_and(|t| t.eq_ignore_ascii_case(table));
+    let partner = |c: (Option<&str>, &str), lookup: &str| {
+        Some((
+            c.0.unwrap_or(probe).to_string(),
+            c.1.to_string(),
+            lookup.to_string(),
+        ))
+    };
     match (is_lookup(&a), is_lookup(&b)) {
-        (false, true) => Some((a.1.to_string(), b.1.to_string())),
-        (true, false) => Some((b.1.to_string(), a.1.to_string())),
+        (false, true) => partner(a, b.1),
+        (true, false) => partner(b, a.1),
         _ => None,
     }
 }
@@ -231,8 +254,9 @@ enum KeyPredicate {
 }
 
 /// `probe = k1 OR probe = k2 ...` for `keys`, or their integer range once
-/// there are more than [`MAX_LISTED_KEYS`]. A NULL key never joins.
-fn key_predicate(probe: &str, keys: &[Value]) -> KeyPredicate {
+/// there are more than [`MAX_LISTED_KEYS`], with `probe` qualified by
+/// `table` if given. A NULL key never joins.
+fn key_predicate(table: Option<&str>, probe: &str, keys: &[Value]) -> KeyPredicate {
     let mut literals: Vec<Literal> = Vec::new();
     for key in keys {
         let literal = match key {
@@ -249,7 +273,7 @@ fn key_predicate(probe: &str, keys: &[Value]) -> KeyPredicate {
         return KeyPredicate::Empty;
     }
     if literals.len() <= MAX_LISTED_KEYS {
-        let equal = |l: Literal| binary(BinaryOp::Eq, column(None, probe), literal(l));
+        let equal = |l: Literal| binary(BinaryOp::Eq, column(table, probe), literal(l));
         let mut terms = literals.into_iter().map(equal);
         let first = terms.next();
         return first.map_or(KeyPredicate::Unknown, |first| {
@@ -273,12 +297,12 @@ fn key_predicate(probe: &str, keys: &[Value]) -> KeyPredicate {
         BinaryOp::And,
         binary(
             BinaryOp::Ge,
-            column(None, probe),
+            column(table, probe),
             literal(Literal::Integer(*lo)),
         ),
         binary(
             BinaryOp::Le,
-            column(None, probe),
+            column(table, probe),
             literal(Literal::Integer(*hi)),
         ),
     ))
@@ -364,7 +388,11 @@ mod tests {
                  INSERT INTO event_def VALUES (5, 'a');\
                  INSERT INTO event_def VALUES (250, 'b');\
                  INSERT INTO event_def VALUES (255, 'b');\
-                 INSERT INTO event_def VALUES (900, 'c');",
+                 INSERT INTO event_def VALUES (900, 'c');\
+                 CREATE TABLE category(name TEXT, tier INTEGER);\
+                 INSERT INTO category VALUES ('a', 1);\
+                 INSERT INTO category VALUES ('b', 2);\
+                 INSERT INTO category VALUES ('c', 1);",
             )
             .unwrap();
         Lookup(path, engine)
@@ -402,6 +430,44 @@ mod tests {
                    WHERE event_def.name IN ('a', 'c') AND event_def.name <> 'zz'";
         // keys 5 and 900: groups 0 and 9, ON written lookup-first
         assert_eq!(surviving_groups(sql, "in"), Some(2));
+    }
+
+    #[test]
+    fn a_filter_on_a_chained_lookup_prunes_through_the_table_it_joins() {
+        // tools#108: category -> event_def -> events. Tier 2 is name 'b',
+        // keys 250 and 255, both in group 2.
+        let chain = "SELECT 1 FROM events JOIN event_def ON events.event_id = event_def.event_id \
+                     JOIN category ON category.name = event_def.name";
+        assert_eq!(
+            surviving_groups(&format!("{chain} WHERE category.tier = 2"), "chain"),
+            Some(1)
+        );
+        // Tier 1 is 'a' and 'c': keys 5 and 900, groups 0 and 9; with a
+        // filter on event_def too, only 900.
+        assert_eq!(
+            surviving_groups(&format!("{chain} WHERE category.tier = 1"), "chain-1"),
+            Some(2)
+        );
+        assert_eq!(
+            surviving_groups(
+                &format!("{chain} WHERE category.tier = 1 AND event_def.event_id > 100"),
+                "chain-both"
+            ),
+            Some(1)
+        );
+        // No category matches, or none of its names in event_def's rows
+        // that pass: the inner join is empty.
+        assert_eq!(
+            surviving_groups(&format!("{chain} WHERE category.tier = 3"), "chain-none"),
+            Some(0)
+        );
+        assert_eq!(
+            surviving_groups(
+                &format!("{chain} WHERE category.tier = 2 AND event_def.name = 'a'"),
+                "chain-disjoint"
+            ),
+            Some(0)
+        );
     }
 
     #[test]
@@ -453,7 +519,7 @@ mod tests {
     #[test]
     fn many_integer_keys_prune_as_a_range_and_other_keys_not_at_all() {
         let many: Vec<Value> = (0..=MAX_LISTED_KEYS as i64 + 1).map(Value::Int).collect();
-        let KeyPredicate::Expr(e) = key_predicate("id", &many) else {
+        let KeyPredicate::Expr(e) = key_predicate(None, "id", &many) else {
             panic!("an integer range");
         };
         assert!(matches!(
@@ -467,15 +533,15 @@ mod tests {
             .map(|i| Value::Str(i.to_string().into()))
             .collect();
         assert!(matches!(
-            key_predicate("id", &many_text),
+            key_predicate(None, "id", &many_text),
             KeyPredicate::Unknown
         ));
         assert!(matches!(
-            key_predicate("id", &[Value::Null]),
+            key_predicate(None, "id", &[Value::Null]),
             KeyPredicate::Empty
         ));
         assert!(matches!(
-            key_predicate("id", &[Value::Float(1.5)]),
+            key_predicate(None, "id", &[Value::Float(1.5)]),
             KeyPredicate::Unknown
         ));
     }

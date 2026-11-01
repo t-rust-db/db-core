@@ -53,7 +53,11 @@ impl Fixture {
              INSERT INTO machine VALUES (9, 'h9');\
              CREATE TABLE region(id INTEGER PRIMARY KEY, name TEXT);\
              INSERT INTO region VALUES (1, 'm-one');\
-             INSERT INTO region VALUES (2, 'm-two');",
+             INSERT INTO region VALUES (2, 'm-two');\
+             CREATE TABLE box(machine_id INTEGER, customers INTEGER);\
+             INSERT INTO box VALUES (10, 5);\
+             INSERT INTO box VALUES (20, 1);\
+             INSERT INTO box VALUES (30, 4);",
         );
         seed(
             &root.join("session.db"),
@@ -62,7 +66,14 @@ impl Fixture {
              INSERT INTO session_live VALUES (9, 'u9');\
              INSERT INTO session_live VALUES (10, 'u10');\
              CREATE TABLE region(id INTEGER PRIMARY KEY, name TEXT);\
-             INSERT INTO region VALUES (1, 's-one');",
+             INSERT INTO region VALUES (1, 's-one');\
+             CREATE TABLE sess(event_id INTEGER, machine_id INTEGER);\
+             INSERT INTO sess VALUES (1, 10);\
+             INSERT INTO sess VALUES (2, 20);\
+             INSERT INTO sess VALUES (3, 10);\
+             INSERT INTO sess VALUES (5, 30);\
+             INSERT INTO sess VALUES (8, 10);\
+             INSERT INTO sess VALUES (9, 10);",
         );
         let mut w = TableWriter::open(
             &root.join("events"),
@@ -337,4 +348,111 @@ fn a_qualified_table_outside_a_cross_mode_engine_is_unknown() {
     let mut row = RowEngine::open(&f.path("machine.db")).unwrap();
     let hosts = row.run_query("SELECT host FROM main.machine").unwrap().rows;
     assert_eq!(hosts.len(), 3);
+}
+
+/// tools#108: a chain from the table directory through `sess` (one file)
+/// to `box` (the other), in every join order, returns what sqlite3's own
+/// join of the two files (with `ATTACH`) and the table read separately
+/// give together.
+#[test]
+fn a_chain_through_two_sqlite_files_matches_attach_plus_the_table() {
+    let f = Fixture::new();
+    // The SQLite side by sqlite3's rules: one row engine with the other
+    // file attached.
+    let mut sqlite = RowEngine::open(&f.path("session.db")).unwrap();
+    sqlite
+        .run_query(&format!("ATTACH '{}' AS m", f.path("machine.db").display()))
+        .unwrap();
+    let sessions = sqlite
+        .run_query(
+            "SELECT sess.event_id, sess.machine_id, box.customers FROM sess \
+             JOIN m.box ON box.machine_id = sess.machine_id WHERE box.customers >= 3",
+        )
+        .unwrap()
+        .rows;
+    // The column table on its own.
+    let mut events = TableEngine::open(&f.path("events")).unwrap();
+    let odd: Vec<Cell> = events
+        .run_query("SELECT event_id FROM events WHERE channel_id = 2")
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|r| r[0].clone())
+        .collect();
+    let mut want: Vec<Vec<Cell>> = sessions
+        .into_iter()
+        .filter(|r| odd.contains(&r[0]))
+        .collect();
+    want.sort_by_key(|r| match r[0] {
+        Cell::Int(i) => i,
+        _ => i64::MAX,
+    });
+    assert_eq!(want.len(), 4, "{want:?}");
+
+    let mut e = f.engine();
+    let columns = "SELECT events.event_id, sess.machine_id, box.customers FROM";
+    let filter = "WHERE box.customers >= 3 AND events.channel_id = 2 ORDER BY events.event_id";
+    let explained = e
+        .explain_plan(&format!(
+            "{columns} events JOIN sess ON events.event_id = sess.event_id \
+             JOIN box ON box.machine_id = sess.machine_id {filter}"
+        ))
+        .unwrap();
+    let plan: Vec<&str> = explained.iter().map(|r| r.detail.as_str()).collect();
+    for (table, file) in [("sess", "session.db"), ("box", "machine.db")] {
+        assert!(
+            plan.iter().any(|d| d.contains(table) && d.contains(file)),
+            "{table} from {file}: {plan:?}"
+        );
+    }
+    // Each side loads its own columns: `sess.machine_id` under `sess`,
+    // not under the table directory.
+    for load in plan.iter().filter_map(|d| d.strip_prefix("LOAD COLUMNS: ")) {
+        let tables: Vec<&str> = load
+            .split(", ")
+            .filter_map(|c| c.split_once('.').map(|(t, _)| t))
+            .collect();
+        assert!(tables.windows(2).all(|w| w[0] == w[1]), "{load}");
+    }
+    for from in [
+        "events JOIN sess ON events.event_id = sess.event_id \
+         JOIN box ON box.machine_id = sess.machine_id",
+        "sess JOIN box ON box.machine_id = sess.machine_id \
+         JOIN events ON events.event_id = sess.event_id",
+        "box JOIN sess ON box.machine_id = sess.machine_id \
+         JOIN events ON sess.event_id = events.event_id",
+    ] {
+        let sql = format!("{columns} {from} {filter}");
+        assert_eq!(rows(&mut e, &sql), want, "{sql}");
+    }
+}
+
+/// A chain with a `LEFT JOIN` runs as written, so each `ON` must name a
+/// table joined before it.
+#[test]
+fn a_left_join_chain_keeps_its_written_order() {
+    let f = Fixture::new();
+    let mut e = f.engine();
+    let got = rows(
+        &mut e,
+        "SELECT events.event_id, box.customers FROM events \
+         LEFT JOIN sess ON events.event_id = sess.event_id \
+         LEFT JOIN box ON box.machine_id = sess.machine_id \
+         WHERE events.event_id <= 3 ORDER BY events.event_id",
+    );
+    assert_eq!(
+        got,
+        vec![
+            vec![Cell::Int(1), Cell::Int(5)],
+            vec![Cell::Int(2), Cell::Int(1)],
+            vec![Cell::Int(3), Cell::Int(5)],
+        ]
+    );
+    let (kind, message) = error(
+        &mut e,
+        "SELECT COUNT(*) FROM events \
+         LEFT JOIN box ON box.machine_id = sess.machine_id \
+         LEFT JOIN sess ON events.event_id = sess.event_id",
+    );
+    assert!(message.contains("joined before it"), "{kind:?}: {message}");
 }

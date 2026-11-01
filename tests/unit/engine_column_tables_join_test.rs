@@ -380,18 +380,16 @@ fn a_left_join_keeps_the_from_table_as_the_probe_and_its_unmatched_rows() {
 }
 
 #[test]
-fn a_join_that_is_not_a_star_around_a_parquet_table_is_refused() {
-    let data = Dataset::new("chain", 400, 100);
+fn a_parquet_table_joined_to_no_other_table_is_refused() {
+    let data = Dataset::new("unlinked", 400, 100);
     let mut e = data.engine();
-    // channels joins transactions, not events, and events joins channels:
-    // a chain events - channels - transactions, no star centre among the
-    // Parquet tables.
+    // `transactions` is joined to itself, not to `events` or `channels`.
     let sql = "SELECT count(*) FROM events \
                JOIN channels ON events.channel_id = channels.channel_id \
-               JOIN transactions ON transactions.session_id = channels.channel_id";
+               JOIN transactions ON transactions.session_id = transactions.session_id";
     let err = e.run_query(sql).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
-    assert!(err.message.contains("star"), "{err}");
+    assert!(err.message.contains("directly or through"), "{err}");
 }
 
 #[test]
@@ -459,11 +457,11 @@ fn tables_lists_every_parquet_file_and_the_lookup_tables() {
 }
 
 // MC/DC vectors for `sides::choose_probe` (obligation
-// `engine_resolve_sides_choose_probe_d959e87b`, `!allowed || !is_star_around`).
+// `engine_resolve_sides_choose_probe_f9e40499`, `!allowed || !reaches_all_from`).
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__engine_resolve_sides_choose_probe_d959e87b__v1_a_left_joined_table_cannot_probe() {
+fn mcdc__engine_resolve_sides_choose_probe_f9e40499__v1_a_left_joined_table_cannot_probe() {
     let data = Dataset::new("mcdc-v1", 300, 100);
     let mut e = data.engine();
     // `events` is the right side of a LEFT JOIN, so only `transactions`
@@ -478,7 +476,7 @@ fn mcdc__engine_resolve_sides_choose_probe_d959e87b__v1_a_left_joined_table_cann
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__engine_resolve_sides_choose_probe_d959e87b__v2_an_inner_star_may_probe() {
+fn mcdc__engine_resolve_sides_choose_probe_f9e40499__v2_an_inner_star_may_probe() {
     let data = Dataset::new("mcdc-v2", 300, 100);
     let mut e = data.engine();
     let sql = "SELECT count(*) FROM events \
@@ -491,11 +489,29 @@ fn mcdc__engine_resolve_sides_choose_probe_d959e87b__v2_an_inner_star_may_probe(
 
 #[test]
 #[allow(non_snake_case)]
-fn mcdc__engine_resolve_sides_choose_probe_d959e87b__v3_an_inner_chain_has_no_probe() {
+fn mcdc__engine_resolve_sides_choose_probe_f9e40499__v3_an_unlinked_table_has_no_probe() {
     let data = Dataset::new("mcdc-v3", 300, 100);
     let mut e = data.engine();
+    // `transactions` joined to itself reaches no other table.
     let sql = "SELECT count(*) FROM events \
-               JOIN channels ON events.channel_id = channels.channel_id \
-               JOIN transactions ON transactions.session_id = channels.channel_id";
+               JOIN transactions ON transactions.session_id = transactions.session_id";
     assert_eq!(e.run_query(sql).unwrap_err().kind, ErrorKind::Unsupported);
+}
+
+/// tools#108: a chain through a SQLite table probes with the larger
+/// Parquet table and returns what the same join written as a star does.
+#[test]
+fn a_chain_through_a_sqlite_table_matches_its_star_form() {
+    let data = Dataset::new("chain-star", 300, 100);
+    let mut e = data.engine();
+    let chain = "SELECT count(*) FROM events \
+                 JOIN channels ON events.channel_id = channels.channel_id \
+                 JOIN transactions ON transactions.session_id = channels.channel_id";
+    let star = "SELECT count(*) FROM events \
+                JOIN channels ON events.channel_id = channels.channel_id \
+                JOIN transactions ON transactions.session_id = events.channel_id";
+    assert_eq!(rows(&mut e, chain), rows(&mut e, star));
+    assert!(plan(&data.engine(), chain)
+        .iter()
+        .any(|d| d.starts_with("JOIN SIDES: PROBE events ")));
 }
