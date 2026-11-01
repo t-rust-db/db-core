@@ -23,7 +23,7 @@ use std::time::Duration;
 use crate::runner::RunError;
 
 /// The parse.y / fixture pin (`tests/unit/eqp_test.rs`, grammar.ebnf).
-pub const EXPECTED_SQLITE_VERSION: &str = "3.53.4";
+pub const EXPECTED_SQLITE_VERSION: &str = "3.54.1";
 
 const SENTINEL: &str = "__db_core_fuzz_sentinel_7f3a__";
 

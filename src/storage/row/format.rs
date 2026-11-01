@@ -60,27 +60,14 @@ pub fn format_list_value(v: &Value) -> String {
 /// uses for `.dump`. Returns bytes rather than `String` since a raw blob
 /// is not guaranteed to be valid UTF-8.
 ///
-/// Text and blob output is truncated at the first embedded `0x00` byte:
-/// the shell prints column values through a null-terminated C string
-/// (verified against the pinned oracle on a BLOB column containing
-/// embedded NUL bytes), so anything after the first NUL is silently
-/// dropped rather than a bug worth fighting — this reproduces that
-/// exactly, not a design choice made independently here.
+/// Text is truncated at its first embedded `0x00` byte, as the shell
+/// reads it as a C string; a blob keeps every byte (sqlite3 3.54, which
+/// stopped truncating blobs). Both then get the shell's default `ascii`
+/// control-character escape ([`write_escaped`]).
 pub fn format_query_value(v: &Value) -> Vec<u8> {
-    match v {
-        Value::Null => Vec::new(),
-        Value::Integer(i) => i.to_string().into_bytes(),
-        Value::Real(r) => format_real(*r).into_bytes(),
-        Value::Text(s) => truncate_at_nul(s.as_bytes()),
-        Value::Blob(b) => truncate_at_nul(b),
-    }
-}
-
-fn truncate_at_nul(bytes: &[u8]) -> Vec<u8> {
-    match bytes.iter().position(|&b| b == 0) {
-        Some(i) => bytes.get(..i).unwrap_or(bytes).to_vec(),
-        None => bytes.to_vec(),
-    }
+    let mut buf = Vec::new();
+    write_query_value(&mut buf, v);
+    buf
 }
 
 /// Same rendering as [`format_query_value`], appended onto a
@@ -92,17 +79,31 @@ pub fn write_query_value(buf: &mut Vec<u8>, v: &Value) {
         Value::Null => {}
         Value::Integer(i) => buf.extend_from_slice(i.to_string().as_bytes()),
         Value::Real(r) => buf.extend_from_slice(format_real(*r).as_bytes()),
-        Value::Text(s) => write_truncated_at_nul(buf, s.as_bytes()),
-        Value::Blob(b) => write_truncated_at_nul(buf, b),
+        Value::Text(s) => {
+            let bytes = s.as_bytes();
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            write_escaped(buf, bytes.get(..end).unwrap_or(bytes));
+        }
+        Value::Blob(b) => write_escaped(buf, b),
     }
 }
 
-fn write_truncated_at_nul(buf: &mut Vec<u8>, bytes: &[u8]) {
-    let bytes = match bytes.iter().position(|&b| b == 0) {
-        Some(i) => bytes.get(..i).unwrap_or(bytes),
-        None => bytes,
-    };
-    buf.extend_from_slice(bytes);
+/// `bytes` with each control character but tab, newline and a CR before
+/// a newline written as `^` and its letter (`0x01` is `^A`, `0x00` is
+/// `^@`): the sqlite3 shell's default `-escape ascii` (`qrfEscape`).
+fn write_escaped(buf: &mut Vec<u8>, bytes: &[u8]) {
+    for (i, &c) in bytes.iter().enumerate() {
+        let kept = c > 0x1f
+            || c == b'\t'
+            || c == b'\n'
+            || (c == b'\r' && bytes.get(i.saturating_add(1)) == Some(&b'\n'));
+        if kept {
+            buf.push(c);
+        } else {
+            buf.push(b'^');
+            buf.push(c | 0x40);
+        }
+    }
 }
 
 /// Renders a value for `-csv` mode (what `export` prints): empty string
@@ -233,16 +234,23 @@ mod tests {
             format_query_value(&Value::Blob(vec![0x41, 0xDE, 0xAD].into())),
             vec![0x41, 0xDE, 0xAD]
         );
-        // Verified against the pinned oracle: `-list` mode prints column
-        // values through a null-terminated C string, so anything from the
-        // first embedded NUL onward is silently dropped.
+        // sqlite3 3.54: a blob keeps its bytes after a NUL, text stops at
+        // its first NUL, and control characters print as `^X`.
         assert_eq!(
             format_query_value(&Value::Blob(vec![0x41, 0x00, 0xAD].into())),
-            vec![0x41]
+            b"A^@\xAD".to_vec()
         );
         assert_eq!(
             format_query_value(&Value::Text("ab\0cd".to_string().into())),
             b"ab".to_vec()
+        );
+        assert_eq!(
+            format_query_value(&Value::Text("a\x01b\x1b\x7f".to_string().into())),
+            b"a^Ab^[\x7f".to_vec()
+        );
+        assert_eq!(
+            format_query_value(&Value::Text("t\tn\nrn\r\nr\rend\r".to_string().into())),
+            b"t\tn\nrn\r\nr^Mend^M".to_vec()
         );
     }
 

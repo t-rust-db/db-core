@@ -14,7 +14,7 @@
 //!                           ignored under VERBOSE/REPLAY)
 //!   ALLOW_IMPLDEF=1         also run RANDOM()/CURRENT_* statements
 //!   ORACLE=1                also run each statement on sqlite3 and compare
-//!   ORACLE_BIN=path         the sqlite3 binary (default sqlite3; 3.53.4 expected)
+//!   ORACLE_BIN=path         the sqlite3 binary (default sqlite3; 3.54.1 expected)
 //!   ALLOW_ORACLE_VERSION=1  accept another sqlite3 version
 //!   REDUCE=0                skip ddmin reduction of repro scripts (JOBS=1 only)
 //!   VERBOSE=1               print every statement and its outcome

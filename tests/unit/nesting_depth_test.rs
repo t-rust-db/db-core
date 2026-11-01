@@ -71,9 +71,14 @@ fn nested_and(depth: usize) -> String {
     format!("SELECT a FROM t WHERE {s}")
 }
 
+/// A spawned thread's default stack, 2 MiB. Coverage instrumentation
+/// grows every frame, and the parser alone needs more than 2 MiB at its
+/// depth cap there, so an instrumented build gets 3 MiB.
+const STACK: usize = if cfg!(coverage) { 3 << 20 } else { 2 << 20 };
+
 fn on_2mib_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
-        .stack_size(2 << 20)
+        .stack_size(STACK)
         .spawn(f)
         .unwrap()
         .join()

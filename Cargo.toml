@@ -579,6 +579,8 @@ workspace = true
 # storage::row::vfs::fcntl each carry one documented, audited
 # `#[allow(unsafe_code)]` carve-out (ADR 0016).
 unsafe_code = "deny"
+# `cargo llvm-cov` builds with `--cfg coverage`.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage)"] }
 
 [workspace.lints.clippy]
 let_underscore_must_use = "deny"

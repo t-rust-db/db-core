@@ -1,4 +1,4 @@
--- Date and time functions vs sqlite3 3.53.4 (#651): one statement per
+-- Date and time functions vs sqlite3 3.54.1 (#651): one statement per
 -- line, run by tools/check_row_functions_oracle.py. 'localtime' is not
 -- exercised (it depends on the host's zone); 'utc' only on values
 -- already known to be UTC.
@@ -79,6 +79,11 @@ SELECT datetime('2024-03-15 13:45', 'start of month', '+1 month', '-1 day'), dat
 SELECT date('2024-03-15', 'weekday 0'), date('2024-03-15', 'weekday 5'), date('2024-03-15', 'weekday 6'), date('2024-03-17', 'weekday 0'), datetime('2024-03-15 13:45', 'weekday 1')
 SELECT date('2024-03-15', 'weekday 7'), date('2024-03-15', 'weekday -1'), date('2024-03-15', 'weekday 1.5'), date('2024-03-15', 'weekday 2.0'), date('2024-03-15', 'WEEKDAY 3'), date('2024-03-15', 'weekday')
 SELECT date('2024-03-15', 'weekday  3'), date('2024-03-15', 'weekday 3 '), date('2024-03-15', 'weekday x'), date('2024-03-15 23:00-05:00', 'weekday 6')
+SELECT date('2024-03-15', 'weekday -5'), date('2024-03-15', 'weekday -0'), date('2024-03-15', 'weekday -6'), date('2024-03-15', 'weekday -7'), date('2024-03-15', 'weekday - 1'), date('2024-03-15', 'weekday -1.0'), datetime('2024-03-15 13:45:10', 'weekday -1'), date('2024-03-15', 'weekday +2')
+SELECT datetime('2024-03-15 13:45:30', 'end of day'), datetime('2024-03-15 13:45:30', 'end of month'), datetime('2024-03-15 13:45:30', 'end of year'), datetime('2024-03-15', 'END OF DAY', 'subsec'), datetime('2024-03-15', 'end of week'), datetime('2024-03-15', 'end of')
+SELECT datetime('2024-02-10', 'end of month'), datetime('2023-02-10', 'end of month'), datetime('2024-12-10', 'end of month', 'subsec'), datetime('2024-01-31', '+1 month', 'end of month'), date('13:45', 'end of month'), julianday('2024-03-15', 'end of day') - julianday('2024-03-16')
+SELECT time('24:00:00'), time('24:00:01'), time('24:00:00.5'), time('24:01'), datetime('2024-03-15 24:00'), datetime('2024-12-31 24:00:00'), datetime('2024-02-29 24:00'), datetime('2024-02-28 24:00'), datetime('2023-02-28 24:00')
+SELECT datetime('2024-03-15T24:00:00.000Z'), datetime('2024-03-15 24:00+02:00'), strftime('%H', '2024-03-15 24:00'), datetime('24:00', 'start of day'), datetime('2024-03-15 24:00:00', '+1 hour'), datetime('2024-01-31', '+1 month', 'floor'), datetime('2024-01-31', '+1 month', 'ceiling')
 SELECT date('2024-01-31', '+1 month', 'floor'), date('2024-01-31', '+1 month', 'ceiling'), date('2023-01-31', '+1 month', 'floor'), date('2024-03-31', '-1 month', 'floor')
 SELECT date('2024-01-30', '+1 month', 'floor'), date('2024-05-31', '+1 month', 'floor'), date('2024-02-29', '+1 year', 'floor'), date('2024-01-31', '+0001-01-00', 'floor')
 SELECT date('2024-02-30', 'floor'), date('2024-02-31', 'ceiling'), date('2023-02-31', 'floor'), date('2023-02-31', '+0 days', 'floor'), date('2024-01-31', '+1 month', '+1 day', 'floor')
