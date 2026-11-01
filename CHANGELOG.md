@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.223.0] - 2026-11-01
+
+### Added
+
+- Cross-mode joins chain SQLite tables (and built tables) through each other: `events JOIN sessions ON … JOIN machine ON machine.id = sessions.machine_id`, in any order for inner joins, across SQLite files, with row-group pruning from the end of the chain (tools#108)
+
 ## [0.222.0] - 2026-11-01
 
 ### Added
