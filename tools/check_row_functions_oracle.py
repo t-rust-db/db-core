@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Row engine scalar functions against sqlite3 (#651). Local only, like
-check_column_oracle.sh: needs Homebrew's sqlite3 (3.53.4) first on PATH.
+check_column_oracle.sh: needs Homebrew's sqlite3 (3.54.1) first on PATH.
 
 Each line of tools/row_functions_cases.sql is one statement. The row
 engine's half runs through examples/row_oracle; sqlite3 runs each line in
@@ -27,7 +27,7 @@ import sys
 
 RANDOM = len(sys.argv) > 1 and sys.argv[1] == "--random"
 CASES = "tools/row_functions_cases.sql" if RANDOM or len(sys.argv) < 2 else sys.argv[1]
-EXPECTED = "3.53.4"
+EXPECTED = "3.54.1"
 
 
 def split_cells(row):

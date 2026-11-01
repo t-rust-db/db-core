@@ -74,7 +74,7 @@ TIMEOUT_MS ?= 2000
 OUT ?= target/fuzz
 STAGE ?= vm
 JOBS ?= 1
-# The pinned oracle (parse.y / fixtures: 3.53.4). Homebrew's sqlite is
+# The pinned oracle (parse.y / fixtures: 3.54.1). Homebrew's sqlite is
 # preferred over the system one when present; ORACLE_BIN= overrides.
 ORACLE_BIN ?= $(shell test -x /opt/homebrew/opt/sqlite/bin/sqlite3 && echo /opt/homebrew/opt/sqlite/bin/sqlite3 || echo sqlite3)
 
@@ -263,7 +263,7 @@ check-grammar-sync: ## Local-only: grammar.ebnf's SQLITE-RS ONLY section agrees 
 	if [ -f "$$f" ]; then cargo run -q -p fuzz-gen --bin grammar_sync -- "$$f"; \
 	else echo "check-grammar-sync: skipped -- no sqlite-rs checkout at $(SQLITE_RS) (set SQLITE_RS=)"; fi
 
-check-row-functions-oracle: ## Local-only: row engine scalar functions agree with sqlite3 3.53.4 (Homebrew's, on PATH) -- tools/row_functions_cases*.sql (#651)
+check-row-functions-oracle: ## Local-only: row engine scalar functions agree with sqlite3 3.54.1 (Homebrew's, on PATH) -- tools/row_functions_cases*.sql (#651)
 	@for f in tools/row_functions_cases*.sql; do python3 tools/check_row_functions_oracle.py $$f || exit 1; done
 	@python3 tools/check_row_functions_oracle.py --random 5000
 

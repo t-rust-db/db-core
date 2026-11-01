@@ -5202,7 +5202,7 @@
   {
     "id": "codegen_row_expr_json_subtype_is_value_position_d1ca9ab0",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 62,
+    "line": 63,
     "decision": "match name {\n        \"json_array\" => true,\n        \"json_object\" => !i.is_multiple_of(2),\n        \"json_quote\" => i == 0,\n        \"json_insert\" | \"json_replace\" | \"json_set\" => i >= 2 && i.is_multiple_of(2),\n        _ => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5212,7 +5212,7 @@
   {
     "id": "codegen_row_expr_json_subtype_mark_820d6a1c",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 81,
+    "line": 82,
     "decision": "!is_value_position(name, i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5222,7 +5222,7 @@
   {
     "id": "codegen_row_expr_json_subtype_mark_63b65bd1",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 84,
+    "line": 85,
     "decision": "let Arg::Json(expr) = classify(arg, true)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -5232,7 +5232,7 @@
   {
     "id": "codegen_row_expr_json_subtype_mark_a3b06017",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 86,
+    "line": 87,
     "decision": "expr != *arg",
     "conditions": 1,
     "vectors_required": 2,
@@ -5242,7 +5242,7 @@
   {
     "id": "codegen_row_expr_json_subtype_mark_232e0560",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 88,
+    "line": 89,
     "decision": "let Some(slot) = out.get_mut(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5250,10 +5250,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_expr_json_subtype_classify_74a6e6a4",
+    "id": "codegen_row_expr_json_subtype_classify_ebc646d8",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 105,
-    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Null) => Ok(Arg::Null),\n        ExprKind::Paren(inner) => {\n            classify(inner, rewrite).map(|a| rewrap(a, expr, |e| ExprKind::Paren(Box::new(e))))\n        }\n        ExprKind::Unary {\n            op: UnaryOp::Plus,\n            expr: inner,\n        } => classify(inner, rewrite).map(|a| {\n            rewrap(a, expr, |e| ExprKind::Unary {\n                op: UnaryOp::Plus,\n                expr: Box::new(e),\n            })\n        }),\n        ExprKind::Collate {\n            expr: inner,\n            collation,\n        } => classify(inner, rewrite).map(|a| {\n            rewrap(a, expr, |e| ExprKind::Collate {\n                expr: Box::new(e),\n                collation: collation.clone(),\n            })\n        }),\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            let mut results: Vec<&Expr> = whens.iter().map(|(_, then)| then).collect();\n            results.extend(else_.as_deref());\n            let mut results = match branches(&results, &vec![rewrite; results.len()])? {\n                Branches::Json(results) => results,\n                Branches::Not(arg) => return Ok(arg),\n            };\n            let else_ = else_\n                .as_ref()\n                .map(|_| Box::new(results.pop().unwrap_or_else(null)));\n            let thens = results;\n            let whens = whens\n                .iter()\n                .zip(thens)\n                .map(|((when, _), then)| (when.clone(), then))\n                .collect();\n            Ok(Arg::Json(Expr {\n                kind: ExprKind::Case {\n                    operand: operand.clone(),\n                    whens,\n                    else_,\n                },\n                span: expr.span,\n            }))\n        }\n        ExprKind::Subquery(select) => {\n            let [ResultColumn::Expr { expr: result, .. }] = select.columns.as_slice() else {\n                return Ok(Arg::Plain);\n            };\n            if !select.compound.is_empty() {\n                return Ok(Arg::Plain);\n            }\n            Ok(match classify(result, false)? {\n                Arg::Json(_) => Arg::Json(expr.clone()),\n                other => other,\n            })\n        }\n        ExprKind::FunctionCall {\n            name,\n            distinct: false,\n            args: FunctionArgs::List(args),\n            tail: None,\n        } => call(expr, &name.to_ascii_lowercase(), args, rewrite),\n        _ => Ok(Arg::Plain),\n    }",
+    "line": 106,
+    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Null) => Ok(Arg::Null),\n        ExprKind::Paren(inner) => {\n            classify(inner, rewrite).map(|a| rewrap(a, expr, |e| ExprKind::Paren(Box::new(e))))\n        }\n        ExprKind::Unary {\n            op: UnaryOp::Plus,\n            expr: inner,\n        } => classify(inner, rewrite).map(|a| {\n            rewrap(a, expr, |e| ExprKind::Unary {\n                op: UnaryOp::Plus,\n                expr: Box::new(e),\n            })\n        }),\n        ExprKind::Collate {\n            expr: inner,\n            collation,\n        } => classify(inner, rewrite).map(|a| {\n            rewrap(a, expr, |e| ExprKind::Collate {\n                expr: Box::new(e),\n                collation: collation.clone(),\n            })\n        }),\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            let mut results: Vec<&Expr> = whens.iter().map(|(_, then)| then).collect();\n            results.extend(else_.as_deref());\n            let mut results = match branches(&results, &vec![rewrite; results.len()])? {\n                Branches::Json(results) => results,\n                Branches::Not(arg) => return Ok(arg),\n            };\n            let else_ = else_\n                .as_ref()\n                .map(|_| Box::new(results.pop().unwrap_or_else(null)));\n            let thens = results;\n            let whens = whens\n                .iter()\n                .zip(thens)\n                .map(|((when, _), then)| (when.clone(), then))\n                .collect();\n            Ok(Arg::Json(Expr {\n                kind: ExprKind::Case {\n                    operand: operand.clone(),\n                    whens,\n                    else_,\n                },\n                span: expr.span,\n            }))\n        }\n        // sqlite3 3.54 clears a scalar subquery's subtype.\n        ExprKind::Subquery(_) => Ok(Arg::Plain),\n        ExprKind::FunctionCall {\n            name,\n            distinct: false,\n            args: FunctionArgs::List(args),\n            tail: None,\n        } => call(expr, &name.to_ascii_lowercase(), args, rewrite),\n        _ => Ok(Arg::Plain),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -5262,28 +5262,8 @@
   {
     "id": "codegen_row_expr_json_subtype_classify_ec67dbb0",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 135,
+    "line": 136,
     "decision": "match branches(&results, &vec![rewrite; results.len()])? {\n                Branches::Json(results) => results,\n                Branches::Not(arg) => return Ok(arg),\n            }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_expr_json_subtype_classify_13fa7590",
-    "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 161,
-    "decision": "!select.compound.is_empty()",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_expr_json_subtype_classify_e2ac3a25",
-    "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 164,
-    "decision": "match classify(result, false)? {\n                Arg::Json(_) => Arg::Json(expr.clone()),\n                other => other,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -5292,7 +5272,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_b995852b",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 181,
+    "line": 172,
     "decision": "JSON_RESULTS.contains(&name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -5302,7 +5282,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_e08953f8",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 185,
+    "line": 176,
     "decision": "match (name, args) {\n        (\"json_extract\", [_, _]) => {\n            if !rewrite {\n                return Err(mixed());\n            }\n            Ok(Arg::Json(with_args(\n                expr,\n                JSON_EXTRACT_SUBTYPED,\n                args.to_vec(),\n            )))\n        }\n        // With several paths, always a JSON array.\n        (\"json_extract\", _) if n >= 3 => Ok(Arg::Json(expr.clone())),\n        (\"likely\" | \"unlikely\", [inner]) | (\"likelihood\", [inner, _]) => {\n            let rest = args.get(1..).unwrap_or(&[]);\n            classify(inner, rewrite).map(|a| {\n                rewrap(a, expr, |e| {\n                    let mut args = vec![e];\n                    args.extend_from_slice(rest);\n                    call_kind(name, args)\n                })\n            })\n        }\n        (\"iif\" | \"if\", _) if n >= 2 => classify(&super::value::iif_as_case(expr, args), rewrite),\n        (\"coalesce\" | \"ifnull\", _) if n >= 2 => {\n            let refs: Vec<&Expr> = args.iter().collect();\n            match branches(&refs, &vec![rewrite; n])? {\n                Branches::Json(results) => Ok(Arg::Json(with_args(expr, name, results))),\n                Branches::Not(arg) => Ok(arg),\n            }\n        }\n        (\"nullif\", [first, _]) => Ok(match classify(first, false)? {\n            Arg::Json(_) => Arg::Json(expr.clone()),\n            other => other,\n        }),\n        (\"min\" | \"max\", _) if n >= 1 => {\n            let refs: Vec<&Expr> = args.iter().collect();\n            Ok(match branches(&refs, &vec![false; n])? {\n                Branches::Json(_) => Arg::Json(expr.clone()),\n                Branches::Not(arg) => arg,\n            })\n        }\n        _ => Ok(Arg::Plain),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5312,7 +5292,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_3c4eb533",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 197,
+    "line": 188,
     "decision": "n >= 3",
     "conditions": 1,
     "vectors_required": 2,
@@ -5322,7 +5302,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_3c4eb680",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 208,
+    "line": 199,
     "decision": "n >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -5332,7 +5312,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_3c4eb680_2",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 209,
+    "line": 200,
     "decision": "n >= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -5342,7 +5322,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_3c4e8ca9",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 220,
+    "line": 211,
     "decision": "n >= 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -5352,7 +5332,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_1c2ace33",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 187,
+    "line": 178,
     "decision": "!rewrite",
     "conditions": 1,
     "vectors_required": 2,
@@ -5362,7 +5342,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_c02f9fba",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 211,
+    "line": 202,
     "decision": "match branches(&refs, &vec![rewrite; n])? {\n                Branches::Json(results) => Ok(Arg::Json(with_args(expr, name, results))),\n                Branches::Not(arg) => Ok(arg),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5372,7 +5352,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_9c694c72",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 216,
+    "line": 207,
     "decision": "match classify(first, false)? {\n            Arg::Json(_) => Arg::Json(expr.clone()),\n            other => other,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5382,7 +5362,7 @@
   {
     "id": "codegen_row_expr_json_subtype_call_627f92ff",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 222,
+    "line": 213,
     "decision": "match branches(&refs, &vec![false; n])? {\n                Branches::Json(_) => Arg::Json(expr.clone()),\n                Branches::Not(arg) => arg,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5392,7 +5372,7 @@
   {
     "id": "codegen_row_expr_json_subtype_branches_78d9d645",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 246,
+    "line": 237,
     "decision": "!args.iter().any(|(_, _, a)| matches!(a, Arg::Json(_)))",
     "conditions": 1,
     "vectors_required": 2,
@@ -5402,7 +5382,7 @@
   {
     "id": "codegen_row_expr_json_subtype_branches_e2bb0185",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 248,
+    "line": 239,
     "decision": "all_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -5412,7 +5392,7 @@
   {
     "id": "codegen_row_expr_json_subtype_branches_05ede5c1",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 252,
+    "line": 243,
     "decision": "match arg {\n            Arg::Json(e) => e,\n            Arg::Null => result.clone(),\n            Arg::Plain if rewrite => with_args(result, JSON_QUOTE_NULLABLE, vec![result.clone()]),\n            Arg::Plain => return Err(mixed()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5422,7 +5402,7 @@
   {
     "id": "codegen_row_expr_json_subtype_branches_f8ba189b",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 255,
+    "line": 246,
     "decision": "rewrite",
     "conditions": 1,
     "vectors_required": 2,
@@ -5432,7 +5412,7 @@
   {
     "id": "codegen_row_expr_json_subtype_rewrap_d906e66f",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 272,
+    "line": 263,
     "decision": "match arg {\n        Arg::Json(inner) => Arg::Json(Expr {\n            kind: kind(inner),\n            span: outer.span,\n        }),\n        other => other,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -5442,7 +5422,7 @@
   {
     "id": "codegen_row_expr_json_subtype_marks_0c435cec",
     "file": "src/codegen/row/expr/json_subtype.rs",
-    "line": 334,
+    "line": 326,
     "decision": "match &a.kind {\n                ExprKind::FunctionCall { name, .. } => name.clone(),\n                ExprKind::Case { .. } => \"CASE\".to_string(),\n                _ => \"-\".to_string(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21652,7 +21632,7 @@
   {
     "id": "functions_datetime_compute_jd_e73a43f3",
     "file": "src/functions/datetime.rs",
-    "line": 265,
+    "line": 266,
     "decision": "p.valid_jd",
     "conditions": 1,
     "vectors_required": 2,
@@ -21662,7 +21642,7 @@
   {
     "id": "functions_datetime_compute_jd_22657416",
     "file": "src/functions/datetime.rs",
-    "line": 268,
+    "line": 269,
     "decision": "p.valid_ymd",
     "conditions": 1,
     "vectors_required": 2,
@@ -21670,9 +21650,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "functions_datetime_compute_jd_a8b8229b",
+    "file": "src/functions/datetime.rs",
+    "line": 271,
+    "decision": "p.valid_hms && p.h == 24",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "functions_datetime_compute_jd_1393f1d2",
     "file": "src/functions/datetime.rs",
-    "line": 273,
+    "line": 277,
     "decision": "!(-4713..=9999).contains(&y) || p.raw_s",
     "conditions": 2,
     "vectors_required": 3,
@@ -21682,7 +21672,7 @@
   {
     "id": "functions_datetime_compute_jd_97d4ba86",
     "file": "src/functions/datetime.rs",
-    "line": 277,
+    "line": 281,
     "decision": "mo <= 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -21692,7 +21682,7 @@
   {
     "id": "functions_datetime_compute_jd_7e0a9cd1",
     "file": "src/functions/datetime.rs",
-    "line": 291,
+    "line": 295,
     "decision": "p.valid_hms",
     "conditions": 1,
     "vectors_required": 2,
@@ -21702,7 +21692,7 @@
   {
     "id": "functions_datetime_compute_jd_24189477",
     "file": "src/functions/datetime.rs",
-    "line": 297,
+    "line": 301,
     "decision": "p.tz != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -21710,39 +21700,49 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_datetime_compute_floor_0c55f755",
+    "id": "functions_datetime_days_of_month_10b4256a",
     "file": "src/functions/datetime.rs",
-    "line": 311,
-    "decision": "p.d <= 28 || matches!(p.mo, 1 | 3 | 5 | 7 | 8 | 10 | 12)",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "functions_datetime_compute_floor_73ce9067",
-    "file": "src/functions/datetime.rs",
-    "line": 313,
-    "decision": "p.mo != 2",
+    "line": 314,
+    "decision": "matches!(mo, 1 | 3 | 5 | 7 | 8 | 10 | 12)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "functions_datetime_compute_floor_88967cd4",
+    "id": "functions_datetime_days_of_month_1d43188c",
     "file": "src/functions/datetime.rs",
-    "line": 315,
-    "decision": "p.y % 4 != 0 || (p.y % 100 == 0 && p.y % 400 != 0)",
+    "line": 316,
+    "decision": "mo != 2",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_days_of_month_d002399b",
+    "file": "src/functions/datetime.rs",
+    "line": 318,
+    "decision": "y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)",
     "conditions": 3,
     "vectors_required": 4,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
+    "id": "functions_datetime_compute_floor_6a3ebb33",
+    "file": "src/functions/datetime.rs",
+    "line": 329,
+    "decision": "p.d > max",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "functions_datetime_compute_ymd_22657416",
     "file": "src/functions/datetime.rs",
-    "line": 324,
+    "line": 334,
     "decision": "p.valid_ymd",
     "conditions": 1,
     "vectors_required": 2,
@@ -21752,7 +21752,7 @@
   {
     "id": "functions_datetime_compute_ymd_e46b7ba3",
     "file": "src/functions/datetime.rs",
-    "line": 327,
+    "line": 337,
     "decision": "!p.valid_jd",
     "conditions": 1,
     "vectors_required": 2,
@@ -21762,7 +21762,7 @@
   {
     "id": "functions_datetime_compute_ymd_378d5fb0",
     "file": "src/functions/datetime.rs",
-    "line": 331,
+    "line": 341,
     "decision": "!valid_julian_day(p.ijd)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21772,7 +21772,7 @@
   {
     "id": "functions_datetime_compute_ymd_7e935c82",
     "file": "src/functions/datetime.rs",
-    "line": 345,
+    "line": 355,
     "decision": "e.0 < 14",
     "conditions": 1,
     "vectors_required": 2,
@@ -21782,7 +21782,7 @@
   {
     "id": "functions_datetime_compute_ymd_e2dc0bfa",
     "file": "src/functions/datetime.rs",
-    "line": 350,
+    "line": 360,
     "decision": "p.mo > 2",
     "conditions": 1,
     "vectors_required": 2,
@@ -21792,7 +21792,7 @@
   {
     "id": "functions_datetime_compute_hms_7e0a9cd1",
     "file": "src/functions/datetime.rs",
-    "line": 361,
+    "line": 371,
     "decision": "p.valid_hms",
     "conditions": 1,
     "vectors_required": 2,
@@ -21802,7 +21802,7 @@
   {
     "id": "functions_datetime_parse_timezone_7891253f",
     "file": "src/functions/datetime.rs",
-    "line": 384,
+    "line": 394,
     "decision": "is_space(at(z, 0))",
     "conditions": 1,
     "vectors_required": 2,
@@ -21812,7 +21812,7 @@
   {
     "id": "functions_datetime_parse_timezone_018060d2",
     "file": "src/functions/datetime.rs",
-    "line": 388,
+    "line": 398,
     "decision": "match at(z, 0) {\n        b'-' => -1,\n        b'+' => 1,\n        b'Z' | b'z' => {\n            p.is_local = false;\n            p.is_utc = true;\n            return trailing_junk(adv(z, 1));\n        }\n        c => return c != 0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21822,7 +21822,7 @@
   {
     "id": "functions_datetime_parse_hhmmss_d2ab6ed5",
     "file": "src/functions/datetime.rs",
-    "line": 419,
+    "line": 429,
     "decision": "at(z, 0) == b':'",
     "conditions": 1,
     "vectors_required": 2,
@@ -21832,7 +21832,7 @@
   {
     "id": "functions_datetime_parse_hhmmss_00a2f70e",
     "file": "src/functions/datetime.rs",
-    "line": 425,
+    "line": 435,
     "decision": "at(z, 0) == b'.' && at(z, 1).is_ascii_digit()",
     "conditions": 2,
     "vectors_required": 3,
@@ -21842,7 +21842,7 @@
   {
     "id": "functions_datetime_parse_hhmmss_a109f886",
     "file": "src/functions/datetime.rs",
-    "line": 428,
+    "line": 438,
     "decision": "let Some(dv) = digit(at(z, 0))",
     "conditions": 1,
     "vectors_required": 2,
@@ -21852,7 +21852,7 @@
   {
     "id": "functions_datetime_parse_hhmmss_f0ee6dd2",
     "file": "src/functions/datetime.rs",
-    "line": 436,
+    "line": 446,
     "decision": "ms > 0.999",
     "conditions": 1,
     "vectors_required": 2,
@@ -21860,9 +21860,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "functions_datetime_parse_hhmmss_8fdff3ee",
+    "file": "src/functions/datetime.rs",
+    "line": 455,
+    "decision": "h == 24 && (m != 0 || s != 0 || ms != 0.0)",
+    "conditions": 4,
+    "vectors_required": 5,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "functions_datetime_parse_yyyymmdd_d3a63c56",
     "file": "src/functions/datetime.rs",
-    "line": 456,
+    "line": 470,
     "decision": "at(z, 0) == b'-'",
     "conditions": 1,
     "vectors_required": 2,
@@ -21872,7 +21882,7 @@
   {
     "id": "functions_datetime_parse_yyyymmdd_5a15ed2a",
     "file": "src/functions/datetime.rs",
-    "line": 467,
+    "line": 481,
     "decision": "is_space(at(z, 0)) || at(z, 0) == b'T'",
     "conditions": 2,
     "vectors_required": 3,
@@ -21882,8 +21892,38 @@
   {
     "id": "functions_datetime_parse_yyyymmdd_85732dcd",
     "file": "src/functions/datetime.rs",
-    "line": 470,
+    "line": 484,
     "decision": "!parse_hhmmss(z, p)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_parse_yyyymmdd_5f433027",
+    "file": "src/functions/datetime.rs",
+    "line": 486,
+    "decision": "p.h == 24",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_parse_yyyymmdd_6216de37",
+    "file": "src/functions/datetime.rs",
+    "line": 489,
+    "decision": "d > days_of_month(y, m)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_parse_yyyymmdd_efe83bac",
+    "file": "src/functions/datetime.rs",
+    "line": 492,
+    "decision": "m > 12",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -21892,7 +21932,7 @@
   {
     "id": "functions_datetime_parse_yyyymmdd_8c9568c5",
     "file": "src/functions/datetime.rs",
-    "line": 472,
+    "line": 498,
     "decision": "z.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -21902,7 +21942,7 @@
   {
     "id": "functions_datetime_parse_yyyymmdd_04493778",
     "file": "src/functions/datetime.rs",
-    "line": 479,
+    "line": 505,
     "decision": "neg",
     "conditions": 1,
     "vectors_required": 2,
@@ -21912,7 +21952,7 @@
   {
     "id": "functions_datetime_parse_yyyymmdd_24189477",
     "file": "src/functions/datetime.rs",
-    "line": 483,
+    "line": 509,
     "decision": "p.tz != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -21922,7 +21962,7 @@
   {
     "id": "functions_datetime_set_raw_date_number_f10eb7f8",
     "file": "src/functions/datetime.rs",
-    "line": 508,
+    "line": 534,
     "decision": "(0.0..5_373_484.5).contains(&r)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21932,7 +21972,7 @@
   {
     "id": "functions_datetime_parse_date_or_time_bf598f61",
     "file": "src/functions/datetime.rs",
-    "line": 517,
+    "line": 543,
     "decision": "!parse_yyyymmdd(z, p) || !parse_hhmmss(z, p)",
     "conditions": 2,
     "vectors_required": 3,
@@ -21942,7 +21982,7 @@
   {
     "id": "functions_datetime_parse_date_or_time_50807449",
     "file": "src/functions/datetime.rs",
-    "line": 520,
+    "line": 546,
     "decision": "z.eq_ignore_ascii_case(b\"now\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -21952,7 +21992,7 @@
   {
     "id": "functions_datetime_parse_date_or_time_1d7712e3",
     "file": "src/functions/datetime.rs",
-    "line": 524,
+    "line": 550,
     "decision": "let Some(r) = atof(z)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21962,7 +22002,7 @@
   {
     "id": "functions_datetime_parse_date_or_time_022df7ff",
     "file": "src/functions/datetime.rs",
-    "line": 528,
+    "line": 554,
     "decision": "z.eq_ignore_ascii_case(b\"subsec\") || z.eq_ignore_ascii_case(b\"subsecond\")",
     "conditions": 2,
     "vectors_required": 3,
@@ -21972,7 +22012,7 @@
   {
     "id": "functions_datetime_auto_adjust_date_11585db7",
     "file": "src/functions/datetime.rs",
-    "line": 539,
+    "line": 565,
     "decision": "!p.raw_s || p.valid_jd",
     "conditions": 2,
     "vectors_required": 3,
@@ -21982,7 +22022,7 @@
   {
     "id": "functions_datetime_auto_adjust_date_27732cde",
     "file": "src/functions/datetime.rs",
-    "line": 541,
+    "line": 567,
     "decision": "(-210_866_760_000.0..=253_402_300_799.0).contains(&p.s)",
     "conditions": 1,
     "vectors_required": 2,
@@ -21992,7 +22032,7 @@
   {
     "id": "functions_datetime_to_localtime_05d3bfeb",
     "file": "src/functions/datetime.rs",
-    "line": 558,
+    "line": 584,
     "decision": "(210_866_760_000_000..=213_014_145_600_000).contains(&p.ijd)",
     "conditions": 1,
     "vectors_required": 2,
@@ -22002,7 +22042,7 @@
   {
     "id": "functions_datetime_carry_months_e2dc0d40",
     "file": "src/functions/datetime.rs",
-    "line": 603,
+    "line": 629,
     "decision": "p.mo > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22010,10 +22050,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_datetime_parse_modifier_15213e66",
+    "id": "functions_datetime_parse_modifier_338f23eb",
     "file": "src/functions/datetime.rs",
-    "line": 615,
-    "decision": "match at(z, 0).to_ascii_lowercase() {\n        b'a' if z.eq_ignore_ascii_case(b\"auto\") => {\n            // Only valid directly after the time value.\n            if idx > 1 {\n                return true;\n            }\n            auto_adjust_date(p);\n            false\n        }\n        b'c' if z.eq_ignore_ascii_case(b\"ceiling\") => {\n            // Day-of-month overflow rolls forward: the default.\n            compute_jd(p);\n            clear_ymd_hms_tz(p);\n            p.n_floor = 0;\n            false\n        }\n        b'f' if z.eq_ignore_ascii_case(b\"floor\") => {\n            compute_jd(p);\n            p.ijd = p.ijd.saturating_sub((W(p.n_floor) * W(DAY_MS)).0);\n            clear_ymd_hms_tz(p);\n            false\n        }\n        b'j' if z.eq_ignore_ascii_case(b\"julianday\") => {\n            if idx > 1 {\n                return true;\n            }\n            if p.valid_jd && p.raw_s {\n                p.raw_s = false;\n                return false;\n            }\n            true\n        }\n        b'l' if z.eq_ignore_ascii_case(b\"localtime\") => {\n            if !p.is_local {\n                to_localtime(p);\n            }\n            p.is_utc = false;\n            p.is_local = true;\n            false\n        }\n        b'u' if z.eq_ignore_ascii_case(b\"unixepoch\") && p.raw_s => {\n            if idx > 1 {\n                return true;\n            }\n            let r = p.s * 1000.0 + UNIX_EPOCH_JD_MS as f64;\n            if !(0.0..464_269_060_800_000.0).contains(&r) {\n                return true;\n            }\n            clear_ymd_hms_tz(p);\n            p.ijd = f2i(r + 0.5);\n            p.valid_jd = true;\n            p.raw_s = false;\n            false\n        }\n        b'u' if z.eq_ignore_ascii_case(b\"utc\") => {\n            if !p.is_utc {\n                modifier_utc(p);\n            }\n            false\n        }\n        b'w' => modifier_weekday(z, p),\n        b's' => modifier_start_of(z, p),\n        b'+' | b'-' | b'0'..=b'9' => modifier_numeric(z, p),\n        _ => true,\n    }",
+    "line": 641,
+    "decision": "match at(z, 0).to_ascii_lowercase() {\n        b'a' if z.eq_ignore_ascii_case(b\"auto\") => {\n            // Only valid directly after the time value.\n            if idx > 1 {\n                return true;\n            }\n            auto_adjust_date(p);\n            false\n        }\n        b'c' if z.eq_ignore_ascii_case(b\"ceiling\") => {\n            // Day-of-month overflow rolls forward: the default.\n            compute_jd(p);\n            clear_ymd_hms_tz(p);\n            p.n_floor = 0;\n            false\n        }\n        b'f' if z.eq_ignore_ascii_case(b\"floor\") => {\n            compute_jd(p);\n            p.ijd = p.ijd.saturating_sub((W(p.n_floor) * W(DAY_MS)).0);\n            clear_ymd_hms_tz(p);\n            false\n        }\n        b'j' if z.eq_ignore_ascii_case(b\"julianday\") => {\n            if idx > 1 {\n                return true;\n            }\n            if p.valid_jd && p.raw_s {\n                p.raw_s = false;\n                return false;\n            }\n            true\n        }\n        b'l' if z.eq_ignore_ascii_case(b\"localtime\") => {\n            if !p.is_local {\n                to_localtime(p);\n            }\n            p.is_utc = false;\n            p.is_local = true;\n            false\n        }\n        b'u' if z.eq_ignore_ascii_case(b\"unixepoch\") && p.raw_s => {\n            if idx > 1 {\n                return true;\n            }\n            let r = p.s * 1000.0 + UNIX_EPOCH_JD_MS as f64;\n            if !(0.0..464_269_060_800_000.0).contains(&r) {\n                return true;\n            }\n            clear_ymd_hms_tz(p);\n            p.ijd = f2i(r + 0.5);\n            p.valid_jd = true;\n            p.raw_s = false;\n            false\n        }\n        b'u' if z.eq_ignore_ascii_case(b\"utc\") => {\n            if !p.is_utc {\n                modifier_utc(p);\n            }\n            false\n        }\n        b'w' => modifier_weekday(z, p),\n        b's' => modifier_start_of(z, p),\n        b'e' => modifier_end_of(z, p),\n        b'+' | b'-' | b'0'..=b'9' => modifier_numeric(z, p),\n        _ => true,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -22022,7 +22062,7 @@
   {
     "id": "functions_datetime_parse_modifier_3c224a02",
     "file": "src/functions/datetime.rs",
-    "line": 616,
+    "line": 642,
     "decision": "z.eq_ignore_ascii_case(b\"auto\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22032,7 +22072,7 @@
   {
     "id": "functions_datetime_parse_modifier_079e3134",
     "file": "src/functions/datetime.rs",
-    "line": 624,
+    "line": 650,
     "decision": "z.eq_ignore_ascii_case(b\"ceiling\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22042,7 +22082,7 @@
   {
     "id": "functions_datetime_parse_modifier_37eebf49",
     "file": "src/functions/datetime.rs",
-    "line": 631,
+    "line": 657,
     "decision": "z.eq_ignore_ascii_case(b\"floor\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22052,7 +22092,7 @@
   {
     "id": "functions_datetime_parse_modifier_77deb30f",
     "file": "src/functions/datetime.rs",
-    "line": 637,
+    "line": 663,
     "decision": "z.eq_ignore_ascii_case(b\"julianday\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22062,7 +22102,7 @@
   {
     "id": "functions_datetime_parse_modifier_f986318b",
     "file": "src/functions/datetime.rs",
-    "line": 647,
+    "line": 673,
     "decision": "z.eq_ignore_ascii_case(b\"localtime\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22072,7 +22112,7 @@
   {
     "id": "functions_datetime_parse_modifier_a3c1b99d",
     "file": "src/functions/datetime.rs",
-    "line": 655,
+    "line": 681,
     "decision": "z.eq_ignore_ascii_case(b\"unixepoch\") && p.raw_s",
     "conditions": 2,
     "vectors_required": 3,
@@ -22082,7 +22122,7 @@
   {
     "id": "functions_datetime_parse_modifier_4ad86f4f",
     "file": "src/functions/datetime.rs",
-    "line": 669,
+    "line": 695,
     "decision": "z.eq_ignore_ascii_case(b\"utc\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22092,7 +22132,7 @@
   {
     "id": "functions_datetime_parse_modifier_7464c7ff",
     "file": "src/functions/datetime.rs",
-    "line": 618,
+    "line": 644,
     "decision": "idx > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -22102,7 +22142,7 @@
   {
     "id": "functions_datetime_parse_modifier_7464c7ff_2",
     "file": "src/functions/datetime.rs",
-    "line": 638,
+    "line": 664,
     "decision": "idx > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -22112,7 +22152,7 @@
   {
     "id": "functions_datetime_parse_modifier_99eb0071",
     "file": "src/functions/datetime.rs",
-    "line": 641,
+    "line": 667,
     "decision": "p.valid_jd && p.raw_s",
     "conditions": 2,
     "vectors_required": 3,
@@ -22122,7 +22162,7 @@
   {
     "id": "functions_datetime_parse_modifier_55ab819d",
     "file": "src/functions/datetime.rs",
-    "line": 648,
+    "line": 674,
     "decision": "!p.is_local",
     "conditions": 1,
     "vectors_required": 2,
@@ -22132,7 +22172,7 @@
   {
     "id": "functions_datetime_parse_modifier_7464c7ff_3",
     "file": "src/functions/datetime.rs",
-    "line": 656,
+    "line": 682,
     "decision": "idx > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -22142,7 +22182,7 @@
   {
     "id": "functions_datetime_parse_modifier_e7d2db64",
     "file": "src/functions/datetime.rs",
-    "line": 660,
+    "line": 686,
     "decision": "!(0.0..464_269_060_800_000.0).contains(&r)",
     "conditions": 1,
     "vectors_required": 2,
@@ -22152,7 +22192,7 @@
   {
     "id": "functions_datetime_parse_modifier_67a6f461",
     "file": "src/functions/datetime.rs",
-    "line": 670,
+    "line": 696,
     "decision": "!p.is_utc",
     "conditions": 1,
     "vectors_required": 2,
@@ -22162,7 +22202,7 @@
   {
     "id": "functions_datetime_modifier_utc_c5789e7f",
     "file": "src/functions/datetime.rs",
-    "line": 700,
+    "line": 727,
     "decision": "err == 0 || cnt >= 3",
     "conditions": 2,
     "vectors_required": 3,
@@ -22170,20 +22210,80 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_datetime_modifier_weekday_8f1c5994",
+    "id": "functions_datetime_modifier_weekday_9d7bf902",
     "file": "src/functions/datetime.rs",
-    "line": 722,
-    "decision": "!(0.0..7.0).contains(&r) || r.fract() != 0.0",
+    "line": 750,
+    "decision": "!(-6.0..=6.0).contains(&r) || r.fract() != 0.0",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
+    "id": "functions_datetime_modifier_weekday_3667c297",
+    "file": "src/functions/datetime.rs",
+    "line": 759,
+    "decision": "wd != n",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "functions_datetime_modifier_weekday_d8fc3c1f",
     "file": "src/functions/datetime.rs",
-    "line": 731,
+    "line": 760,
     "decision": "wd > n",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_modifier_weekday_eb19a799",
+    "file": "src/functions/datetime.rs",
+    "line": 767,
+    "decision": "adv(z, 8).contains(&b'-')",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_modifier_end_of_afc89dd0",
+    "file": "src/functions/datetime.rs",
+    "line": 781,
+    "decision": "!is_end || (!p.valid_jd && !p.valid_ymd && !p.valid_hms)",
+    "conditions": 4,
+    "vectors_required": 5,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_modifier_end_of_de4db457",
+    "file": "src/functions/datetime.rs",
+    "line": 793,
+    "decision": "unit.eq_ignore_ascii_case(b\"month\")",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_modifier_end_of_c410c06a",
+    "file": "src/functions/datetime.rs",
+    "line": 796,
+    "decision": "p.mo > 12",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "functions_datetime_modifier_end_of_c1551471",
+    "file": "src/functions/datetime.rs",
+    "line": 807,
+    "decision": "unit.eq_ignore_ascii_case(b\"year\")",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -22192,7 +22292,7 @@
   {
     "id": "functions_datetime_modifier_start_of_d51dd602",
     "file": "src/functions/datetime.rs",
-    "line": 746,
+    "line": 821,
     "decision": "!is_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -22202,7 +22302,7 @@
   {
     "id": "functions_datetime_modifier_start_of_022df7ff",
     "file": "src/functions/datetime.rs",
-    "line": 747,
+    "line": 822,
     "decision": "z.eq_ignore_ascii_case(b\"subsec\") || z.eq_ignore_ascii_case(b\"subsecond\")",
     "conditions": 2,
     "vectors_required": 3,
@@ -22212,7 +22312,7 @@
   {
     "id": "functions_datetime_modifier_start_of_7dc9be9f",
     "file": "src/functions/datetime.rs",
-    "line": 753,
+    "line": 828,
     "decision": "!p.valid_jd && !p.valid_ymd && !p.valid_hms",
     "conditions": 3,
     "vectors_required": 4,
@@ -22222,7 +22322,7 @@
   {
     "id": "functions_datetime_modifier_start_of_de4db457",
     "file": "src/functions/datetime.rs",
-    "line": 765,
+    "line": 840,
     "decision": "unit.eq_ignore_ascii_case(b\"month\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22232,7 +22332,7 @@
   {
     "id": "functions_datetime_modifier_start_of_c1551471",
     "file": "src/functions/datetime.rs",
-    "line": 768,
+    "line": 843,
     "decision": "unit.eq_ignore_ascii_case(b\"year\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22242,7 +22342,7 @@
   {
     "id": "functions_datetime_modifier_numeric_37daa820",
     "file": "src/functions/datetime.rs",
-    "line": 786,
+    "line": 861,
     "decision": "c == 0 || c == b':' || is_space(c)",
     "conditions": 3,
     "vectors_required": 4,
@@ -22252,7 +22352,7 @@
   {
     "id": "functions_datetime_modifier_numeric_01236e48",
     "file": "src/functions/datetime.rs",
-    "line": 789,
+    "line": 864,
     "decision": "c == b'-'\n            && ((n == 5 && get_digits(adv(z, 1), &[(4, 0, 14712, 0)]).len() == 1)\n                || (n == 6 && get_digits(adv(z, 1), &[(5, 0, 14712, 0)]).len() == 1))",
     "conditions": 5,
     "vectors_required": 6,
@@ -22262,7 +22362,7 @@
   {
     "id": "functions_datetime_modifier_numeric_1cab07de",
     "file": "src/functions/datetime.rs",
-    "line": 802,
+    "line": 877,
     "decision": "at(z, n) == b'-'",
     "conditions": 1,
     "vectors_required": 2,
@@ -22272,7 +22372,7 @@
   {
     "id": "functions_datetime_modifier_numeric_a61d4831",
     "file": "src/functions/datetime.rs",
-    "line": 805,
+    "line": 880,
     "decision": "z0 != b'+' && z0 != b'-'",
     "conditions": 2,
     "vectors_required": 3,
@@ -22282,7 +22382,7 @@
   {
     "id": "functions_datetime_modifier_numeric_01b7c231",
     "file": "src/functions/datetime.rs",
-    "line": 808,
+    "line": 883,
     "decision": "n == 5",
     "conditions": 1,
     "vectors_required": 2,
@@ -22292,7 +22392,7 @@
   {
     "id": "functions_datetime_modifier_numeric_150cb5de",
     "file": "src/functions/datetime.rs",
-    "line": 824,
+    "line": 899,
     "decision": "m >= 12 || d >= 31",
     "conditions": 2,
     "vectors_required": 3,
@@ -22302,7 +22402,7 @@
   {
     "id": "functions_datetime_modifier_numeric_a77e069b",
     "file": "src/functions/datetime.rs",
-    "line": 829,
+    "line": 904,
     "decision": "z0 == b'-'",
     "conditions": 1,
     "vectors_required": 2,
@@ -22312,7 +22412,7 @@
   {
     "id": "functions_datetime_modifier_numeric_c1c60de9",
     "file": "src/functions/datetime.rs",
-    "line": 844,
+    "line": 919,
     "decision": "at(z, 11) == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22322,7 +22422,7 @@
   {
     "id": "functions_datetime_modifier_numeric_0b40fe1c",
     "file": "src/functions/datetime.rs",
-    "line": 847,
+    "line": 922,
     "decision": "is_space(at(z, 11)) && get_digits(adv(z, 12), &HH_MM).len() == 2",
     "conditions": 2,
     "vectors_required": 3,
@@ -22332,7 +22432,7 @@
   {
     "id": "functions_datetime_modifier_numeric_ed71b58c",
     "file": "src/functions/datetime.rs",
-    "line": 854,
+    "line": 929,
     "decision": "at(z2, n) == b':'",
     "conditions": 1,
     "vectors_required": 2,
@@ -22342,7 +22442,7 @@
   {
     "id": "functions_datetime_modifier_numeric_dba2d0f3",
     "file": "src/functions/datetime.rs",
-    "line": 856,
+    "line": 931,
     "decision": "!at(z2, 0).is_ascii_digit()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22352,7 +22452,7 @@
   {
     "id": "functions_datetime_modifier_numeric_7e7bcd62",
     "file": "src/functions/datetime.rs",
-    "line": 860,
+    "line": 935,
     "decision": "parse_hhmmss(z2, &mut tx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -22362,7 +22462,7 @@
   {
     "id": "functions_datetime_modifier_numeric_a77e069b_2",
     "file": "src/functions/datetime.rs",
-    "line": 867,
+    "line": 942,
     "decision": "z0 == b'-'",
     "conditions": 1,
     "vectors_required": 2,
@@ -22372,7 +22472,7 @@
   {
     "id": "functions_datetime_modifier_numeric_384b1141",
     "file": "src/functions/datetime.rs",
-    "line": 877,
+    "line": 952,
     "decision": "is_space(at(unit, 0))",
     "conditions": 1,
     "vectors_required": 2,
@@ -22382,7 +22482,7 @@
   {
     "id": "functions_datetime_modifier_numeric_c25b04f8",
     "file": "src/functions/datetime.rs",
-    "line": 880,
+    "line": 955,
     "decision": "!(3..=10).contains(&unit.len())",
     "conditions": 1,
     "vectors_required": 2,
@@ -22392,7 +22492,7 @@
   {
     "id": "functions_datetime_modifier_numeric_7d27c2f2",
     "file": "src/functions/datetime.rs",
-    "line": 883,
+    "line": 958,
     "decision": "unit.last().is_some_and(|c| c.eq_ignore_ascii_case(&b's'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -22402,7 +22502,7 @@
   {
     "id": "functions_datetime_modifier_numeric_ca8ed691",
     "file": "src/functions/datetime.rs",
-    "line": 887,
+    "line": 962,
     "decision": "r < 0.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22412,7 +22512,7 @@
   {
     "id": "functions_datetime_modifier_numeric_da9dc157",
     "file": "src/functions/datetime.rs",
-    "line": 892,
+    "line": 967,
     "decision": "unit.eq_ignore_ascii_case(name) && r > -limit && r < limit",
     "conditions": 3,
     "vectors_required": 4,
@@ -22422,7 +22522,7 @@
   {
     "id": "functions_datetime_modifier_numeric_1063a50b",
     "file": "src/functions/datetime.rs",
-    "line": 894,
+    "line": 969,
     "decision": "i == 4 || i == 5",
     "conditions": 2,
     "vectors_required": 3,
@@ -22432,7 +22532,7 @@
   {
     "id": "functions_datetime_modifier_numeric_acb5046c",
     "file": "src/functions/datetime.rs",
-    "line": 898,
+    "line": 973,
     "decision": "i == 4",
     "conditions": 1,
     "vectors_required": 2,
@@ -22442,7 +22542,7 @@
   {
     "id": "functions_datetime_is_date_81c48c5a",
     "file": "src/functions/datetime.rs",
-    "line": 928,
+    "line": 1003,
     "decision": "match first {\n        Value::Integer(i) => set_raw_date_number(&mut p, *i as f64),\n        Value::Real(r) => set_raw_date_number(&mut p, *r),\n        other => {\n            let z = arg_text(other)?;\n            if parse_date_or_time(&z, &mut p, now_ns) {\n                return None;\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22452,7 +22552,7 @@
   {
     "id": "functions_datetime_is_date_62e8a5a7",
     "file": "src/functions/datetime.rs",
-    "line": 933,
+    "line": 1008,
     "decision": "parse_date_or_time(&z, &mut p, now_ns)",
     "conditions": 1,
     "vectors_required": 2,
@@ -22462,7 +22562,7 @@
   {
     "id": "functions_datetime_is_date_23b49a65",
     "file": "src/functions/datetime.rs",
-    "line": 940,
+    "line": 1015,
     "decision": "parse_modifier(&z, &mut p, idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -22472,7 +22572,7 @@
   {
     "id": "functions_datetime_is_date_7e7af6e2",
     "file": "src/functions/datetime.rs",
-    "line": 945,
+    "line": 1020,
     "decision": "p.is_error || !valid_julian_day(p.ijd)",
     "conditions": 2,
     "vectors_required": 3,
@@ -22482,7 +22582,7 @@
   {
     "id": "functions_datetime_is_date_d595070a",
     "file": "src/functions/datetime.rs",
-    "line": 948,
+    "line": 1023,
     "decision": "args.len() == 1 && p.valid_ymd && p.d > 28",
     "conditions": 3,
     "vectors_required": 4,
@@ -22492,7 +22592,7 @@
   {
     "id": "functions_datetime_ymd_string_ff16f576",
     "file": "src/functions/datetime.rs",
-    "line": 966,
+    "line": 1041,
     "decision": "p.y < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22502,7 +22602,7 @@
   {
     "id": "functions_datetime_hms_string_26f90749",
     "file": "src/functions/datetime.rs",
-    "line": 972,
+    "line": 1047,
     "decision": "p.use_subsec",
     "conditions": 1,
     "vectors_required": 2,
@@ -22512,7 +22612,7 @@
   {
     "id": "functions_datetime_round_half_up_a629fa30",
     "file": "src/functions/datetime.rs",
-    "line": 999,
+    "line": 1074,
     "decision": "at(digits, k) >= b'5'",
     "conditions": 1,
     "vectors_required": 2,
@@ -22522,7 +22622,7 @@
   {
     "id": "functions_datetime_round_half_up_f787c36a",
     "file": "src/functions/datetime.rs",
-    "line": 1002,
+    "line": 1077,
     "decision": "*c == b'9'",
     "conditions": 1,
     "vectors_required": 2,
@@ -22532,7 +22632,7 @@
   {
     "id": "functions_datetime_round_half_up_a65214cb",
     "file": "src/functions/datetime.rs",
-    "line": 1010,
+    "line": 1085,
     "decision": "carry",
     "conditions": 1,
     "vectors_required": 2,
@@ -22542,7 +22642,7 @@
   {
     "id": "functions_datetime_round_half_up_510b8ed7",
     "file": "src/functions/datetime.rs",
-    "line": 1015,
+    "line": 1090,
     "decision": "out.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22552,7 +22652,7 @@
   {
     "id": "functions_datetime_fmt_fixed_c176eb0e",
     "file": "src/functions/datetime.rs",
-    "line": 1027,
+    "line": 1102,
     "decision": "x == 0.0 || d.iter().all(|&c| c == b'0')",
     "conditions": 2,
     "vectors_required": 3,
@@ -22562,7 +22662,7 @@
   {
     "id": "functions_datetime_fmt_fixed_722ebf45",
     "file": "src/functions/datetime.rs",
-    "line": 1053,
+    "line": 1128,
     "decision": "x < 0.0 && (int_part.bytes().chain(frac.bytes())).any(|c| c != b'0')",
     "conditions": 2,
     "vectors_required": 3,
@@ -22572,7 +22672,7 @@
   {
     "id": "functions_datetime_fmt_fixed_1b580d99",
     "file": "src/functions/datetime.rs",
-    "line": 1058,
+    "line": 1133,
     "decision": "prec == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22582,7 +22682,7 @@
   {
     "id": "functions_datetime_fmt_g16_531840b8",
     "file": "src/functions/datetime.rs",
-    "line": 1068,
+    "line": 1143,
     "decision": "x == 0.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22592,7 +22692,7 @@
   {
     "id": "functions_datetime_fmt_g16_e67bdb44",
     "file": "src/functions/datetime.rs",
-    "line": 1073,
+    "line": 1148,
     "decision": "x < 0.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22602,7 +22702,7 @@
   {
     "id": "functions_datetime_fmt_g16_f12f05b5",
     "file": "src/functions/datetime.rs",
-    "line": 1075,
+    "line": 1150,
     "decision": "!(-4..16).contains(&e)",
     "conditions": 1,
     "vectors_required": 2,
@@ -22612,7 +22712,7 @@
   {
     "id": "functions_datetime_fmt_g16_c6513307",
     "file": "src/functions/datetime.rs",
-    "line": 1078,
+    "line": 1153,
     "decision": "rest.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22622,7 +22722,7 @@
   {
     "id": "functions_datetime_fmt_g16_084a93db",
     "file": "src/functions/datetime.rs",
-    "line": 1079,
+    "line": 1154,
     "decision": "e < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22632,7 +22732,7 @@
   {
     "id": "functions_datetime_fmt_g16_084a93db_2",
     "file": "src/functions/datetime.rs",
-    "line": 1082,
+    "line": 1157,
     "decision": "e < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22642,7 +22742,7 @@
   {
     "id": "functions_datetime_fmt_g16_12aae428",
     "file": "src/functions/datetime.rs",
-    "line": 1088,
+    "line": 1163,
     "decision": "int_part.len() < split",
     "conditions": 1,
     "vectors_required": 2,
@@ -22652,7 +22752,7 @@
   {
     "id": "functions_datetime_fmt_g16_4542d397",
     "file": "src/functions/datetime.rs",
-    "line": 1095,
+    "line": 1170,
     "decision": "frac.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22662,7 +22762,7 @@
   {
     "id": "functions_datetime_unixepoch_26f90749",
     "file": "src/functions/datetime.rs",
-    "line": 1145,
+    "line": 1220,
     "decision": "p.use_subsec",
     "conditions": 1,
     "vectors_required": 2,
@@ -22672,7 +22772,7 @@
   {
     "id": "functions_datetime_strftime_conv_c4b14b5c",
     "file": "src/functions/datetime.rs",
-    "line": 1186,
+    "line": 1261,
     "decision": "match h {\n        0 => 12,\n        h if h > 12 => (W(h) - W(12)).0,\n        h => h,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22682,7 +22782,7 @@
   {
     "id": "functions_datetime_strftime_conv_aff84b8c",
     "file": "src/functions/datetime.rs",
-    "line": 1188,
+    "line": 1263,
     "decision": "h > 12",
     "conditions": 1,
     "vectors_required": 2,
@@ -22692,7 +22792,7 @@
   {
     "id": "functions_datetime_strftime_conv_73e29da5",
     "file": "src/functions/datetime.rs",
-    "line": 1191,
+    "line": 1266,
     "decision": "match cf {\n        b'd' => format!(\"{:02}\", x.d),\n        b'e' => format!(\"{:2}\", x.d),\n        b'f' => pad6(fmt_fixed(x.s.min(59.999), 3)),\n        b'F' => format!(\"{:04}-{:02}-{:02}\", x.y, x.mo, x.d),\n        b'G' => format!(\"{:04}\", iso_thursday(x).y),\n        b'g' => format!(\"{:02}\", iso_thursday(x).y % 100),\n        b'H' => format!(\"{:02}\", x.h),\n        b'k' => format!(\"{:2}\", x.h),\n        b'I' => format!(\"{:02}\", twelve(x.h)),\n        b'l' => format!(\"{:2}\", twelve(x.h)),\n        b'j' => format!(\"{:03}\", (W(days_after_jan01(x)) + W(1)).0),\n        b'J' => fmt_g16(x.ijd as f64 / 86_400_000.0),\n        b'm' => format!(\"{:02}\", x.mo),\n        b'M' => format!(\"{:02}\", x.mi),\n        b'p' => (if x.h >= 12 { \"PM\" } else { \"AM\" }).to_string(),\n        b'P' => (if x.h >= 12 { \"pm\" } else { \"am\" }).to_string(),\n        b'R' => format!(\"{:02}:{:02}\", x.h, x.mi),\n        b's' => {\n            if x.use_subsec {\n                fmt_fixed((W(x.ijd) - W(UNIX_EPOCH_JD_MS)).0 as f64 / 1000.0, 3)\n            } else {\n                (W(x.ijd / 1000) - W(UNIX_EPOCH_JD_MS / 1000)).0.to_string()\n            }\n        }\n        b'S' => format!(\"{:02}\", f2i(x.s)),\n        b'T' => format!(\"{:02}:{:02}:{:02}\", x.h, x.mi, f2i(x.s)),\n        b'u' => {\n            let w = days_after_sunday(x);\n            (if w == 0 { 7 } else { w }).to_string()\n        }\n        b'w' => days_after_sunday(x).to_string(),\n        b'U' => format!(\n            \"{:02}\",\n            (W(days_after_jan01(x)) - W(days_after_sunday(x)) + W(7)).0 / 7\n        ),\n        b'V' => format!(\n            \"{:02}\",\n            (W(days_after_jan01(&iso_thursday(x)) / 7) + W(1)).0\n        ),\n        b'W' => format!(\n            \"{:02}\",\n            (W(days_after_jan01(x)) - W(days_after_monday(x)) + W(7)).0 / 7\n        ),\n        b'Y' => format!(\"{:04}\", x.y),\n        b'%' => \"%\".to_string(),\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22702,7 +22802,7 @@
   {
     "id": "functions_datetime_strftime_conv_c075c88f",
     "file": "src/functions/datetime.rs",
-    "line": 1206,
+    "line": 1281,
     "decision": "x.h >= 12",
     "conditions": 1,
     "vectors_required": 2,
@@ -22712,7 +22812,7 @@
   {
     "id": "functions_datetime_strftime_conv_c075c88f_2",
     "file": "src/functions/datetime.rs",
-    "line": 1207,
+    "line": 1282,
     "decision": "x.h >= 12",
     "conditions": 1,
     "vectors_required": 2,
@@ -22722,7 +22822,7 @@
   {
     "id": "functions_datetime_strftime_conv_3a4c4576",
     "file": "src/functions/datetime.rs",
-    "line": 1210,
+    "line": 1285,
     "decision": "x.use_subsec",
     "conditions": 1,
     "vectors_required": 2,
@@ -22732,7 +22832,7 @@
   {
     "id": "functions_datetime_strftime_conv_5f684bda",
     "file": "src/functions/datetime.rs",
-    "line": 1220,
+    "line": 1295,
     "decision": "w == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22742,7 +22842,7 @@
   {
     "id": "functions_datetime_strftime_f68e825e",
     "file": "src/functions/datetime.rs",
-    "line": 1262,
+    "line": 1337,
     "decision": "let Some(&c) = bytes.next()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22752,7 +22852,7 @@
   {
     "id": "functions_datetime_strftime_4a7b2e33",
     "file": "src/functions/datetime.rs",
-    "line": 1263,
+    "line": 1338,
     "decision": "c != b'%'",
     "conditions": 1,
     "vectors_required": 2,
@@ -22762,7 +22862,7 @@
   {
     "id": "functions_datetime_timediff_e9d8ac21",
     "file": "src/functions/datetime.rs",
-    "line": 1293,
+    "line": 1368,
     "decision": "d1.ijd >= d2.ijd",
     "conditions": 1,
     "vectors_required": 2,
@@ -22772,7 +22872,7 @@
   {
     "id": "functions_datetime_timediff_cf1ce703",
     "file": "src/functions/datetime.rs",
-    "line": 1296,
+    "line": 1371,
     "decision": "y != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22782,7 +22882,7 @@
   {
     "id": "functions_datetime_timediff_5912441e",
     "file": "src/functions/datetime.rs",
-    "line": 1302,
+    "line": 1377,
     "decision": "m < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22792,7 +22892,7 @@
   {
     "id": "functions_datetime_timediff_15b1a67c",
     "file": "src/functions/datetime.rs",
-    "line": 1306,
+    "line": 1381,
     "decision": "m != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22802,7 +22902,7 @@
   {
     "id": "functions_datetime_timediff_bf667cf5",
     "file": "src/functions/datetime.rs",
-    "line": 1311,
+    "line": 1386,
     "decision": "d1.ijd < d2.ijd",
     "conditions": 1,
     "vectors_required": 2,
@@ -22812,7 +22912,7 @@
   {
     "id": "functions_datetime_timediff_5912441e_2",
     "file": "src/functions/datetime.rs",
-    "line": 1313,
+    "line": 1388,
     "decision": "m < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22822,7 +22922,7 @@
   {
     "id": "functions_datetime_timediff_0de08345",
     "file": "src/functions/datetime.rs",
-    "line": 1318,
+    "line": 1393,
     "decision": "d2.mo < 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -22832,7 +22932,7 @@
   {
     "id": "functions_datetime_timediff_cf1ce703_2",
     "file": "src/functions/datetime.rs",
-    "line": 1329,
+    "line": 1404,
     "decision": "y != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22842,7 +22942,7 @@
   {
     "id": "functions_datetime_timediff_5912441e_3",
     "file": "src/functions/datetime.rs",
-    "line": 1335,
+    "line": 1410,
     "decision": "m < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22852,7 +22952,7 @@
   {
     "id": "functions_datetime_timediff_15b1a67c_2",
     "file": "src/functions/datetime.rs",
-    "line": 1339,
+    "line": 1414,
     "decision": "m != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22862,7 +22962,7 @@
   {
     "id": "functions_datetime_timediff_ad71a79c",
     "file": "src/functions/datetime.rs",
-    "line": 1344,
+    "line": 1419,
     "decision": "d1.ijd > d2.ijd",
     "conditions": 1,
     "vectors_required": 2,
@@ -22872,7 +22972,7 @@
   {
     "id": "functions_datetime_timediff_1917efe6",
     "file": "src/functions/datetime.rs",
-    "line": 1346,
+    "line": 1421,
     "decision": "d2.is_error",
     "conditions": 1,
     "vectors_required": 2,
@@ -22882,7 +22982,7 @@
   {
     "id": "functions_datetime_timediff_5912441e_4",
     "file": "src/functions/datetime.rs",
-    "line": 1350,
+    "line": 1425,
     "decision": "m < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -22892,7 +22992,7 @@
   {
     "id": "functions_datetime_timediff_3b5fb5e7",
     "file": "src/functions/datetime.rs",
-    "line": 1355,
+    "line": 1430,
     "decision": "d2.mo > 12",
     "conditions": 1,
     "vectors_required": 2,
@@ -26912,7 +27012,7 @@
   {
     "id": "functions_text_printf_d8bcffee",
     "file": "src/functions/text.rs",
-    "line": 253,
+    "line": 252,
     "decision": "matches!(format, Value::Null)",
     "conditions": 1,
     "vectors_required": 2,
@@ -26920,19 +27020,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "functions_text_printf_19d5fb5d",
-    "file": "src/functions/text.rs",
-    "line": 261,
-    "decision": "out.is_empty() && !converted",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "functions_text_printf_904033db",
     "file": "src/functions/text.rs",
-    "line": 268,
+    "line": 259,
     "decision": "let Some(c) = chars.next()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26942,7 +27032,7 @@
   {
     "id": "functions_text_printf_10ee7568",
     "file": "src/functions/text.rs",
-    "line": 269,
+    "line": 260,
     "decision": "c != '%'",
     "conditions": 1,
     "vectors_required": 2,
@@ -26952,7 +27042,7 @@
   {
     "id": "functions_text_printf_ade175ed",
     "file": "src/functions/text.rs",
-    "line": 273,
+    "line": 264,
     "decision": "chars.peek().is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26962,7 +27052,7 @@
   {
     "id": "functions_text_printf_4f2380c5",
     "file": "src/functions/text.rs",
-    "line": 280,
+    "line": 271,
     "decision": "spec.too_big()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26972,7 +27062,7 @@
   {
     "id": "functions_text_printf_02169130",
     "file": "src/functions/text.rs",
-    "line": 283,
+    "line": 274,
     "decision": "spec.takes_arg()",
     "conditions": 1,
     "vectors_required": 2,
@@ -26982,7 +27072,7 @@
   {
     "id": "functions_text_printf_9c63952d",
     "file": "src/functions/text.rs",
-    "line": 284,
+    "line": 275,
     "decision": "out.len().saturating_add(spec.size_bound(arg)) > MAX_LENGTH",
     "conditions": 1,
     "vectors_required": 2,
@@ -26992,7 +27082,7 @@
   {
     "id": "functions_text_printf_84c3dfe2",
     "file": "src/functions/text.rs",
-    "line": 292,
+    "line": 282,
     "decision": "out.len() > MAX_LENGTH",
     "conditions": 1,
     "vectors_required": 2,
@@ -27002,7 +27092,7 @@
   {
     "id": "functions_text_ordinal_suffix_bda6cc38",
     "file": "src/functions/text.rs",
-    "line": 301,
+    "line": 291,
     "decision": "match (n % 100, n % 10) {\n        (11..=13, _) => \"th\",\n        (_, 1) => \"st\",\n        (_, 2) => \"nd\",\n        (_, 3) => \"rd\",\n        _ => \"th\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27012,7 +27102,7 @@
   {
     "id": "functions_text_int_arg_fcbc0e6e",
     "file": "src/functions/text.rs",
-    "line": 314,
+    "line": 304,
     "decision": "match v {\n        None | Some(Value::Null) => 0,\n        Some(Value::Blob(b)) => crate::coerce::cast_to_integer(&Value::Text(\n            String::from_utf8_lossy(b).into_owned().into(),\n        )),\n        Some(v) => crate::coerce::cast_to_integer(v),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27022,7 +27112,7 @@
   {
     "id": "functions_text_real_arg_94ef7a77",
     "file": "src/functions/text.rs",
-    "line": 325,
+    "line": 315,
     "decision": "match v {\n        None | Some(Value::Null) => return 0.0,\n        Some(Value::Integer(i)) => Value::Integer(*i),\n        Some(Value::Real(r)) => Value::Real(*r),\n        Some(other) => crate::coerce::coerce_text_to_numeric(&as_text(other)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27032,7 +27122,7 @@
   {
     "id": "functions_text_real_arg_c2ecdbb5",
     "file": "src/functions/text.rs",
-    "line": 331,
+    "line": 321,
     "decision": "match numeric {\n        #[allow(\n            clippy::cast_precision_loss,\n            reason = \"a %f/%e/%g argument is a double, as in sqlite3\"\n        )]\n        Value::Integer(i) => i as f64,\n        Value::Real(r) => r,\n        _ => 0.0,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27042,7 +27132,7 @@
   {
     "id": "functions_text_parse_b63baf20",
     "file": "src/functions/text.rs",
-    "line": 381,
+    "line": 371,
     "decision": "match *chars.peek()? {\n                '-' => spec.left = true,\n                '+' => spec.plus = true,\n                ' ' => spec.space = true,\n                '0' => spec.zero = true,\n                '#' => spec.alt = true,\n                ',' => spec.comma = true,\n                '!' => spec.bang = true,\n                _ => break,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27052,7 +27142,7 @@
   {
     "id": "functions_text_parse_23fac037",
     "file": "src/functions/text.rs",
-    "line": 393,
+    "line": 383,
     "decision": "chars.peek() == Some(&'*')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27062,7 +27152,7 @@
   {
     "id": "functions_text_parse_5bdee99d",
     "file": "src/functions/text.rs",
-    "line": 398,
+    "line": 388,
     "decision": "w == i32::MIN",
     "conditions": 1,
     "vectors_required": 2,
@@ -27072,7 +27162,7 @@
   {
     "id": "functions_text_parse_d77b3aa3",
     "file": "src/functions/text.rs",
-    "line": 406,
+    "line": 396,
     "decision": "chars.peek() == Some(&'.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27082,7 +27172,7 @@
   {
     "id": "functions_text_parse_23fac037_2",
     "file": "src/functions/text.rs",
-    "line": 408,
+    "line": 398,
     "decision": "chars.peek() == Some(&'*')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27092,7 +27182,7 @@
   {
     "id": "functions_text_parse_62ad91bb",
     "file": "src/functions/text.rs",
-    "line": 412,
+    "line": 402,
     "decision": "match star_arg(args.next()) {\n                    i32::MIN => None,\n                    p => usize::try_from(p.unsigned_abs()).ok(),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27102,7 +27192,7 @@
   {
     "id": "functions_text_parse_4e0386e4",
     "file": "src/functions/text.rs",
-    "line": 420,
+    "line": 410,
     "decision": "chars.peek() == Some(&'l')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27112,7 +27202,7 @@
   {
     "id": "functions_text_size_bound_4bb24f21",
     "file": "src/functions/text.rs",
-    "line": 445,
+    "line": 435,
     "decision": "match self.conversion {\n            'c' => {\n                let width = arg\n                    .and_then(|v| as_text(v).chars().next())\n                    .map_or(1, char::len_utf8);\n                self.precision.unwrap_or(1).max(1).saturating_mul(width)\n            }\n            'q' | 'Q' | 'w' => {\n                let text = arg.map(as_text).unwrap_or_default();\n                let quote = if self.conversion == 'w' { '\"' } else { '\\'' };\n                let kept = self\n                    .precision\n                    .map_or(text.len(), |p| p.saturating_mul(4).min(text.len()));\n                let quotes = text.matches(quote).count();\n                kept.saturating_add(quotes).saturating_add(2)\n            }\n            'd' | 'i' | 'r' | 'u' | 'o' | 'x' | 'X' | 'p' if self.comma => {\n                let digits = self.precision.unwrap_or(0).max(64);\n                digits.saturating_add(digits / 3).saturating_add(4)\n            }\n            _ => return 0,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27122,7 +27212,7 @@
   {
     "id": "functions_text_size_bound_619cf837",
     "file": "src/functions/text.rs",
-    "line": 461,
+    "line": 451,
     "decision": "self.comma",
     "conditions": 1,
     "vectors_required": 2,
@@ -27132,7 +27222,7 @@
   {
     "id": "functions_text_size_bound_8592a9c0",
     "file": "src/functions/text.rs",
-    "line": 454,
+    "line": 444,
     "decision": "self.conversion == 'w'",
     "conditions": 1,
     "vectors_required": 2,
@@ -27142,7 +27232,7 @@
   {
     "id": "functions_text_convert_bfc4070b",
     "file": "src/functions/text.rs",
-    "line": 478,
+    "line": 468,
     "decision": "match self.conversion {\n            '%' => self.pad(\"%\", 1),\n            'n' => String::new(),\n            'd' | 'i' => {\n                let v = int_arg(arg);\n                self.integer(v < 0, u128::from(v.unsigned_abs()), 10, \"\")\n            }\n            'r' => {\n                let v = int_arg(arg);\n                let suffix = ordinal_suffix(v.unsigned_abs());\n                self.integer(v < 0, u128::from(v.unsigned_abs()), 10, suffix)\n            }\n            'u' => self.integer(false, unsigned(int_arg(arg)), 10, \"\"),\n            'o' => self.integer(false, unsigned(int_arg(arg)), 8, \"\"),\n            'x' => self.integer(false, unsigned(int_arg(arg)), 16, \"\"),\n            'X' | 'p' => self\n                .integer(false, unsigned(int_arg(arg)), 16, \"\")\n                .to_ascii_uppercase(),\n            'f' | 'e' | 'E' | 'g' | 'G' => self.real(real_arg(arg)),\n            'c' => {\n                // The first character, repeated `precision` times; NULL\n                // or empty is a NUL character.\n                let c = arg\n                    .filter(|v| !matches!(v, Value::Null))\n                    .and_then(|v| as_text(v).chars().next())\n                    .unwrap_or('\\0');\n                let n = self.precision.unwrap_or(1).max(1);\n                let body: String = std::iter::repeat_n(c, n).collect();\n                let len = body.len();\n                self.pad(&body, len)\n            }\n            's' | 'z' => {\n                let s = arg.map(as_text).unwrap_or_default();\n                let (s, len) = self.cut(&s);\n                self.pad(&s, len)\n            }\n            'q' | 'Q' | 'w' => {\n                let quote = if self.conversion == 'w' { '\"' } else { '\\'' };\n                let (s, len) = match arg {\n                    None | Some(Value::Null) => self.cut(if self.conversion == 'Q' {\n                        \"NULL\"\n                    } else {\n                        \"(NULL)\"\n                    }),\n                    Some(v) => {\n                        // Width counts the cut bytes, not the U+FFFD that\n                        // stands in for a dangling one.\n                        let (s, cut_len) = self.cut(&as_text(v));\n                        let stand_in = s.len().saturating_sub(cut_len);\n                        let escaped = s.replace(quote, &format!(\"{quote}{quote}\"));\n                        let s = if self.conversion == 'Q' {\n                            format!(\"'{escaped}'\")\n                        } else {\n                            escaped\n                        };\n                        let len = s.len().saturating_sub(stand_in);\n                        (s, len)\n                    }\n                };\n                self.pad(&s, len)\n            }\n            _ => return None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27152,7 +27242,7 @@
   {
     "id": "functions_text_convert_8592a9c0",
     "file": "src/functions/text.rs",
-    "line": 515,
+    "line": 505,
     "decision": "self.conversion == 'w'",
     "conditions": 1,
     "vectors_required": 2,
@@ -27162,7 +27252,7 @@
   {
     "id": "functions_text_convert_bb000540",
     "file": "src/functions/text.rs",
-    "line": 516,
+    "line": 506,
     "decision": "match arg {\n                    None | Some(Value::Null) => self.cut(if self.conversion == 'Q' {\n                        \"NULL\"\n                    } else {\n                        \"(NULL)\"\n                    }),\n                    Some(v) => {\n                        // Width counts the cut bytes, not the U+FFFD that\n                        // stands in for a dangling one.\n                        let (s, cut_len) = self.cut(&as_text(v));\n                        let stand_in = s.len().saturating_sub(cut_len);\n                        let escaped = s.replace(quote, &format!(\"{quote}{quote}\"));\n                        let s = if self.conversion == 'Q' {\n                            format!(\"'{escaped}'\")\n                        } else {\n                            escaped\n                        };\n                        let len = s.len().saturating_sub(stand_in);\n                        (s, len)\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27172,7 +27262,7 @@
   {
     "id": "functions_text_convert_8485e492",
     "file": "src/functions/text.rs",
-    "line": 517,
+    "line": 507,
     "decision": "self.conversion == 'Q'",
     "conditions": 1,
     "vectors_required": 2,
@@ -27182,7 +27272,7 @@
   {
     "id": "functions_text_convert_8485e492_2",
     "file": "src/functions/text.rs",
-    "line": 528,
+    "line": 518,
     "decision": "self.conversion == 'Q'",
     "conditions": 1,
     "vectors_required": 2,
@@ -27192,7 +27282,7 @@
   {
     "id": "functions_text_pad_f1c87d72",
     "file": "src/functions/text.rs",
-    "line": 546,
+    "line": 536,
     "decision": "self.bang",
     "conditions": 1,
     "vectors_required": 2,
@@ -27202,7 +27292,7 @@
   {
     "id": "functions_text_pad_c74315e8",
     "file": "src/functions/text.rs",
-    "line": 548,
+    "line": 538,
     "decision": "self.left",
     "conditions": 1,
     "vectors_required": 2,
@@ -27212,7 +27302,7 @@
   {
     "id": "functions_text_cut_f1c87d72",
     "file": "src/functions/text.rs",
-    "line": 562,
+    "line": 552,
     "decision": "self.bang",
     "conditions": 1,
     "vectors_required": 2,
@@ -27222,7 +27312,7 @@
   {
     "id": "functions_text_cut_bf2b08b1",
     "file": "src/functions/text.rs",
-    "line": 567,
+    "line": 557,
     "decision": "p >= s.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27232,7 +27322,7 @@
   {
     "id": "functions_text_cut_41472c7b",
     "file": "src/functions/text.rs",
-    "line": 571,
+    "line": 561,
     "decision": "!s.is_char_boundary(end)",
     "conditions": 1,
     "vectors_required": 2,
@@ -27242,7 +27332,7 @@
   {
     "id": "functions_text_cut_b915a29d",
     "file": "src/functions/text.rs",
-    "line": 575,
+    "line": 565,
     "decision": "end < p",
     "conditions": 1,
     "vectors_required": 2,
@@ -27252,7 +27342,7 @@
   {
     "id": "functions_text_integer_9eb817f7",
     "file": "src/functions/text.rs",
-    "line": 589,
+    "line": 579,
     "decision": "negative",
     "conditions": 1,
     "vectors_required": 2,
@@ -27262,7 +27352,7 @@
   {
     "id": "functions_text_integer_e7f100b2",
     "file": "src/functions/text.rs",
-    "line": 591,
+    "line": 581,
     "decision": "self.plus && signed",
     "conditions": 2,
     "vectors_required": 3,
@@ -27272,7 +27362,7 @@
   {
     "id": "functions_text_integer_5ad02a83",
     "file": "src/functions/text.rs",
-    "line": 593,
+    "line": 583,
     "decision": "self.space && signed",
     "conditions": 2,
     "vectors_required": 3,
@@ -27282,7 +27372,7 @@
   {
     "id": "functions_text_integer_94e4d65c",
     "file": "src/functions/text.rs",
-    "line": 599,
+    "line": 589,
     "decision": "self.zero",
     "conditions": 1,
     "vectors_required": 2,
@@ -27292,7 +27382,7 @@
   {
     "id": "functions_text_integer_5271b5fe",
     "file": "src/functions/text.rs",
-    "line": 604,
+    "line": 594,
     "decision": "digits.len() < precision",
     "conditions": 1,
     "vectors_required": 2,
@@ -27302,7 +27392,7 @@
   {
     "id": "functions_text_integer_905b8bff",
     "file": "src/functions/text.rs",
-    "line": 610,
+    "line": 600,
     "decision": "self.comma && radix == 10",
     "conditions": 2,
     "vectors_required": 3,
@@ -27312,7 +27402,7 @@
   {
     "id": "functions_text_integer_9171d90b",
     "file": "src/functions/text.rs",
-    "line": 613,
+    "line": 603,
     "decision": "match (self.alt, radix) {\n            (true, 16) if magnitude != 0 => \"0x\",\n            (true, 8) if magnitude != 0 => \"0\",\n            _ => \"\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27322,7 +27412,7 @@
   {
     "id": "functions_text_integer_e9ea8123",
     "file": "src/functions/text.rs",
-    "line": 614,
+    "line": 604,
     "decision": "magnitude != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27332,7 +27422,7 @@
   {
     "id": "functions_text_integer_e9ea8123_2",
     "file": "src/functions/text.rs",
-    "line": 615,
+    "line": 605,
     "decision": "magnitude != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27342,7 +27432,7 @@
   {
     "id": "functions_text_real_f66c5f9e",
     "file": "src/functions/text.rs",
-    "line": 632,
+    "line": 622,
     "decision": "match self.conversion {\n            'f' => p.saturating_neg(),\n            'e' | 'E' => p.saturating_add(1),\n            _ => p.max(1),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27352,7 +27442,7 @@
   {
     "id": "functions_text_real_f1c87d72",
     "file": "src/functions/text.rs",
-    "line": 637,
+    "line": 627,
     "decision": "self.bang",
     "conditions": 1,
     "vectors_required": 2,
@@ -27362,7 +27452,7 @@
   {
     "id": "functions_text_real_72e6a385",
     "file": "src/functions/text.rs",
-    "line": 638,
+    "line": 628,
     "decision": "x.is_finite()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27372,7 +27462,7 @@
   {
     "id": "functions_text_real_e95541df",
     "file": "src/functions/text.rs",
-    "line": 639,
+    "line": 629,
     "decision": "match fp::fp_decode(x.abs(), i_round, mx_round) {\n                fp::Decoded::Finite { digits, idp } => (\n                    digits.iter().map(|d| d.saturating_sub(b'0')).collect(),\n                    i64::from(idp).saturating_sub(1),\n                ),\n                fp::Decoded::Special(_) => (vec![0], 0),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27382,7 +27472,7 @@
   {
     "id": "functions_text_real_1b714cdf",
     "file": "src/functions/text.rs",
-    "line": 651,
+    "line": 641,
     "decision": "match self.conversion {\n                'f' => exp.saturating_add(1).saturating_add(p),\n                'e' | 'E' => p.saturating_add(1),\n                _ => p.max(1),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27392,7 +27482,7 @@
   {
     "id": "functions_text_real_997d1e4f",
     "file": "src/functions/text.rs",
-    "line": 658,
+    "line": 648,
     "decision": "match self.conversion {\n            'f' => self.fixed(&digits, exp, precision),\n            'e' | 'E' => self.scientific(&digits, exp, precision),\n            _ => self.general(&digits, exp, precision),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27402,7 +27492,7 @@
   {
     "id": "functions_text_real_f1c87d72_2",
     "file": "src/functions/text.rs",
-    "line": 663,
+    "line": 653,
     "decision": "self.bang",
     "conditions": 1,
     "vectors_required": 2,
@@ -27412,7 +27502,7 @@
   {
     "id": "functions_text_real_d63cc931",
     "file": "src/functions/text.rs",
-    "line": 667,
+    "line": 657,
     "decision": "self.alt\n            && !split_exponent(&body)\n                .0\n                .bytes()\n                .any(|b| matches!(b, b'1'..=b'9'))",
     "conditions": 2,
     "vectors_required": 3,
@@ -27422,7 +27512,7 @@
   {
     "id": "functions_text_real_d816b41e",
     "file": "src/functions/text.rs",
-    "line": 675,
+    "line": 665,
     "decision": "matches!(self.conversion, 'E' | 'G')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27432,7 +27522,7 @@
   {
     "id": "functions_text_real_9eb817f7",
     "file": "src/functions/text.rs",
-    "line": 678,
+    "line": 668,
     "decision": "negative",
     "conditions": 1,
     "vectors_required": 2,
@@ -27442,7 +27532,7 @@
   {
     "id": "functions_text_real_f846167a",
     "file": "src/functions/text.rs",
-    "line": 680,
+    "line": 670,
     "decision": "self.plus",
     "conditions": 1,
     "vectors_required": 2,
@@ -27452,7 +27542,7 @@
   {
     "id": "functions_text_real_e570e6f2",
     "file": "src/functions/text.rs",
-    "line": 682,
+    "line": 672,
     "decision": "self.space",
     "conditions": 1,
     "vectors_required": 2,
@@ -27462,7 +27552,7 @@
   {
     "id": "functions_text_real_c74315e8",
     "file": "src/functions/text.rs",
-    "line": 689,
+    "line": 679,
     "decision": "self.left",
     "conditions": 1,
     "vectors_required": 2,
@@ -27472,7 +27562,7 @@
   {
     "id": "functions_text_real_94e4d65c",
     "file": "src/functions/text.rs",
-    "line": 691,
+    "line": 681,
     "decision": "self.zero",
     "conditions": 1,
     "vectors_required": 2,
@@ -27482,7 +27572,7 @@
   {
     "id": "functions_text_fixed_2f83fb89",
     "file": "src/functions/text.rs",
-    "line": 712,
+    "line": 702,
     "decision": "exp < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27492,7 +27582,7 @@
   {
     "id": "functions_text_fixed_619cf837",
     "file": "src/functions/text.rs",
-    "line": 735,
+    "line": 725,
     "decision": "self.comma",
     "conditions": 1,
     "vectors_required": 2,
@@ -27502,7 +27592,7 @@
   {
     "id": "functions_text_fixed_4542d397",
     "file": "src/functions/text.rs",
-    "line": 738,
+    "line": 728,
     "decision": "frac.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27512,7 +27602,7 @@
   {
     "id": "functions_text_fixed_7f88b68a",
     "file": "src/functions/text.rs",
-    "line": 739,
+    "line": 729,
     "decision": "self.alt",
     "conditions": 1,
     "vectors_required": 2,
@@ -27522,7 +27612,7 @@
   {
     "id": "functions_text_scientific_82c47a9d",
     "file": "src/functions/text.rs",
-    "line": 760,
+    "line": 750,
     "decision": "mantissa.len() < precision.saturating_add(1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -27532,7 +27622,7 @@
   {
     "id": "functions_text_scientific_62e2e470",
     "file": "src/functions/text.rs",
-    "line": 764,
+    "line": 754,
     "decision": "tail.is_empty() && !self.alt",
     "conditions": 2,
     "vectors_required": 3,
@@ -27542,7 +27632,7 @@
   {
     "id": "functions_text_scientific_2f83fb89",
     "file": "src/functions/text.rs",
-    "line": 769,
+    "line": 759,
     "decision": "exp < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27552,7 +27642,7 @@
   {
     "id": "functions_text_general_854bc405",
     "file": "src/functions/text.rs",
-    "line": 780,
+    "line": 770,
     "decision": "rexp < -4 || rexp >= p_i",
     "conditions": 2,
     "vectors_required": 3,
@@ -27562,7 +27652,7 @@
   {
     "id": "functions_text_general_7f88b68a",
     "file": "src/functions/text.rs",
-    "line": 786,
+    "line": 776,
     "decision": "self.alt",
     "conditions": 1,
     "vectors_required": 2,
@@ -27572,7 +27662,7 @@
   {
     "id": "functions_text_general_af12c860",
     "file": "src/functions/text.rs",
-    "line": 791,
+    "line": 781,
     "decision": "mantissa.contains('.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27582,7 +27672,7 @@
   {
     "id": "functions_text_general_655de979",
     "file": "src/functions/text.rs",
-    "line": 792,
+    "line": 782,
     "decision": "mantissa.ends_with('0')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27592,7 +27682,7 @@
   {
     "id": "functions_text_general_102cc00b",
     "file": "src/functions/text.rs",
-    "line": 795,
+    "line": 785,
     "decision": "mantissa.ends_with('.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27602,7 +27692,7 @@
   {
     "id": "functions_text_split_exponent_6be4a01c",
     "file": "src/functions/text.rs",
-    "line": 805,
+    "line": 795,
     "decision": "match s.find('e') {\n        Some(i) => s.split_at(i),\n        None => (s, \"\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27612,7 +27702,7 @@
   {
     "id": "functions_text_alternate_form_2_af12c860",
     "file": "src/functions/text.rs",
-    "line": 816,
+    "line": 806,
     "decision": "mantissa.contains('.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27622,7 +27712,7 @@
   {
     "id": "functions_text_alternate_form_2_655de979",
     "file": "src/functions/text.rs",
-    "line": 817,
+    "line": 807,
     "decision": "mantissa.ends_with('0')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27632,7 +27722,7 @@
   {
     "id": "functions_text_alternate_form_2_102cc00b",
     "file": "src/functions/text.rs",
-    "line": 820,
+    "line": 810,
     "decision": "mantissa.ends_with('.')",
     "conditions": 1,
     "vectors_required": 2,
@@ -27642,7 +27732,7 @@
   {
     "id": "functions_text_digits_a46a7230",
     "file": "src/functions/text.rs",
-    "line": 834,
+    "line": 824,
     "decision": "let Some(d) = chars.peek().and_then(|c| c.to_digit(10))",
     "conditions": 1,
     "vectors_required": 2,
@@ -27652,7 +27742,7 @@
   {
     "id": "functions_text_to_radix_01b7c5b2",
     "file": "src/functions/text.rs",
-    "line": 853,
+    "line": 843,
     "decision": "n == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27662,7 +27752,7 @@
   {
     "id": "functions_text_to_radix_48fa7593",
     "file": "src/functions/text.rs",
-    "line": 858,
+    "line": 848,
     "decision": "n > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27672,7 +27762,7 @@
   {
     "id": "functions_text_group_thousands_4a6d0c91",
     "file": "src/functions/text.rs",
-    "line": 871,
+    "line": 861,
     "decision": "i > 0 && (n.saturating_sub(i)) % 3 == 0",
     "conditions": 2,
     "vectors_required": 3,
@@ -27682,7 +27772,7 @@
   {
     "id": "functions_text_decode_4e677405",
     "file": "src/functions/text.rs",
-    "line": 884,
+    "line": 874,
     "decision": "x.is_nan()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27692,7 +27782,7 @@
   {
     "id": "functions_text_decode_fdc443c3",
     "file": "src/functions/text.rs",
-    "line": 886,
+    "line": 876,
     "decision": "x.is_infinite()",
     "conditions": 1,
     "vectors_required": 2,
@@ -27702,7 +27792,7 @@
   {
     "id": "functions_text_decode_25b21c7a",
     "file": "src/functions/text.rs",
-    "line": 891,
+    "line": 881,
     "decision": "ax == 0.0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27712,7 +27802,7 @@
   {
     "id": "functions_text_round_b8d2422b",
     "file": "src/functions/text.rs",
-    "line": 914,
+    "line": 904,
     "decision": "digits.get(keep).is_some_and(|d| *d >= 5)",
     "conditions": 1,
     "vectors_required": 2,
@@ -27722,7 +27812,7 @@
   {
     "id": "functions_text_round_acb70138",
     "file": "src/functions/text.rs",
-    "line": 917,
+    "line": 907,
     "decision": "i == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -27732,7 +27822,7 @@
   {
     "id": "functions_text_round_dc0c9e58",
     "file": "src/functions/text.rs",
-    "line": 924,
+    "line": 914,
     "decision": "match kept.get_mut(i) {\n                Some(d) if *d == 9 => *d = 0,\n                Some(d) => {\n                    *d = d.saturating_add(1);\n                    break;\n                }\n                None => break,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -27742,7 +27832,7 @@
   {
     "id": "functions_text_round_9efedf4b",
     "file": "src/functions/text.rs",
-    "line": 925,
+    "line": 915,
     "decision": "*d == 9",
     "conditions": 1,
     "vectors_required": 2,
@@ -27752,7 +27842,7 @@
   {
     "id": "functions_text_round_66c41aa7",
     "file": "src/functions/text.rs",
-    "line": 934,
+    "line": 924,
     "decision": "kept.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -48000,49 +48090,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_format_format_query_value_adbccb7e",
+    "id": "storage_row_format_write_query_value_838baf59",
     "file": "src/storage/row/format.rs",
-    "line": 70,
-    "decision": "match v {\n        Value::Null => Vec::new(),\n        Value::Integer(i) => i.to_string().into_bytes(),\n        Value::Real(r) => format_real(*r).into_bytes(),\n        Value::Text(s) => truncate_at_nul(s.as_bytes()),\n        Value::Blob(b) => truncate_at_nul(b),\n    }",
+    "line": 78,
+    "decision": "match v {\n        Value::Null => {}\n        Value::Integer(i) => buf.extend_from_slice(i.to_string().as_bytes()),\n        Value::Real(r) => buf.extend_from_slice(format_real(*r).as_bytes()),\n        Value::Text(s) => {\n            let bytes = s.as_bytes();\n            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());\n            write_escaped(buf, bytes.get(..end).unwrap_or(bytes));\n        }\n        Value::Blob(b) => write_escaped(buf, b),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_format_truncate_at_nul_8425a771",
+    "id": "storage_row_format_write_escaped_04efa70e",
     "file": "src/storage/row/format.rs",
-    "line": 80,
-    "decision": "match bytes.iter().position(|&b| b == 0) {\n        Some(i) => bytes.get(..i).unwrap_or(bytes).to_vec(),\n        None => bytes.to_vec(),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_row_format_write_query_value_a6d86b04",
-    "file": "src/storage/row/format.rs",
-    "line": 91,
-    "decision": "match v {\n        Value::Null => {}\n        Value::Integer(i) => buf.extend_from_slice(i.to_string().as_bytes()),\n        Value::Real(r) => buf.extend_from_slice(format_real(*r).as_bytes()),\n        Value::Text(s) => write_truncated_at_nul(buf, s.as_bytes()),\n        Value::Blob(b) => write_truncated_at_nul(buf, b),\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "storage_row_format_write_truncated_at_nul_d53d055b",
-    "file": "src/storage/row/format.rs",
-    "line": 101,
-    "decision": "match bytes.iter().position(|&b| b == 0) {\n        Some(i) => bytes.get(..i).unwrap_or(bytes),\n        None => bytes,\n    }",
-    "conditions": 0,
-    "vectors_required": 0,
-    "compiler_void": true,
+    "line": 100,
+    "decision": "kept",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "storage_row_format_format_csv_value_d47761de",
     "file": "src/storage/row/format.rs",
-    "line": 120,
+    "line": 121,
     "decision": "match v {\n        Value::Null => String::new(),\n        Value::Integer(i) => i.to_string(),\n        Value::Real(r) => format_real(*r),\n        Value::Text(s) => csv_quote(s),\n        Value::Blob(b) => csv_quote(&format_blob(b)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48052,7 +48122,7 @@
   {
     "id": "storage_row_format_write_csv_value_d90eed5d",
     "file": "src/storage/row/format.rs",
-    "line": 134,
+    "line": 135,
     "decision": "match v {\n        Value::Null => {}\n        Value::Integer(i) => buf.push_str(&i.to_string()),\n        Value::Real(r) => buf.push_str(&format_real(*r)),\n        Value::Text(s) => buf.push_str(&csv_quote(s)),\n        Value::Blob(b) => buf.push_str(&csv_quote(&format_blob(b))),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48062,7 +48132,7 @@
   {
     "id": "storage_row_format_csv_quote_daad0552",
     "file": "src/storage/row/format.rs",
-    "line": 179,
+    "line": 180,
     "decision": "!needs_quote",
     "conditions": 1,
     "vectors_required": 2,
@@ -48072,7 +48142,7 @@
   {
     "id": "storage_row_format_csv_quote_7b8c762f",
     "file": "src/storage/row/format.rs",
-    "line": 185,
+    "line": 186,
     "decision": "c == '\"'",
     "conditions": 1,
     "vectors_required": 2,

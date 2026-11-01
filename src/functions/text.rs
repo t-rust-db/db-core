@@ -5,7 +5,7 @@
 //! `concat`, `concat_ws`, `format`/`printf`, `likely`/`unlikely`/
 //! `likelihood`, `octet_length`, `random`, `randomblob`, `substring`,
 //! `unicode`, `unistr`, and the build-introspection functions. sqlite3
-//! 3.53.4 is the oracle (`make check-row-functions-oracle`).
+//! 3.54.1 is the oracle (`make check-row-functions-oracle`).
 //!
 //! `changes()`, `total_changes()` and `last_insert_rowid()` are listed
 //! here so a statement naming them compiles, but the row VM answers them
@@ -243,9 +243,8 @@ fn compileoption_used(args: &[Value]) -> Result<Value, FunctionError> {
 
 /// `printf(FORMAT, ...)`/`format(...)`: sqlite3's `printf.c`. NULL for a
 /// NULL format; a conversion it does not know (or a format that ends
-/// inside one) stops the output there. The result is NULL when it is
-/// empty and no conversion ran (`printf('')`, `printf('%y')`), as
-/// sqlite3's never-allocated buffer is.
+/// inside one) stops the output there. An empty result is `''`, as in
+/// sqlite3 3.54 (3.53 gave NULL when no conversion ran).
 fn printf(args: &[Value]) -> Result<Value, FunctionError> {
     let Some(format) = args.first() else {
         return Ok(Value::Null);
@@ -256,14 +255,6 @@ fn printf(args: &[Value]) -> Result<Value, FunctionError> {
     let format = as_text(format);
     let mut rest = args.get(1..).unwrap_or_default().iter();
     let mut out = String::new();
-    let mut converted = false;
-    let finish = |out: String, converted: bool| {
-        if out.is_empty() && !converted {
-            Value::Null
-        } else {
-            text(out)
-        }
-    };
     let mut chars = format.chars().peekable();
     while let Some(c) = chars.next() {
         if c != '%' {
@@ -275,7 +266,7 @@ fn printf(args: &[Value]) -> Result<Value, FunctionError> {
             break;
         }
         let Some(spec) = Spec::parse(&mut chars, &mut rest) else {
-            return Ok(finish(out, converted));
+            return Ok(text(out));
         };
         if spec.too_big() {
             return Err(FunctionError::TooBig);
@@ -285,15 +276,14 @@ fn printf(args: &[Value]) -> Result<Value, FunctionError> {
             return Err(FunctionError::TooBig);
         }
         let Some(piece) = spec.convert(arg) else {
-            return Ok(finish(out, false));
+            return Ok(text(out));
         };
-        converted = true;
         out.push_str(&piece);
         if out.len() > MAX_LENGTH {
             return Err(FunctionError::TooBig);
         }
     }
-    Ok(finish(out, converted))
+    Ok(text(out))
 }
 
 /// The English ordinal suffix of `n`.
@@ -1145,7 +1135,7 @@ mod tests {
         ] {
             assert_eq!(p(&args), t(want), "{args:?}");
         }
-        assert_eq!(p(&[t("%y")]), Value::Null);
+        assert_eq!(p(&[t("%y")]), t(""));
         assert_eq!(p(&[Value::Null]), Value::Null);
         assert_eq!(call("format", &[t("%s %s"), i(1)]).unwrap(), t("1 "));
     }
@@ -1195,22 +1185,10 @@ mod tests {
         assert!(call("changes", &[]).is_err());
     }
 
-    // functions_text_printf_19d5fb5d: out.is_empty() && !converted
     #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_text_printf_19d5fb5d__v1_non_empty_output() {
-        assert_eq!(p(&[t("abc")]), t("abc"));
-    }
-
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_text_printf_19d5fb5d__v2_empty_and_no_conversion_is_null() {
-        assert_eq!(p(&[t("")]), Value::Null);
-    }
-
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_text_printf_19d5fb5d__v3_empty_after_a_conversion_is_text() {
+    fn an_empty_printf_result_is_empty_text() {
+        assert_eq!(p(&[t("")]), t(""));
+        assert_eq!(p(&[t("%y")]), t(""));
         assert_eq!(p(&[t("%s"), t("")]), t(""));
     }
 

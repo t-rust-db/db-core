@@ -260,13 +260,17 @@ fn clear_ymd_hms_tz(p: &mut DateTime) {
 }
 
 /// Y-M-D h:m:s to julian day (`computeJD`, Meeus p. 61), Gregorian
-/// calendar throughout; a missing date means 2000-01-01.
+/// calendar throughout; a missing date means 2000-01-01, and a lone
+/// `24:00` means 2000-01-02 00:00 (sqlite3 3.54).
 fn compute_jd(p: &mut DateTime) {
     if p.valid_jd {
         return;
     }
     let (y, mo, d) = if p.valid_ymd {
         (p.y, p.mo, p.d)
+    } else if p.valid_hms && p.h == 24 {
+        p.h = 0;
+        (2000, 1, 2)
     } else {
         (2000, 1, 1)
     };
@@ -305,18 +309,24 @@ fn compute_jd(p: &mut DateTime) {
     }
 }
 
+/// The number of days in month `mo` of year `y` (`daysOfMonth`).
+fn days_of_month(y: i64, mo: i64) -> i64 {
+    if matches!(mo, 1 | 3 | 5 | 7 | 8 | 10 | 12) {
+        31
+    } else if mo != 2 {
+        30
+    } else if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) {
+        29
+    } else {
+        28
+    }
+}
+
 /// The number of days `floor` would subtract to undo day-of-month
 /// overflow (`computeFloor`): 2023-02-31 has an `n_floor` of 3.
 fn compute_floor(p: &mut DateTime) {
-    p.n_floor = if p.d <= 28 || matches!(p.mo, 1 | 3 | 5 | 7 | 8 | 10 | 12) {
-        0
-    } else if p.mo != 2 {
-        i64::from(p.d == 31)
-    } else if p.y % 4 != 0 || (p.y % 100 == 0 && p.y % 400 != 0) {
-        (W(p.d) - W(28)).0
-    } else {
-        (W(p.d) - W(29)).0
-    };
+    let max = days_of_month(p.y, p.mo);
+    p.n_floor = if p.d > max { (W(p.d) - W(max)).0 } else { 0 };
 }
 
 /// Julian day to Y-M-D (`computeYMD`); an out-of-range day is an error.
@@ -441,6 +451,10 @@ fn parse_hhmmss(z: &[u8], p: &mut DateTime) -> bool {
     } else {
         0
     };
+    // sqlite3 3.54 takes `24:00[:00[.000]]` as the end of the day.
+    if h == 24 && (m != 0 || s != 0 || ms != 0.0) {
+        return true;
+    }
     p.valid_jd = false;
     p.raw_s = false;
     p.valid_hms = true;
@@ -458,7 +472,7 @@ fn parse_yyyymmdd(z: &[u8], p: &mut DateTime) -> bool {
     } else {
         (false, z)
     };
-    let &[y, m, d] =
+    let &[mut y, mut m, mut d] =
         get_digits(z, &[(4, 0, 14712, b'-'), (2, 1, 12, b'-'), (2, 1, 31, 0)]).as_slice()
     else {
         return true;
@@ -468,7 +482,19 @@ fn parse_yyyymmdd(z: &[u8], p: &mut DateTime) -> bool {
         z = adv(z, 1);
     }
     if !parse_hhmmss(z, p) {
-        // got the time
+        // `24:00` is 00:00 the next day (sqlite3 3.54).
+        if p.h == 24 {
+            p.h = 0;
+            d = (W(d) + W(1)).0;
+            if d > days_of_month(y, m) {
+                d = (W(d) - W(days_of_month(y, m))).0;
+                m = (W(m) + W(1)).0;
+                if m > 12 {
+                    m = 1;
+                    y = (W(y) + W(1)).0;
+                }
+            }
+        }
     } else if z.is_empty() {
         p.valid_hms = false;
     } else {
@@ -674,6 +700,7 @@ fn parse_modifier(z: &[u8], p: &mut DateTime, idx: usize) -> bool {
         }
         b'w' => modifier_weekday(z, p),
         b's' => modifier_start_of(z, p),
+        b'e' => modifier_end_of(z, p),
         b'+' | b'-' | b'0'..=b'9' => modifier_numeric(z, p),
         _ => true,
     }
@@ -710,8 +737,9 @@ fn modifier_utc(p: &mut DateTime) {
     };
 }
 
-/// `weekday N`: advance to the next day that is weekday N (0 = Sunday),
-/// a no-op if already there.
+/// `weekday N`: advance to the next day that is weekday N (0 = Sunday);
+/// `weekday -N` goes back to the previous one instead (sqlite3 3.54).
+/// A no-op if already there.
 fn modifier_weekday(z: &[u8], p: &mut DateTime) -> bool {
     let is_prefix = z
         .get(..8)
@@ -719,23 +747,70 @@ fn modifier_weekday(z: &[u8], p: &mut DateTime) -> bool {
     let Some(r) = is_prefix.then(|| atof(adv(z, 8))).flatten() else {
         return true;
     };
-    if !(0.0..7.0).contains(&r) || r.fract() != 0.0 {
+    if !(-6.0..=6.0).contains(&r) || r.fract() != 0.0 {
         return true;
     }
-    let n = f2i(r);
+    let n = f2i(r).abs();
     compute_ymd_hms(p);
     p.tz = 0;
     p.valid_jd = false;
     compute_jd(p);
     let mut wd = (W(p.ijd) + W(129_600_000)).0 / DAY_MS % 7;
-    if wd > n {
-        wd = (W(wd) - W(7)).0;
+    if wd != n {
+        if wd > n {
+            wd = (W(wd) - W(7)).0;
+        }
+        p.ijd = p
+            .ijd
+            .saturating_add((W(n) - W(wd)).0.saturating_mul(DAY_MS));
+        // sqlite3 tests for any '-' after `weekday `, not the sign of N.
+        if adv(z, 8).contains(&b'-') {
+            p.ijd = p.ijd.saturating_sub(7 * DAY_MS);
+        }
     }
-    p.ijd = p
-        .ijd
-        .saturating_add((W(n) - W(wd)).0.saturating_mul(DAY_MS));
     clear_ymd_hms_tz(p);
     false
+}
+
+/// `end of day|month|year` (sqlite3 3.54): the last millisecond of the
+/// current day, month or year.
+fn modifier_end_of(z: &[u8], p: &mut DateTime) -> bool {
+    let is_end = z
+        .get(..7)
+        .is_some_and(|h| h.eq_ignore_ascii_case(b"end of "));
+    if !is_end || (!p.valid_jd && !p.valid_ymd && !p.valid_hms) {
+        return true;
+    }
+    let unit = adv(z, 7);
+    compute_ymd(p);
+    p.valid_hms = true;
+    p.h = 23;
+    p.mi = 59;
+    p.s = 59.999;
+    p.raw_s = false;
+    p.tz = 0;
+    p.valid_jd = false;
+    if unit.eq_ignore_ascii_case(b"month") {
+        p.d = 1;
+        p.mo = (W(p.mo) + W(1)).0;
+        if p.mo > 12 {
+            p.y = (W(p.y) + W(1)).0;
+            p.mo = 1;
+        }
+        compute_floor(p);
+        compute_jd(p);
+        p.ijd = p
+            .ijd
+            .saturating_sub((W(p.n_floor) + W(1)).0.saturating_mul(DAY_MS));
+        clear_ymd_hms_tz(p);
+        false
+    } else if unit.eq_ignore_ascii_case(b"year") {
+        p.mo = 12;
+        p.d = 31;
+        false
+    } else {
+        !unit.eq_ignore_ascii_case(b"day")
+    }
 }
 
 /// `start of month|year|day`, and `subsec`/`subsecond`.
@@ -2034,97 +2109,122 @@ mod tests {
         assert!(p.is_error);
     }
 
-    // functions_datetime_compute_floor_0c55f755: p.d <= 28 || matches!(p.mo, 1 | 3 | 5 | 7 | 8 | 10 | 12)
+    #[test]
+    fn floor_counts_the_days_past_the_end_of_the_month() {
+        for (y, mo, d, n_floor) in [
+            (2024, 4, 30, 0),
+            (2024, 4, 31, 1),
+            (2023, 2, 30, 2),
+            (2024, 1, 31, 0),
+        ] {
+            let mut p = DateTime {
+                y,
+                mo,
+                d,
+                ..DateTime::default()
+            };
+            compute_floor(&mut p);
+            assert_eq!(p.n_floor, n_floor, "{y}-{mo}-{d}");
+        }
+    }
+
+    // functions_datetime_days_of_month_d002399b: y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_compute_floor_0c55f755__v1_day_at_most_28() {
-        let mut p = DateTime {
-            y: 2024,
-            mo: 4,
-            d: 1,
-            ..DateTime::default()
-        };
-        compute_floor(&mut p);
-        assert_eq!(p.n_floor, 0);
+    fn mcdc__functions_datetime_days_of_month_d002399b__v1_not_multiple_of_4() {
+        assert_eq!(days_of_month(2023, 2), 28);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_compute_floor_0c55f755__v2_long_month() {
-        let mut p = DateTime {
-            y: 2024,
-            mo: 1,
-            d: 31,
-            ..DateTime::default()
-        };
-        compute_floor(&mut p);
-        assert_eq!(p.n_floor, 0);
+    fn mcdc__functions_datetime_days_of_month_d002399b__v2_plain_leap_year() {
+        assert_eq!(days_of_month(2024, 2), 29);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_compute_floor_0c55f755__v3_short_month_day_31() {
-        let mut p = DateTime {
-            y: 2024,
-            mo: 4,
-            d: 31,
-            ..DateTime::default()
-        };
-        compute_floor(&mut p);
-        assert_eq!(p.n_floor, 1);
-    }
-
-    // functions_datetime_compute_floor_88967cd4: p.y % 4 != 0 || (p.y % 100 == 0 && p.y % 400 != 0)
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_compute_floor_88967cd4__v1_not_multiple_of_4() {
-        let mut p = DateTime {
-            y: 2023,
-            mo: 2,
-            d: 30,
-            ..DateTime::default()
-        };
-        compute_floor(&mut p);
-        assert_eq!(p.n_floor, 2);
+    fn mcdc__functions_datetime_days_of_month_d002399b__v3_century_not_leap() {
+        assert_eq!(days_of_month(1900, 2), 28);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_compute_floor_88967cd4__v2_plain_leap_year() {
+    fn mcdc__functions_datetime_days_of_month_d002399b__v4_century_400_leap() {
+        assert_eq!(days_of_month(2000, 2), 29);
+    }
+
+    // functions_datetime_compute_jd_a8b8229b: p.valid_hms && p.h == 24
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_compute_jd_a8b8229b__v1_no_time() {
         let mut p = DateTime {
-            y: 2024,
-            mo: 2,
-            d: 30,
+            h: 24,
             ..DateTime::default()
         };
-        compute_floor(&mut p);
-        assert_eq!(p.n_floor, 1);
+        compute_jd(&mut p);
+        compute_ymd(&mut p);
+        assert_eq!(p.d, 1);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_compute_floor_88967cd4__v3_century_not_leap() {
+    fn mcdc__functions_datetime_compute_jd_a8b8229b__v2_an_ordinary_hour() {
         let mut p = DateTime {
-            y: 1900,
-            mo: 2,
-            d: 30,
+            h: 12,
+            valid_hms: true,
             ..DateTime::default()
         };
-        compute_floor(&mut p);
-        assert_eq!(p.n_floor, 2);
+        compute_jd(&mut p);
+        assert_eq!(p.h, 12);
+        compute_ymd(&mut p);
+        assert_eq!(p.d, 1);
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_compute_floor_88967cd4__v4_century_400_leap() {
+    fn mcdc__functions_datetime_compute_jd_a8b8229b__v3_hour_24_is_the_next_day() {
         let mut p = DateTime {
-            y: 2000,
-            mo: 2,
-            d: 30,
+            h: 24,
+            valid_hms: true,
             ..DateTime::default()
         };
-        compute_floor(&mut p);
-        assert_eq!(p.n_floor, 1);
+        compute_jd(&mut p);
+        assert_eq!(p.h, 0);
+        compute_ymd(&mut p);
+        assert_eq!(p.d, 2);
+    }
+
+    // functions_datetime_parse_hhmmss_8fdff3ee: h == 24 && (m != 0 || s != 0 || ms != 0.0)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_hhmmss_8fdff3ee__v1_not_hour_24() {
+        assert!(!parse_hhmmss(b"23:59:59.5", &mut DateTime::default()));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_hhmmss_8fdff3ee__v2_exactly_24_00() {
+        let mut p = DateTime::default();
+        assert!(!parse_hhmmss(b"24:00:00.000", &mut p));
+        assert_eq!(p.h, 24);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_hhmmss_8fdff3ee__v3_minutes_past_24() {
+        assert!(parse_hhmmss(b"24:01", &mut DateTime::default()));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_hhmmss_8fdff3ee__v4_seconds_past_24() {
+        assert!(parse_hhmmss(b"24:00:01", &mut DateTime::default()));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_parse_hhmmss_8fdff3ee__v5_fraction_past_24() {
+        assert!(parse_hhmmss(b"24:00:00.5", &mut DateTime::default()));
     }
 
     // functions_datetime_parse_hhmmss_00a2f70e: at(z, 0) == b'.' && at(z, 1).is_ascii_digit()
@@ -2350,29 +2450,88 @@ mod tests {
         assert!(!p.raw_s);
     }
 
-    // functions_datetime_modifier_weekday_8f1c5994: !(0.0..7.0).contains(&r) || r.fract() != 0.0
+    // functions_datetime_modifier_weekday_9d7bf902: !(-6.0..=6.0).contains(&r) || r.fract() != 0.0
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_modifier_weekday_8f1c5994__v1_whole_in_range() {
+    fn mcdc__functions_datetime_modifier_weekday_9d7bf902__v1_whole_in_range() {
         let mut p = DateTime::default();
         assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
-        assert!(!modifier_weekday(b"weekday 1", &mut p));
+        assert!(!modifier_weekday(b"weekday -1", &mut p));
+        compute_ymd(&mut p);
+        assert_eq!((p.mo, p.d), (3, 11));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_modifier_weekday_8f1c5994__v2_out_of_range() {
+    fn mcdc__functions_datetime_modifier_weekday_9d7bf902__v2_out_of_range() {
         let mut p = DateTime::default();
         assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
-        assert!(modifier_weekday(b"weekday 9", &mut p));
+        assert!(modifier_weekday(b"weekday -7", &mut p));
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__functions_datetime_modifier_weekday_8f1c5994__v3_fractional() {
+    fn mcdc__functions_datetime_modifier_weekday_9d7bf902__v3_fractional() {
         let mut p = DateTime::default();
         assert!(!parse_date_or_time(b"2024-03-15", &mut p, 0));
-        assert!(modifier_weekday(b"weekday 1.5", &mut p));
+        assert!(modifier_weekday(b"weekday -1.5", &mut p));
+    }
+
+    // functions_datetime_modifier_end_of_afc89dd0: !is_end || (!p.valid_jd && !p.valid_ymd && !p.valid_hms)
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_end_of_afc89dd0__v1_end_of_a_date() {
+        let mut p = DateTime {
+            y: 2024,
+            mo: 3,
+            d: 15,
+            valid_ymd: true,
+            ..DateTime::default()
+        };
+        assert!(!modifier_end_of(b"end of day", &mut p));
+        assert_eq!((p.h, p.mi, p.s), (23, 59, 59.999));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_end_of_afc89dd0__v2_not_end_of() {
+        let mut p = DateTime {
+            valid_ymd: true,
+            ..DateTime::default()
+        };
+        assert!(modifier_end_of(b"end at day", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_end_of_afc89dd0__v3_nothing_valid() {
+        let mut p = DateTime::default();
+        assert!(modifier_end_of(b"end of day", &mut p));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_end_of_afc89dd0__v4_julian_day_only() {
+        let mut p = DateTime {
+            ijd: 2_460_385 * DAY_MS,
+            valid_jd: true,
+            ..DateTime::default()
+        };
+        assert!(!modifier_end_of(b"end of month", &mut p));
+        compute_ymd_hms(&mut p);
+        assert_eq!((p.mo, p.d, p.h), (3, 31, 23));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__functions_datetime_modifier_end_of_afc89dd0__v5_time_only() {
+        let mut p = DateTime {
+            h: 13,
+            valid_hms: true,
+            ..DateTime::default()
+        };
+        assert!(!modifier_end_of(b"end of year", &mut p));
+        assert_eq!((p.y, p.mo, p.d, p.h), (2000, 12, 31, 23));
     }
 
     // functions_datetime_modifier_start_of_7dc9be9f: !p.valid_jd && !p.valid_ymd && !p.valid_hms

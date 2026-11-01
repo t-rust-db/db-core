@@ -1,4 +1,4 @@
--- sqlite3 JSON functions vs sqlite3 3.53.4 (#651): one statement per
+-- sqlite3 JSON functions vs sqlite3 3.54.1 (#651): one statement per
 -- line, run by tools/check_row_functions_oracle.py.
 -- json(): minify, canonicalise, JSON5
 SELECT json(' { "a" : [ 1 , 2 , 3 ] , "b" : null } ')

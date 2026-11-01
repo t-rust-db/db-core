@@ -192,7 +192,7 @@ fn typeof_fn(args: &[Value]) -> Result<Value, FunctionError> {
 }
 
 fn sqlite_version(_args: &[Value]) -> Result<Value, FunctionError> {
-    Ok(Value::Text("3.53.4".to_string().into()))
+    Ok(Value::Text("3.54.1".to_string().into()))
 }
 
 fn hex(args: &[Value]) -> Result<Value, FunctionError> {
@@ -2156,7 +2156,7 @@ mod tests {
     fn sqlite_version_returns_pinned_string() {
         assert_eq!(
             v("sqlite_version", &[]),
-            Value::Text("3.53.4".to_string().into())
+            Value::Text("3.54.1".to_string().into())
         );
     }
 

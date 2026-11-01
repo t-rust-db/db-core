@@ -1,6 +1,6 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
-//! The row engine's scalar functions against sqlite3 3.53.4's answers
+//! The row engine's scalar functions against sqlite3 3.54.1's answers
 //! (#651), without sqlite3: each `tools/row_functions_cases*.sql` runs as
 //! `examples/row_oracle` runs it, and must print what
 //! `tools/check_row_functions_oracle.py` wrote to the matching

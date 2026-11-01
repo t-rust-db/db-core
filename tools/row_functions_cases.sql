@@ -1,4 +1,4 @@
--- Row engine scalar functions vs sqlite3 3.53.4 (#651): one statement
+-- Row engine scalar functions vs sqlite3 3.54.1 (#651): one statement
 -- per line, run by tools/check_row_functions_oracle.py.
 -- harness self-check: functions db-core already had
 SELECT upper('abc'), lower('ÀBC'), length('héllo'), abs(-3), abs(-2.5)

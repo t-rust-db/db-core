@@ -11,9 +11,10 @@
 //!
 //! The subtype survives what passes a value through unchanged --
 //! parentheses, unary `+`, `COLLATE`, `likely`/`unlikely`/`likelihood`,
-//! the results of `CASE`/`iif`, `coalesce`/`ifnull`/`nullif`, `min`/`max`
-//! and a scalar subquery -- and is lost by anything that computes a new
-//! value and by a column, a `FROM` subquery's or a CTE's included. Where
+//! and the results of `CASE`/`iif`, `coalesce`/`ifnull`/`nullif` and
+//! `min`/`max` -- and is lost by anything that computes a new value, by a
+//! column, a `FROM` subquery's or a CTE's included, and by a scalar
+//! subquery, which clears it since sqlite3 3.54. Where
 //! it depends on the row:
 //!
 //! * `json_extract(X, P)` gives an object or array the subtype and any
@@ -25,12 +26,12 @@
 //!
 //! Both keep NULL as NULL, so `coalesce` still picks the same argument,
 //! but change the value itself: where something still compares it
-//! (`nullif`'s first argument, `min`/`max`, a subquery's result) a mix
-//! is refused rather than guessed.
+//! (`nullif`'s first argument, `min`/`max`) a mix is refused rather than
+//! guessed.
 
 use crate::codegen::row::CodegenError;
 use crate::functions::{JSON_EXTRACT_SUBTYPED, JSON_QUOTE_NULLABLE};
-use crate::parser::ast::{Expr, ExprKind, FunctionArgs, Literal, ResultColumn, UnaryOp};
+use crate::parser::ast::{Expr, ExprKind, FunctionArgs, Literal, UnaryOp};
 use crate::parser::Span;
 
 /// The functions whose result carries the JSON subtype.
@@ -154,18 +155,8 @@ fn classify(expr: &Expr, rewrite: bool) -> Result<Arg, CodegenError> {
                 span: expr.span,
             }))
         }
-        ExprKind::Subquery(select) => {
-            let [ResultColumn::Expr { expr: result, .. }] = select.columns.as_slice() else {
-                return Ok(Arg::Plain);
-            };
-            if !select.compound.is_empty() {
-                return Ok(Arg::Plain);
-            }
-            Ok(match classify(result, false)? {
-                Arg::Json(_) => Arg::Json(expr.clone()),
-                other => other,
-            })
-        }
+        // sqlite3 3.54 clears a scalar subquery's subtype.
+        ExprKind::Subquery(_) => Ok(Arg::Plain),
         ExprKind::FunctionCall {
             name,
             distinct: false,
@@ -308,6 +299,7 @@ fn mixed() -> CodegenError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::ast::ResultColumn;
     use crate::parser::row::{parse_select, ParseOutcome};
 
     /// `mark` for the single call in `SELECT <call>`: the marked positions
@@ -364,7 +356,6 @@ mod tests {
             "likelihood(json('[1]'), 0.5)",
             "nullif(json('[1]'), 1)",
             "min(json('[1]'), json('[2]'))",
-            "(SELECT json('[1]'))",
             "coalesce(NULL, json('[1]'))",
             "CASE WHEN 1 THEN json('[1]') END",
         ] {
@@ -375,6 +366,9 @@ mod tests {
             "upper(json('[1]'))",
             "json('[1]') || ''",
             "(SELECT '[1]')",
+            "(SELECT json('[1]'))",
+            "(SELECT json_extract('[1]', '$'))",
+            "(SELECT CASE WHEN 1 THEN json('[1]') ELSE 'x' END)",
             "(SELECT json('[1]') UNION ALL SELECT 1)",
             "CASE WHEN 1 THEN NULL END",
             "count(DISTINCT json('[1]'))",
@@ -410,8 +404,6 @@ mod tests {
         for arg in [
             "nullif(json_extract('[1]', '$'), '')",
             "max(json('[1]'), '[0]')",
-            "(SELECT json_extract('[1]', '$'))",
-            "(SELECT CASE WHEN 1 THEN json('[1]') ELSE 'x' END)",
         ] {
             let refused = marks(&format!("json_array({arg})"));
             assert!(
