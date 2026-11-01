@@ -142,7 +142,7 @@ impl Fixture {
     }
 
     fn engine(&self, paths: &[&Path]) -> CrossModeEngine {
-        CrossModeEngine::open_column_tables_sqlite(paths, &self.lookup()).unwrap()
+        CrossModeEngine::open_column_tables_sqlite(paths, &[("lookup", &self.lookup())]).unwrap()
     }
 
     /// The Parquet file first, then the directory.
@@ -395,5 +395,5 @@ fn all_files_still_open_the_parquet_only_session() {
     // No directory among the paths: the earlier session shape, unchanged.
     let e = f.engine(&[&f.events()]);
     assert!(e.tables().unwrap().iter().any(|t| t.name == "events"));
-    assert!(CrossModeEngine::open_column_tables_sqlite(&[], &f.lookup()).is_err());
+    assert!(CrossModeEngine::open_column_tables_sqlite(&[], &[("lookup", &f.lookup())]).is_err());
 }

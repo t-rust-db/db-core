@@ -501,6 +501,7 @@ mod tests {
     fn table_schema(name: &str, root_page: u32, indexes: Vec<IndexSchema>) -> TableSchema {
         TableSchema {
             name: name.to_string(),
+            database: 0,
             root_page,
             columns: vec![],
             column_types: vec![],

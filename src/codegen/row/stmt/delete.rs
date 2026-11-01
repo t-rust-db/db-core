@@ -66,7 +66,7 @@ pub fn compile_delete_with_catalog(
         Opcode::OpenWrite,
         TABLE_CURSOR,
         root_page,
-        0,
+        schema.database_p3(),
     ));
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
@@ -184,7 +184,7 @@ fn compile_delete_without_rowid(
         Opcode::OpenWrite,
         TABLE_CURSOR,
         root_page,
-        0,
+        schema.database_p3(),
     ));
     let scope = Scope::single(schema, TABLE_CURSOR).with_catalog(catalog);
     emit_two_pass(

@@ -299,6 +299,9 @@ pub enum TableRefKind {
 pub struct TableRef {
     /// The table itself: a catalog name or a materialized subquery.
     pub kind: TableRefKind,
+    /// The `schema.` a table name is qualified with (#924), if given:
+    /// which attached SQLite file of a cross-mode engine reads it.
+    pub schema: Option<String>,
     /// The `AS alias`, if given.
     pub alias: Option<String>,
     /// The source span covering this entry.
@@ -951,6 +954,27 @@ pub enum TransactionMode {
 pub struct Begin {
     /// The locking mode, if given.
     pub mode: Option<TransactionMode>,
+    /// The source span covering the whole statement.
+    pub span: Span,
+}
+
+/// `ATTACH [DATABASE] expr AS schema-name` (#924, ADR 0043): opens the
+/// SQLite file `file` names under `name`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Attach {
+    /// The file to attach: an expression, a string literal in practice.
+    pub file: Expr,
+    /// The schema name the file's tables are qualified with.
+    pub name: String,
+    /// The source span covering the whole statement.
+    pub span: Span,
+}
+
+/// `DETACH [DATABASE] schema-name` (#924, ADR 0043).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Detach {
+    /// The schema name of the attached file to close.
+    pub name: String,
     /// The source span covering the whole statement.
     pub span: Span,
 }

@@ -99,7 +99,7 @@ pub fn compile_select_with_catalog_and_stats(
                 Opcode::OpenRead,
                 cursors.table,
                 root_page,
-                0,
+                schema.database_p3(),
             ));
         }
         TableRefKind::Unnest { .. } => {
@@ -272,6 +272,7 @@ where
     }
     let no_table = Rc::new(TableSchema {
         name: String::new(),
+        database: 0,
         root_page: 0,
         columns: vec![],
         column_types: vec![],
@@ -640,6 +641,7 @@ pub fn compile_select_compound(
     // result columns, never to any arm's table columns.
     let output_schema = TableSchema {
         name: String::new(),
+        database: 0,
         root_page: 0,
         columns: output_column_names(first, first_schema),
         without_rowid: false,
@@ -826,7 +828,7 @@ pub fn compile_select_compound(
                     Opcode::OpenRead,
                     cursors.table,
                     root_page,
-                    0,
+                    schema.database_p3(),
                 ));
             }
         }

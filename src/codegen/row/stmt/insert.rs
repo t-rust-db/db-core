@@ -468,7 +468,7 @@ pub fn compile_insert(
         Opcode::OpenWrite,
         TABLE_CURSOR,
         root_page,
-        0,
+        schema.database_p3(),
     ));
     open_index_cursors(&mut em, schema, FIRST_INDEX_CURSOR)?;
 
@@ -598,7 +598,7 @@ pub fn compile_insert(
                     Opcode::OpenRead,
                     select_cursors.table,
                     select_root_page,
-                    0,
+                    select_schema.database_p3(),
                 ));
                 compile_select_scan(
                     &mut em,

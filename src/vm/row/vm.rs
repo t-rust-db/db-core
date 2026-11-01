@@ -161,8 +161,8 @@ pub enum ExecError {
     /// db-core#81).
     TransactionFailed(super::transaction::TransactionError),
     /// `OpenRead`/`OpenWrite` named a nonzero `p3` (attached-database
-    /// index) -- db-core has no notion of attached databases
-    /// (db-core#125).
+    /// index) that the installed [`super::cursor_factory::CursorFactory`]
+    /// does not serve (db-core#125, #924).
     AttachedDatabasesUnsupported,
     /// A [`super::cursor_factory::CursorFactory`] call failed
     /// (db-core#125).
@@ -409,7 +409,7 @@ pub struct Vm {
     /// parallel to `cursors` -- `OpenDup`'s only way to re-derive which
     /// root to hand the factory for a second cursor onto the same
     /// table (db-core#125).
-    cursor_roots: Vec<Option<u32>>,
+    cursor_roots: Vec<Option<(u32, u32)>>,
     /// Per-slot register an `OpenPseudo` cursor reads its row from, lazily
     /// at `Column` time (sqlite-rs `CursorSlot::Pseudo`, #134).
     pseudo_regs: Vec<Option<i32>>,
@@ -614,18 +614,21 @@ impl Vm {
 
     /// Records `root` as the root page cursor slot `slot` was last
     /// opened against -- `OpenDup`'s lookup key (db-core#125).
-    fn set_cursor_root(&mut self, slot: i32, root: u32) -> Result<(), ExecError> {
+    /// Records that `slot` was opened on the b-tree rooted at `root` of
+    /// database `db` (#924), for `OpenDup` to re-open.
+    fn set_cursor_root(&mut self, slot: i32, db: u32, root: u32) -> Result<(), ExecError> {
         let idx = Self::index("cursor slot write", slot)?;
         if idx >= self.cursor_roots.len() {
             self.cursor_roots.resize(idx.saturating_add(1), None);
         }
         if let Some(cell) = self.cursor_roots.get_mut(idx) {
-            *cell = Some(root);
+            *cell = Some((db, root));
         }
         Ok(())
     }
 
-    fn cursor_root(&self, slot: i32) -> Result<u32, ExecError> {
+    /// The `(database, root page)` `slot` was opened on.
+    fn cursor_root(&self, slot: i32) -> Result<(u32, u32), ExecError> {
         let idx = Self::index("cursor slot read", slot)?;
         self.cursor_roots
             .get(idx)

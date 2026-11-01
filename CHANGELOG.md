@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.221.0] - 2026-11-01
+
+### Added
+
+- Cross-mode engines join a table to SQLite tables from several named files; a bare table name must be unique across them, otherwise qualify it as `file.table` (#924)
+- Row engine: `ATTACH 'file' AS name` and `DETACH name`; `name.table` and `main.table` queries and writes, with transactions committed per file (#924)
+
 ## [0.220.2] - 2026-10-31
 
 ### Fixed

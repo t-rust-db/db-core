@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.220.2"
+version = "0.221.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -45,6 +45,11 @@ path = "tests/unit/parser_public_api_test.rs"
 [[test]]
 name = "unit_sqlite_parity"
 path = "tests/unit/sqlite_parity_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
+name = "unit_row_attach"
+path = "tests/unit/row_attach_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
@@ -251,6 +256,11 @@ required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch"]
 [[test]]
 name = "unit_engine_table_join"
 path = "tests/unit/engine_table_join_test.rs"
+required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "ingest"]
+
+[[test]]
+name = "unit_engine_multi_sqlite_join"
+path = "tests/unit/engine_multi_sqlite_join_test.rs"
 required-features = ["engine-row", "engine-column", "engine-stream", "vm-batch", "ingest"]
 
 [[test]]

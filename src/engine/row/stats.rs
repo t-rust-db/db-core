@@ -179,6 +179,7 @@ mod tests {
 
         let schemas = vec![TableSchema {
             name: "sqlite_stat1".to_string(),
+            database: 0,
             root_page: stat1_root,
             columns: vec!["tbl".to_string(), "idx".to_string(), "stat".to_string()],
             column_types: vec![String::new(), String::new(), String::new()],

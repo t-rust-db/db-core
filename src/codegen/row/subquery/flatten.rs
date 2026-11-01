@@ -154,6 +154,7 @@ fn try_flatten_table_ref_at(select: &mut Select, slot: TableRefSlot) -> bool {
     let span = target.span;
     *target = TableRef {
         kind: TableRefKind::Name(inner_table_name),
+        schema: None,
         alias: Some(alias),
         span,
     };

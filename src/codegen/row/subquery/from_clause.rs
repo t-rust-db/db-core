@@ -140,6 +140,7 @@ fn subquery_result_schema(
     let columns = subquery_output_columns(subquery, table_refs, schemas);
     TableSchema {
         name: String::new(),
+        database: 0,
         root_page: 0,
         columns: columns.clone(),
         without_rowid: false,
@@ -333,7 +334,7 @@ pub(crate) fn materialize_from_subquery(
                     Opcode::OpenRead,
                     cursors.table,
                     root_page,
-                    0,
+                    schema.database_p3(),
                 ));
             }
             TableRefKind::Unnest { .. } => {
@@ -482,6 +483,7 @@ mod tests {
     fn table(name: &str, root_page: u32) -> TableSchema {
         TableSchema {
             name: name.to_string(),
+            database: 0,
             root_page,
             columns: vec!["a".to_string(), "b".to_string()],
             without_rowid: false,

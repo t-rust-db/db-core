@@ -1731,10 +1731,20 @@ fn planner_parse(sql: &str) -> Result<Select, EngineError> {
 /// The plain table name a `SELECT` reads from; anything else (`FROM`-less,
 /// subquery in `FROM`) is an unknown table, as in column-rs.
 fn from_table(select: &Select) -> Result<&str, EngineError> {
-    select
+    let first = select
         .from
         .as_ref()
-        .and_then(|f| f.first.name())
+        .map(|f| &f.first)
+        .ok_or_else(|| EngineError::new(ErrorKind::Compile, "unknown table: <no table>"))?;
+    // Only a cross-mode engine has SQLite files to qualify a table with (#924).
+    if let (Some(schema), Some(name)) = (&first.schema, first.name()) {
+        return Err(EngineError::new(
+            ErrorKind::Compile,
+            format!("unknown table: {schema}.{name}"),
+        ));
+    }
+    first
+        .name()
         .ok_or_else(|| EngineError::new(ErrorKind::Compile, "unknown table: <no table>"))
 }
 

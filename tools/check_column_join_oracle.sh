@@ -15,6 +15,11 @@
 # DuckDB). Every query has a total ORDER BY, or is an aggregate over a
 # non-NULL key, since DuckDB and SQLite order NULLs differently.
 #
+# Two SQLite files (#924): `lk` (the lookup file above) and `dk`, attached
+# under the same names on both sides, so a qualified `lk.ids`/`dk.zones` is
+# written the same for db-core and DuckDB. `dk` has its own `ids`, which
+# makes a bare `ids` ambiguous in db-core (DuckDB has no bare `ids` either).
+#
 # Usage: tools/check_column_join_oracle.sh   (needs `duckdb` and `sqlite3`
 # on PATH; DuckDB installs its `sqlite` extension on first use, which needs
 # network once)
@@ -146,10 +151,32 @@ ERROR_QUERIES=(
   "SELECT nope FROM __P__ JOIN __ids__ USING (id)"
 )
 
+DIMS_SEED="
+CREATE TABLE zones(region TEXT PRIMARY KEY, label TEXT);
+INSERT INTO zones VALUES ('north','N'),('east','E'),('west','W');
+CREATE TABLE ids(id INTEGER PRIMARY KEY, label TEXT);
+INSERT INTO ids VALUES (2,'dk-two'),(3,'dk-three'),(4,'dk-four');
+"
+
+# __P__ is the column table, __zones__ is `zones` (bare for db-core, as
+# only `dk` has it; `dk.zones` for DuckDB).
+MULTI_FILE_QUERIES=(
+  "SELECT production.id, ids.label, zones.label FROM __P__ JOIN lk.ids ON production.id = ids.id JOIN dk.zones ON production.region = zones.region ORDER BY production.id"
+  "SELECT production.id, ids.label FROM __P__ JOIN dk.ids ON production.id = ids.id ORDER BY production.id"
+  "SELECT zones.label, count(*) FROM __P__ JOIN __zones__ ON production.region = zones.region GROUP BY zones.label ORDER BY zones.label"
+  "SELECT count(*), count(zones.label) FROM __P__ LEFT JOIN dk.zones ON production.region = zones.region"
+  "SELECT production.id FROM __P__ JOIN lk.ids ON production.id = ids.id JOIN dk.zones ON production.region = zones.region WHERE zones.label = 'N' ORDER BY production.id"
+  "SELECT regions.zone, zones.label, count(*) FROM __P__ JOIN lk.regions ON production.region = regions.region JOIN __zones__ ON production.region = zones.region GROUP BY regions.zone, zones.label ORDER BY regions.zone, zones.label"
+  "SELECT d.label FROM __P__ JOIN dk.ids AS d ON production.id = d.id WHERE d.id > 2 ORDER BY d.label"
+)
+
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 lookup="$workdir/lookup.db"
 sqlite3 "$lookup" "$SEED"
+dims="$workdir/dims.db"
+sqlite3 "$dims" "$DIMS_SEED"
+ATTACH_BOTH="INSTALL sqlite; LOAD sqlite; ATTACH '$lookup' AS lk (TYPE sqlite); ATTACH '$dims' AS dk (TYPE sqlite);"
 
 EXTRA="$workdir/extra.parquet"
 duckdb -c "COPY (SELECT (i % 1000) + 1 AS id, i AS n FROM range(0, 3000) t(i) ORDER BY id, n) TO '$EXTRA' (FORMAT parquet, ROW_GROUP_SIZE 500, COMPRESSION uncompressed)"
@@ -293,6 +320,40 @@ for combo in "file dir" "dir file" "dir dir"; do
     fi
   done
 done
+
+# Two SQLite files (#924), over the Parquet fixture and the table directory.
+for p_kind in file dir; do
+  if [[ "$p_kind" == file ]]; then
+    p_db="$FIXTURE"; p_duck="'$FIXTURE'"
+  else
+    p_db="$tabledir"; p_duck="read_parquet('$tabledir/**/*.parquet')"
+  fi
+  for template in "${MULTI_FILE_QUERIES[@]}"; do
+    db_sql="${template//__P__/production}"
+    db_sql="${db_sql//__zones__/zones}"
+    duck_sql="${template//__P__/$p_duck AS production}"
+    duck_sql="${duck_sql//__zones__/dk.zones}"
+
+    got="$(./target/release/examples/column_join_oracle "$p_db" "lk=$lookup,dk=$dims" "$db_sql")"
+    want="$(duckdb -csv -noheader -nullvalue '' -c "$ATTACH_BOTH $duck_sql" | grep -v '^$' || true)"
+
+    checked=$((checked + 1))
+    if [[ "$got" != "$want" ]]; then
+      echo "MISMATCH (two SQLite files, production: $p_kind): $db_sql"
+      echo "  db-core: $got"
+      echo "  duckdb:  $want"
+      fail=1
+    fi
+  done
+done
+
+# A bare name two files have is ambiguous in db-core.
+ambiguous="SELECT count(*) FROM production JOIN ids ON production.id = ids.id"
+checked=$((checked + 1))
+if ./target/release/examples/column_join_oracle "$FIXTURE" "lk=$lookup,dk=$dims" "$ambiguous" >/dev/null 2>&1; then
+  echo "NOT REFUSED by db-core: $ambiguous"
+  fail=1
+fi
 
 if [[ "$fail" -ne 0 ]]; then
   echo "check-column-join-oracle: FAILED"

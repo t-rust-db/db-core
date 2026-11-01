@@ -106,7 +106,8 @@ pub(crate) fn open_index_cursors(
     for (i, index) in schema.indexes.iter().enumerate() {
         let cursor = first_cursor.saturating_add(i32::try_from(i).unwrap_or(0));
         let root_page = valid_index_root_page(index)?;
-        let mut instr = Instruction::new(Opcode::OpenWrite, cursor, root_page, 0);
+        let mut instr =
+            Instruction::new(Opcode::OpenWrite, cursor, root_page, schema.database_p3());
         instr.p5 = 1;
         em.emit(instr);
     }

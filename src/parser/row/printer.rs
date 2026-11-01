@@ -186,6 +186,9 @@ impl fmt::Display for ResultColumn {
 
 impl fmt::Display for TableRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(schema) = &self.schema {
+            write!(f, "{schema}.")?;
+        }
         match &self.kind {
             TableRefKind::Name(name) => write!(f, "{name}")?,
             TableRefKind::Subquery(select) => write!(f, "({select})")?,

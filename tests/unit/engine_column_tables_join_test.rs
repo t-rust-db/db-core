@@ -145,7 +145,7 @@ impl Dataset {
         let transactions = self.dir.join("transactions.parquet");
         CrossModeEngine::open_column_tables_sqlite(
             &[events.as_path(), transactions.as_path()],
-            &self.dir.join("lookup.db"),
+            &[("lookup", &self.dir.join("lookup.db"))],
         )
         .unwrap()
     }
@@ -400,7 +400,7 @@ fn one_parquet_table_and_a_lookup_still_work_through_the_tables_constructor() {
     let events = data.dir.join("events.parquet");
     let mut e = CrossModeEngine::open_column_tables_sqlite(
         &[events.as_path()],
-        &data.dir.join("lookup.db"),
+        &[("lookup", &data.dir.join("lookup.db"))],
     )
     .unwrap();
     assert_eq!(
@@ -417,7 +417,8 @@ fn one_parquet_table_and_a_lookup_still_work_through_the_tables_constructor() {
             vec![Cell::Text("web".into()), Cell::Int(100)],
         ]
     );
-    let none = CrossModeEngine::open_column_tables_sqlite(&[], &data.dir.join("lookup.db"));
+    let none =
+        CrossModeEngine::open_column_tables_sqlite(&[], &[("lookup", &data.dir.join("lookup.db"))]);
     assert!(none.is_err());
 }
 

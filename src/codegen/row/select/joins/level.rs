@@ -278,8 +278,12 @@ where
                     let index_cursor = i32::try_from(exec_bindings.len().saturating_add(level))
                         .unwrap_or(i32::MAX);
                     let root_page = valid_index_root_page(&index)?;
-                    let mut open_instr =
-                        Instruction::new(Opcode::OpenRead, index_cursor, root_page, 0);
+                    let mut open_instr = Instruction::new(
+                        Opcode::OpenRead,
+                        index_cursor,
+                        root_page,
+                        binding.schema.database_p3(),
+                    );
                     open_instr.p5 = 1;
                     em.emit(open_instr);
                     let leading_collation = index

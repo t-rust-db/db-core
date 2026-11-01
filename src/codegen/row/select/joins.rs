@@ -355,7 +355,12 @@ where
                     });
                 };
                 let root_page = valid_table_root_page(&binding.schema)?;
-                em.emit(Instruction::new(Opcode::OpenRead, cursor, root_page, 0));
+                em.emit(Instruction::new(
+                    Opcode::OpenRead,
+                    cursor,
+                    root_page,
+                    binding.schema.database_p3(),
+                ));
             }
         }
     }

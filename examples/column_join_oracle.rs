@@ -22,7 +22,11 @@
 //! directory the script compares: `extra(id, n)`, ids 1..=1000 three times
 //! each, flushed every 500 rows.
 //!
-//! Usage: `column_join_oracle <table>[,<more>...] <lookup.db> <sql>`
+//! The second argument may name several SQLite files (#924),
+//! comma-separated, each `name=path`: a query names a table of one as
+//! `name.table`, or bare when no other file has a table of that name.
+//!
+//! Usage: `column_join_oracle <table>[,<more>...] <lookup.db>|<name=path>[,...] <sql>`
 //! or `column_join_oracle --seed-dir <dir>` / `--seed-extra-dir <dir>`
 
 use std::env;
@@ -124,9 +128,16 @@ fn main() -> ExitCode {
     };
 
     let tables: Vec<&Path> = parquet.split(',').map(Path::new).collect();
-    let opened = match tables.as_slice() {
-        [only] if only.is_dir() => CrossModeEngine::open_table_sqlite(only, Path::new(lookup)),
-        _ => CrossModeEngine::open_column_tables_sqlite(&tables, Path::new(lookup)),
+    let lookups: Vec<(&str, &Path)> = lookup
+        .split(',')
+        .map(|l| match l.split_once('=') {
+            Some((name, path)) => (name, Path::new(path)),
+            None => ("lookup", Path::new(l)),
+        })
+        .collect();
+    let opened = match (tables.as_slice(), lookups.as_slice()) {
+        ([only], [(_, file)]) if only.is_dir() => CrossModeEngine::open_table_sqlite(only, file),
+        _ => CrossModeEngine::open_column_tables_sqlite(&tables, &lookups),
     };
     let mut engine = match opened {
         Ok(e) => e,

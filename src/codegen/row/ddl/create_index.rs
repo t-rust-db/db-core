@@ -97,6 +97,7 @@ mod tests {
     fn schema() -> TableSchema {
         TableSchema {
             name: "t".to_string(),
+            database: 0,
             root_page: 2,
             columns: vec!["a".to_string(), "b".to_string()],
             without_rowid: false,

@@ -216,6 +216,7 @@ fn normalize_select_list_unnest(select: &mut Select) -> Result<()> {
                     expr: Box::new(list.clone()),
                     column: Some(UNNEST_COLUMN.to_string()),
                 },
+                schema: None,
                 alias: None,
                 span,
             },

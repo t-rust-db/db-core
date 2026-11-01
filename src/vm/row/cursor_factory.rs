@@ -18,6 +18,15 @@ use super::program::SortKeyColumn;
 /// `db-core` has no pager of its own (ADR 0008/0006) -- a consumer
 /// (e.g. t-rust-db/sqlite-rs) implements this over its own b-tree.
 pub trait CursorFactory {
+    /// Points the `open_*` calls that follow at database `db`, sqlite3's
+    /// index: `0` is `main`, `2..` attached files (#924, ADR 0043). `false`
+    /// when this factory does not serve `db`; the VM then fails the open
+    /// with `AttachedDatabasesUnsupported`. Default: only `main`, so an
+    /// implementor without attached databases need not override this.
+    fn use_database(&mut self, db: u32) -> bool {
+        db == 0
+    }
+
     /// Opens a read-only cursor onto the table/index rooted at `root`.
     fn open_read(
         &mut self,
