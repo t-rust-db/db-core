@@ -33262,7 +33262,7 @@
   {
     "id": "parser_row_grammar_operator_chains_are_capped_at_sqlite3s_expression_height_acbcd3da",
     "file": "src/parser/row/grammar.rs",
-    "line": 4250,
+    "line": 4297,
     "decision": "match parse(&over) {\n                    crate::parser::row::ParseOutcome::Invalid { message, .. } => assert!(\n                        message.contains(\"Expression tree is too large (maximum depth 1000)\"),\n                        \"{message}\"\n                    ),\n                    other => panic!(\"{term}{op} x {n}: {other:?}\"),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33272,7 +33272,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_e4a5bc85",
     "file": "src/parser/row/grammar.rs",
-    "line": 4305,
+    "line": 4352,
     "decision": "match crate::parser::row::parse_select(sql) {\n            crate::parser::row::ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33282,7 +33282,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_20abd9ee",
     "file": "src/parser/row/grammar.rs",
-    "line": 4309,
+    "line": 4356,
     "decision": "match &select.columns[0] {\n            ResultColumn::Expr { expr, .. } => match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            },\n            other => panic!(\"expected an expression column, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33292,7 +33292,7 @@
   {
     "id": "parser_row_grammar_function_tail_of_0bdb902e",
     "file": "src/parser/row/grammar.rs",
-    "line": 4310,
+    "line": 4357,
     "decision": "match &expr.kind {\n                ExprKind::FunctionCall { tail, .. } => tail.clone(),\n                other => panic!(\"expected a function call, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -33302,7 +33302,7 @@
   {
     "id": "parser_row_grammar_parse_select_stmt_aa58f6cd",
     "file": "src/parser/row/grammar.rs",
-    "line": 4374,
+    "line": 4421,
     "decision": "self.depth > MAX_EXPR_DEPTH",
     "conditions": 1,
     "vectors_required": 2,

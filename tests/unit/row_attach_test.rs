@@ -305,3 +305,30 @@ fn attaching_a_missing_file_creates_it() {
     let err = e.run_query("ATTACH 1 AS k").unwrap_err();
     assert_eq!(err.kind, ErrorKind::Unsupported, "{err}");
 }
+
+// codegen_row_select_eqp_eqp_display_name_a007f951 (#924):
+// alias != unqualified(name) || alias == name -- a written alias shows as
+// `name AS alias`; an attached table's implied alias (its bare name) does not.
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__codegen_row_select_eqp_eqp_display_name_a007f951__v1_written_alias_is_shown() {
+    let f = Files::new();
+    let e = f.main_with_x();
+    assert_eq!(plan(&e, "SELECT b FROM x.u AS w"), vec!["SCAN x.u AS w"]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__codegen_row_select_eqp_eqp_display_name_a007f951__v2_alias_equal_to_the_name_is_shown() {
+    let f = Files::new();
+    let e = f.main_with_x();
+    assert_eq!(plan(&e, "SELECT a FROM t AS t"), vec!["SCAN t AS t"]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__codegen_row_select_eqp_eqp_display_name_a007f951__v3_implied_alias_is_not_shown() {
+    let f = Files::new();
+    let e = f.main_with_x();
+    assert_eq!(plan(&e, "SELECT b FROM x.u"), vec!["SCAN x.u"]);
+}
