@@ -1,0 +1,73 @@
+# #929: regexp_extract follows RE2 (DuckDB) on the subset it supports:
+# `^`/`$` anchor the whole text, `.` does not match a newline, `(...)?` is
+# an optional group whose capture is '' when left out. Syntax outside the
+# subset, and a malformed pattern, is an error -- even when no row reaches
+# the call -- never a literal reading or NULL.
+
+query TI rowsort
+SELECT regexp_extract(region, '^(.)', 1) AS c, count(*) FROM production GROUP BY c
+----
+e
+1250
+n
+1250
+s
+1250
+w
+1250
+
+query TI rowsort
+SELECT regexp_extract(region, '(.)$', 1) AS c, count(*) FROM production GROUP BY c
+----
+h
+2500
+t
+2500
+
+query I nosort
+SELECT count(*) FROM production WHERE regexp_extract(region, '^nor', 0) <> ''
+----
+1250
+
+query I nosort
+SELECT count(*) FROM production WHERE regexp_extract(region, 'or$', 0) <> ''
+----
+0
+
+query II rowsort
+SELECT regexp_extract(region, '^(n)?[oe]', 1) = '' AS c, count(*) FROM production GROUP BY c
+----
+0
+1250
+1
+3750
+
+query TT rowsort
+SELECT regexp_extract(region, '^[ns](or)?', 0) AS m, regexp_extract(region, '^[ns](or)?', 1) AS g FROM production GROUP BY m, g
+----
+(empty)
+(empty)
+nor
+or
+s
+(empty)
+
+query T nosort
+SELECT regexp_extract(region, '^north$', 0) FROM production WHERE id = 2
+----
+north
+
+statement error
+SELECT regexp_extract(region, '(n|s)', 1) FROM production
+
+statement error
+SELECT regexp_extract(region, '\d', 0) FROM production
+
+statement error
+SELECT regexp_extract(region, 'o{2}', 0) FROM production
+
+statement error
+SELECT regexp_extract(region, '[', 0) FROM production
+
+statement error
+SELECT count(*) FROM production WHERE id < 0 AND regexp_extract(region, '(?:n)', 0) = ''
