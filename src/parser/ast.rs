@@ -447,6 +447,124 @@ pub struct Expr {
     pub span: Span,
 }
 
+/// Whether `a` and `b` are the same expression as written, ignoring spans
+/// and redundant parentheses: `GROUP BY id / 2` names the select item
+/// `id / 2` even though the two were parsed from different places (#869).
+/// Function names compare case-insensitively, as SQL does. A kind not
+/// listed here is compared with `==`, spans included, so it never matches
+/// a copy from elsewhere -- a missed match, never a wrong one.
+#[cfg(feature = "parser-column")]
+pub(crate) fn same_expr(a: &Expr, b: &Expr) -> bool {
+    let (a, b) = (strip_parens(a), strip_parens(b));
+    let same = |x: &Expr, y: &Expr| same_expr(x, y);
+    let same_opt = |x: &Option<Box<Expr>>, y: &Option<Box<Expr>>| match (x, y) {
+        (Some(x), Some(y)) => same_expr(x, y),
+        (None, None) => true,
+        _ => false,
+    };
+    match (&a.kind, &b.kind) {
+        (ExprKind::Literal(x), ExprKind::Literal(y)) => x == y,
+        (ExprKind::Column { .. }, ExprKind::Column { .. }) => a.kind == b.kind,
+        (
+            ExprKind::FunctionCall {
+                name: n1,
+                distinct: d1,
+                args: a1,
+                tail: None,
+            },
+            ExprKind::FunctionCall {
+                name: n2,
+                distinct: d2,
+                args: a2,
+                tail: None,
+            },
+        ) => {
+            n1.eq_ignore_ascii_case(n2)
+                && d1 == d2
+                && match (a1, a2) {
+                    (FunctionArgs::Star, FunctionArgs::Star) => true,
+                    (FunctionArgs::List(l1), FunctionArgs::List(l2)) => {
+                        l1.len() == l2.len() && l1.iter().zip(l2).all(|(x, y)| same(x, y))
+                    }
+                    _ => false,
+                }
+        }
+        (ExprKind::Unary { op: o1, expr: e1 }, ExprKind::Unary { op: o2, expr: e2 }) => {
+            o1 == o2 && same(e1, e2)
+        }
+        (
+            ExprKind::Binary {
+                op: o1,
+                lhs: l1,
+                rhs: r1,
+            },
+            ExprKind::Binary {
+                op: o2,
+                lhs: l2,
+                rhs: r2,
+            },
+        ) => o1 == o2 && same(l1, l2) && same(r1, r2),
+        (
+            ExprKind::Is {
+                lhs: l1,
+                rhs: r1,
+                negated: n1,
+            },
+            ExprKind::Is {
+                lhs: l2,
+                rhs: r2,
+                negated: n2,
+            },
+        ) => n1 == n2 && same(l1, l2) && same(r1, r2),
+        (
+            ExprKind::IsNull {
+                expr: e1,
+                negated: n1,
+            },
+            ExprKind::IsNull {
+                expr: e2,
+                negated: n2,
+            },
+        ) => n1 == n2 && same(e1, e2),
+        (
+            ExprKind::Like {
+                expr: e1,
+                pattern: p1,
+                glob: g1,
+                negated: n1,
+                escape: x1,
+            },
+            ExprKind::Like {
+                expr: e2,
+                pattern: p2,
+                glob: g2,
+                negated: n2,
+                escape: x2,
+            },
+        ) => g1 == g2 && n1 == n2 && same(e1, e2) && same(p1, p2) && same_opt(x1, x2),
+        (
+            ExprKind::Cast {
+                expr: e1,
+                type_name: t1,
+            },
+            ExprKind::Cast {
+                expr: e2,
+                type_name: t2,
+            },
+        ) => t1.eq_ignore_ascii_case(t2) && same(e1, e2),
+        _ => a == b,
+    }
+}
+
+/// `expr` without its outer parentheses: `((a))` is `a`.
+#[cfg(feature = "parser-column")]
+fn strip_parens(mut expr: &Expr) -> &Expr {
+    while let ExprKind::Paren(inner) = &expr.kind {
+        expr = inner;
+    }
+    expr
+}
+
 /// The kind of expression an [`Expr`] holds.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
@@ -1149,4 +1267,59 @@ pub enum BinaryOp {
     Mod,
     /// `||`.
     Concat,
+}
+
+#[cfg(all(test, feature = "parser-column"))]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
+
+    use super::*;
+
+    /// The select list of `SELECT <a>, <b> FROM t`, as parsed: two
+    /// expressions at different offsets, so with different spans.
+    fn pair(a: &str, b: &str) -> (Expr, Expr) {
+        let select = crate::parser::column::parse(&format!("SELECT {a}, {b} FROM t")).unwrap();
+        let expr = |i: usize| match &select.columns[i] {
+            ResultColumn::Expr { expr, .. } => expr.clone(),
+            other => panic!("expected an expression, got {other:?}"),
+        };
+        (expr(0), expr(1))
+    }
+
+    /// #869: same expression at another place, parentheses and function
+    /// name case aside.
+    #[test]
+    fn same_expr_ignores_spans_parens_and_function_name_case() {
+        for (a, b) in [
+            ("id / 1000", "id / 1000"),
+            ("id / 1000", "((id / 1000))"),
+            ("regexp_extract(r, '(n)', 1)", "REGEXP_EXTRACT(r, '(n)', 1)"),
+            ("-id", "-(id)"),
+            ("r IS NULL", "r IS NULL"),
+            ("r LIKE 'a%'", "r LIKE 'a%'"),
+            ("count(*)", "COUNT(*)"),
+        ] {
+            let (x, y) = pair(a, b);
+            assert_ne!(x.span, y.span, "{a} / {b}");
+            assert!(same_expr(&x, &y), "{a} / {b}");
+        }
+    }
+
+    #[test]
+    fn same_expr_tells_different_expressions_apart() {
+        for (a, b) in [
+            ("id / 1000", "id / 100"),
+            ("id / 1000", "id * 1000"),
+            ("id / 1000", "x / 1000"),
+            ("regexp_extract(r, '(n)', 1)", "regexp_extract(r, '(n)', 0)"),
+            ("r IS NULL", "r IS NOT NULL"),
+            ("r LIKE 'a%'", "r NOT LIKE 'a%'"),
+            ("count(*)", "count(id)"),
+            ("count(id)", "count(DISTINCT id)"),
+            ("-id", "NOT id"),
+        ] {
+            let (x, y) = pair(a, b);
+            assert!(!same_expr(&x, &y), "{a} / {b}");
+        }
+    }
 }

@@ -141,8 +141,20 @@ fn column_name(expr: &AstExpr) -> Result<String> {
         } => Err(unsupported(expr.span, "catalog-qualified column".into())),
         other => Err(unsupported(
             expr.span,
-            format!("expected a column reference, found {other:?}"),
+            format!("expected a column reference, found {}", kind_name(other)),
         )),
+    }
+}
+
+/// What an expression is, for a message: never its `Debug` tree (#869).
+fn kind_name(kind: &ExprKind) -> String {
+    match kind {
+        ExprKind::Literal(_) => "a literal".into(),
+        ExprKind::FunctionCall { name, .. } => format!("a call to {name}()"),
+        ExprKind::Subquery(_) | ExprKind::Exists { .. } | ExprKind::InSubquery { .. } => {
+            "a subquery".into()
+        }
+        _ => "an expression".into(),
     }
 }
 
@@ -1026,8 +1038,19 @@ fn expr_contains_agg(expr: &AstExpr) -> bool {
 }
 
 /// The first column `expr` reads outside an aggregate call that is not one
-/// of `group_by` (#623), if any.
-fn ungrouped_column(expr: &AstExpr, group_by: &[String]) -> Result<Option<String>> {
+/// of `group_by` (#623), if any. A subexpression equal to one of the
+/// `terms` written out (`id / 2` under `GROUP BY id / 2`, #869) is a key
+/// as a whole, so the columns inside it are grouped.
+fn ungrouped_column(
+    expr: &AstExpr,
+    group_by: &[String],
+    terms: &[AstExpr],
+) -> Result<Option<String>> {
+    if !matches!(expr.kind, ExprKind::Column { .. })
+        && terms.iter().any(|t| crate::parser::ast::same_expr(expr, t))
+    {
+        return Ok(None);
+    }
     Ok(match &expr.kind {
         ExprKind::Column { .. } => {
             let name = column_name(expr)?;
@@ -1039,7 +1062,7 @@ fn ungrouped_column(expr: &AstExpr, group_by: &[String]) -> Result<Option<String
             ..
         } => {
             for arg in list {
-                if let Some(name) = ungrouped_column(arg, group_by)? {
+                if let Some(name) = ungrouped_column(arg, group_by, terms)? {
                     return Ok(Some(name));
                 }
             }
@@ -1051,15 +1074,26 @@ fn ungrouped_column(expr: &AstExpr, group_by: &[String]) -> Result<Option<String
             expr: lhs,
             pattern: rhs,
             ..
-        } => match ungrouped_column(lhs, group_by)? {
+        } => match ungrouped_column(lhs, group_by, terms)? {
             Some(name) => Some(name),
-            None => ungrouped_column(rhs, group_by)?,
+            None => ungrouped_column(rhs, group_by, terms)?,
         },
         ExprKind::Unary { expr: inner, .. }
         | ExprKind::IsNull { expr: inner, .. }
-        | ExprKind::Paren(inner) => ungrouped_column(inner, group_by)?,
+        | ExprKind::Paren(inner) => ungrouped_column(inner, group_by, terms)?,
         _ => None,
     })
+}
+
+/// The names of `select`'s plain-column `GROUP BY` keys; an expression
+/// key (#869) is matched as a whole by [`ungrouped_column`] instead.
+fn group_column_names(select: &Select) -> Result<Vec<String>> {
+    select
+        .group_by
+        .iter()
+        .filter(|e| matches!(e.kind, ExprKind::Column { .. }))
+        .map(column_name)
+        .collect()
 }
 
 fn item_kind(col: &crate::parser::ast::ResultColumn) -> Result<ItemKind> {
@@ -1209,7 +1243,7 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
         }
         other => Err(unsupported(
             expr.span,
-            format!("unsupported expression form {other:?}"),
+            format!("unsupported expression form: {}", kind_name(other)),
         )),
     }
 }
@@ -1387,14 +1421,16 @@ fn validate_select(select: &mut Select) -> Result<()> {
         validate_expr(where_clause, false)?;
     }
 
-    for e in &select.group_by {
-        column_name(e)?;
+    resolve_group_by_ordinals(select)?;
+    for (i, e) in select.group_by.iter_mut().enumerate() {
+        validate_group_term(e, i)?;
     }
 
     resolve_order_by_ordinals(select)?;
+    order_by_select_items_as_positions(select);
 
-    // Each term (#645: any number, most significant first) is a column
-    // or an aggregate.
+    // Each term (#645: any number, most significant first) is a column,
+    // an aggregate, or a select item's position (#930).
     for term in &select.order_by {
         if term.nulls_last.is_some() {
             return Err(unsupported(select.span, "NULLS FIRST/LAST".into()));
@@ -1403,12 +1439,16 @@ fn validate_select(select: &mut Select) -> Result<()> {
             ExprKind::Column { .. } => {
                 column_name(&term.expr)?;
             }
+            // In range: `resolve_order_by_ordinals` checked it.
+            ExprKind::Literal(AstLiteral::Integer(_)) => {}
             ExprKind::FunctionCall {
                 name,
                 distinct,
                 args,
                 tail,
-            } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
+            } if is_known_agg_name(name)
+                && !matches!(tail.as_deref(), Some(t) if t.over.is_some()) =>
+            {
                 validate_distinct(term.expr.span, name, *distinct, args)?;
                 validate_aggregate_call(term.expr.span, name, args)?;
             }
@@ -1416,8 +1456,9 @@ fn validate_select(select: &mut Select) -> Result<()> {
                 return Err(unsupported(
                     term.expr.span,
                     format!(
-                        "expected a column reference or aggregate, found {:?}",
-                        term.expr.kind
+                        "an ORDER BY term must be a column, an aggregate or a select-list \
+                         item; found {} that is not in the select list",
+                        kind_name(&term.expr.kind)
                     ),
                 ))
             }
@@ -1478,11 +1519,7 @@ fn validate_select(select: &mut Select) -> Result<()> {
         // projects the select list from the merged keys and aggregates.
         // Without `GROUP BY` the whole input is one group, and only
         // aggregates (and expressions over them) describe it.
-        let group_by: Vec<String> = select
-            .group_by
-            .iter()
-            .map(column_name)
-            .collect::<Result<_>>()?;
+        let group_by = group_column_names(select)?;
         for (col, item) in select.columns.iter().zip(&items) {
             let crate::parser::ast::ResultColumn::Expr { expr, alias } = col else {
                 continue;
@@ -1491,14 +1528,14 @@ fn validate_select(select: &mut Select) -> Result<()> {
             let message = match item {
                 ItemKind::Star | ItemKind::Window => continue,
                 ItemKind::Column | ItemKind::Expr if grouped_by_alias => continue,
-                ItemKind::Column if group_by.is_empty() => {
+                ItemKind::Column if select.group_by.is_empty() => {
                     "a plain column alongside an aggregate requires GROUP BY".to_string()
                 }
-                ItemKind::Expr if group_by.is_empty() => {
+                ItemKind::Expr if select.group_by.is_empty() => {
                     "a computed expression alongside an aggregate requires GROUP BY".to_string()
                 }
                 ItemKind::Column | ItemKind::Expr | ItemKind::Agg => {
-                    match ungrouped_column(expr, &group_by)? {
+                    match ungrouped_column(expr, &group_by, &select.group_by)? {
                         Some(name) => {
                             format!("column `{name}` must be a GROUP BY key or inside an aggregate")
                         }
@@ -1518,9 +1555,10 @@ fn validate_select(select: &mut Select) -> Result<()> {
 
 /// Rewrites each integer `ORDER BY k` term (#752) to the `k`-th select
 /// item, 1-based as in SQLite: its alias when it has one -- the form the
-/// planner already sorts on by label -- otherwise its expression, which the
-/// term check below then admits only as a column or an aggregate. `k`
-/// outside `1..=N` is sqlite3's "out of range" error.
+/// planner already sorts on by label -- or its column or aggregate call.
+/// Any other item (a computed expression, #930) keeps the position, which
+/// the planner sorts on directly. `k` outside `1..=N` is sqlite3's "out of
+/// range" error.
 fn resolve_order_by_ordinals(select: &mut Select) -> Result<()> {
     let count = select.columns.len();
     for (i, term) in select.order_by.iter_mut().enumerate() {
@@ -1549,13 +1587,14 @@ fn resolve_order_by_ordinals(select: &mut Select) -> Result<()> {
                 name: alias.clone(),
             },
             crate::parser::ast::ResultColumn::Expr { expr, alias: None } => match &expr.kind {
-                ExprKind::Column { .. } | ExprKind::FunctionCall { .. } => expr.kind.clone(),
-                _ => {
-                    return Err(unsupported(
-                        term.expr.span,
-                        format!("ORDER BY {k} refers to a computed expression; give it an alias"),
-                    ))
+                ExprKind::Column { .. } => expr.kind.clone(),
+                ExprKind::FunctionCall { name, tail, .. }
+                    if is_known_agg_name(name)
+                        || matches!(tail.as_deref(), Some(t) if t.over.is_some()) =>
+                {
+                    expr.kind.clone()
                 }
+                _ => continue,
             },
             _ => {
                 return Err(unsupported(
@@ -1567,6 +1606,95 @@ fn resolve_order_by_ordinals(select: &mut Select) -> Result<()> {
         term.expr.kind = kind;
     }
     Ok(())
+}
+
+/// Rewrites each integer `GROUP BY k` term (#869) to the `k`-th select
+/// item's expression, 1-based as in DuckDB, so the planner groups on it
+/// like a written-out expression and matches the item to it. `k` outside
+/// `1..=N`, `*`, or an item containing an aggregate is refused.
+fn resolve_group_by_ordinals(select: &mut Select) -> Result<()> {
+    let count = select.columns.len();
+    for (i, term) in select.group_by.iter_mut().enumerate() {
+        let ExprKind::Literal(AstLiteral::Integer(k)) = term.kind else {
+            continue;
+        };
+        let item = usize::try_from(k)
+            .ok()
+            .and_then(|k| k.checked_sub(1))
+            .and_then(|k| select.columns.get(k))
+            .ok_or_else(|| {
+                unsupported(
+                    term.span,
+                    format!(
+                        "{} GROUP BY term out of range - should be between 1 and {count}",
+                        ordinal(i.saturating_add(1))
+                    ),
+                )
+            })?;
+        let crate::parser::ast::ResultColumn::Expr { expr, .. } = item else {
+            return Err(unsupported(
+                term.span,
+                format!("GROUP BY {k} refers to `*`; name the column instead"),
+            ));
+        };
+        if expr_contains_agg(expr) {
+            return Err(unsupported(
+                term.span,
+                format!("GROUP BY {k} refers to an aggregate; GROUP BY cannot contain aggregates"),
+            ));
+        }
+        *term = expr.clone();
+    }
+    Ok(())
+}
+
+/// Checks the `index`-th `GROUP BY` term (#869): a column, or a scalar
+/// expression the select list would accept. An aggregate is refused by
+/// name, as is anything else the subset can't compute, with the term's
+/// position rather than a dump of its tree.
+fn validate_group_term(term: &mut AstExpr, index: usize) -> Result<()> {
+    if matches!(term.kind, ExprKind::Column { .. }) {
+        return column_name(term).map(|_| ());
+    }
+    let position = ordinal(index.saturating_add(1));
+    if expr_contains_agg(term) {
+        return Err(unsupported(
+            term.span,
+            format!("{position} GROUP BY term contains an aggregate; GROUP BY cannot contain aggregates"),
+        ));
+    }
+    validate_expr(term, false).map_err(|e| match e {
+        ParseError::Unsupported { message, span } => {
+            unsupported(span, format!("{position} GROUP BY term: {message}"))
+        }
+        other => other,
+    })
+}
+
+/// Rewrites each `ORDER BY` expression written the same way as a select
+/// item (#930: `ORDER BY id / 2` beside `SELECT id / 2`, spans and
+/// parentheses aside) to that item's 1-based position, which the planner
+/// sorts on. A column or an aggregate call keeps its own form, sorted on
+/// by name or label as before.
+fn order_by_select_items_as_positions(select: &mut Select) {
+    for term in &mut select.order_by {
+        let keep = match &term.expr.kind {
+            ExprKind::Column { .. } | ExprKind::Literal(AstLiteral::Integer(_)) => true,
+            ExprKind::FunctionCall { name, .. } => is_known_agg_name(name),
+            _ => false,
+        };
+        if keep {
+            continue;
+        }
+        let position = select.columns.iter().position(|col| {
+            matches!(col, crate::parser::ast::ResultColumn::Expr { expr, .. }
+                if crate::parser::ast::same_expr(expr, &term.expr))
+        });
+        let Some(k) = position.and_then(|p| i64::try_from(p.saturating_add(1)).ok()) else {
+            continue;
+        };
+        term.expr.kind = ExprKind::Literal(AstLiteral::Integer(k));
+    }
 }
 
 /// `1st`, `2nd`, `3rd`, `4th`, ... as sqlite3 numbers a clause's terms.
@@ -1602,12 +1730,8 @@ fn validate_having(
     let mut plain = having.clone();
     clear_distinct(&mut plain)?;
     validate_expr(&mut plain, true)?;
-    let group_by: Vec<String> = select
-        .group_by
-        .iter()
-        .map(column_name)
-        .collect::<Result<_>>()?;
-    if group_by.is_empty() && !has_agg && !expr_contains_agg(having) {
+    let group_by = group_column_names(select)?;
+    if select.group_by.is_empty() && !has_agg && !expr_contains_agg(having) {
         return Err(unsupported(
             having.span,
             "HAVING requires GROUP BY or an aggregate".into(),
@@ -1620,7 +1744,7 @@ fn validate_having(
         } => Some(alias.clone()),
         _ => None,
     }));
-    match ungrouped_column(having, &known)? {
+    match ungrouped_column(having, &known, &select.group_by)? {
         Some(name) => Err(unsupported(
             having.span,
             format!("column `{name}` must be a GROUP BY key or inside an aggregate"),
@@ -2361,6 +2485,115 @@ mod tests {
         assert!(parse("SELECT region AS r, COUNT(*) FROM t GROUP BY r").is_ok());
     }
 
+    /// #869: a `GROUP BY` term may be an expression; a select item (or a
+    /// part of one, or HAVING) written the same way is that key, so its
+    /// columns count as grouped. Spans and redundant parentheses differ.
+    #[test]
+    fn group_by_expression_groups_a_matching_select_item() {
+        for sql in [
+            "SELECT id / 1000, COUNT(*) FROM t GROUP BY id / 1000",
+            "SELECT (id / 1000) + 1, COUNT(*) FROM t GROUP BY id / 1000",
+            "SELECT regexp_extract(r, '(n)', 1), COUNT(*) FROM t GROUP BY REGEXP_EXTRACT(r, '(n)', 1)",
+            "SELECT region, COUNT(*) FROM t GROUP BY region, amount > 10",
+            "SELECT COUNT(*) FROM t GROUP BY id / 1000 HAVING id / 1000 > 2",
+        ] {
+            assert!(parse(sql).is_ok(), "{sql}: {:?}", parse(sql));
+        }
+        // The columns inside a key are grouped only through the whole key.
+        let err = parse("SELECT id, COUNT(*) FROM t GROUP BY id / 1000").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("column `id` must be a GROUP BY key"),
+            "{err}"
+        );
+        let err = parse("SELECT id * 2, COUNT(*) FROM t GROUP BY id / 1000").unwrap_err();
+        assert!(err.to_string().contains("column `id`"), "{err}");
+    }
+
+    /// #869: `GROUP BY k` is the k-th select item's expression, 1-based.
+    #[test]
+    fn group_by_position_names_the_select_item() {
+        let q = parse("SELECT region, COUNT(*) FROM t GROUP BY 1").unwrap();
+        assert!(matches!(&q.group_by[0].kind, ExprKind::Column { name, .. } if name == "region"));
+        let q = parse("SELECT COUNT(*), id / 1000 AS k FROM t GROUP BY 2").unwrap();
+        assert!(matches!(
+            q.group_by[0].kind,
+            ExprKind::Binary {
+                op: AstBinOp::Div,
+                ..
+            }
+        ));
+    }
+
+    /// #869: a position outside the select list is DuckDB's range error,
+    /// naming which term; a position naming an aggregate or `*` is refused.
+    #[test]
+    fn group_by_position_out_of_range_aggregate_or_star_is_refused() {
+        for (sql, want) in [
+            (
+                "SELECT region, COUNT(*) FROM t GROUP BY 0",
+                "1st GROUP BY term out of range - should be between 1 and 2",
+            ),
+            (
+                "SELECT region, COUNT(*) FROM t GROUP BY region, 3",
+                "2nd GROUP BY term out of range - should be between 1 and 2",
+            ),
+            (
+                "SELECT region, COUNT(*) FROM t GROUP BY 2",
+                "GROUP BY 2 refers to an aggregate",
+            ),
+            (
+                "SELECT region, SUM(amount) * 2 FROM t GROUP BY 2",
+                "GROUP BY 2 refers to an aggregate",
+            ),
+            ("SELECT * FROM t GROUP BY 1", "GROUP BY 1 refers to `*`"),
+        ] {
+            let err = parse(sql).unwrap_err();
+            assert!(err.to_string().contains(want), "{sql}: {err}");
+        }
+    }
+
+    /// #869: an aggregate, or a form the subset can't compute, is refused
+    /// naming the term's position -- never a `Debug` dump of the AST.
+    #[test]
+    fn group_by_aggregate_or_unsupported_term_names_the_term_without_a_dump() {
+        for (sql, want) in [
+            (
+                "SELECT region, COUNT(*) FROM t GROUP BY region, COUNT(*)",
+                "2nd GROUP BY term contains an aggregate",
+            ),
+            (
+                "SELECT COUNT(*) FROM t GROUP BY SUM(amount) + 1",
+                "1st GROUP BY term contains an aggregate",
+            ),
+            (
+                "SELECT COUNT(*) FROM t GROUP BY (SELECT 1)",
+                "1st GROUP BY term: unsupported expression form: a subquery",
+            ),
+            (
+                "SELECT COUNT(*) FROM t GROUP BY upper(region)",
+                "1st GROUP BY term: unsupported expression form: a call to upper()",
+            ),
+        ] {
+            let err = parse(sql).unwrap_err().to_string();
+            assert!(err.contains(want), "{sql}: {err}");
+            assert!(
+                !err.contains("FunctionCall") && !err.contains("span"),
+                "{sql}: {err}"
+            );
+        }
+    }
+
+    /// #869: a refused ORDER BY term names its kind, not its `Debug` tree.
+    #[test]
+    fn order_by_refusal_has_no_ast_dump() {
+        let err = parse("SELECT region FROM t ORDER BY (SELECT 1)")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("found a subquery"), "{err}");
+        assert!(!err.contains("Subquery(") && !err.contains("span"), "{err}");
+    }
+
     /// #623 review: `LIKE` over an aggregate is an aggregate expression
     /// (it used to classify as a per-row one and reach the planner
     /// unmerged); an aggregate inside `IN (SELECT ...)` is refused rather
@@ -2608,10 +2841,6 @@ mod tests {
                 "2nd ORDER BY term out of range - should be between 1 and 2",
             ),
             (
-                "SELECT id, amount * 2 FROM t ORDER BY 2",
-                "ORDER BY 2 refers to a computed expression; give it an alias",
-            ),
-            (
                 "SELECT * FROM t ORDER BY 1",
                 "ORDER BY 1 refers to `*`; name the column instead",
             ),
@@ -2640,10 +2869,51 @@ mod tests {
         );
     }
 
+    /// #930: an expression is sortable only as a select item; one that
+    /// is not in the select list is refused, saying so.
     #[test]
     fn order_by_rejects_non_aggregate_expression() {
         let err = parse("SELECT id FROM t ORDER BY id + 1").unwrap_err();
-        assert!(format!("{err}").contains("expected a column reference"));
+        assert!(
+            format!("{err}").contains("found an expression that is not in the select list"),
+            "{err}"
+        );
+    }
+
+    /// #930: a computed select item is sorted on by position, written as a
+    /// number or as the same expression (spans and parentheses aside); a
+    /// column or an aggregate keeps its own form.
+    #[test]
+    fn order_by_a_computed_item_is_its_position() {
+        let position = |sql: &str| -> Vec<ExprKind> {
+            parse(sql)
+                .unwrap()
+                .order_by
+                .into_iter()
+                .map(|t| t.expr.kind)
+                .collect()
+        };
+        let two = ExprKind::Literal(AstLiteral::Integer(2));
+        assert_eq!(
+            position("SELECT id, amount * 2 FROM t ORDER BY 2"),
+            std::slice::from_ref(&two)
+        );
+        assert_eq!(
+            position("SELECT id, amount * 2 FROM t ORDER BY (amount * 2)"),
+            std::slice::from_ref(&two)
+        );
+        assert_eq!(
+            position("SELECT id, regexp_extract(r, '(n)', 1) FROM t ORDER BY REGEXP_EXTRACT(r, '(n)', 1)"),
+            [two]
+        );
+        assert!(matches!(
+            &position("SELECT id, COUNT(*) FROM t GROUP BY id ORDER BY 2")[..],
+            [ExprKind::FunctionCall { .. }]
+        ));
+        assert!(matches!(
+            &position("SELECT id, amount FROM t ORDER BY 1")[..],
+            [ExprKind::Column { .. }]
+        ));
     }
 
     #[test]
@@ -3384,28 +3654,103 @@ mod tests {
         assert!(parse("SELECT id FROM t WHERE SUM(amount) * 2 > 10").is_err());
     }
 
-    // parser_column_validate_having_8d3dd7da: group_by.is_empty() && !has_agg && !expr_contains_agg(having)
+    // parser_column_validate_having_82655197: select.group_by.is_empty() && !has_agg && !expr_contains_agg(having)
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__parser_column_validate_having_8d3dd7da__v1_group_by_present() {
+    fn mcdc__parser_column_validate_having_82655197__v1_group_by_present() {
         assert!(parse("SELECT a FROM t GROUP BY a HAVING a > 1").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__parser_column_validate_having_8d3dd7da__v2_select_has_an_aggregate() {
+    fn mcdc__parser_column_validate_having_82655197__v2_select_has_an_aggregate() {
         assert!(parse("SELECT COUNT(*) FROM t HAVING COUNT(*) > 1").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__parser_column_validate_having_8d3dd7da__v3_only_having_has_an_aggregate() {
+    fn mcdc__parser_column_validate_having_82655197__v3_only_having_has_an_aggregate() {
         assert!(parse("SELECT a FROM t HAVING SUM(b) > 1").is_ok());
     }
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__parser_column_validate_having_8d3dd7da__v4_nothing_to_group_on() {
+    fn mcdc__parser_column_validate_having_82655197__v4_nothing_to_group_on() {
         assert!(parse("SELECT a FROM t HAVING a > 1").is_err());
+    }
+
+    // parser_column_ungrouped_column_92d34643:
+    // !matches!(expr.kind, ExprKind::Column { .. }) && terms.iter().any(|t| same_expr(expr, t))
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_ungrouped_column_92d34643__v1_expression_is_a_key() {
+        assert!(parse("SELECT a / 2, COUNT(*) FROM t GROUP BY a / 2").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_ungrouped_column_92d34643__v2_column_is_checked_by_name() {
+        assert!(parse("SELECT a, COUNT(*) FROM t GROUP BY a").is_ok());
+        assert!(parse("SELECT a, COUNT(*) FROM t GROUP BY a / 2").is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_ungrouped_column_92d34643__v3_expression_is_not_a_key() {
+        assert!(parse("SELECT a * 2, COUNT(*) FROM t GROUP BY a / 2").is_err());
+    }
+
+    // parser_column_validate_select_34a0e9e2 (#930): an ORDER BY call is
+    // sorted on as an aggregate only if it is one, and not a window call.
+    // is_known_agg_name(name) && !matches!(tail.as_deref(), Some(t) if t.over.is_some())
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_34a0e9e2__v1_aggregate_call() {
+        assert!(parse("SELECT a, COUNT(*) FROM t GROUP BY a ORDER BY COUNT(*)").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_34a0e9e2__v2_scalar_call_not_in_the_list() {
+        let err = parse("SELECT a FROM t ORDER BY regexp_extract(a, '(n)', 1)").unwrap_err();
+        assert!(err.to_string().contains("not in the select list"), "{err}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_select_34a0e9e2__v3_aggregate_window_call() {
+        assert!(parse("SELECT a FROM t ORDER BY SUM(a) OVER ()").is_err());
+    }
+
+    // parser_column_resolve_order_by_ordinals_74b29f21 (#930): a position
+    // naming an aggregate or window call becomes that call; any other
+    // computed item stays a position.
+    // is_known_agg_name(name) || matches!(tail.as_deref(), Some(t) if t.over.is_some())
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_resolve_order_by_ordinals_74b29f21__v1_aggregate_item() {
+        let q = parse("SELECT a, COUNT(*) FROM t GROUP BY a ORDER BY 2").unwrap();
+        assert!(matches!(
+            q.order_by[0].expr.kind,
+            ExprKind::FunctionCall { .. }
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_resolve_order_by_ordinals_74b29f21__v2_window_item() {
+        // The window call is copied in and refused by the term check, as
+        // before #930.
+        assert!(parse("SELECT a, row_number() OVER (ORDER BY a) FROM t ORDER BY 2").is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_resolve_order_by_ordinals_74b29f21__v3_scalar_item_stays_a_position() {
+        let q = parse("SELECT a, regexp_extract(a, '(n)', 1) FROM t ORDER BY 2").unwrap();
+        assert_eq!(
+            q.order_by[0].expr.kind,
+            ExprKind::Literal(AstLiteral::Integer(2))
+        );
     }
 }

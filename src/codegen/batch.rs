@@ -636,12 +636,13 @@ fn group_term_label(term: &AstExpr) -> String {
 }
 
 /// Whether `item_expr` is the `GROUP BY` key `term`: the same column by
-/// name, or the very expression [`expand_star`] copied into `GROUP BY`
-/// from a `SELECT`-list alias (#307), so equal including its spans.
+/// name, or the same expression as written, wherever it was parsed from
+/// (#869): a `GROUP BY id / 2` written out beside a select item `id / 2`,
+/// or the expression copied in from an alias (#307) or a position.
 fn is_group_term(item_expr: &AstExpr, term: &AstExpr) -> bool {
     match (expr_column_name(item_expr), expr_column_name(term)) {
         (Some(a), Some(b)) => a == b,
-        _ => item_expr == term,
+        _ => crate::parser::ast::same_expr(item_expr, term),
     }
 }
 
@@ -1283,9 +1284,10 @@ fn aggregate_call_label(name: &str, distinct: bool, args: &FunctionArgs) -> Opti
 }
 
 /// Each `ORDER BY` term's resolved output-column reference (a bare column
-/// name or a `SELECT`-list aggregate's rendered label), and whether it's
-/// descending, most significant first (#645). A term with no such
-/// reference is left out; `parser::column`'s validator admits none.
+/// name, a `SELECT`-list aggregate's rendered label, or for a position
+/// (#930) that item's label), and whether it's descending, most
+/// significant first (#645). A term with no such reference is left out;
+/// `parser::column`'s validator admits none.
 fn select_order_by(select: &Select) -> Vec<(String, bool)> {
     select
         .order_by
@@ -1301,11 +1303,23 @@ fn select_order_by(select: &Select) -> Vec<(String, bool)> {
                 } if !matches!(tail.as_deref(), Some(t) if t.over.is_some()) => {
                     aggregate_call_label(name, *distinct, args)?
                 }
+                ExprKind::Literal(AstLiteral::Integer(k)) => {
+                    let item = select.columns.get(ordinal_index(*k)?)?;
+                    match select_item_label(item) {
+                        label if label.is_empty() => k.to_string(),
+                        label => label,
+                    }
+                }
                 _ => return None,
             };
             Some((column, term.desc.unwrap_or(false)))
         })
         .collect()
+}
+
+/// The 0-based select-list index a 1-based `ORDER BY` position names.
+fn ordinal_index(k: i64) -> Option<usize> {
+    usize::try_from(k).ok()?.checked_sub(1)
 }
 
 /// [`Opcode::Sort`] for `select`'s `ORDER BY` (#645): each term's output
@@ -1329,15 +1343,19 @@ fn order_sort(
     let mut keys = Vec::with_capacity(terms.len());
     let mut hidden = 0usize;
     for (term, (label, descending)) in select.order_by.iter().zip(&terms) {
-        let pos = select
-            .columns
-            .iter()
-            .position(|item| match (item, &term.expr.kind) {
-                (ResultColumn::Expr { expr, .. }, ExprKind::FunctionCall { .. }) => {
-                    same_aggregate(expr, &term.expr)
-                }
-                _ => select_item_label(item) == *label,
-            });
+        let pos = match term.expr.kind {
+            // #930: a select item's position, sorted on as it is.
+            ExprKind::Literal(AstLiteral::Integer(k)) => ordinal_index(k),
+            _ => select
+                .columns
+                .iter()
+                .position(|item| match (item, &term.expr.kind) {
+                    (ResultColumn::Expr { expr, .. }, ExprKind::FunctionCall { .. }) => {
+                        same_aggregate(expr, &term.expr)
+                    }
+                    _ => select_item_label(item) == *label,
+                }),
+        };
         let pos = match (pos, &mut extra, &term.expr.kind) {
             (Some(pos), _, _) => pos,
             (None, Some((ctx, regs)), ExprKind::Column { .. }) => {
@@ -4386,7 +4404,11 @@ fn referenced_columns(select: &Select) -> Result<Vec<String>> {
             push_unique(&mut out, join.right_col.clone());
         }
     }
-    for (column, _) in select_order_by(select) {
+    for (term, (column, _)) in select.order_by.iter().zip(select_order_by(select)) {
+        // #930: a position names a select item, whose columns are above.
+        if matches!(term.expr.kind, ExprKind::Literal(_)) {
+            continue;
+        }
         // #131: an `ORDER BY` referencing a SELECT-list aggregate carries
         // that aggregate's rendered label (e.g. `COUNT(x)`), not a real
         // column name -- its underlying column, if any, is already
@@ -6096,6 +6118,72 @@ mod tests {
         );
         assert!(
             matches!(&sort.opcode, Opcode::Sort { keys, hidden: 1 } if keys[..] == [(0, true), (1, false)])
+        );
+    }
+
+    /// #930: a computed select item is sorted on by its position, written
+    /// as a number or as the same expression; nothing is loaded hidden.
+    #[test]
+    fn order_by_a_computed_item_sorts_on_its_position() {
+        let schema = ["region".to_string(), "amount".to_string()];
+        let plan = |q: &str| compile(&expand_star(&sql::parse(q).unwrap(), &schema).unwrap());
+        for q in [
+            "SELECT region, amount * 2 FROM t ORDER BY 2 DESC, 1",
+            "SELECT region, amount * 2 FROM t ORDER BY (amount * 2) DESC, region",
+        ] {
+            let program = plan(q).unwrap();
+            let sort = program
+                .instructions
+                .iter()
+                .find(|i| matches!(i.opcode, Opcode::Sort { .. }))
+                .unwrap();
+            assert!(
+                matches!(&sort.opcode, Opcode::Sort { keys, hidden: 0 } if keys[..] == [(1, true), (0, false)]),
+                "{q}: {:?}",
+                sort.opcode
+            );
+            assert_eq!(
+                sort.comment.as_deref(),
+                Some("ORDER BY amount * 2 DESC, region"),
+                "{q}"
+            );
+        }
+    }
+
+    /// The `(left_col, right_col)` a `JOIN ... ON` lowers to (tools#108).
+    fn join_keys(sql: &str) -> (String, String) {
+        let q = sql::parse(sql).unwrap();
+        let joins = extract_joins(q.from.as_ref().unwrap()).unwrap();
+        (joins[0].left_col.clone(), joins[0].right_col.clone())
+    }
+
+    // codegen_batch_extract_joins_5ba520da (tools#108): the ON pair is
+    // swapped when its left column is the joined table's and its right is
+    // not -- `owners.0 == Some(table) && owners.1 != Some(table)`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_extract_joins_5ba520da__v1_joined_table_first_is_swapped() {
+        assert_eq!(
+            join_keys("SELECT t.a FROM t JOIN u ON u.k = t.k"),
+            ("t.k".to_string(), "u.k".to_string())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_extract_joins_5ba520da__v2_both_keys_from_the_joined_table_keep_order() {
+        assert_eq!(
+            join_keys("SELECT t.a FROM t JOIN u ON u.k = u.j"),
+            ("u.k".to_string(), "u.j".to_string())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_extract_joins_5ba520da__v3_from_table_first_keeps_order() {
+        assert_eq!(
+            join_keys("SELECT t.a FROM t JOIN u ON t.k = u.k"),
+            ("t.k".to_string(), "u.k".to_string())
         );
     }
 
