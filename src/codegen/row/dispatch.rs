@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use crate::codegen::row::planner::Stats;
 use crate::codegen::row::select::{check_having_clauses, check_table_star_qualifiers};
 use crate::codegen::row::{Emitter, RegAlloc, TableSchema, ViewSchema};
-use crate::parser::ast::{InsertSource, Select, TableRef};
+use crate::parser::ast::{Insert, InsertSource, Select, TableRef};
 use crate::parser::row::error::ParseOutcome;
 use crate::parser::row::error::{
     parse_analyze, parse_begin, parse_commit, parse_create_index, parse_create_table,
@@ -254,6 +254,77 @@ fn dispatch_create_view(
     }
 }
 
+/// `INSERT` (also led by `WITH`, #939): resolves the SELECT source's
+/// tables (after WITH/view expansion), then compiles.
+fn dispatch_insert(
+    mut insert: Insert,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
+    let find_schema = |name: &str| -> Result<&TableSchema, DispatchError> {
+        schemas
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
+            .ok_or_else(|| DispatchError::NoSuchTable(name.to_string()))
+    };
+    let schema = find_schema(&insert.table)?;
+    let mut arm_schemas: Vec<TableSchema> = Vec::new();
+    let select_schemas: Option<Vec<TableSchema>> = match &insert.source {
+        InsertSource::Select(select) => {
+            // Same `WITH`/view expansion `compile_select_program`
+            // runs for a plain SELECT (#375/#380). A CTE or view
+            // becomes a FROM-subquery, which `compile_insert`
+            // materializes like a plain SELECT does (#939).
+            let resolved_views = resolve_views(views);
+            let cte_expanded = expand_with_clause(select)?;
+            let expanded = cte_expanded.expand_views(&resolved_views)?;
+            super::subquery::reject_unparsable_view_refs(&expanded, views)?;
+
+            // #939: a FROM-less source has no FROM tables.
+            let Some(from) = &expanded.from else {
+                insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
+                return Ok(compile_insert_with_catalog(
+                    &insert,
+                    schema,
+                    Some(&[]),
+                    &[],
+                    &readable_catalog(schemas),
+                )?);
+            };
+            let readable = readable_catalog(schemas);
+            let mut joined_schemas = vec![resolve_from_table_schema(&from.first, &readable)?];
+            for join in &from.joins {
+                joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);
+            }
+            // #939: a compound source's arm tables, resolved
+            // like a plain compound SELECT's.
+            for arm in &expanded.compound {
+                let Some(arm_from) = &arm.from else {
+                    return Err(CodegenError::Unsupported {
+                        reason: "INSERT ... SELECT: a UNION arm without FROM after \
+                                 one with FROM is not yet supported"
+                            .to_string(),
+                    }
+                    .into());
+                };
+                arm_schemas.push(resolve_from_table_schema(&arm_from.first, &readable)?);
+            }
+            insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
+            Some(joined_schemas)
+        }
+        InsertSource::Values(_) | InsertSource::DefaultValues => None,
+    };
+    // Subqueries read through the same catalog a plain SELECT
+    // does (WITHOUT ROWID tables' indexes hidden).
+    Ok(compile_insert_with_catalog(
+        &insert,
+        schema,
+        select_schemas.as_deref(),
+        &arm_schemas,
+        &readable_catalog(schemas),
+    )?)
+}
+
 fn dispatch_create_index(
     sql: &str,
     schemas: &[TableSchema],
@@ -475,6 +546,17 @@ pub fn compile_statement(
             ParseOutcome::Accepted(select) => {
                 compile_select_statement(&select, schemas, views, &HashMap::new())
             }
+            // #939: `WITH … INSERT`; anything else keeps the SELECT error.
+            other if head == "WITH" => match parse_insert(sql) {
+                ParseOutcome::Accepted(insert) => dispatch_insert(*insert, schemas, views),
+                ParseOutcome::Unsupported { message, span } => {
+                    Err(parse_error(ParseOutcome::<Select>::Unsupported {
+                        message,
+                        span,
+                    }))
+                }
+                _ => Err(parse_error(other)),
+            },
             other => Err(parse_error(other)),
         },
         "EXPLAIN" => match parse_explain(sql) {
@@ -507,66 +589,7 @@ pub fn compile_statement(
             other => Err(parse_error(other)),
         },
         "INSERT" => match parse_insert(sql) {
-            ParseOutcome::Accepted(mut insert) => {
-                let schema = find_schema(&insert.table)?;
-                let mut arm_schemas: Vec<TableSchema> = Vec::new();
-                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {
-                    InsertSource::Select(select) => {
-                        // Same `WITH`/view expansion `compile_select_program`
-                        // runs for a plain SELECT (#375/#380). A CTE or view
-                        // becomes a FROM-subquery, which `compile_insert`
-                        // materializes like a plain SELECT does (#939).
-                        let resolved_views = resolve_views(views);
-                        let cte_expanded = expand_with_clause(select)?;
-                        let expanded = cte_expanded.expand_views(&resolved_views)?;
-                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;
-
-                        // #939: a FROM-less source has no FROM tables.
-                        let Some(from) = &expanded.from else {
-                            insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
-                            return Ok(compile_insert_with_catalog(
-                                &insert,
-                                schema,
-                                Some(&[]),
-                                &[],
-                                &readable_catalog(schemas),
-                            )?);
-                        };
-                        let readable = readable_catalog(schemas);
-                        let mut joined_schemas =
-                            vec![resolve_from_table_schema(&from.first, &readable)?];
-                        for join in &from.joins {
-                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);
-                        }
-                        // #939: a compound source's arm tables, resolved
-                        // like a plain compound SELECT's.
-                        for arm in &expanded.compound {
-                            let Some(arm_from) = &arm.from else {
-                                return Err(CodegenError::Unsupported {
-                                    reason: "INSERT ... SELECT: a UNION arm without FROM after \
-                                             one with FROM is not yet supported"
-                                        .to_string(),
-                                }
-                                .into());
-                            };
-                            arm_schemas
-                                .push(resolve_from_table_schema(&arm_from.first, &readable)?);
-                        }
-                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
-                        Some(joined_schemas)
-                    }
-                    InsertSource::Values(_) | InsertSource::DefaultValues => None,
-                };
-                // Subqueries read through the same catalog a plain SELECT
-                // does (WITHOUT ROWID tables' indexes hidden).
-                Ok(compile_insert_with_catalog(
-                    &insert,
-                    schema,
-                    select_schemas.as_deref(),
-                    &arm_schemas,
-                    &readable_catalog(schemas),
-                )?)
-            }
+            ParseOutcome::Accepted(insert) => dispatch_insert(*insert, schemas, views),
             other => Err(parse_error(other)),
         },
         "UPDATE" => match parse_update(sql) {

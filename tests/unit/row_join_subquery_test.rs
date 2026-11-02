@@ -712,3 +712,80 @@ fn union_order_by_names_output_columns_by_position_alias_or_first_arm_column() {
         assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
     }
 }
+
+#[test]
+fn with_before_insert_feeds_its_select() {
+    assert_eq!(
+        insert_rows(&[
+            "WITH w AS (SELECT id * 100 AS id, k FROM a) INSERT INTO d SELECT id, k FROM w"
+        ]),
+        ["1|seed", "2|seed2", "100|x", "200|y", "300|z"]
+    );
+    assert_eq!(
+        insert_rows(&["WITH w AS (SELECT id, t FROM c) \
+             INSERT INTO d SELECT w1.id + 1000, w2.t FROM w AS w1 JOIN w AS w2 ON w2.id = w1.id"]),
+        ["1|seed", "2|seed2", "1001|icf", "1002|other"]
+    );
+    assert_eq!(
+        insert_rows(&[
+            "WITH x AS (SELECT id FROM a WHERE id > 1), y AS (SELECT id + 2000 AS id FROM x) \
+             INSERT INTO d SELECT id, 'chain' FROM y"
+        ]),
+        ["1|seed", "2|seed2", "2002|chain", "2003|chain"]
+    );
+}
+
+#[test]
+fn with_before_insert_and_in_its_select_scope_like_sqlite() {
+    // The SELECT's own CTE uses the outer one; a name defined in both
+    // means the SELECT's own inside it.
+    assert_eq!(
+        insert_rows(&[
+            "WITH o AS (SELECT k FROM a WHERE id = 3) \
+             INSERT INTO d WITH i AS (SELECT k || '!' AS k FROM o) SELECT 3000, k FROM i",
+            "WITH o AS (SELECT 1 AS v) \
+             INSERT INTO d WITH o AS (SELECT 2 AS v) SELECT 3500 + v, 'clash' FROM o",
+        ]),
+        ["1|seed", "2|seed2", "3000|z!", "3502|clash"]
+    );
+}
+
+#[test]
+fn with_before_insert_over_the_target_sees_it_before_the_statement() {
+    assert_eq!(
+        insert_rows(&[
+            "WITH n AS (SELECT count(*) AS n FROM d) INSERT INTO d SELECT 4000 + n, 'self' FROM n, a",
+            "WITH s AS (SELECT * FROM d WHERE id < 10) \
+             INSERT OR IGNORE INTO d SELECT id + 4500, t FROM s ORDER BY id DESC LIMIT 1",
+        ]),
+        ["1|seed", "2|seed2", "4002|self", "4002|self", "4002|self", "4502|seed2"]
+    );
+}
+
+#[test]
+fn with_before_values_update_or_delete_is_still_refused() {
+    let (_db, mut e) = insert_fixture();
+    for sql in [
+        "WITH v AS (SELECT 1) INSERT INTO d VALUES (6000, 'values')",
+        "WITH w AS (SELECT 1) UPDATE d SET t = 'x' WHERE id = 1",
+        "WITH w AS (SELECT 1) DELETE FROM d WHERE id = 1",
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert!(
+            err.to_string().contains("not yet supported"),
+            "{sql}: {err}"
+        );
+    }
+    assert_eq!(
+        rows(
+            &mut e,
+            "WITH w AS (SELECT id FROM a) SELECT count(*) FROM w",
+            true
+        ),
+        ["3"]
+    );
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
+        ["1|seed", "2|seed2"]
+    );
+}
