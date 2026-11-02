@@ -92,6 +92,61 @@ fn match_scope_unit(name: &str) -> Option<(ScopeUnit, u64)> {
     }
 }
 
+/// Gives a `WITH … INSERT … SELECT`'s leading CTEs to the SELECT (#939).
+/// They go in front of its own CTEs, which may use them. When a name is
+/// defined in both, the SELECT's own one must shadow the outer one inside
+/// it, so the SELECT becomes a FROM-subquery of `WITH outer SELECT * FROM
+/// (…)`, keeping the two scopes apart as sqlite3 does.
+fn attach_leading_with(select: &mut Select, outer: WithClause) {
+    let Some(inner) = select.with_clause.take() else {
+        select.with_clause = Some(outer);
+        return;
+    };
+    let clash = inner.ctes.iter().any(|cte| {
+        outer
+            .ctes
+            .iter()
+            .any(|o| o.name.eq_ignore_ascii_case(&cte.name))
+    });
+    if clash {
+        select.with_clause = Some(inner);
+        let span = select.span;
+        let source = std::mem::replace(
+            select,
+            Select {
+                with_clause: Some(outer),
+                distinct: None,
+                columns: vec![ResultColumn::Star],
+                from: None,
+                where_clause: None,
+                group_by: Vec::new(),
+                having: None,
+                compound: Vec::new(),
+                order_by: Vec::new(),
+                limit: None,
+                scope: None,
+                span,
+            },
+        );
+        select.from = Some(FromClause {
+            first: TableRef {
+                kind: TableRefKind::Subquery(Box::new(source)),
+                schema: None,
+                alias: None,
+                span,
+            },
+            joins: Vec::new(),
+        });
+        return;
+    }
+    let mut ctes = outer.ctes;
+    ctes.extend(inner.ctes);
+    select.with_clause = Some(WithClause {
+        ctes,
+        span: outer.span,
+    });
+}
+
 fn join_span(a: Span, b: Span) -> Span {
     Span {
         line: a.line,
@@ -313,7 +368,14 @@ impl Parser {
     // ---- statement -----------------------------------------------------
 
     pub(super) fn parse_insert_stmt(&mut self) -> PResult<Insert> {
-        let start = self.expect_kw(Keyword::INSERT)?;
+        // #939: `WITH … INSERT`. The CTEs feed the SELECT source; see below.
+        let mut with_clause = if self.at_kw(Keyword::WITH) {
+            Some(self.parse_with_clause()?)
+        } else {
+            None
+        };
+        let insert_kw = self.expect_kw(Keyword::INSERT)?;
+        let start = with_clause.as_ref().map_or(insert_kw, |w| w.span);
         let or_action = if self.eat_kw(Keyword::OR) {
             Some(self.conflict_action()?)
         } else {
@@ -349,13 +411,19 @@ impl Parser {
             }
             (InsertSource::Values(rows), end)
         } else if self.at_kw(Keyword::SELECT) || self.at_kw(Keyword::WITH) {
-            let select = self.parse_select_stmt()?;
+            let mut select = self.parse_select_stmt()?;
             let end = select.span;
+            if let Some(outer) = with_clause.take() {
+                attach_leading_with(&mut select, outer);
+            }
             (InsertSource::Select(Box::new(select)), end)
         } else {
             return self.invalid("expected VALUES, DEFAULT VALUES, or SELECT after INSERT INTO");
         };
 
+        if with_clause.is_some() {
+            return self.unsupported("WITH ... INSERT ... VALUES not yet supported");
+        }
         // `DEFAULT VALUES` takes no upsert clause (sqlite3's grammar).
         let upsert = if matches!(source, InsertSource::DefaultValues) {
             Vec::new()
@@ -3633,6 +3701,58 @@ mod tests {
         let insert = parser(sql).parse_insert_stmt().unwrap();
         // `end` comes from the last value expr's span, not the closing paren.
         assert_eq!(insert.span.len, u32::try_from(sql.len() - 1).unwrap());
+    }
+
+    fn insert_select(sql: &str) -> Select {
+        match parser(sql).parse_insert_stmt().unwrap().source {
+            InsertSource::Select(select) => *select,
+            other => panic!("{sql}: {other:?}"),
+        }
+    }
+
+    fn cte_names(select: &Select) -> Vec<String> {
+        select
+            .with_clause
+            .as_ref()
+            .map(|w| w.ctes.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// #939: a leading `WITH` feeds the INSERT's SELECT, ahead of its own
+    /// CTEs; the statement's span starts at `WITH`.
+    #[test]
+    fn with_before_insert_goes_to_the_select_ahead_of_its_own_ctes() {
+        let sql = "WITH w AS (SELECT 1) INSERT INTO t SELECT * FROM w";
+        let insert = parser(sql).parse_insert_stmt().unwrap();
+        assert_eq!(insert.span.offset, 0);
+        assert_eq!(cte_names(&insert_select(sql)), ["w"]);
+        let merged = insert_select(
+            "WITH o AS (SELECT 1) INSERT INTO t WITH i AS (SELECT * FROM o) SELECT * FROM i",
+        );
+        assert_eq!(cte_names(&merged), ["o", "i"]);
+    }
+
+    /// #939: a name defined both before INSERT and in the SELECT keeps two
+    /// scopes: the SELECT becomes a subquery under the outer `WITH`.
+    #[test]
+    fn with_before_insert_clashing_with_the_selects_own_cte_nests() {
+        let outer = insert_select(
+            "WITH o AS (SELECT 1) INSERT INTO t WITH o AS (SELECT 2) SELECT * FROM o",
+        );
+        assert_eq!(cte_names(&outer), ["o"]);
+        assert!(matches!(outer.columns.as_slice(), [ResultColumn::Star]));
+        let Some(TableRefKind::Subquery(inner)) = outer.from.as_ref().map(|f| &f.first.kind) else {
+            panic!("expected a FROM-subquery: {outer:?}");
+        };
+        assert_eq!(cte_names(inner), ["o"]);
+    }
+
+    #[test]
+    fn with_before_insert_values_is_unsupported() {
+        assert!(matches!(
+            parser("WITH w AS (SELECT 1) INSERT INTO t VALUES (1)").parse_insert_stmt(),
+            Err(ParseFail::Unsupported { .. })
+        ));
     }
 
     /// #368 tagged MC/DC vector (obligation `grammar_474`,

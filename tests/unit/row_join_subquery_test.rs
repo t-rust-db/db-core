@@ -428,3 +428,364 @@ fn insert_select_from_the_target_with_autoincrement() {
         ["1|1", "2|2", "3|3", "4|4"]
     );
 }
+
+// #939: INSERT ... SELECT from sources sqlite3 runs beyond a plain table or
+// join. Each test starts from the fixture plus a view and a seeded target;
+// the rows are sqlite3 3.54.1's for the same statements.
+
+/// The fixture plus `vb` (a view over `b`) and `d` holding two seed rows.
+fn insert_fixture() -> (TempDb, RowEngine) {
+    let (db, mut e) = fixture();
+    for sql in [
+        "CREATE VIEW vb AS SELECT k, t || '~' AS t FROM b",
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "INSERT INTO d VALUES (1, 'seed'), (2, 'seed2')",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    (db, e)
+}
+
+/// Runs `statements` against [`insert_fixture`], then returns `d` in order.
+fn insert_rows(statements: &[&str]) -> Vec<String> {
+    let (_db, mut e) = insert_fixture();
+    for sql in statements {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true)
+}
+
+#[test]
+fn insert_select_from_a_from_subquery() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT x.id, x.k FROM (SELECT id, k FROM a WHERE id > 1) AS x"
+        ]),
+        ["1|seed", "2|seed2", "2|y", "3|z"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_view() {
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT 10, t FROM vb WHERE k = 'x'"]),
+        ["1|seed", "2|seed2", "10|icf~", "10|mcqf~"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_cte_inside_the_insert() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d WITH w AS (SELECT id + 1000 AS id, t FROM c) SELECT id, t FROM w"
+        ]),
+        ["1|seed", "2|seed2", "1001|icf", "1002|other"]
+    );
+}
+
+#[test]
+fn insert_select_joining_a_subquery_and_a_view() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT a.id + 2000, s.t FROM a \
+             JOIN (SELECT k, max(t) AS t FROM b GROUP BY k) AS s ON s.k = a.k",
+            "INSERT INTO d SELECT a.id + 3000, v.t FROM a JOIN vb AS v ON v.k = a.k",
+        ]),
+        [
+            "1|seed",
+            "2|seed2",
+            "2001|mcqf",
+            "2002|icf",
+            "3001|icf~",
+            "3001|mcqf~",
+            "3002|icf~"
+        ]
+    );
+}
+
+#[test]
+fn insert_select_from_a_subquery_over_the_target_sees_it_before_the_statement() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT x.id + 7000, x.t FROM (SELECT id, t FROM d WHERE id < 10) AS x",
+            "INSERT INTO d SELECT count(*) + 8000, 'self' FROM (SELECT * FROM d)",
+        ]),
+        ["1|seed", "2|seed2", "7001|seed", "7002|seed2", "8004|self"]
+    );
+}
+
+#[test]
+fn insert_select_from_nested_and_limited_subqueries() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT * FROM (SELECT 9500, 'nested' FROM (SELECT 1))",
+            "INSERT INTO d SELECT x.id + 100, x.t FROM \
+             (SELECT id, t FROM d ORDER BY id DESC LIMIT 1) AS x",
+        ]),
+        ["1|seed", "2|seed2", "9500|nested", "9600|nested"]
+    );
+}
+
+#[test]
+fn insert_select_without_from() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE p (id INTEGER PRIMARY KEY, v TEXT UNIQUE, n REAL)",
+        "INSERT INTO p SELECT 1, 'a', 2",
+        "INSERT INTO p(v) SELECT 'b'",
+        // Reads the target: sees it before the statement.
+        "INSERT INTO p(v, n) SELECT (SELECT max(v) FROM p) || '+', (SELECT count(*) FROM p)",
+        "INSERT INTO p(v, n) SELECT NULL, '3.5'",
+        "INSERT OR IGNORE INTO p(v, n) SELECT 'a', 99",
+        "INSERT INTO p(v, n) SELECT 'a', 7 ON CONFLICT(v) DO UPDATE SET n = excluded.n + p.n",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    let err = e
+        .run_query("INSERT INTO p(v, n) SELECT 'b', 1")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("UNIQUE constraint failed: p.v"),
+        "{err}"
+    );
+    assert!(e.run_query("INSERT INTO p(v) SELECT 'x', 'y'").is_err());
+    e.run_query(
+        "INSERT INTO p(v, n) SELECT (SELECT max(k) || min(k) FROM a), (SELECT sum(id) FROM a)",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT id, v, n, typeof(n) FROM p ORDER BY id",
+            true
+        ),
+        [
+            "1|a|9.0|real",
+            "2|b|NULL|null",
+            "3|b+|2.0|real",
+            "4|NULL|3.5|real",
+            "5|zx|6.0|real"
+        ]
+    );
+}
+
+#[test]
+fn insert_select_without_from_with_where_inserts_only_when_it_holds() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE p (id INTEGER PRIMARY KEY, v TEXT UNIQUE, n REAL)",
+        "INSERT INTO p(v) VALUES ('a'), ('b'), ('c'), ('d')",
+        "INSERT INTO p(v) SELECT 'w' WHERE 1",
+        "INSERT INTO p(v) SELECT 'never' WHERE 0",
+        "INSERT INTO p(v) SELECT 'nul' WHERE NULL",
+        // sqlite3's insert-if-missing idiom: the second one inserts nothing.
+        "INSERT INTO p(v, n) SELECT 'new', 1 WHERE NOT EXISTS (SELECT 1 FROM p WHERE v = 'new')",
+        "INSERT INTO p(v, n) SELECT 'new', 2 WHERE NOT EXISTS (SELECT 1 FROM p WHERE v = 'new')",
+        "INSERT INTO p(v, n) SELECT 'cnt', (SELECT count(*) FROM p) WHERE (SELECT count(*) FROM p) > 3",
+    ] {
+        e.run_query(sql).unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT id, v, n FROM p WHERE id > 4 ORDER BY id",
+            true
+        ),
+        ["5|w|NULL", "6|new|1.0", "7|cnt|6.0"]
+    );
+}
+
+#[test]
+fn select_without_from_reads_tables_in_its_subqueries() {
+    let (_db, mut e) = fixture();
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT (SELECT count(*) FROM c), (SELECT max(t) FROM b)",
+            true
+        ),
+        ["2|orphan"]
+    );
+}
+
+#[test]
+fn insert_select_from_union_all_and_union() {
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT id, k FROM a UNION ALL SELECT id, t FROM c"]),
+        ["1|icf", "1|seed", "1|x", "2|other", "2|seed2", "2|y", "3|z"]
+    );
+    // UNION dedups across arms: `x` and `y` come from both.
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT 50, k FROM b UNION SELECT 50, k FROM a"]),
+        ["1|seed", "2|seed2", "50|w", "50|x", "50|y", "50|z"]
+    );
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT 600, 'v1' UNION ALL SELECT 601, 'v2'"]),
+        ["1|seed", "2|seed2", "600|v1", "601|v2"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_union_with_order_by_and_limit() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT id + 100, k FROM a UNION ALL SELECT id + 100, t FROM c \
+             ORDER BY 1 DESC, 2 LIMIT 3 OFFSET 1"
+        ]),
+        ["1|seed", "2|seed2", "101|icf", "102|other", "102|y"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_union_over_a_subquery_and_a_view() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT x.id + 300, x.k FROM (SELECT id, k FROM a WHERE id < 3) AS x \
+             UNION ALL SELECT 300, t FROM vb WHERE k = 'y'"
+        ]),
+        ["1|seed", "2|seed2", "300|icf~", "301|x", "302|y"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_union_over_the_target_sees_it_before_the_statement() {
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT id + 400, t FROM d \
+             UNION ALL SELECT (SELECT count(*) FROM d) + 400, 'n' FROM a WHERE id = 1"]),
+        ["1|seed", "2|seed2", "401|seed", "402|n", "402|seed2"]
+    );
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT id, t FROM d UNION SELECT id, t FROM d"]),
+        ["1|seed", "1|seed", "2|seed2", "2|seed2"]
+    );
+}
+
+#[test]
+fn insert_select_union_dedup_decides_a_unique_constraint() {
+    let (_db, mut e) = fixture();
+    e.run_query("CREATE TABLE u (t TEXT UNIQUE)").unwrap();
+    // `icf` is in both b and c: UNION keeps one, so no conflict.
+    e.run_query("INSERT INTO u SELECT t FROM b UNION SELECT t FROM c")
+        .unwrap();
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM u ORDER BY 1", true),
+        ["icf", "mcqf", "orphan", "other"]
+    );
+    let err = e
+        .run_query("INSERT INTO u SELECT t FROM b UNION ALL SELECT 'zz' FROM a")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("UNIQUE constraint failed: u.t"),
+        "{err}"
+    );
+    assert_eq!(rows(&mut e, "SELECT count(*) FROM u", true), ["4"]);
+}
+
+#[test]
+fn union_order_by_names_output_columns_by_position_alias_or_first_arm_column() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        (
+            "SELECT id + 100, k FROM a UNION ALL SELECT id, t FROM c ORDER BY 1 DESC",
+            &["103|z", "102|y", "101|x", "2|other", "1|icf"][..],
+        ),
+        (
+            "SELECT k AS z FROM a UNION SELECT t FROM c ORDER BY z DESC",
+            &["z", "y", "x", "other", "icf"][..],
+        ),
+        (
+            "SELECT id * 2 AS d, k FROM a UNION ALL SELECT id, t FROM c ORDER BY d, 2",
+            &["1|icf", "2|other", "2|x", "4|y", "6|z"][..],
+        ),
+        (
+            "SELECT upper(k) FROM a UNION SELECT t FROM c ORDER BY 1",
+            &["X", "Y", "Z", "icf", "other"][..],
+        ),
+        (
+            "SELECT id AS n, k FROM a UNION ALL SELECT id, t FROM c ORDER BY n DESC LIMIT 2",
+            &["3|z", "2|y"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+#[test]
+fn with_before_insert_feeds_its_select() {
+    assert_eq!(
+        insert_rows(&[
+            "WITH w AS (SELECT id * 100 AS id, k FROM a) INSERT INTO d SELECT id, k FROM w"
+        ]),
+        ["1|seed", "2|seed2", "100|x", "200|y", "300|z"]
+    );
+    assert_eq!(
+        insert_rows(&["WITH w AS (SELECT id, t FROM c) \
+             INSERT INTO d SELECT w1.id + 1000, w2.t FROM w AS w1 JOIN w AS w2 ON w2.id = w1.id"]),
+        ["1|seed", "2|seed2", "1001|icf", "1002|other"]
+    );
+    assert_eq!(
+        insert_rows(&[
+            "WITH x AS (SELECT id FROM a WHERE id > 1), y AS (SELECT id + 2000 AS id FROM x) \
+             INSERT INTO d SELECT id, 'chain' FROM y"
+        ]),
+        ["1|seed", "2|seed2", "2002|chain", "2003|chain"]
+    );
+}
+
+#[test]
+fn with_before_insert_and_in_its_select_scope_like_sqlite() {
+    // The SELECT's own CTE uses the outer one; a name defined in both
+    // means the SELECT's own inside it.
+    assert_eq!(
+        insert_rows(&[
+            "WITH o AS (SELECT k FROM a WHERE id = 3) \
+             INSERT INTO d WITH i AS (SELECT k || '!' AS k FROM o) SELECT 3000, k FROM i",
+            "WITH o AS (SELECT 1 AS v) \
+             INSERT INTO d WITH o AS (SELECT 2 AS v) SELECT 3500 + v, 'clash' FROM o",
+        ]),
+        ["1|seed", "2|seed2", "3000|z!", "3502|clash"]
+    );
+}
+
+#[test]
+fn with_before_insert_over_the_target_sees_it_before_the_statement() {
+    assert_eq!(
+        insert_rows(&[
+            "WITH n AS (SELECT count(*) AS n FROM d) INSERT INTO d SELECT 4000 + n, 'self' FROM n, a",
+            "WITH s AS (SELECT * FROM d WHERE id < 10) \
+             INSERT OR IGNORE INTO d SELECT id + 4500, t FROM s ORDER BY id DESC LIMIT 1",
+        ]),
+        ["1|seed", "2|seed2", "4002|self", "4002|self", "4002|self", "4502|seed2"]
+    );
+}
+
+#[test]
+fn with_before_values_update_or_delete_is_still_refused() {
+    let (_db, mut e) = insert_fixture();
+    for sql in [
+        "WITH v AS (SELECT 1) INSERT INTO d VALUES (6000, 'values')",
+        "WITH w AS (SELECT 1) UPDATE d SET t = 'x' WHERE id = 1",
+        "WITH w AS (SELECT 1) DELETE FROM d WHERE id = 1",
+    ] {
+        let err = e.run_query(sql).unwrap_err();
+        assert!(
+            err.to_string().contains("not yet supported"),
+            "{sql}: {err}"
+        );
+    }
+    assert_eq!(
+        rows(
+            &mut e,
+            "WITH w AS (SELECT id FROM a) SELECT count(*) FROM w",
+            true
+        ),
+        ["3"]
+    );
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
+        ["1|seed", "2|seed2"]
+    );
+}

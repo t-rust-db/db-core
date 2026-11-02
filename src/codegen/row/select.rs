@@ -249,8 +249,9 @@ pub(crate) use aggregate::{
     try_compile_index_only_count, try_compile_index_only_sum,
 };
 pub(crate) use entry::{
-    check_having_clauses, check_table_star_qualifiers, compile_constant_row, compile_select_scan,
-    select_result_column_count, select_result_column_count_joined,
+    check_having_clauses, check_table_star_qualifiers, compile_constant_row,
+    compile_select_compound_scan, compile_select_scan, select_result_column_count,
+    select_result_column_count_joined,
 };
 pub(crate) use joins::compile_select_joined_scan;
 pub(crate) use limit_scan::{is_rowid_reference, top_level_equality_operands};

@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.224.3] - 2026-11-02
+
+### Added
+
+- `INSERT ... SELECT` accepts a FROM-subquery, view, or CTE as its source, and subqueries or views as join sides (#939).
+- `INSERT ... SELECT` accepts a SELECT without FROM (including `WHERE NOT EXISTS (...)`), and `UNION` / `UNION ALL` sources (#939).
+- `WITH ... INSERT ... SELECT` runs; the leading CTEs are visible to the SELECT (#939).
+- an `INSERT ... SELECT` that reads its own target table sees it as it was before the statement (#939).
+- a compound `SELECT`'s ORDER BY accepts an output column's position, name or alias, including computed columns (#939).
+
 ## [0.224.2] - 2026-11-02
 
 ### Fixed

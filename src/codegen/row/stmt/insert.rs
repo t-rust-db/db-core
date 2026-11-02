@@ -86,8 +86,8 @@ use crate::codegen::row::index_maintenance::{
     emit_index_key_ops, emit_index_key_ops_from_regs, open_index_cursors, valid_table_root_page,
 };
 use crate::codegen::row::select::{
-    compile_select_joined_scan, compile_select_scan, select_result_column_count,
-    select_result_column_count_joined, CodegenError, ScanCursors,
+    compile_select_compound_scan, compile_select_joined_scan, compile_select_scan,
+    select_result_column_count, select_result_column_count_joined, CodegenError, ScanCursors,
 };
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, Label, NullTarget, RegAlloc, Target};
@@ -300,6 +300,7 @@ pub fn compile_insert(
         insert,
         schema,
         select_schemas,
+        &[],
         select_schemas.unwrap_or_default(),
     )
 }
@@ -307,11 +308,13 @@ pub fn compile_insert(
 /// [`compile_insert`] with the database's full `catalog` (#937): a
 /// subquery in an `INSERT ... SELECT` (scalar, `IN`, `EXISTS`, or a
 /// subquery in a joined `FROM`) may read a table that is not among the
-/// `SELECT`'s own `FROM` tables.
+/// `SELECT`'s own `FROM` tables. `arm_schemas` holds a compound
+/// source's arm tables, one per `UNION`/`UNION ALL` arm (#939).
 pub(crate) fn compile_insert_with_catalog(
     insert: &Insert,
     schema: &TableSchema,
     select_schemas: Option<&[TableSchema]>,
+    arm_schemas: &[TableSchema],
     catalog: &[TableSchema],
 ) -> Result<Program, CodegenError> {
     // A `WITHOUT ROWID` table is written by key (#722): no rowid, no
@@ -419,14 +422,14 @@ pub(crate) fn compile_insert_with_catalog(
     // reported before any code is emitted, matching the literal-`VALUES`
     // check above.
     if let InsertSource::Select(select) = &insert.source {
-        // #377/#378 made a compound (`UNION`/`UNION ALL`) `SELECT`
-        // parse successfully wherever any `select-stmt` grammar
-        // production is used, `INSERT ... SELECT`'s source included —
-        // but this codegen path only ever compiles `select`'s own
-        // core, silently dropping every `select.compound` arm. Reject
-        // it explicitly rather than insert a silently incomplete row
-        // set; wiring a compound source through is future scope.
-        if !select.compound.is_empty() {
+        // A compound source (#939) needs each arm's table; without them
+        // (the public `compile_insert`) only the first arm would run, so
+        // it is refused rather than inserting an incomplete row set. A
+        // FROM-less compound is materialized as constant rows instead.
+        if !select.compound.is_empty()
+            && select.from.is_some()
+            && arm_schemas.len() != select.compound.len()
+        {
             return Err(CodegenError::Unsupported {
                 reason: "INSERT ... SELECT with a compound (UNION/UNION ALL) source is not yet \
                          supported"
@@ -434,6 +437,10 @@ pub(crate) fn compile_insert_with_catalog(
             });
         }
         let found = match select_schemas {
+            // #939: a FROM-less source counts its own result columns.
+            Some([]) if select.from.is_none() => {
+                select_result_column_count(select, &TableSchema::default())
+            }
             Some([single]) => select_result_column_count(select, single),
             Some(joined) if joined.len() > 1 => {
                 let Some(from) = &select.from else {
@@ -557,8 +564,16 @@ pub(crate) fn compile_insert_with_catalog(
             // ephemeral table first, as sqlite3 does; inserting while it
             // still scans would let it see (or, after a page split, skip)
             // the statement's own rows.
-            let buffer = select_reads_table(select, &schema.name).then(|| {
+            // #939: a FROM-less source is always buffered: its rows are
+            // materialized (the constant-row path of a FROM-less subquery)
+            // and replayed below, like a buffered scan's.
+            let from_less = select.from.is_none();
+            let buffer = (from_less || select_reads_table(select, &schema.name)).then(|| {
                 let cursor = reg.alloc_cursor();
+                if from_less {
+                    // `materialize_from_subquery` opens it itself.
+                    return cursor;
+                }
                 em.emit(Instruction {
                     opcode: Opcode::OpenEphemeral,
                     p1: cursor,
@@ -622,7 +637,35 @@ pub(crate) fn compile_insert_with_catalog(
                 ));
                 Ok(())
             };
-            if select_schemas.len() > 1 {
+            if from_less {
+                let cursor = buffer.ok_or_else(|| CodegenError::Internal {
+                    reason: "a FROM-less INSERT ... SELECT source has no buffer".to_string(),
+                })?;
+                crate::codegen::row::subquery::materialize_from_subquery(
+                    &mut em, &mut reg, select, catalog, cursor,
+                )?;
+            } else if !select.compound.is_empty() {
+                // #939: a UNION/UNION ALL source; its arms' cursors start
+                // above this INSERT's own, like the scans below.
+                let first_schema =
+                    select_schemas
+                        .first()
+                        .ok_or_else(|| CodegenError::Internal {
+                            reason: "a compound INSERT ... SELECT source has no first arm schema"
+                                .to_string(),
+                        })?;
+                compile_select_compound_scan(
+                    &mut em,
+                    &mut reg,
+                    select,
+                    first_schema,
+                    arm_schemas,
+                    catalog,
+                    select_table_cursor,
+                    scan_end,
+                    &mut scan_sink,
+                )?;
+            } else if select_schemas.len() > 1 {
                 // #250: the SELECT's FROM clause has a JOIN — drive the
                 // same nested-loop join scan `compile_select_joined`
                 // uses, with cursor numbers offset above this INSERT's
@@ -657,13 +700,29 @@ pub(crate) fn compile_insert_with_catalog(
                     pseudo: select_table_cursor.saturating_add(2),
                     distinct: select_table_cursor.saturating_add(3),
                 };
-                let select_root_page = valid_table_root_page(select_schema)?;
-                em.emit(Instruction::new(
-                    Opcode::OpenRead,
-                    select_cursors.table,
-                    select_root_page,
-                    select_schema.database_p3(),
-                ));
+                // #939: a FROM-subquery (a view or CTE after expansion) is
+                // materialized into the scan's cursor, as a plain SELECT
+                // does; a real table is opened by its root page.
+                match select.from.as_ref().map(|from| &from.first.kind) {
+                    Some(TableRefKind::Subquery(subquery)) => {
+                        crate::codegen::row::subquery::materialize_from_subquery(
+                            &mut em,
+                            &mut reg,
+                            subquery,
+                            catalog,
+                            select_cursors.table,
+                        )?;
+                    }
+                    _ => {
+                        let select_root_page = valid_table_root_page(select_schema)?;
+                        em.emit(Instruction::new(
+                            Opcode::OpenRead,
+                            select_cursors.table,
+                            select_root_page,
+                            select_schema.database_p3(),
+                        ));
+                    }
+                }
                 compile_select_scan(
                     &mut em,
                     &mut reg,
@@ -1892,6 +1951,64 @@ mod mcdc_vectors {
     fn mcdc__codegen_row_stmt_insert_compile_row_4d66f676__v2_each_column_listed_once_compiles() {
         assert!(insert_result("INSERT INTO t(a, b) VALUES (1, 2)").is_ok());
         assert!(insert_result("INSERT INTO t(a, a) VALUES (1, 2)").is_ok());
+    }
+
+    // codegen_row_stmt_insert_compile_insert_with_catalog_c969e194:
+    // `!select.compound.is_empty() && select.from.is_some()
+    //  && arm_schemas.len() != select.compound.len()` (#939).
+    fn compound_insert(sql: &str, arm_schemas: &[TableSchema]) -> Result<Program, CodegenError> {
+        let ParseOutcome::Accepted(insert) = parse_insert(sql) else {
+            panic!("{sql} does not parse");
+        };
+        let u = table("u", 3, &["a", "b"]);
+        let select_schemas: &[TableSchema] = if sql.contains("FROM u") {
+            std::slice::from_ref(&u)
+        } else {
+            &[]
+        };
+        super::compile_insert_with_catalog(
+            &insert,
+            &table("t", 2, &["a", "b"]),
+            Some(select_schemas),
+            arm_schemas,
+            std::slice::from_ref(&u),
+        )
+    }
+
+    fn refused_as_compound(result: Result<Program, CodegenError>) -> bool {
+        matches!(result, Err(CodegenError::Unsupported { reason }) if reason.contains("compound"))
+    }
+
+    #[test]
+    fn mcdc__codegen_row_stmt_insert_compile_insert_with_catalog_c969e194__v1_union_without_arm_schemas_is_refused(
+    ) {
+        assert!(refused_as_compound(compound_insert(
+            "INSERT INTO t SELECT a, b FROM u UNION ALL SELECT a, b FROM u",
+            &[],
+        )));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_stmt_insert_compile_insert_with_catalog_c969e194__v2_no_compound_compiles()
+    {
+        assert!(compound_insert("INSERT INTO t SELECT a, b FROM u", &[]).is_ok());
+    }
+
+    #[test]
+    fn mcdc__codegen_row_stmt_insert_compile_insert_with_catalog_c969e194__v3_from_less_union_compiles(
+    ) {
+        assert!(compound_insert("INSERT INTO t SELECT 1, 2 UNION ALL SELECT 3, 4", &[]).is_ok());
+    }
+
+    #[test]
+    fn mcdc__codegen_row_stmt_insert_compile_insert_with_catalog_c969e194__v4_union_with_arm_schemas_compiles(
+    ) {
+        let u = table("u", 3, &["a", "b"]);
+        assert!(compound_insert(
+            "INSERT INTO t SELECT a, b FROM u UNION ALL SELECT a, b FROM u",
+            std::slice::from_ref(&u),
+        )
+        .is_ok());
     }
 }
 
