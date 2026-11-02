@@ -20,10 +20,11 @@ use crate::parser::row::error::{
 };
 use crate::vm::row::{Instruction, Opcode, Program, P4};
 
+use super::stmt::insert::compile_insert_with_catalog;
 use super::{
     compile_analyze, compile_begin, compile_commit, compile_create_index, compile_create_table,
     compile_create_view, compile_delete_with_catalog, compile_drop_index, compile_drop_table,
-    compile_drop_view, compile_insert, compile_pragma, compile_rollback, compile_select_compound,
+    compile_drop_view, compile_pragma, compile_rollback, compile_select_compound,
     compile_select_joined, compile_select_with_catalog, compile_select_with_catalog_and_stats,
     compile_update_with_catalog, expand_with_clause, explain_query_plan, flatten_from_subqueries,
     push_down_where_predicates, resolve_from_table_schema, resolve_views, CodegenError, EqpRow,
@@ -557,7 +558,12 @@ pub fn compile_statement(
                     }
                     InsertSource::Values(_) | InsertSource::DefaultValues => None,
                 };
-                Ok(compile_insert(&insert, schema, select_schemas.as_deref())?)
+                Ok(compile_insert_with_catalog(
+                    &insert,
+                    schema,
+                    select_schemas.as_deref(),
+                    schemas,
+                )?)
             }
             other => Err(parse_error(other)),
         },

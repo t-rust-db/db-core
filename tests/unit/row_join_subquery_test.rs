@@ -5,8 +5,10 @@
 //! the subquery's own FROM against the joined tables only ("isn't
 //! visible to this compiler's catalog"). A JOIN with ORDER BY also
 //! refused any computed result column; it is now evaluated before the
-//! sort and carried in the sorter record. Expected rows are sqlite3
-//! 3.54.1's on the same data.
+//! sort and carried in the sorter record. `INSERT ... SELECT` resolves
+//! its subqueries against the whole catalog too, and a SELECT that reads
+//! the target table runs to completion before the first row is inserted.
+//! Expected rows are sqlite3 3.54.1's on the same data.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -275,4 +277,154 @@ fn ordered_join_with_distinct_and_limit_over_computed_items() {
     let page =
         "SELECT a.id, b.t || '!' FROM a JOIN b ON b.k = a.k ORDER BY a.k, b.t LIMIT 2 OFFSET 1";
     assert_eq!(rows(&mut e, page, true), ["1|mcqf!", "2|icf!"]);
+}
+
+// INSERT ... SELECT: subqueries over any table, and a source that reads
+// the target table sees it as it was before the statement.
+
+#[test]
+fn insert_select_with_subqueries_over_tables_outside_the_source() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "INSERT INTO d SELECT a.id, b.t FROM a JOIN b ON b.k = a.k \
+         WHERE NOT EXISTS (SELECT 1 FROM c WHERE c.id = a.id AND c.t = b.t)",
+        "INSERT INTO d SELECT a.id + 100, b.t FROM a JOIN b ON b.k = a.k \
+         WHERE b.t IN (SELECT t FROM c)",
+        "INSERT INTO d SELECT a.id + 200, (SELECT max(t) FROM c WHERE c.id = a.id) \
+         FROM a JOIN b ON b.k = a.k",
+        "INSERT INTO d SELECT a.id + 300, k FROM a WHERE EXISTS (SELECT 1 FROM c WHERE c.id = a.id)",
+        "INSERT INTO d SELECT a.id + 400, (SELECT count(*) FROM b WHERE b.k = a.k) FROM a",
+        "INSERT INTO d SELECT a.id + 500, b.t || '!' FROM a JOIN b ON b.k = a.k \
+         ORDER BY 2 DESC LIMIT 1",
+    ] {
+        e.run_query(sql).unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true),
+        [
+            "1|mcqf",
+            "2|icf",
+            "101|icf",
+            "102|icf",
+            "201|icf",
+            "201|icf",
+            "202|other",
+            "301|x",
+            "302|y",
+            "401|2",
+            "402|1",
+            "403|0",
+            "501|mcqf!"
+        ]
+    );
+}
+
+#[test]
+fn insert_select_whose_subquery_reads_the_target_sees_it_before_the_statement() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE e (id INTEGER, t TEXT)",
+        "INSERT INTO e VALUES (1, 'icf')",
+        "INSERT INTO e SELECT a.id, b.t FROM a JOIN b ON b.k = a.k \
+         WHERE NOT EXISTS (SELECT 1 FROM e WHERE e.id = a.id AND e.t = b.t)",
+        // sqlite3: 3 on every row, the count before the statement.
+        "INSERT INTO e SELECT id + 10, (SELECT count(*) FROM e) FROM a \
+         WHERE NOT EXISTS (SELECT 1 FROM e AS x WHERE x.id = a.id + 10)",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM e ORDER BY 1, 2", true),
+        ["1|icf", "1|mcqf", "2|icf", "11|3", "12|3", "13|3"]
+    );
+}
+
+#[test]
+fn insert_select_from_the_target_across_page_splits_copies_each_row_once() {
+    // On main this lost rows: the scan read pages the insert was splitting.
+    let (_db, mut e) = fixture();
+    e.run_query("CREATE TABLE g (id INTEGER, pad TEXT)")
+        .unwrap();
+    e.run_query("INSERT INTO g SELECT a.id, b.t FROM a, b")
+        .unwrap();
+    for step in 1..=9 {
+        let sql = format!("INSERT INTO g SELECT id + {}, pad FROM g", 10_i64.pow(step));
+        e.run_query(&sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT count(*), sum(id) FROM g", true),
+        ["6144|3413333342208"]
+    );
+}
+
+#[test]
+fn insert_select_from_the_target_with_an_index_upsert_and_limit() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE h (id INTEGER PRIMARY KEY, v TEXT UNIQUE, n INTEGER)",
+        "CREATE INDEX h_n ON h(n)",
+        "INSERT INTO h(v, n) SELECT b.t || a.id, a.id FROM a JOIN b ON b.k = a.k",
+        "INSERT INTO h(v, n) SELECT v || '+', n + (SELECT max(n) FROM h) FROM h \
+         ORDER BY v DESC LIMIT 2",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    // Two new rows would both be `icf#`: the whole statement fails.
+    let err = e
+        .run_query(
+            "INSERT INTO h(v, n) SELECT b.t || '#', a.id FROM a JOIN b \
+             ON b.k = a.k AND a.id IN (SELECT n FROM h)",
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("UNIQUE constraint failed: h.v"),
+        "{err}"
+    );
+    for sql in [
+        "INSERT INTO h(v, n) SELECT v, 99 FROM h WHERE n = 1 \
+         ON CONFLICT(v) DO UPDATE SET n = excluded.n + h.n",
+        "INSERT OR IGNORE INTO h(v, n) SELECT v, -1 FROM h",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM h ORDER BY id", true),
+        [
+            "1|icf1|100",
+            "2|mcqf1|100",
+            "3|icf2|2",
+            "4|mcqf1+|3",
+            "5|icf2+|4"
+        ]
+    );
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT n, count(*) FROM h WHERE n > 0 GROUP BY n ORDER BY n",
+            true
+        ),
+        ["2|1", "3|1", "4|1", "100|2"]
+    );
+}
+
+#[test]
+fn insert_select_from_the_target_with_autoincrement() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE z (id INTEGER PRIMARY KEY AUTOINCREMENT, v INTEGER)",
+        "INSERT INTO z(v) VALUES (1), (2)",
+        "INSERT INTO z(v) SELECT v + (SELECT count(*) FROM z) FROM z",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM z ORDER BY id", true),
+        ["1|1", "2|2", "3|3", "4|4"]
+    );
 }
