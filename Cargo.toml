@@ -68,6 +68,11 @@ path = "tests/unit/row_create_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_row_join_subquery"
+path = "tests/unit/row_join_subquery_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_index_seek"
 path = "tests/unit/index_seek_test.rs"
 required-features = ["engine-row"]
