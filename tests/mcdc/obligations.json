@@ -9132,7 +9132,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_9e9a4b15",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 127,
+    "line": 128,
     "decision": "has_order_by",
     "conditions": 1,
     "vectors_required": 2,
@@ -9142,7 +9142,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_9e9a4b15_2",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 144,
+    "line": 145,
     "decision": "has_order_by",
     "conditions": 1,
     "vectors_required": 2,
@@ -9152,7 +9152,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_a6524e27",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 145,
+    "line": 146,
     "decision": "let Some(dc) = distinct_cursor",
     "conditions": 1,
     "vectors_required": 2,
@@ -9162,7 +9162,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_7cbd4502",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 198,
+    "line": 199,
     "decision": "let Some(c) = &constraint",
     "conditions": 1,
     "vectors_required": 2,
@@ -9172,7 +9172,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_b7872d16",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 217,
+    "line": 218,
     "decision": "let Some(sort) = &sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -9182,7 +9182,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_258441b3",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 252,
+    "line": 253,
     "decision": "let Some(b) = b_null_bindings.get_mut(1)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9192,7 +9192,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_b7872d16_2",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 262,
+    "line": 263,
     "decision": "let Some(sort) = &sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -9202,7 +9202,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_a4ff3110",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 310,
+    "line": 311,
     "decision": "let Some(a) = a_null_bindings.get_mut(0)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9212,7 +9212,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_b7872d16_3",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 320,
+    "line": 321,
     "decision": "let Some(sort) = &sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -9222,7 +9222,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_b7872d16_4",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 354,
+    "line": 355,
     "decision": "let Some(sort) = &sort",
     "conditions": 1,
     "vectors_required": 2,
@@ -9232,7 +9232,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_a49038f2",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 379,
+    "line": 380,
     "decision": "let Some(distinct_cursor) = distinct_cursor",
     "conditions": 1,
     "vectors_required": 2,
@@ -9242,7 +9242,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_13928563",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 394,
+    "line": 395,
     "decision": "let Some(limit) = &limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -9252,7 +9252,7 @@
   {
     "id": "codegen_row_select_join_full_compile_full_join_two_table_13928563_2",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 397,
+    "line": 398,
     "decision": "let Some(limit) = &limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -9262,7 +9262,7 @@
   {
     "id": "codegen_row_select_join_full_emit_full_join_sort_row_0d86c16d",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 436,
+    "line": 437,
     "decision": "let Some(where_expr) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -9272,7 +9272,7 @@
   {
     "id": "codegen_row_select_join_full_emit_full_join_sort_row_d184781a",
     "file": "src/codegen/row/select/join_full.rs",
-    "line": 450,
+    "line": 451,
     "decision": "!*patched",
     "conditions": 1,
     "vectors_required": 2,
@@ -9392,7 +9392,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_36d4d477",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 57,
+    "line": 54,
     "decision": "schemas.len() != table_count",
     "conditions": 1,
     "vectors_required": 2,
@@ -9402,7 +9402,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_13fa7590",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 66,
+    "line": 63,
     "decision": "!select.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -9412,7 +9412,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_13abcba3",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 81,
+    "line": 78,
     "decision": "from.joins.len() == 1 && from.joins.first().is_some_and(|j| j.op == JoinOp::Full)",
     "conditions": 2,
     "vectors_required": 3,
@@ -9422,7 +9422,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_27062aac",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 88,
+    "line": 85,
     "decision": "from.joins.iter().any(|j| j.op == JoinOp::Full)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9432,7 +9432,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_2312956d",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 106,
+    "line": 103,
     "decision": "right_count > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -9442,7 +9442,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_27062aac",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 193,
+    "line": 190,
     "decision": "from.joins.iter().any(|j| j.op == JoinOp::Full)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9452,7 +9452,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_2312956d",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 199,
+    "line": 196,
     "decision": "right_count > 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -9462,7 +9462,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_ecd39d31",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 297,
+    "line": 294,
     "decision": "join.op == JoinOp::Right",
     "conditions": 1,
     "vectors_required": 2,
@@ -9472,7 +9472,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_2dcfaa8b",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 313,
+    "line": 310,
     "decision": "reorder_plan.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -9482,7 +9482,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_f257e505",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 318,
+    "line": 315,
     "decision": "let Some(order) = &reorder_plan",
     "conditions": 1,
     "vectors_required": 2,
@@ -9492,7 +9492,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_fde4cd5f",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 326,
+    "line": 323,
     "decision": "let Some(slot) = pos_of.get_mut(orig)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9502,7 +9502,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_b7b3fb04",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 338,
+    "line": 335,
     "decision": "let Some(binding) = bindings.get_mut(orig)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9512,7 +9512,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_9923666c",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 341,
+    "line": 338,
     "decision": "match table_refs.get(orig).map(|t| &t.kind) {\n            Some(TableRefKind::Subquery(subquery)) => {\n                crate::codegen::row::subquery::materialize_from_subquery(\n                    em,\n                    reg,\n                    subquery,\n                    full_catalog,\n                    cursor,\n                )?;\n            }\n            _ => {\n                let Some(binding) = bindings.get(orig) else {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"join table binding out of range\".to_string(),\n                    });\n                };\n                let root_page = valid_table_root_page(&binding.schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    cursor,\n                    root_page,\n                    binding.schema.database_p3(),\n                ));\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9522,7 +9522,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_f70a9165",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 387,
+    "line": 384,
     "decision": "match &reorder_plan {\n            Some(_) => constraint\n                .as_ref()\n                .map(|c| super::join_order::referenced_binding_indices(c, &bindings))\n                .unwrap_or_default()\n                .into_iter()\n                .chain(std::iter::once(step.table))\n                .filter_map(|i| pos_of.get(i).copied())\n                .max()\n                .ok_or_else(|| CodegenError::Internal {\n                    reason: format!(\n                        \"join step for table {} references no known level\",\n                        step.table\n                    ),\n                })?,\n            None => pos_of\n                .get(step.table)\n                .copied()\n                .ok_or_else(|| CodegenError::Internal {\n                    reason: format!(\"join step table {} has no level position\", step.table),\n                })?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9532,7 +9532,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_79e2afde",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 409,
+    "line": 406,
     "decision": "let Some(plan) = levels.get_mut(pos)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9542,7 +9542,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_cfc0eb8b",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 412,
+    "line": 409,
     "decision": "step.is_left",
     "conditions": 1,
     "vectors_required": 2,
@@ -9552,7 +9552,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_cfc0eb8b_2",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 414,
+    "line": 411,
     "decision": "step.is_left",
     "conditions": 1,
     "vectors_required": 2,
@@ -9562,7 +9562,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_5a05d67a",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 419,
+    "line": 416,
     "decision": "let Some(rs) = &right_step",
     "conditions": 1,
     "vectors_required": 2,
@@ -9572,7 +9572,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_7f6f2e24",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 446,
+    "line": 443,
     "decision": "let Some(plan) = levels.get_mut(check_pos)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9582,7 +9582,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_8991ce4c",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 452,
+    "line": 449,
     "decision": "let Some(plan) = levels.get_mut(owner_pos)",
     "conditions": 1,
     "vectors_required": 2,
@@ -9592,7 +9592,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_239fe8c8",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 468,
+    "line": 465,
     "decision": "match resolve_joined_group_terms(select, &full_scope)? {\n        Some(select) => {\n            resolved = select;\n            &resolved\n        }\n        None => select,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9602,7 +9602,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_8e3e2857",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 475,
+    "line": 472,
     "decision": "!select.group_by.is_empty() || select_has_aggregate(select)",
     "conditions": 2,
     "vectors_required": 3,
@@ -9612,7 +9612,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_a7c98f27",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 488,
+    "line": 485,
     "decision": "select.order_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -9622,7 +9622,7 @@
   {
     "id": "codegen_row_select_joins_compile_select_joined_scan_00d48992",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 518,
+    "line": 515,
     "decision": "!select.order_by.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -9632,7 +9632,7 @@
   {
     "id": "codegen_row_select_joins_synthesize_equality_constraint_eb422549",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 669,
+    "line": 666,
     "decision": "require_left_match",
     "conditions": 1,
     "vectors_required": 2,
@@ -9642,7 +9642,7 @@
   {
     "id": "codegen_row_select_joins_synthesize_equality_constraint_f43ef21c",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 690,
+    "line": 687,
     "decision": "match acc {\n            Some(prev) => Expr {\n                kind: ExprKind::Binary {\n                    op: BinaryOp::And,\n                    lhs: Box::new(prev),\n                    rhs: Box::new(eq),\n                },\n                span: SYNTHETIC_SPAN,\n            },\n            None => eq,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9652,7 +9652,7 @@
   {
     "id": "codegen_row_select_joins_ok_e61d3dd7",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 740,
+    "line": 737,
     "decision": "match compile(sql, schemas) {\n            Ok(p) => p,\n            Err(e) => panic!(\"{sql}: expected Ok, got {e:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -9662,7 +9662,7 @@
   {
     "id": "codegen_row_select_joins_err_text_60f80ce7",
     "file": "src/codegen/row/select/joins.rs",
-    "line": 747,
+    "line": 744,
     "decision": "match compile(sql, schemas) {\n            Ok(p) => panic!(\"{sql}: expected Err, got program {p:?}\"),\n            Err(e) => format!(\"{e:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

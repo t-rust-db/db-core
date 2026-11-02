@@ -58,6 +58,7 @@ struct FullJoinSort {
 pub(super) fn compile_full_join_two_table(
     select: &Select,
     schemas: &[TableSchema],
+    full_catalog: &[TableSchema],
     from: &FromClause,
     stats_by_table: &std::collections::HashMap<String, crate::codegen::row::planner::Stats>,
 ) -> Result<Program, CodegenError> {
@@ -113,7 +114,7 @@ pub(super) fn compile_full_join_two_table(
 
     let full_scope = Scope {
         tables: bindings.clone(),
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -190,7 +191,7 @@ pub(super) fn compile_full_join_two_table(
     let b_skip = em.new_label();
     let match_scope = Scope {
         tables: bindings.clone(),
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -254,7 +255,7 @@ pub(super) fn compile_full_join_two_table(
     }
     let b_null_scope = Scope {
         tables: b_null_bindings,
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -312,7 +313,7 @@ pub(super) fn compile_full_join_two_table(
     }
     let a_null_scope = Scope {
         tables: a_null_bindings,
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()

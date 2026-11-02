@@ -35,15 +35,12 @@ pub(super) use level::{
 /// projections (including `*`/`table.*`) all work across the join,
 /// including combined with `GROUP BY`/aggregates (#502).
 ///
-/// `full_catalog` (#257) is only consulted when a `FROM` slot is a
-/// subquery — to resolve *its own* `FROM` table(s), which need not be
-/// among `schemas` (the outer query's own joined tables). It's
-/// deliberately separate from the `Scope::catalog` a scalar/`IN`/
-/// `EXISTS` subquery *expression* inside this JOIN's `WHERE` resolves
-/// against (still just `schemas`, unchanged, per the existing scope
-/// limitation this function's own doc doesn't relitigate here).
-/// `compile_full_join_two_table`'s dedicated path does not accept a
-/// subquery-in-FROM (not yet supported there).
+/// `full_catalog` resolves a subquery's own `FROM` table(s), which need
+/// not be among `schemas` (the outer query's own joined tables): a
+/// subquery in a `FROM` slot (#257), and a scalar/`IN`/`EXISTS`
+/// subquery expression anywhere in the query (#937), as the single-table
+/// path already does. `compile_full_join_two_table`'s dedicated path
+/// does not accept a subquery-in-FROM (not yet supported there).
 pub fn compile_select_joined(
     select: &Select,
     schemas: &[TableSchema],
@@ -83,7 +80,7 @@ pub fn compile_select_joined(
         // JOIN`; db-core#219 (carried over from db-core#208) lets them
         // combine too -- `DISTINCT` dedups the sorted output, see
         // `compile_full_join_two_table`.
-        return compile_full_join_two_table(select, schemas, from, stats_by_table);
+        return compile_full_join_two_table(select, schemas, full_catalog, from, stats_by_table);
     }
     if from.joins.iter().any(|j| j.op == JoinOp::Full) {
         return Err(CodegenError::Unsupported {
@@ -456,7 +453,7 @@ where
 
     let full_scope = Scope {
         tables: bindings.clone(),
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -502,7 +499,7 @@ where
             &pos_of,
             &levels,
             &dedup_star,
-            schemas,
+            full_catalog,
             &full_scope,
             sort_cursor,
             pseudo_cursor,
@@ -528,7 +525,7 @@ where
             &pos_of,
             &levels,
             &dedup_star,
-            schemas,
+            full_catalog,
             &full_scope,
             &order_by_plans,
             sort_cursor,
@@ -562,7 +559,7 @@ where
         end_label,
         limit.as_ref(),
         distinct_cursor,
-        schemas,
+        full_catalog,
         sink,
     )
 }
