@@ -657,13 +657,29 @@ pub(crate) fn compile_insert_with_catalog(
                     pseudo: select_table_cursor.saturating_add(2),
                     distinct: select_table_cursor.saturating_add(3),
                 };
-                let select_root_page = valid_table_root_page(select_schema)?;
-                em.emit(Instruction::new(
-                    Opcode::OpenRead,
-                    select_cursors.table,
-                    select_root_page,
-                    select_schema.database_p3(),
-                ));
+                // #939: a FROM-subquery (a view or CTE after expansion) is
+                // materialized into the scan's cursor, as a plain SELECT
+                // does; a real table is opened by its root page.
+                match select.from.as_ref().map(|from| &from.first.kind) {
+                    Some(TableRefKind::Subquery(subquery)) => {
+                        crate::codegen::row::subquery::materialize_from_subquery(
+                            &mut em,
+                            &mut reg,
+                            subquery,
+                            catalog,
+                            select_cursors.table,
+                        )?;
+                    }
+                    _ => {
+                        let select_root_page = valid_table_root_page(select_schema)?;
+                        em.emit(Instruction::new(
+                            Opcode::OpenRead,
+                            select_cursors.table,
+                            select_root_page,
+                            select_schema.database_p3(),
+                        ));
+                    }
+                }
                 compile_select_scan(
                     &mut em,
                     &mut reg,

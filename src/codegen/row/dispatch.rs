@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use crate::codegen::row::planner::Stats;
 use crate::codegen::row::select::{check_having_clauses, check_table_star_qualifiers};
 use crate::codegen::row::{Emitter, RegAlloc, TableSchema, ViewSchema};
-use crate::parser::ast::{InsertSource, Select, TableRef, TableRefKind};
+use crate::parser::ast::{InsertSource, Select, TableRef};
 use crate::parser::row::error::ParseOutcome;
 use crate::parser::row::error::{
     parse_analyze, parse_begin, parse_commit, parse_create_index, parse_create_table,
@@ -512,20 +512,9 @@ pub fn compile_statement(
                 let select_schemas: Option<Vec<TableSchema>> = match &insert.source {
                     InsertSource::Select(select) => {
                         // Same `WITH`/view expansion `compile_select_program`
-                        // runs for a plain SELECT (#375/#380), so a CTE/view
-                        // name in the source at least *resolves* against the
-                        // catalog instead of failing with an unexplained "no
-                        // such table". The INSERT codegen path below
-                        // (`compile_insert`'s single-/joined-table scan)
-                        // only knows how to scan a *real* table's root page,
-                        // though — it doesn't yet drive `#257`'s FROM-
-                        // subquery materialization the way a plain SELECT's
-                        // codegen does — so a CTE/view expanding into a
-                        // `TableRefKind::Subquery` here is rejected
-                        // explicitly rather than falling through to
-                        // `compile_insert` and failing with a confusing
-                        // "invalid root page (0)" (the subquery's synthetic,
-                        // rootpage-less schema).
+                        // runs for a plain SELECT (#375/#380). A CTE or view
+                        // becomes a FROM-subquery, which `compile_insert`
+                        // materializes like a plain SELECT does (#939).
                         let resolved_views = resolve_views(views);
                         let cte_expanded = expand_with_clause(select)?;
                         let expanded = cte_expanded.expand_views(&resolved_views)?;
@@ -534,19 +523,6 @@ pub fn compile_statement(
                         let Some(from) = &expanded.from else {
                             return Err(DispatchError::NoFromClause);
                         };
-                        let is_subquery = |r: &crate::parser::ast::TableRef| {
-                            matches!(r.kind, TableRefKind::Subquery(_))
-                        };
-                        if is_subquery(&from.first)
-                            || from.joins.iter().any(|j| is_subquery(&j.table))
-                        {
-                            return Err(CodegenError::Unsupported {
-                                reason: "INSERT ... SELECT with a CTE or view source is not yet \
-                                         supported"
-                                    .to_string(),
-                            }
-                            .into());
-                        }
                         let readable = readable_catalog(schemas);
                         let mut joined_schemas =
                             vec![resolve_from_table_schema(&from.first, &readable)?];
@@ -763,7 +739,7 @@ mod mcdc_vectors {
     //! by `make test-mcdc`; db-core#219/#235).
 
     use crate::codegen::row::dispatch::{compile_statement, DispatchError};
-    use crate::codegen::row::{CodegenError, TableSchema, ViewSchema};
+    use crate::codegen::row::{TableSchema, ViewSchema};
 
     fn table(name: &str, root_page: u32, columns: &[&str]) -> TableSchema {
         TableSchema {
@@ -789,47 +765,18 @@ mod mcdc_vectors {
         (schemas, views)
     }
 
-    fn is_view_source_rejection(result: Result<crate::vm::row::Program, DispatchError>) -> bool {
-        matches!(
-            result,
-            Err(DispatchError::Codegen(CodegenError::Unsupported { reason }))
-                if reason.contains("CTE or view source")
-        )
-    }
-
-    // codegen_row_dispatch_compile_statement_8144d3a5: `is_subquery(&from.first) || from.joins.iter().any(|j| is_subquery(&j.table))`
+    // #939: a view in an INSERT ... SELECT source compiles, as the first
+    // source and as a join side (rows: tests/unit/row_join_subquery_test.rs).
     #[test]
-    fn mcdc__codegen_row_dispatch_compile_statement_8144d3a5__v1_view_as_first_source_is_rejected()
-    {
+    fn insert_select_from_a_view_compiles() {
         let (schemas, views) = catalog();
-        assert!(is_view_source_rejection(compile_statement(
+        for sql in [
             "INSERT INTO t SELECT a FROM v",
-            &schemas,
-            &views
-        )));
-    }
-
-    #[test]
-    fn mcdc__codegen_row_dispatch_compile_statement_8144d3a5__v2_view_as_joined_source_is_rejected()
-    {
-        let (schemas, views) = catalog();
-        assert!(is_view_source_rejection(compile_statement(
             "INSERT INTO t SELECT u.a FROM u JOIN v ON u.a = v.a",
-            &schemas,
-            &views
-        )));
-    }
-
-    #[test]
-    fn mcdc__codegen_row_dispatch_compile_statement_8144d3a5__v3_plain_table_sources_pass_the_guard(
-    ) {
-        let (schemas, views) = catalog();
-        let result = compile_statement(
             "INSERT INTO t SELECT u.a FROM u JOIN w ON u.a = w.a",
-            &schemas,
-            &views,
-        );
-        assert!(!is_view_source_rejection(result));
+        ] {
+            assert!(compile_statement(sql, &schemas, &views).is_ok(), "{sql}");
+        }
     }
 
     fn with_index(mut schemas: Vec<TableSchema>) -> Vec<TableSchema> {

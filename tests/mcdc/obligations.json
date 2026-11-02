@@ -4070,10 +4070,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_0d4f3403",
+    "id": "codegen_row_dispatch_compile_statement_5c6ca101",
     "file": "src/codegen/row/dispatch.rs",
     "line": 415,
-    "decision": "match head {\n        \"BEGIN\" => match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        },\n        \"COMMIT\" | \"END\" => match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        },\n        \"ROLLBACK\" => match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        },\n        \"PRAGMA\" => match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        },\n        \"ANALYZE\" => match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        // db-core addition (#219): sqlite-rs dispatches SELECT from its\n        // CLI binary (`src/bin/sqlite-rs/query.rs::compile_select_program`),\n        // which db-core has no counterpart for -- so that function's pure\n        // half lives here as [`compile_select_statement`] /\n        // [`explain_select_statement`], and `compile_statement` covers the\n        // whole statement vocabulary as a library entry point. `WITH` is a\n        // `SELECT`'s CTE prefix (only `Select` carries a `with_clause`).\n        \"SELECT\" | \"WITH\" => match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        },\n        \"EXPLAIN\" => match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        },\n        \"INSERT\" => match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select)?;\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert_with_catalog(\n                    &insert,\n                    schema,\n                    select_schemas.as_deref(),\n                    schemas,\n                )?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"UPDATE\" => match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(\n                    &update,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"DELETE\" => match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(\n                    &delete,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"CREATE\" if second == \"TABLE\" => dispatch_create_table(sql, schemas, views),\n        \"CREATE\" if second == \"VIEW\" => dispatch_create_view(sql, schemas, views),\n        \"CREATE\" if is_create_index => dispatch_create_index(sql, schemas, views),\n        \"DROP\" if second == \"TABLE\" => dispatch_drop_table(sql, schemas, views),\n        \"DROP\" if second == \"INDEX\" => dispatch_drop_index(sql, schemas),\n        \"DROP\" if second == \"VIEW\" => dispatch_drop_view(sql, schemas, views),\n        // Reports the statement's actual leading word (uppercased, as\n        // before), not `canonical`'s `\"\"` sentinel — this is a cold\n        // path, so the one allocation is free.\n        _ => Err(DispatchError::Unrecognized(first_word.to_ascii_uppercase())),\n    }",
+    "decision": "match head {\n        \"BEGIN\" => match parse_begin(sql) {\n            ParseOutcome::Accepted(begin) => Ok(compile_begin(&begin)),\n            other => Err(parse_error(other)),\n        },\n        \"COMMIT\" | \"END\" => match parse_commit(sql) {\n            ParseOutcome::Accepted(commit) => Ok(compile_commit(&commit)),\n            other => Err(parse_error(other)),\n        },\n        \"ROLLBACK\" => match parse_rollback(sql) {\n            ParseOutcome::Accepted(rollback) => Ok(compile_rollback(&rollback)),\n            other => Err(parse_error(other)),\n        },\n        \"PRAGMA\" => match parse_pragma(sql) {\n            ParseOutcome::Accepted(pragma) => Ok(compile_pragma(&pragma)),\n            other => Err(parse_error(other)),\n        },\n        \"ANALYZE\" => match parse_analyze(sql) {\n            ParseOutcome::Accepted(analyze) => {\n                let targets: Vec<&TableSchema> = match &analyze.target {\n                    None => schemas.iter().collect(),\n                    Some(name) => {\n                        if let Some(schema) =\n                            schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))\n                        {\n                            vec![schema]\n                        } else if schemas\n                            .iter()\n                            .flat_map(|s| &s.indexes)\n                            .any(|idx| idx.name.eq_ignore_ascii_case(name))\n                        {\n                            // Real SQLite also accepts `ANALYZE index-name`\n                            // (analyzing just that index's owning table) —\n                            // syntactically valid, but out of this MVP's\n                            // scope (spec 011/Req 1), so `Unsupported`\n                            // rather than the `NoSuchTable` a genuinely\n                            // unknown name gets below.\n                            return Err(CodegenError::Unsupported {\n                                reason: format!(\n                                    \"ANALYZE of a single index ({name:?}) is not yet supported\"\n                                ),\n                            }\n                            .into());\n                        } else {\n                            return Err(DispatchError::NoSuchTable(name.clone()));\n                        }\n                    }\n                };\n                Ok(compile_analyze(&targets)?)\n            }\n            other => Err(parse_error(other)),\n        },\n        // db-core addition (#219): sqlite-rs dispatches SELECT from its\n        // CLI binary (`src/bin/sqlite-rs/query.rs::compile_select_program`),\n        // which db-core has no counterpart for -- so that function's pure\n        // half lives here as [`compile_select_statement`] /\n        // [`explain_select_statement`], and `compile_statement` covers the\n        // whole statement vocabulary as a library entry point. `WITH` is a\n        // `SELECT`'s CTE prefix (only `Select` carries a `with_clause`).\n        \"SELECT\" | \"WITH\" => match parse_select(sql) {\n            ParseOutcome::Accepted(select) => {\n                compile_select_statement(&select, schemas, views, &HashMap::new())\n            }\n            other => Err(parse_error(other)),\n        },\n        \"EXPLAIN\" => match parse_explain(sql) {\n            ParseOutcome::Accepted(explain) => {\n                if !explain.query_plan {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"bare EXPLAIN (opcode listing) is not yet supported\".to_string(),\n                    }\n                    .into());\n                }\n                // #524: `EXPLAIN QUERY PLAN` renders the join planner's\n                // EQP output, which only exists for a `SELECT` — parsing\n                // now accepts `EXPLAIN UPDATE`/`EXPLAIN DELETE` (bare\n                // `EXPLAIN`'s opcode dump), but there's no equivalent\n                // \"query plan\" summary for a write statement to render.\n                let select = match &explain.body {\n                    crate::parser::ast::ExplainBody::Select(select) => select,\n                    crate::parser::ast::ExplainBody::Update(_)\n                    | crate::parser::ast::ExplainBody::Delete(_) => {\n                        return Err(CodegenError::Unsupported {\n                            reason: \"EXPLAIN QUERY PLAN over UPDATE/DELETE is not supported\"\n                                .to_string(),\n                        }\n                        .into());\n                    }\n                };\n                let rows = explain_select_statement(select, schemas, views, &HashMap::new())?;\n                Ok(compile_eqp_program(&rows))\n            }\n            other => Err(parse_error(other)),\n        },\n        \"INSERT\" => match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380). A CTE or view\n                        // becomes a FROM-subquery, which `compile_insert`\n                        // materializes like a plain SELECT does (#939).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select)?;\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert_with_catalog(\n                    &insert,\n                    schema,\n                    select_schemas.as_deref(),\n                    schemas,\n                )?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"UPDATE\" => match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(\n                    &update,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"DELETE\" => match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(\n                    &delete,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        },\n        \"CREATE\" if second == \"TABLE\" => dispatch_create_table(sql, schemas, views),\n        \"CREATE\" if second == \"VIEW\" => dispatch_create_view(sql, schemas, views),\n        \"CREATE\" if is_create_index => dispatch_create_index(sql, schemas, views),\n        \"DROP\" if second == \"TABLE\" => dispatch_drop_table(sql, schemas, views),\n        \"DROP\" if second == \"INDEX\" => dispatch_drop_index(sql, schemas),\n        \"DROP\" if second == \"VIEW\" => dispatch_drop_view(sql, schemas, views),\n        // Reports the statement's actual leading word (uppercased, as\n        // before), not `canonical`'s `\"\"` sentinel — this is a cold\n        // path, so the one allocation is free.\n        _ => Err(DispatchError::Unrecognized(first_word.to_ascii_uppercase())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -4082,7 +4082,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4ca02b2c",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 592,
+    "line": 568,
     "decision": "second == \"TABLE\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -4092,7 +4092,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_fc01ca5d",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 593,
+    "line": 569,
     "decision": "second == \"VIEW\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -4102,7 +4102,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_cbbea3d0",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 594,
+    "line": 570,
     "decision": "is_create_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -4112,7 +4112,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_4ca02b2c_2",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 595,
+    "line": 571,
     "decision": "second == \"TABLE\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -4122,7 +4122,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_65522442",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 596,
+    "line": 572,
     "decision": "second == \"INDEX\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -4132,7 +4132,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_fc01ca5d_2",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 597,
+    "line": 573,
     "decision": "second == \"VIEW\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -4260,39 +4260,29 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_aec11abf",
+    "id": "codegen_row_dispatch_compile_statement_e2c15393",
     "file": "src/codegen/row/dispatch.rs",
     "line": 509,
-    "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select)?;\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert_with_catalog(\n                    &insert,\n                    schema,\n                    select_schemas.as_deref(),\n                    schemas,\n                )?)\n            }\n            other => Err(parse_error(other)),\n        }",
+    "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(mut insert) => {\n                let schema = find_schema(&insert.table)?;\n                let select_schemas: Option<Vec<TableSchema>> = match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380). A CTE or view\n                        // becomes a FROM-subquery, which `compile_insert`\n                        // materializes like a plain SELECT does (#939).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select)?;\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                };\n                Ok(compile_insert_with_catalog(\n                    &insert,\n                    schema,\n                    select_schemas.as_deref(),\n                    schemas,\n                )?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_dispatch_compile_statement_cd652b74",
+    "id": "codegen_row_dispatch_compile_statement_75396eac",
     "file": "src/codegen/row/dispatch.rs",
     "line": 512,
-    "decision": "match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380), so a CTE/view\n                        // name in the source at least *resolves* against the\n                        // catalog instead of failing with an unexplained \"no\n                        // such table\". The INSERT codegen path below\n                        // (`compile_insert`'s single-/joined-table scan)\n                        // only knows how to scan a *real* table's root page,\n                        // though — it doesn't yet drive `#257`'s FROM-\n                        // subquery materialization the way a plain SELECT's\n                        // codegen does — so a CTE/view expanding into a\n                        // `TableRefKind::Subquery` here is rejected\n                        // explicitly rather than falling through to\n                        // `compile_insert` and failing with a confusing\n                        // \"invalid root page (0)\" (the subquery's synthetic,\n                        // rootpage-less schema).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select)?;\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let is_subquery = |r: &crate::parser::ast::TableRef| {\n                            matches!(r.kind, TableRefKind::Subquery(_))\n                        };\n                        if is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))\n                        {\n                            return Err(CodegenError::Unsupported {\n                                reason: \"INSERT ... SELECT with a CTE or view source is not yet \\\n                                         supported\"\n                                    .to_string(),\n                            }\n                            .into());\n                        }\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                }",
+    "decision": "match &insert.source {\n                    InsertSource::Select(select) => {\n                        // Same `WITH`/view expansion `compile_select_program`\n                        // runs for a plain SELECT (#375/#380). A CTE or view\n                        // becomes a FROM-subquery, which `compile_insert`\n                        // materializes like a plain SELECT does (#939).\n                        let resolved_views = resolve_views(views);\n                        let cte_expanded = expand_with_clause(select)?;\n                        let expanded = cte_expanded.expand_views(&resolved_views)?;\n                        super::subquery::reject_unparsable_view_refs(&expanded, views)?;\n\n                        let Some(from) = &expanded.from else {\n                            return Err(DispatchError::NoFromClause);\n                        };\n                        let readable = readable_catalog(schemas);\n                        let mut joined_schemas =\n                            vec![resolve_from_table_schema(&from.first, &readable)?];\n                        for join in &from.joins {\n                            joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);\n                        }\n                        insert.source = InsertSource::Select(Box::new(expanded.into_owned()));\n                        Some(joined_schemas)\n                    }\n                    InsertSource::Values(_) | InsertSource::DefaultValues => None,\n                }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
-    "wildcard_risk": false
-  },
-  {
-    "id": "codegen_row_dispatch_compile_statement_8144d3a5",
-    "file": "src/codegen/row/dispatch.rs",
-    "line": 540,
-    "decision": "is_subquery(&from.first)\n                            || from.joins.iter().any(|j| is_subquery(&j.table))",
-    "conditions": 2,
-    "vectors_required": 3,
-    "compiler_void": false,
     "wildcard_risk": false
   },
   {
     "id": "codegen_row_dispatch_compile_statement_8dc764f9",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 570,
+    "line": 546,
     "decision": "match parse_update(sql) {\n            ParseOutcome::Accepted(update) => {\n                let schema = find_schema(&update.table)?;\n                Ok(compile_update_with_catalog(\n                    &update,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4302,7 +4292,7 @@
   {
     "id": "codegen_row_dispatch_compile_statement_5cf32762",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 581,
+    "line": 557,
     "decision": "match parse_delete(sql) {\n            ParseOutcome::Accepted(delete) => {\n                let schema = find_schema(&delete.table)?;\n                Ok(compile_delete_with_catalog(\n                    &delete,\n                    schema,\n                    &readable_catalog(schemas),\n                )?)\n            }\n            other => Err(parse_error(other)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -4312,7 +4302,7 @@
   {
     "id": "codegen_row_dispatch_readable_catalog_7aa9946e",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 630,
+    "line": 606,
     "decision": "!schemas\n        .iter()\n        .any(|s| s.without_rowid && !s.indexes.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -4322,7 +4312,7 @@
   {
     "id": "codegen_row_dispatch_readable_catalog_92d76ebb",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 640,
+    "line": 616,
     "decision": "s.without_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -4332,7 +4322,7 @@
   {
     "id": "codegen_row_dispatch_compile_select_statement_13fa7590",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 673,
+    "line": 649,
     "decision": "!select.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -4342,7 +4332,7 @@
   {
     "id": "codegen_row_dispatch_compile_select_statement_8a16b420",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 682,
+    "line": 658,
     "decision": "from.joins.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -4352,7 +4342,7 @@
   {
     "id": "codegen_row_dispatch_explain_select_statement_8a16b420",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 713,
+    "line": 689,
     "decision": "from.joins.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -4362,7 +4352,7 @@
   {
     "id": "codegen_row_dispatch_explain_87918f89",
     "file": "src/codegen/row/dispatch.rs",
-    "line": 1260,
+    "line": 1207,
     "decision": "match crate::parser::row::error::parse_select(sql) {\n            crate::parser::row::error::ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12800,10 +12790,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_stmt_insert_compile_insert_with_catalog_6168fb43",
+    "id": "codegen_row_stmt_insert_compile_insert_with_catalog_0fbbec8e",
     "file": "src/codegen/row/stmt/insert.rs",
     "line": 498,
-    "decision": "match &insert.source {\n        InsertSource::Values(rows) => {\n            for values in rows {\n                compile_row(\n                    &mut em,\n                    &mut reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| values.get(pos).cloned().map(ColumnSource::Expr),\n                    rowid_alias,\n                    action,\n                    &handlers,\n                    &updates,\n                    without_rowid_key.as_deref(),\n                    is_autoincrement,\n                )?;\n            }\n        }\n        InsertSource::DefaultValues => {\n            compile_row(\n                &mut em,\n                &mut reg,\n                schema,\n                &check_schema,\n                &plans,\n                &table_checks,\n                &target_columns,\n                |_pos| None,\n                rowid_alias,\n                action,\n                &handlers,\n                &updates,\n                without_rowid_key.as_deref(),\n                is_autoincrement,\n            )?;\n        }\n        InsertSource::Select(select) => {\n            // Re-checked (rather than trusted from the validation above)\n            // so this arm never needs an infallible unwrap.\n            let Some(select_schemas) = select_schemas else {\n                return Err(CodegenError::Unsupported {\n                    reason: \"INSERT ... SELECT: the SELECT's FROM table schema(s) were not \\\n                             resolved\"\n                        .to_string(),\n                });\n            };\n            // The select's source-table scan needs cursor numbers of its\n            // own, distinct from this INSERT's target-table/index\n            // cursors above — offset above the last index cursor\n            // (`open_index_cursors` uses `FIRST_INDEX_CURSOR..\n            // FIRST_INDEX_CURSOR+schema.indexes.len()`).\n            let select_table_cursor =\n                FIRST_INDEX_CURSOR.saturating_add(i32::try_from(schema.indexes.len()).unwrap_or(0));\n            let end_label = em.new_label();\n            // #937: a SELECT that reads the target table anywhere (its FROM,\n            // a join, or a subquery at any depth) runs to completion into an\n            // ephemeral table first, as sqlite3 does; inserting while it\n            // still scans would let it see (or, after a page split, skip)\n            // the statement's own rows.\n            let buffer = select_reads_table(select, &schema.name).then(|| {\n                let cursor = reg.alloc_cursor();\n                em.emit(Instruction {\n                    opcode: Opcode::OpenEphemeral,\n                    p1: cursor,\n                    p2: 0,\n                    p3: 0,\n                    p4: P4::None,\n                    p5: 1,\n                    comment: None,\n                });\n                cursor\n            });\n            let scan_end = if buffer.is_some() {\n                em.new_label()\n            } else {\n                end_label\n            };\n            let sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {\n                let count = usize::try_from(count).map_err(|_| CodegenError::Internal {\n                    reason: format!(\"INSERT ... SELECT produced a negative column count {count}\"),\n                })?;\n                compile_row(\n                    em,\n                    reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| {\n                        (pos < count)\n                            .then(|| first.saturating_add(i32::try_from(pos).unwrap_or(i32::MAX)))\n                            .map(ColumnSource::Reg)\n                    },\n                    rowid_alias,\n                    action,\n                    &handlers,\n                    &updates,\n                    without_rowid_key.as_deref(),\n                    is_autoincrement,\n                )\n            };\n            // Without a buffer each row goes straight to the insert.\n            let mut scan_sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {\n                let Some(cursor) = buffer else {\n                    return sink(em, reg, first, count);\n                };\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(Opcode::Sequence, cursor, rowid_reg, 0));\n                let record_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::MakeRecord,\n                    first,\n                    count,\n                    record_reg,\n                ));\n                em.emit(Instruction::new(\n                    Opcode::Insert,\n                    cursor,\n                    rowid_reg,\n                    record_reg,\n                ));\n                Ok(())\n            };\n            if select_schemas.len() > 1 {\n                // #250: the SELECT's FROM clause has a JOIN — drive the\n                // same nested-loop join scan `compile_select_joined`\n                // uses, with cursor numbers offset above this INSERT's\n                // own cursors (`compile_select_joined_scan` opens every\n                // source-table cursor itself, unlike the single-table\n                // `compile_select_scan` path below, which expects its\n                // one cursor already open).\n                // `catalog` resolves a subquery's own FROM table(s), in\n                // FROM (#257) or in an expression (#937).\n                compile_select_joined_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    select_schemas,\n                    catalog,\n                    select_table_cursor,\n                    scan_end,\n                    &std::collections::HashMap::new(),\n                    &mut scan_sink,\n                )?;\n            } else {\n                let Some(select_schema) = select_schemas.first() else {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"INSERT ... SELECT: the SELECT's FROM table schema was not \\\n                                 resolved\"\n                            .to_string(),\n                    });\n                };\n                let select_cursors = ScanCursors {\n                    table: select_table_cursor,\n                    sort: select_table_cursor.saturating_add(1),\n                    pseudo: select_table_cursor.saturating_add(2),\n                    distinct: select_table_cursor.saturating_add(3),\n                };\n                let select_root_page = valid_table_root_page(select_schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    select_cursors.table,\n                    select_root_page,\n                    select_schema.database_p3(),\n                ));\n                compile_select_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    &std::rc::Rc::new(select_schema.clone()),\n                    select_cursors,\n                    scan_end,\n                    catalog,\n                    &crate::codegen::row::planner::Stats::default(),\n                    &mut scan_sink,\n                )?;\n            }\n            if let Some(cursor) = buffer {\n                // Replay the buffered rows, in scan order, into the insert.\n                em.place(scan_end);\n                let width = i32::try_from(target_columns.len()).unwrap_or(i32::MAX);\n                let rewind = em.emit(Instruction::new(Opcode::Rewind, cursor, 0, 0));\n                em.patch_p2(rewind, end_label);\n                let replay = em.new_label();\n                em.place(replay);\n                // `alloc` hands out consecutive registers: `first..first+width`.\n                let first = reg.peek();\n                for i in 0..width {\n                    let r = reg.alloc();\n                    em.emit(Instruction::new(Opcode::Column, cursor, i, r));\n                }\n                sink(&mut em, &mut reg, first, width)?;\n                let next = em.emit(Instruction::new(Opcode::Next, cursor, 0, 0));\n                em.patch_p2(next, replay);\n            }\n            em.place(end_label);\n        }\n    }",
+    "decision": "match &insert.source {\n        InsertSource::Values(rows) => {\n            for values in rows {\n                compile_row(\n                    &mut em,\n                    &mut reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| values.get(pos).cloned().map(ColumnSource::Expr),\n                    rowid_alias,\n                    action,\n                    &handlers,\n                    &updates,\n                    without_rowid_key.as_deref(),\n                    is_autoincrement,\n                )?;\n            }\n        }\n        InsertSource::DefaultValues => {\n            compile_row(\n                &mut em,\n                &mut reg,\n                schema,\n                &check_schema,\n                &plans,\n                &table_checks,\n                &target_columns,\n                |_pos| None,\n                rowid_alias,\n                action,\n                &handlers,\n                &updates,\n                without_rowid_key.as_deref(),\n                is_autoincrement,\n            )?;\n        }\n        InsertSource::Select(select) => {\n            // Re-checked (rather than trusted from the validation above)\n            // so this arm never needs an infallible unwrap.\n            let Some(select_schemas) = select_schemas else {\n                return Err(CodegenError::Unsupported {\n                    reason: \"INSERT ... SELECT: the SELECT's FROM table schema(s) were not \\\n                             resolved\"\n                        .to_string(),\n                });\n            };\n            // The select's source-table scan needs cursor numbers of its\n            // own, distinct from this INSERT's target-table/index\n            // cursors above — offset above the last index cursor\n            // (`open_index_cursors` uses `FIRST_INDEX_CURSOR..\n            // FIRST_INDEX_CURSOR+schema.indexes.len()`).\n            let select_table_cursor =\n                FIRST_INDEX_CURSOR.saturating_add(i32::try_from(schema.indexes.len()).unwrap_or(0));\n            let end_label = em.new_label();\n            // #937: a SELECT that reads the target table anywhere (its FROM,\n            // a join, or a subquery at any depth) runs to completion into an\n            // ephemeral table first, as sqlite3 does; inserting while it\n            // still scans would let it see (or, after a page split, skip)\n            // the statement's own rows.\n            let buffer = select_reads_table(select, &schema.name).then(|| {\n                let cursor = reg.alloc_cursor();\n                em.emit(Instruction {\n                    opcode: Opcode::OpenEphemeral,\n                    p1: cursor,\n                    p2: 0,\n                    p3: 0,\n                    p4: P4::None,\n                    p5: 1,\n                    comment: None,\n                });\n                cursor\n            });\n            let scan_end = if buffer.is_some() {\n                em.new_label()\n            } else {\n                end_label\n            };\n            let sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {\n                let count = usize::try_from(count).map_err(|_| CodegenError::Internal {\n                    reason: format!(\"INSERT ... SELECT produced a negative column count {count}\"),\n                })?;\n                compile_row(\n                    em,\n                    reg,\n                    schema,\n                    &check_schema,\n                    &plans,\n                    &table_checks,\n                    &target_columns,\n                    |pos| {\n                        (pos < count)\n                            .then(|| first.saturating_add(i32::try_from(pos).unwrap_or(i32::MAX)))\n                            .map(ColumnSource::Reg)\n                    },\n                    rowid_alias,\n                    action,\n                    &handlers,\n                    &updates,\n                    without_rowid_key.as_deref(),\n                    is_autoincrement,\n                )\n            };\n            // Without a buffer each row goes straight to the insert.\n            let mut scan_sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {\n                let Some(cursor) = buffer else {\n                    return sink(em, reg, first, count);\n                };\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(Opcode::Sequence, cursor, rowid_reg, 0));\n                let record_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::MakeRecord,\n                    first,\n                    count,\n                    record_reg,\n                ));\n                em.emit(Instruction::new(\n                    Opcode::Insert,\n                    cursor,\n                    rowid_reg,\n                    record_reg,\n                ));\n                Ok(())\n            };\n            if select_schemas.len() > 1 {\n                // #250: the SELECT's FROM clause has a JOIN — drive the\n                // same nested-loop join scan `compile_select_joined`\n                // uses, with cursor numbers offset above this INSERT's\n                // own cursors (`compile_select_joined_scan` opens every\n                // source-table cursor itself, unlike the single-table\n                // `compile_select_scan` path below, which expects its\n                // one cursor already open).\n                // `catalog` resolves a subquery's own FROM table(s), in\n                // FROM (#257) or in an expression (#937).\n                compile_select_joined_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    select_schemas,\n                    catalog,\n                    select_table_cursor,\n                    scan_end,\n                    &std::collections::HashMap::new(),\n                    &mut scan_sink,\n                )?;\n            } else {\n                let Some(select_schema) = select_schemas.first() else {\n                    return Err(CodegenError::Unsupported {\n                        reason: \"INSERT ... SELECT: the SELECT's FROM table schema was not \\\n                                 resolved\"\n                            .to_string(),\n                    });\n                };\n                let select_cursors = ScanCursors {\n                    table: select_table_cursor,\n                    sort: select_table_cursor.saturating_add(1),\n                    pseudo: select_table_cursor.saturating_add(2),\n                    distinct: select_table_cursor.saturating_add(3),\n                };\n                // #939: a FROM-subquery (a view or CTE after expansion) is\n                // materialized into the scan's cursor, as a plain SELECT\n                // does; a real table is opened by its root page.\n                match select.from.as_ref().map(|from| &from.first.kind) {\n                    Some(TableRefKind::Subquery(subquery)) => {\n                        crate::codegen::row::subquery::materialize_from_subquery(\n                            &mut em,\n                            &mut reg,\n                            subquery,\n                            catalog,\n                            select_cursors.table,\n                        )?;\n                    }\n                    _ => {\n                        let select_root_page = valid_table_root_page(select_schema)?;\n                        em.emit(Instruction::new(\n                            Opcode::OpenRead,\n                            select_cursors.table,\n                            select_root_page,\n                            select_schema.database_p3(),\n                        ));\n                    }\n                }\n                compile_select_scan(\n                    &mut em,\n                    &mut reg,\n                    select,\n                    &std::rc::Rc::new(select_schema.clone()),\n                    select_cursors,\n                    scan_end,\n                    catalog,\n                    &crate::codegen::row::planner::Stats::default(),\n                    &mut scan_sink,\n                )?;\n            }\n            if let Some(cursor) = buffer {\n                // Replay the buffered rows, in scan order, into the insert.\n                em.place(scan_end);\n                let width = i32::try_from(target_columns.len()).unwrap_or(i32::MAX);\n                let rewind = em.emit(Instruction::new(Opcode::Rewind, cursor, 0, 0));\n                em.patch_p2(rewind, end_label);\n                let replay = em.new_label();\n                em.place(replay);\n                // `alloc` hands out consecutive registers: `first..first+width`.\n                let first = reg.peek();\n                for i in 0..width {\n                    let r = reg.alloc();\n                    em.emit(Instruction::new(Opcode::Column, cursor, i, r));\n                }\n                sink(&mut em, &mut reg, first, width)?;\n                let next = em.emit(Instruction::new(Opcode::Next, cursor, 0, 0));\n                em.patch_p2(next, replay);\n            }\n            em.place(end_label);\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -12830,9 +12820,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_stmt_insert_compile_insert_with_catalog_e5d580f6",
+    "file": "src/codegen/row/stmt/insert.rs",
+    "line": 663,
+    "decision": "match select.from.as_ref().map(|from| &from.first.kind) {\n                    Some(TableRefKind::Subquery(subquery)) => {\n                        crate::codegen::row::subquery::materialize_from_subquery(\n                            &mut em,\n                            &mut reg,\n                            subquery,\n                            catalog,\n                            select_cursors.table,\n                        )?;\n                    }\n                    _ => {\n                        let select_root_page = valid_table_root_page(select_schema)?;\n                        em.emit(Instruction::new(\n                            Opcode::OpenRead,\n                            select_cursors.table,\n                            select_root_page,\n                            select_schema.database_p3(),\n                        ));\n                    }\n                }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "codegen_row_stmt_insert_compile_insert_with_catalog_8bcffb4c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 679,
+    "line": 695,
     "decision": "let Some(cursor) = buffer",
     "conditions": 1,
     "vectors_required": 2,
@@ -12842,7 +12842,7 @@
   {
     "id": "codegen_row_stmt_insert_column_plans_cbe41696",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 730,
+    "line": 746,
     "decision": "match constraint {\n                ColumnConstraint::NotNull => plan.not_null = true,\n                // NULL on the rowid-alias column means \"assign a fresh\n                // rowid\", not a constraint violation, so its implicit\n                // NOT NULL is deliberately not enforced.\n                ColumnConstraint::PrimaryKey { .. } => {\n                    if rowid_alias != Some(idx) {\n                        plan.not_null = true;\n                    }\n                }\n                ColumnConstraint::Default(\n                    DefaultValue::Literal(expr) | DefaultValue::Paren(expr),\n                ) => {\n                    plan.default = Some(expr.clone());\n                }\n                ColumnConstraint::Check { expr, name, body } => plan\n                    .checks\n                    .push((expr.clone(), check_label(schema, name.as_deref(), *body))),\n                ColumnConstraint::Unique | ColumnConstraint::Collate(_) => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12852,7 +12852,7 @@
   {
     "id": "codegen_row_stmt_insert_column_plans_6503ca7d",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 736,
+    "line": 752,
     "decision": "rowid_alias != Some(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -12862,7 +12862,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_4b71b0ef",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 780,
+    "line": 796,
     "decision": "let (Some(source), Some(slot)) = (column_at(pos), value_sources.get_mut(col_idx))",
     "conditions": 1,
     "vectors_required": 2,
@@ -12872,7 +12872,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_4d66f676",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 784,
+    "line": 800,
     "decision": "slot.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12882,7 +12882,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_69baca6f",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 807,
+    "line": 823,
     "decision": "without_rowid_key.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -12892,7 +12892,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_f3d6489b",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 813,
+    "line": 829,
     "decision": "match rowid_alias {\n            Some(idx) => {\n                let explicit = value_source_at(idx).filter(\n                    |source| !matches!(source, ColumnSource::Expr(e) if is_null_literal(e)),\n                );\n                match explicit {\n                    Some(source) => {\n                        let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                        // `DO UPDATE` needs the new row's other values (for\n                        // `excluded`), so its probe waits until they exist.\n                        if let Some(Handler::Update(_)) = handlers.rowid {\n                            rowid_probe_deferred = true;\n                        } else {\n                            let no_conflict = em.new_label();\n                            let seek_addr =\n                                em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                            em.patch_p2(seek_addr, no_conflict);\n                            let pk_action = if let Some(Handler::Skip) = handlers.rowid {\n                                ConflictAction::Ignore\n                            } else {\n                                action\n                            };\n                            emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;\n                            em.place(no_conflict);\n                        }\n                        r\n                    }\n                    None => {\n                        let r = reg.alloc();\n                        emit_new_rowid(em, r, schema, is_autoincrement);\n                        r\n                    }\n                }\n            }\n            None => {\n                let r = reg.alloc();\n                emit_new_rowid(em, r, schema, is_autoincrement);\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12902,7 +12902,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_ee6707af",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 818,
+    "line": 834,
     "decision": "match explicit {\n                    Some(source) => {\n                        let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;\n                        // `DO UPDATE` needs the new row's other values (for\n                        // `excluded`), so its probe waits until they exist.\n                        if let Some(Handler::Update(_)) = handlers.rowid {\n                            rowid_probe_deferred = true;\n                        } else {\n                            let no_conflict = em.new_label();\n                            let seek_addr =\n                                em.emit(Instruction::new(Opcode::SeekRowid, TABLE_CURSOR, 0, r));\n                            em.patch_p2(seek_addr, no_conflict);\n                            let pk_action = if let Some(Handler::Skip) = handlers.rowid {\n                                ConflictAction::Ignore\n                            } else {\n                                action\n                            };\n                            emit_pk_conflict(em, reg, pk_action, row_skip, schema, idx)?;\n                            em.place(no_conflict);\n                        }\n                        r\n                    }\n                    None => {\n                        let r = reg.alloc();\n                        emit_new_rowid(em, r, schema, is_autoincrement);\n                        r\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12912,7 +12912,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_69459eec",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 823,
+    "line": 839,
     "decision": "let Some(Handler::Update(_)) = handlers.rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -12922,7 +12922,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_01fd4094",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 830,
+    "line": 846,
     "decision": "let Some(Handler::Skip) = handlers.rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -12932,7 +12932,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_c861879c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 859,
+    "line": 875,
     "decision": "Some(idx) == rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -12942,7 +12942,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_7150f6bf",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 875,
+    "line": 891,
     "decision": "use_default",
     "conditions": 1,
     "vectors_required": 2,
@@ -12952,7 +12952,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_d0939512",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 881,
+    "line": 897,
     "decision": "match &chosen {\n            Some(source) => compile_column_source(em, reg, schema, TABLE_CURSOR, source)?,\n            None => {\n                let r = reg.alloc();\n                em.emit(Instruction::new(Opcode::Null, 0, r, 0));\n                r\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -12962,7 +12962,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_f476b28e",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 891,
+    "line": 907,
     "decision": "plan.not_null",
     "conditions": 1,
     "vectors_required": 2,
@@ -12972,7 +12972,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_66f20021",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 937,
+    "line": 953,
     "decision": "needs_row_pseudo",
     "conditions": 1,
     "vectors_required": 2,
@@ -12982,7 +12982,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_d93931f7",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 955,
+    "line": 971,
     "decision": "has_checks",
     "conditions": 1,
     "vectors_required": 2,
@@ -12992,7 +12992,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_0d8bde4a",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 989,
+    "line": 1005,
     "decision": "let (true, Some(Handler::Update(clause))) = (rowid_probe_deferred, handlers.rowid)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13002,7 +13002,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_51ad3a4d",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1015,
+    "line": 1031,
     "decision": "match handlers.index(&index.name) {\n            Some(Handler::Update(clause)) => {\n                let (conflict_rowid_reg, no_conflict) =\n                    emit_unique_probe(em, reg, schema, check_schema, *index_cursor, index)?;\n                // The existing row, to update; gone already means no\n                // conflict to answer.\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    TABLE_CURSOR,\n                    0,\n                    conflict_rowid_reg,\n                ));\n                em.patch_p2(seek_addr, no_conflict);\n                let update = upsert_update_at(updates, clause)?;\n                emit_upsert_update(\n                    em,\n                    reg,\n                    schema,\n                    check_schema,\n                    plans,\n                    table_checks,\n                    update,\n                    &col_regs,\n                    rowid_reg,\n                    row_skip,\n                )?;\n                em.place(no_conflict);\n            }\n            other => {\n                let index_action = if let Some(Handler::Skip) = other {\n                    ConflictAction::Ignore\n                } else {\n                    action\n                };\n                emit_unique_check(\n                    em,\n                    reg,\n                    schema,\n                    check_schema,\n                    *index_cursor,\n                    index,\n                    index_action,\n                    row_skip,\n                )?;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13012,7 +13012,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_8c26fae3",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1044,
+    "line": 1060,
     "decision": "let Some(Handler::Skip) = other",
     "conditions": 1,
     "vectors_required": 2,
@@ -13022,7 +13022,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_4b0b7f56",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1080,
+    "line": 1096,
     "decision": "let Some(key) = without_rowid_key",
     "conditions": 1,
     "vectors_required": 2,
@@ -13032,7 +13032,7 @@
   {
     "id": "codegen_row_stmt_insert_compile_row_1af88378",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1090,
+    "line": 1106,
     "decision": "!schema.indexes.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13042,7 +13042,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_without_rowid_key_check_5f960212",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1127,
+    "line": 1143,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_PRIMARYKEY,\n                0,\n                0,\n                P4::Str(key_violation_message(schema, key)),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13052,7 +13052,7 @@
   {
     "id": "codegen_row_stmt_insert_table_check_constraints_cfdbd8dc",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1154,
+    "line": 1170,
     "decision": "match c {\n            TableConstraint::Check { expr, name, body } => {\n                Some((expr.clone(), check_label(schema, name.as_deref(), *body)))\n            }\n            TableConstraint::PrimaryKey(_) | TableConstraint::Unique(_) => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13062,7 +13062,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_constraint_violation_f9999294",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1170,
+    "line": 1186,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Abort\n        | ConflictAction::Fail\n        | ConflictAction::Rollback\n        | ConflictAction::Replace => {\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                code,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13072,7 +13072,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_pk_conflict_1a78c7f5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1196,
+    "line": 1212,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // `SeekRowid` above landed the cursor on the row this\n            // INSERT is about to displace — its secondary-index\n            // entries must be removed before it's deleted, exactly\n            // like `delete.rs`'s ordinary `DELETE` path, or they go\n            // stale (`#196` follow-up: this conflict path predates\n            // index maintenance and wasn't updated when it landed).\n            emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message = format!(\n                \"UNIQUE constraint failed: {}.{} (PRIMARY KEY)\",\n                schema.name,\n                schema.columns.get(idx).map_or(\"?\", String::as_str)\n            );\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_PRIMARYKEY,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13082,7 +13082,7 @@
   {
     "id": "codegen_row_stmt_insert_add_index_72a4a620",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1267,
+    "line": 1283,
     "decision": "self.index(name).is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13092,7 +13092,7 @@
   {
     "id": "codegen_row_stmt_insert_conflict_handlers_1e7dbdc0",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1290,
+    "line": 1306,
     "decision": "match clause.action {\n            UpsertAction::DoNothing => Handler::Skip,\n            UpsertAction::DoUpdate { .. } => Handler::Update(position),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13102,7 +13102,7 @@
   {
     "id": "codegen_row_stmt_insert_conflict_handlers_fa68ffac",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1304,
+    "line": 1320,
     "decision": "let ExprKind::Paren(inner) | ExprKind::Collate { expr: inner, .. } = &expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -13112,7 +13112,7 @@
   {
     "id": "codegen_row_stmt_insert_conflict_handlers_518f73e6",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1321,
+    "line": 1337,
     "decision": "let (false, false) = (is_column, is_rowid_keyword)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13122,7 +13122,7 @@
   {
     "id": "codegen_row_stmt_insert_conflict_handlers_eefe4dbe",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1326,
+    "line": 1342,
     "decision": "match (names.as_slice(), schema.rowid_alias) {\n            ([(only, is_rowid_keyword)], alias) => {\n                let named_alias = alias\n                    .and_then(|idx| schema.columns.get(idx))\n                    .is_some_and(|col| col.eq_ignore_ascii_case(only));\n                named_alias || *is_rowid_keyword\n            }\n            _ => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13132,7 +13132,7 @@
   {
     "id": "codegen_row_stmt_insert_conflict_handlers_37c0f699",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1346,
+    "line": 1362,
     "decision": "target.where_clause.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13142,7 +13142,7 @@
   {
     "id": "codegen_row_stmt_insert_conflict_handlers_23b23bf6",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1349,
+    "line": 1365,
     "decision": "is_rowid_target",
     "conditions": 1,
     "vectors_required": 2,
@@ -13152,7 +13152,7 @@
   {
     "id": "codegen_row_stmt_insert_conflict_handlers_54dcd778",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1351,
+    "line": 1367,
     "decision": "let Some(index) = matching_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -13162,7 +13162,7 @@
   {
     "id": "codegen_row_stmt_insert_upsert_updates_b410d928",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1392,
+    "line": 1408,
     "decision": "let Some(slot) = assigned.get_mut(idx)",
     "conditions": 1,
     "vectors_required": 2,
@@ -13172,7 +13172,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_upsert_update_195e8ba5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1449,
+    "line": 1465,
     "decision": "Some(idx) == schema.rowid_alias",
     "conditions": 1,
     "vectors_required": 2,
@@ -13182,7 +13182,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_upsert_update_94649435",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1489,
+    "line": 1505,
     "decision": "let Some(where_clause) = &update.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -13192,7 +13192,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_probe_b7b491d5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1539,
+    "line": 1555,
     "decision": "col.desc",
     "conditions": 1,
     "vectors_required": 2,
@@ -13202,7 +13202,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_probe_0b949c87",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1555,
+    "line": 1571,
     "decision": "start.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13212,7 +13212,7 @@
   {
     "id": "codegen_row_stmt_insert_emit_unique_check_27b0b374",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1610,
+    "line": 1626,
     "decision": "match action {\n        ConflictAction::Ignore => em.goto(row_skip),\n        ConflictAction::Replace => {\n            // The conflicting row's rowid was written into\n            // `conflict_rowid_reg` by `NoConflict` itself — seek the\n            // table cursor onto it, remove its index entries, then\n            // delete it, exactly like `emit_pk_conflict`'s `Replace`\n            // branch (which instead already had the cursor positioned\n            // via `SeekRowid`).\n            let seek_ok = em.new_label();\n            let seek_addr = em.emit(Instruction::new(\n                Opcode::SeekRowid,\n                TABLE_CURSOR,\n                0,\n                conflict_rowid_reg,\n            ));\n            em.patch_p2(seek_addr, seek_ok);\n            crate::codegen::row::index_maintenance::emit_index_key_ops(\n                em,\n                reg,\n                schema,\n                TABLE_CURSOR,\n                FIRST_INDEX_CURSOR,\n                Opcode::IdxDelete,\n                None,\n            )?;\n            em.emit(Instruction::new(Opcode::Delete, TABLE_CURSOR, 0, 0));\n            em.place(seek_ok);\n        }\n        ConflictAction::Abort | ConflictAction::Fail | ConflictAction::Rollback => {\n            let message =\n                crate::codegen::row::index_maintenance::unique_violation_message(schema, index);\n            em.emit(Instruction::with_p4(\n                Opcode::Halt,\n                SQLITE_CONSTRAINT_UNIQUE,\n                0,\n                0,\n                P4::Str(message),\n            ));\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13222,7 +13222,7 @@
   {
     "id": "codegen_row_stmt_insert_select_reads_table_6d5ac6f7",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1660,
+    "line": 1676,
     "decision": "select.with_clause.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -13232,7 +13232,7 @@
   {
     "id": "codegen_row_stmt_insert_select_reads_table_a89df20c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1669,
+    "line": 1685,
     "decision": "match c {\n                ResultColumn::Expr { expr, .. } => expr_reads_table(expr, name),\n                ResultColumn::Star | ResultColumn::TableStar { .. } => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13242,7 +13242,7 @@
   {
     "id": "codegen_row_stmt_insert_from_reads_table_d4dbcb54",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1704,
+    "line": 1720,
     "decision": "match &t.kind {\n            TableRefKind::Name(table) => table.eq_ignore_ascii_case(name),\n            TableRefKind::Subquery(inner) => select_reads_table(inner, name),\n            TableRefKind::Unnest { expr, .. } => expr_reads_table(expr, name),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13252,7 +13252,7 @@
   {
     "id": "codegen_row_stmt_insert_from_reads_table_cdbb0d24",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1709,
+    "line": 1725,
     "decision": "match &j.constraint {\n            Some(JoinConstraint::On(on)) => expr_reads_table(on, name),\n            Some(JoinConstraint::Using(_)) | None => false,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13262,7 +13262,7 @@
   {
     "id": "codegen_row_stmt_insert_expr_reads_table_74107cba",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1717,
+    "line": 1733,
     "decision": "match &expr.kind {\n        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => false,\n        ExprKind::Subquery(sub) | ExprKind::Exists { subquery: sub, .. } => {\n            select_reads_table(sub, name)\n        }\n        ExprKind::InSubquery { expr, subquery, .. } => {\n            expr_reads_table(expr, name) || select_reads_table(subquery, name)\n        }\n        ExprKind::InSubqueryMulti {\n            exprs, subquery, ..\n        } => any(exprs) || select_reads_table(subquery, name),\n        ExprKind::FunctionCall { args, tail, .. } => {\n            // FILTER/OVER: not walked, so assume it does.\n            tail.is_some() || matches!(args, FunctionArgs::List(list) if any(list))\n        }\n        ExprKind::Unary { expr, .. }\n        | ExprKind::IsNull { expr, .. }\n        | ExprKind::Cast { expr, .. }\n        | ExprKind::Collate { expr, .. }\n        | ExprKind::Paren(expr) => expr_reads_table(expr, name),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            expr_reads_table(lhs, name) || expr_reads_table(rhs, name)\n        }\n        ExprKind::Between { expr, lo, hi, .. } => {\n            expr_reads_table(expr, name) || expr_reads_table(lo, name) || expr_reads_table(hi, name)\n        }\n        ExprKind::In { expr, list, .. } => expr_reads_table(expr, name) || any(list),\n        ExprKind::Like {\n            expr,\n            pattern,\n            escape,\n            ..\n        } => {\n            expr_reads_table(expr, name)\n                || expr_reads_table(pattern, name)\n                || escape.as_deref().is_some_and(|e| expr_reads_table(e, name))\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            operand\n                .as_deref()\n                .is_some_and(|e| expr_reads_table(e, name))\n                || whens\n                    .iter()\n                    .any(|(w, t)| expr_reads_table(w, name) || expr_reads_table(t, name))\n                || else_.as_deref().is_some_and(|e| expr_reads_table(e, name))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13272,7 +13272,7 @@
   {
     "id": "codegen_row_stmt_insert_insert_result_e7f78d1c",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1836,
+    "line": 1852,
     "decision": "match parse_insert(sql) {\n            ParseOutcome::Accepted(insert) => *insert,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -13282,7 +13282,7 @@
   {
     "id": "codegen_row_stmt_insert_reads_ef39f0d5",
     "file": "src/codegen/row/stmt/insert.rs",
-    "line": 1904,
+    "line": 1920,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => select_reads_table(&select, \"T\"),\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

@@ -428,3 +428,102 @@ fn insert_select_from_the_target_with_autoincrement() {
         ["1|1", "2|2", "3|3", "4|4"]
     );
 }
+
+// #939: INSERT ... SELECT from sources sqlite3 runs beyond a plain table or
+// join. Each test starts from the fixture plus a view and a seeded target;
+// the rows are sqlite3 3.54.1's for the same statements.
+
+/// The fixture plus `vb` (a view over `b`) and `d` holding two seed rows.
+fn insert_fixture() -> (TempDb, RowEngine) {
+    let (db, mut e) = fixture();
+    for sql in [
+        "CREATE VIEW vb AS SELECT k, t || '~' AS t FROM b",
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "INSERT INTO d VALUES (1, 'seed'), (2, 'seed2')",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    (db, e)
+}
+
+/// Runs `statements` against [`insert_fixture`], then returns `d` in order.
+fn insert_rows(statements: &[&str]) -> Vec<String> {
+    let (_db, mut e) = insert_fixture();
+    for sql in statements {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true)
+}
+
+#[test]
+fn insert_select_from_a_from_subquery() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT x.id, x.k FROM (SELECT id, k FROM a WHERE id > 1) AS x"
+        ]),
+        ["1|seed", "2|seed2", "2|y", "3|z"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_view() {
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT 10, t FROM vb WHERE k = 'x'"]),
+        ["1|seed", "2|seed2", "10|icf~", "10|mcqf~"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_cte_inside_the_insert() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d WITH w AS (SELECT id + 1000 AS id, t FROM c) SELECT id, t FROM w"
+        ]),
+        ["1|seed", "2|seed2", "1001|icf", "1002|other"]
+    );
+}
+
+#[test]
+fn insert_select_joining_a_subquery_and_a_view() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT a.id + 2000, s.t FROM a \
+             JOIN (SELECT k, max(t) AS t FROM b GROUP BY k) AS s ON s.k = a.k",
+            "INSERT INTO d SELECT a.id + 3000, v.t FROM a JOIN vb AS v ON v.k = a.k",
+        ]),
+        [
+            "1|seed",
+            "2|seed2",
+            "2001|mcqf",
+            "2002|icf",
+            "3001|icf~",
+            "3001|mcqf~",
+            "3002|icf~"
+        ]
+    );
+}
+
+#[test]
+fn insert_select_from_a_subquery_over_the_target_sees_it_before_the_statement() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT x.id + 7000, x.t FROM (SELECT id, t FROM d WHERE id < 10) AS x",
+            "INSERT INTO d SELECT count(*) + 8000, 'self' FROM (SELECT * FROM d)",
+        ]),
+        ["1|seed", "2|seed2", "7001|seed", "7002|seed2", "8004|self"]
+    );
+}
+
+#[test]
+fn insert_select_from_nested_and_limited_subqueries() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT * FROM (SELECT 9500, 'nested' FROM (SELECT 1))",
+            "INSERT INTO d SELECT x.id + 100, x.t FROM \
+             (SELECT id, t FROM d ORDER BY id DESC LIMIT 1) AS x",
+        ]),
+        ["1|seed", "2|seed2", "9500|nested", "9600|nested"]
+    );
+}

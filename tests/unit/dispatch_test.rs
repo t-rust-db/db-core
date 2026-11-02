@@ -499,17 +499,24 @@ fn an_unrecognized_leading_keyword_is_reported_with_the_original_casing() {
 }
 
 #[test]
-fn insert_select_with_a_cte_source_is_unsupported() {
+fn insert_select_with_a_cte_source_inserts_its_rows() {
+    // #939: was refused ("CTE or view source"); sqlite3 runs it.
     let db = TempDb::new("insert-select-cte");
     let mut e = open(&db);
     e.run_query(
         "CREATE TABLE isc_src(a INTEGER); \
-         CREATE TABLE isc_dst(a INTEGER)",
+         CREATE TABLE isc_dst(a INTEGER); \
+         INSERT INTO isc_src VALUES (1), (2)",
     )
     .unwrap();
-    let err = e
-        .run_query("INSERT INTO isc_dst WITH c AS (SELECT a FROM isc_src) SELECT a FROM c")
-        .unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Compile);
-    assert!(err.message.contains("CTE"), "{}", err.message);
+    e.run_query("INSERT INTO isc_dst WITH c AS (SELECT a FROM isc_src) SELECT a FROM c")
+        .unwrap();
+    let rows = e
+        .run_query("SELECT count(*), sum(a) FROM isc_dst")
+        .unwrap()
+        .rows;
+    assert_eq!(
+        format!("{rows:?}"),
+        format!("{:?}", e.run_query("SELECT 2, 3").unwrap().rows)
+    );
 }
