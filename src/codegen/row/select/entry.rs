@@ -9,7 +9,8 @@ use super::limit_scan::{
     emit_offset_guard,
 };
 use super::order_by::{
-    output_column_names, resolve_order_by, resolve_single_table_group_terms, OrderByTarget,
+    output_column_names, resolve_compound_order_by, resolve_order_by,
+    resolve_single_table_group_terms, OrderByTarget,
 };
 use super::projection::{compile_row_values, emit_dedup_check, result_columns, ResultColumnPlan};
 use super::*;
@@ -616,6 +617,52 @@ pub fn compile_select_compound(
     arm_schemas: &[TableSchema],
     catalog: &[TableSchema],
 ) -> Result<Program, CodegenError> {
+    let mut em = Emitter::new();
+    let mut reg = RegAlloc::new();
+    let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
+    let body_start = em.new_label();
+    em.place(body_start);
+    em.patch_p2(init_addr, body_start);
+    let end_label = em.new_label();
+    let mut sink = |em: &mut Emitter, _reg: &mut RegAlloc, first: i32, count: i32| {
+        em.emit(Instruction::new(Opcode::ResultRow, first, count, 0));
+        Ok(())
+    };
+    compile_select_compound_scan(
+        &mut em,
+        &mut reg,
+        first,
+        first_schema,
+        arm_schemas,
+        catalog,
+        0,
+        end_label,
+        &mut sink,
+    )?;
+    em.place(end_label);
+    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+    Ok(em.finish())
+}
+
+/// [`compile_select_compound`]'s body: emits the compound's rows into
+/// `out` (`first` register, column count) instead of `ResultRow`, with
+/// its cursors numbered from `cursor_base` and `end_label` the caller's
+/// "no more rows" target -- so `INSERT ... SELECT` can drive it (#939).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_select_compound_scan<F>(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    first: &Select,
+    first_schema: &TableSchema,
+    arm_schemas: &[TableSchema],
+    catalog: &[TableSchema],
+    cursor_base: i32,
+    end_label: Label,
+    out: &mut F,
+) -> Result<(), CodegenError>
+where
+    F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
+{
     if first
         .from
         .as_ref()
@@ -653,23 +700,8 @@ pub fn compile_select_compound(
         indexes: Vec::new(),
         rowid_alias: None,
     };
-    let order_by_plans = resolve_order_by(first, &output_schema)?;
-    // A compound's ORDER BY term must be an ordinal position or a bare
-    // output column name/alias — real SQLite rejects any other
-    // expression here ("1st ORDER BY term does not match any column in
-    // the result set"), even one that only references output column
-    // names (`ORDER BY a+1`), since a compound statement has no table
-    // scope for expression evaluation once its arms are combined.
-    if order_by_plans
-        .iter()
-        .any(|plan| matches!(plan.target, OrderByTarget::Expr(_)))
-    {
-        return Err(CodegenError::Unsupported {
-            reason: "ORDER BY on a UNION compound SELECT only supports an output column name \
-                     or ordinal position, not an arbitrary expression"
-                .to_string(),
-        });
-    }
+    // A compound's ORDER BY names its own output columns (#939).
+    let order_by_plans = resolve_compound_order_by(first, first_schema, &output_schema.columns)?;
     let needs_sort = !order_by_plans.is_empty();
     let mut arm_selects = Vec::with_capacity(first.compound.len());
     for (arm, arm_schema) in first.compound.iter().zip(arm_schemas) {
@@ -693,17 +725,10 @@ pub fn compile_select_compound(
     // distinct cursors. The whole-compound sorter (only opened when
     // `needs_sort`) and its pseudo-cursor (for reading a sorted row
     // back out in pass 2) follow right after.
-    let dedup_cursor = ScanCursors::after_arms(arm_schemas.len().saturating_add(1));
+    let dedup_cursor =
+        ScanCursors::after_arms(arm_schemas.len().saturating_add(1)).saturating_add(cursor_base);
     let sort_cursor = dedup_cursor.saturating_add(1);
     let pseudo_cursor = dedup_cursor.saturating_add(2);
-
-    let mut em = Emitter::new();
-    let mut reg = RegAlloc::new();
-
-    let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
-    let body_start = em.new_label();
-    em.place(body_start);
-    em.patch_p2(init_addr, body_start);
 
     if has_union {
         em.emit(Instruction::new(Opcode::OpenEphemeral, dedup_cursor, 0, 0));
@@ -711,8 +736,8 @@ pub fn compile_select_compound(
 
     let limit_state = match &first.limit {
         Some(_) => compile_limit_setup(
-            &mut em,
-            &mut reg,
+            em,
+            reg,
             &Scope::single(&output_schema, pseudo_cursor),
             first,
         )?,
@@ -723,7 +748,6 @@ pub fn compile_select_compound(
     // exhausts its budget (in either the sorted or the direct-emit
     // path below). Always placed just before `Halt`, so it's harmless
     // to allocate even when neither path ever jumps to it.
-    let end_label = em.new_label();
 
     let sorter_open_addr = if needs_sort {
         let sorter_open = Instruction::with_p4(Opcode::SorterOpen, sort_cursor, 0, 0, P4::None);
@@ -733,7 +757,7 @@ pub fn compile_select_compound(
     };
     let mut sort_keys_patched = false;
 
-    let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, reg_first: i32, count: i32| {
+    let mut arm_sink = |em: &mut Emitter, reg: &mut RegAlloc, reg_first: i32, count: i32| {
         let mut emit_row = |em: &mut Emitter, reg: &mut RegAlloc| -> Result<(), CodegenError> {
             if needs_sort {
                 // Buffer this row's already-projected tuple into the
@@ -780,10 +804,10 @@ pub fn compile_select_compound(
                 let row_skip = em.new_label();
                 emit_offset_guard(em, limit, row_skip);
                 emit_limit_guard(em, limit, end_label);
-                em.emit(Instruction::new(Opcode::ResultRow, reg_first, count, 0));
+                out(em, reg, reg_first, count)?;
                 em.place(row_skip);
             } else {
-                em.emit(Instruction::new(Opcode::ResultRow, reg_first, count, 0));
+                out(em, reg, reg_first, count)?;
             }
             Ok(())
         };
@@ -811,7 +835,13 @@ pub fn compile_select_compound(
                            select: &Select,
                            schema: &TableSchema|
      -> Result<(), CodegenError> {
-        let cursors = ScanCursors::for_arm(arm_index);
+        let arm = ScanCursors::for_arm(arm_index);
+        let cursors = ScanCursors {
+            table: arm.table.saturating_add(cursor_base),
+            sort: arm.sort.saturating_add(cursor_base),
+            pseudo: arm.pseudo.saturating_add(cursor_base),
+            distinct: arm.distinct.saturating_add(cursor_base),
+        };
         match select.from.as_ref().map(|from| &from.first.kind) {
             Some(TableRefKind::Subquery(subquery)) => {
                 crate::codegen::row::subquery::materialize_from_subquery(
@@ -842,7 +872,7 @@ pub fn compile_select_compound(
             arm_end,
             catalog,
             &crate::codegen::row::planner::Stats::default(),
-            &mut sink,
+            &mut arm_sink,
         )?;
         em.place(arm_end);
         Ok(())
@@ -858,15 +888,9 @@ pub fn compile_select_compound(
         limit: None,
         ..first.clone()
     };
-    compile_arm(&mut em, &mut reg, 0, &first_for_scan, first_schema)?;
+    compile_arm(em, reg, 0, &first_for_scan, first_schema)?;
     for (i, (arm_select, arm_schema)) in arm_selects.iter().zip(arm_schemas).enumerate() {
-        compile_arm(
-            &mut em,
-            &mut reg,
-            i.saturating_add(1),
-            arm_select,
-            arm_schema,
-        )?;
+        compile_arm(em, reg, i.saturating_add(1), arm_select, arm_schema)?;
     }
 
     if needs_sort {
@@ -891,8 +915,8 @@ pub fn compile_select_compound(
 
         let row_skip = em.new_label();
         if let Some(limit) = &limit_state {
-            emit_offset_guard(&mut em, limit, row_skip);
-            emit_limit_guard(&mut em, limit, end_label);
+            emit_offset_guard(em, limit, row_skip);
+            emit_limit_guard(em, limit, end_label);
         }
         let out_first = reg.peek();
         for i in 0..expected {
@@ -904,21 +928,14 @@ pub fn compile_select_compound(
                 r,
             ));
         }
-        em.emit(Instruction::new(
-            Opcode::ResultRow,
-            out_first,
-            i32::try_from(expected).unwrap_or(0),
-            0,
-        ));
+        out(em, reg, out_first, i32::try_from(expected).unwrap_or(0))?;
 
         em.place(row_skip);
         let sorted_next = em.emit(Instruction::new(Opcode::SorterNext, sort_cursor, 0, 0));
         em.patch_p2(sorted_next, sorted_loop);
     }
 
-    em.place(end_label);
-    em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
-    Ok(em.finish())
+    Ok(())
 }
 
 #[cfg(test)]

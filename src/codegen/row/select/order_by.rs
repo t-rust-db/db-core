@@ -344,6 +344,75 @@ pub(super) fn order_by_target_for_expr(
     }
 }
 
+/// A compound `SELECT`'s trailing `ORDER BY`, resolved as sqlite3 does:
+/// each term names an output column -- an ordinal, an output name or
+/// alias, or a column reference matching one of the first arm's result
+/// columns -- so every target is an output position, whatever that
+/// column computes (#939). Anything else is refused, as before.
+pub(super) fn resolve_compound_order_by(
+    first: &Select,
+    first_schema: &TableSchema,
+    output_names: &[String],
+) -> Result<Vec<OrderByPlan>, CodegenError> {
+    let entries = order_by_entries(first, first_schema);
+    let not_a_column = || CodegenError::Unsupported {
+        reason: "ORDER BY on a UNION compound SELECT only supports an output column name \
+                 or ordinal position, not an arbitrary expression"
+            .to_string(),
+    };
+    let mut plans = Vec::with_capacity(first.order_by.len());
+    for term in &first.order_by {
+        let index = match &strip_collate(&term.expr).kind {
+            ExprKind::Literal(Literal::Integer(n)) => usize::try_from(*n)
+                .ok()
+                .and_then(|ordinal| ordinal.checked_sub(1))
+                .filter(|&i| i < output_names.len())
+                .ok_or_else(|| CodegenError::Unsupported {
+                    reason: format!(
+                        "ORDER BY term out of range - should be between 1 and {}",
+                        output_names.len()
+                    ),
+                })?,
+            ExprKind::Column { table, name, .. } => table
+                .is_none()
+                .then(|| {
+                    output_names
+                        .iter()
+                        .position(|n| n.eq_ignore_ascii_case(name))
+                })
+                .flatten()
+                .or_else(|| {
+                    entries.iter().position(|entry| match &entry.expr.kind {
+                        ExprKind::Column {
+                            table: entry_table,
+                            name: entry_name,
+                            ..
+                        } => {
+                            entry_name.eq_ignore_ascii_case(name)
+                                && match (table, entry_table) {
+                                    (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),
+                                    _ => true,
+                                }
+                        }
+                        _ => false,
+                    })
+                })
+                .ok_or_else(not_a_column)?,
+            _ => return Err(not_a_column()),
+        };
+        let descending = term.desc.unwrap_or(false);
+        plans.push(OrderByPlan {
+            target: OrderByTarget::Column(index),
+            descending,
+            collation: collation_of(&term.expr).unwrap_or(Collation::Binary),
+            nulls_first: term
+                .nulls_last
+                .map_or(!descending, |nulls_last| !nulls_last),
+        });
+    }
+    Ok(plans)
+}
+
 pub(super) fn resolve_order_by_target(
     expr: &Expr,
     select: &Select,

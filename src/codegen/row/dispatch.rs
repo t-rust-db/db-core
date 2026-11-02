@@ -509,6 +509,7 @@ pub fn compile_statement(
         "INSERT" => match parse_insert(sql) {
             ParseOutcome::Accepted(mut insert) => {
                 let schema = find_schema(&insert.table)?;
+                let mut arm_schemas: Vec<TableSchema> = Vec::new();
                 let select_schemas: Option<Vec<TableSchema>> = match &insert.source {
                     InsertSource::Select(select) => {
                         // Same `WITH`/view expansion `compile_select_program`
@@ -527,6 +528,7 @@ pub fn compile_statement(
                                 &insert,
                                 schema,
                                 Some(&[]),
+                                &[],
                                 &readable_catalog(schemas),
                             )?);
                         };
@@ -535,6 +537,20 @@ pub fn compile_statement(
                             vec![resolve_from_table_schema(&from.first, &readable)?];
                         for join in &from.joins {
                             joined_schemas.push(resolve_from_table_schema(&join.table, &readable)?);
+                        }
+                        // #939: a compound source's arm tables, resolved
+                        // like a plain compound SELECT's.
+                        for arm in &expanded.compound {
+                            let Some(arm_from) = &arm.from else {
+                                return Err(CodegenError::Unsupported {
+                                    reason: "INSERT ... SELECT: a UNION arm without FROM after \
+                                             one with FROM is not yet supported"
+                                        .to_string(),
+                                }
+                                .into());
+                            };
+                            arm_schemas
+                                .push(resolve_from_table_schema(&arm_from.first, &readable)?);
                         }
                         insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
                         Some(joined_schemas)
@@ -547,6 +563,7 @@ pub fn compile_statement(
                     &insert,
                     schema,
                     select_schemas.as_deref(),
+                    &arm_schemas,
                     &readable_catalog(schemas),
                 )?)
             }

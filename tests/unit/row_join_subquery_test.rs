@@ -610,3 +610,105 @@ fn select_without_from_reads_tables_in_its_subqueries() {
         ["2|orphan"]
     );
 }
+
+#[test]
+fn insert_select_from_union_all_and_union() {
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT id, k FROM a UNION ALL SELECT id, t FROM c"]),
+        ["1|icf", "1|seed", "1|x", "2|other", "2|seed2", "2|y", "3|z"]
+    );
+    // UNION dedups across arms: `x` and `y` come from both.
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT 50, k FROM b UNION SELECT 50, k FROM a"]),
+        ["1|seed", "2|seed2", "50|w", "50|x", "50|y", "50|z"]
+    );
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT 600, 'v1' UNION ALL SELECT 601, 'v2'"]),
+        ["1|seed", "2|seed2", "600|v1", "601|v2"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_union_with_order_by_and_limit() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT id + 100, k FROM a UNION ALL SELECT id + 100, t FROM c \
+             ORDER BY 1 DESC, 2 LIMIT 3 OFFSET 1"
+        ]),
+        ["1|seed", "2|seed2", "101|icf", "102|other", "102|y"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_union_over_a_subquery_and_a_view() {
+    assert_eq!(
+        insert_rows(&[
+            "INSERT INTO d SELECT x.id + 300, x.k FROM (SELECT id, k FROM a WHERE id < 3) AS x \
+             UNION ALL SELECT 300, t FROM vb WHERE k = 'y'"
+        ]),
+        ["1|seed", "2|seed2", "300|icf~", "301|x", "302|y"]
+    );
+}
+
+#[test]
+fn insert_select_from_a_union_over_the_target_sees_it_before_the_statement() {
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT id + 400, t FROM d \
+             UNION ALL SELECT (SELECT count(*) FROM d) + 400, 'n' FROM a WHERE id = 1"]),
+        ["1|seed", "2|seed2", "401|seed", "402|n", "402|seed2"]
+    );
+    assert_eq!(
+        insert_rows(&["INSERT INTO d SELECT id, t FROM d UNION SELECT id, t FROM d"]),
+        ["1|seed", "1|seed", "2|seed2", "2|seed2"]
+    );
+}
+
+#[test]
+fn insert_select_union_dedup_decides_a_unique_constraint() {
+    let (_db, mut e) = fixture();
+    e.run_query("CREATE TABLE u (t TEXT UNIQUE)").unwrap();
+    // `icf` is in both b and c: UNION keeps one, so no conflict.
+    e.run_query("INSERT INTO u SELECT t FROM b UNION SELECT t FROM c")
+        .unwrap();
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM u ORDER BY 1", true),
+        ["icf", "mcqf", "orphan", "other"]
+    );
+    let err = e
+        .run_query("INSERT INTO u SELECT t FROM b UNION ALL SELECT 'zz' FROM a")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("UNIQUE constraint failed: u.t"),
+        "{err}"
+    );
+    assert_eq!(rows(&mut e, "SELECT count(*) FROM u", true), ["4"]);
+}
+
+#[test]
+fn union_order_by_names_output_columns_by_position_alias_or_first_arm_column() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        (
+            "SELECT id + 100, k FROM a UNION ALL SELECT id, t FROM c ORDER BY 1 DESC",
+            &["103|z", "102|y", "101|x", "2|other", "1|icf"][..],
+        ),
+        (
+            "SELECT k AS z FROM a UNION SELECT t FROM c ORDER BY z DESC",
+            &["z", "y", "x", "other", "icf"][..],
+        ),
+        (
+            "SELECT id * 2 AS d, k FROM a UNION ALL SELECT id, t FROM c ORDER BY d, 2",
+            &["1|icf", "2|other", "2|x", "4|y", "6|z"][..],
+        ),
+        (
+            "SELECT upper(k) FROM a UNION SELECT t FROM c ORDER BY 1",
+            &["X", "Y", "Z", "icf", "other"][..],
+        ),
+        (
+            "SELECT id AS n, k FROM a UNION ALL SELECT id, t FROM c ORDER BY n DESC LIMIT 2",
+            &["3|z", "2|y"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
