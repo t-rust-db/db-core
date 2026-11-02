@@ -4,6 +4,15 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.224.2] - 2026-11-02
+
+### Fixed
+
+- Row engine: a subquery in a JOIN query can read a table outside the join; it no longer fails with "isn't visible to this compiler's catalog" (#937).
+- Row engine: ORDER BY on a JOIN accepts computed result columns (expressions, function calls, CASE, scalar subqueries).
+- Row engine: `INSERT … SELECT` accepts subqueries over any table.
+- Row engine: an `INSERT … SELECT` that reads its own target table sees the table as it was before the statement. A self-copy across page splits no longer loses rows.
+
 ## [0.224.1] - 2026-11-01
 
 ### Fixed

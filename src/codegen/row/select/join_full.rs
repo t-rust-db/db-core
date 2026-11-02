@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::eqp::table_binding_name;
 use super::join_access::{
-    compile_join_order_by_sort_keys, emit_full_joined_row, emit_joined_pseudo_projection,
-    resolve_join_order_by, JoinOrderPlan,
+    compile_join_order_by_sort_keys, compile_joined_computed_results, emit_full_joined_row,
+    emit_joined_pseudo_projection, record_computed_offsets, resolve_join_order_by, JoinOrderPlan,
 };
 use super::joins::{emit_join_final_row, resolve_join_constraint};
 use super::limit_scan::{compile_limit_setup, emit_limit_guard, emit_offset_guard};
@@ -58,6 +58,7 @@ struct FullJoinSort {
 pub(super) fn compile_full_join_two_table(
     select: &Select,
     schemas: &[TableSchema],
+    full_catalog: &[TableSchema],
     from: &FromClause,
     stats_by_table: &std::collections::HashMap<String, crate::codegen::row::planner::Stats>,
 ) -> Result<Program, CodegenError> {
@@ -113,7 +114,7 @@ pub(super) fn compile_full_join_two_table(
 
     let full_scope = Scope {
         tables: bindings.clone(),
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -160,6 +161,8 @@ pub(super) fn compile_full_join_two_table(
     // patched only once, on whichever emission point buffers a row
     // first.
     let mut sort_key_patched = false;
+    // #937: each emission point's computed-result offsets (all equal).
+    let mut computed: Option<Vec<usize>> = None;
 
     let end_label = em.new_label();
     let mut sink = |em: &mut Emitter, _reg: &mut RegAlloc, first: i32, count: i32| {
@@ -190,7 +193,7 @@ pub(super) fn compile_full_join_two_table(
     let b_skip = em.new_label();
     let match_scope = Scope {
         tables: bindings.clone(),
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -224,6 +227,7 @@ pub(super) fn compile_full_join_two_table(
             sort.open_addr,
             &order_by_plans,
             &mut sort_key_patched,
+            &mut computed,
         )?;
     } else {
         emit_join_final_row(
@@ -254,7 +258,7 @@ pub(super) fn compile_full_join_two_table(
     }
     let b_null_scope = Scope {
         tables: b_null_bindings,
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -269,6 +273,7 @@ pub(super) fn compile_full_join_two_table(
             sort.open_addr,
             &order_by_plans,
             &mut sort_key_patched,
+            &mut computed,
         )?;
     } else {
         emit_join_final_row(
@@ -312,7 +317,7 @@ pub(super) fn compile_full_join_two_table(
     }
     let a_null_scope = Scope {
         tables: a_null_bindings,
-        catalog: std::rc::Rc::from(schemas),
+        catalog: std::rc::Rc::from(full_catalog),
         outer: None,
         dedup_star: dedup_star.clone(),
         ..Scope::default()
@@ -327,6 +332,7 @@ pub(super) fn compile_full_join_two_table(
             sort.open_addr,
             &order_by_plans,
             &mut sort_key_patched,
+            &mut computed,
         )?;
     } else {
         emit_join_final_row(
@@ -374,8 +380,14 @@ pub(super) fn compile_full_join_two_table(
         ));
 
         let row_skip = em.new_label();
-        let (first, count) =
-            emit_joined_pseudo_projection(&mut em, &mut reg, select, &full_scope, pseudo_cursor)?;
+        let (first, count) = emit_joined_pseudo_projection(
+            &mut em,
+            &mut reg,
+            select,
+            &full_scope,
+            pseudo_cursor,
+            computed.as_deref().unwrap_or_default(),
+        )?;
         if let Some(distinct_cursor) = distinct_cursor {
             // #613: each column under its collation.
             let collations = super::projection::joined_result_collations(
@@ -431,6 +443,7 @@ fn emit_full_join_sort_row(
     sorter_open_addr: usize,
     order_by_plans: &[JoinOrderPlan],
     patched: &mut bool,
+    computed: &mut Option<Vec<usize>>,
 ) -> Result<(), CodegenError> {
     let row_skip = em.new_label();
     if let Some(where_expr) = &select.where_clause {
@@ -451,6 +464,8 @@ fn emit_full_join_sort_row(
         em.patch_p4(sorter_open_addr, P4::SortKey(sort_keys));
         *patched = true;
     }
+    let offsets = compile_joined_computed_results(em, reg, scope, select, first)?;
+    record_computed_offsets(computed, offsets)?;
     let count = record_width(reg.peek(), first)?;
     let record_reg = reg.alloc();
     em.emit(Instruction::new(

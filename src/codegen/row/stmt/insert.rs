@@ -92,8 +92,9 @@ use crate::codegen::row::select::{
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, Label, NullTarget, RegAlloc, Target};
 use crate::parser::ast::{
-    ColumnConstraint, ConflictAction, CreateTable, DefaultValue, Expr, ExprKind, Insert,
-    InsertSource, Literal, TableConstraint, TableRef, UpsertAction,
+    ColumnConstraint, ConflictAction, CreateTable, DefaultValue, Expr, ExprKind, FromClause,
+    FunctionArgs, Insert, InsertSource, JoinConstraint, Literal, ResultColumn, Select,
+    TableConstraint, TableRef, TableRefKind, UpsertAction,
 };
 use crate::parser::row::error::ParseOutcome;
 use crate::parser::row::parse_create_table;
@@ -286,10 +287,32 @@ fn emit_new_rowid(em: &mut Emitter, dest: i32, schema: &TableSchema, is_autoincr
 /// `None` if the caller couldn't resolve it (or `insert.source` isn't
 /// `Select`). A single-element slice is the pre-#250 single-table case;
 /// more than one element means the `SELECT` has a JOIN.
+///
+/// A subquery in that `SELECT` resolves its own `FROM` against
+/// `select_schemas` alone here; [`compile_insert_with_catalog`] takes the
+/// database's full catalog instead.
 pub fn compile_insert(
     insert: &Insert,
     schema: &TableSchema,
     select_schemas: Option<&[TableSchema]>,
+) -> Result<Program, CodegenError> {
+    compile_insert_with_catalog(
+        insert,
+        schema,
+        select_schemas,
+        select_schemas.unwrap_or_default(),
+    )
+}
+
+/// [`compile_insert`] with the database's full `catalog` (#937): a
+/// subquery in an `INSERT ... SELECT` (scalar, `IN`, `EXISTS`, or a
+/// subquery in a joined `FROM`) may read a table that is not among the
+/// `SELECT`'s own `FROM` tables.
+pub(crate) fn compile_insert_with_catalog(
+    insert: &Insert,
+    schema: &TableSchema,
+    select_schemas: Option<&[TableSchema]>,
+    catalog: &[TableSchema],
 ) -> Result<Program, CodegenError> {
     // A `WITHOUT ROWID` table is written by key (#722): no rowid, no
     // rowid-keyed upsert, and a source scan must not read the b-tree it is
@@ -529,7 +552,30 @@ pub fn compile_insert(
             let select_table_cursor =
                 FIRST_INDEX_CURSOR.saturating_add(i32::try_from(schema.indexes.len()).unwrap_or(0));
             let end_label = em.new_label();
-            let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {
+            // #937: a SELECT that reads the target table anywhere (its FROM,
+            // a join, or a subquery at any depth) runs to completion into an
+            // ephemeral table first, as sqlite3 does; inserting while it
+            // still scans would let it see (or, after a page split, skip)
+            // the statement's own rows.
+            let buffer = select_reads_table(select, &schema.name).then(|| {
+                let cursor = reg.alloc_cursor();
+                em.emit(Instruction {
+                    opcode: Opcode::OpenEphemeral,
+                    p1: cursor,
+                    p2: 0,
+                    p3: 0,
+                    p4: P4::None,
+                    p5: 1,
+                    comment: None,
+                });
+                cursor
+            });
+            let scan_end = if buffer.is_some() {
+                em.new_label()
+            } else {
+                end_label
+            };
+            let sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {
                 let count = usize::try_from(count).map_err(|_| CodegenError::Internal {
                     reason: format!("INSERT ... SELECT produced a negative column count {count}"),
                 })?;
@@ -554,6 +600,28 @@ pub fn compile_insert(
                     is_autoincrement,
                 )
             };
+            // Without a buffer each row goes straight to the insert.
+            let mut scan_sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {
+                let Some(cursor) = buffer else {
+                    return sink(em, reg, first, count);
+                };
+                let rowid_reg = reg.alloc();
+                em.emit(Instruction::new(Opcode::Sequence, cursor, rowid_reg, 0));
+                let record_reg = reg.alloc();
+                em.emit(Instruction::new(
+                    Opcode::MakeRecord,
+                    first,
+                    count,
+                    record_reg,
+                ));
+                em.emit(Instruction::new(
+                    Opcode::Insert,
+                    cursor,
+                    rowid_reg,
+                    record_reg,
+                ));
+                Ok(())
+            };
             if select_schemas.len() > 1 {
                 // #250: the SELECT's FROM clause has a JOIN — drive the
                 // same nested-loop join scan `compile_select_joined`
@@ -562,22 +630,18 @@ pub fn compile_insert(
                 // source-table cursor itself, unlike the single-table
                 // `compile_select_scan` path below, which expects its
                 // one cursor already open).
-                // `select_schemas` doubles as the full catalog for a
-                // subquery-in-FROM to resolve its own inner FROM table(s)
-                // against (#257) — narrower than `compile_select_joined`'s
-                // own full-database catalog, so `INSERT ... SELECT` with
-                // both a JOIN and a FROM-subquery whose own table isn't
-                // among the SELECT's joined tables isn't supported yet.
+                // `catalog` resolves a subquery's own FROM table(s), in
+                // FROM (#257) or in an expression (#937).
                 compile_select_joined_scan(
                     &mut em,
                     &mut reg,
                     select,
                     select_schemas,
-                    select_schemas,
+                    catalog,
                     select_table_cursor,
-                    end_label,
+                    scan_end,
                     &std::collections::HashMap::new(),
-                    &mut sink,
+                    &mut scan_sink,
                 )?;
             } else {
                 let Some(select_schema) = select_schemas.first() else {
@@ -606,11 +670,29 @@ pub fn compile_insert(
                     select,
                     &std::rc::Rc::new(select_schema.clone()),
                     select_cursors,
-                    end_label,
-                    std::slice::from_ref(select_schema),
+                    scan_end,
+                    catalog,
                     &crate::codegen::row::planner::Stats::default(),
-                    &mut sink,
+                    &mut scan_sink,
                 )?;
+            }
+            if let Some(cursor) = buffer {
+                // Replay the buffered rows, in scan order, into the insert.
+                em.place(scan_end);
+                let width = i32::try_from(target_columns.len()).unwrap_or(i32::MAX);
+                let rewind = em.emit(Instruction::new(Opcode::Rewind, cursor, 0, 0));
+                em.patch_p2(rewind, end_label);
+                let replay = em.new_label();
+                em.place(replay);
+                // `alloc` hands out consecutive registers: `first..first+width`.
+                let first = reg.peek();
+                for i in 0..width {
+                    let r = reg.alloc();
+                    em.emit(Instruction::new(Opcode::Column, cursor, i, r));
+                }
+                sink(&mut em, &mut reg, first, width)?;
+                let next = em.emit(Instruction::new(Opcode::Next, cursor, 0, 0));
+                em.patch_p2(next, replay);
             }
             em.place(end_label);
         }
@@ -1570,6 +1652,121 @@ fn emit_unique_check(
     Ok(())
 }
 
+/// Whether `select` reads table `name` anywhere: its FROM and joins, any
+/// compound arm, or a subquery at any depth (#937). An expression form
+/// this walk doesn't look inside counts as reading it, so a gap here
+/// costs a buffer, never a wrong row.
+fn select_reads_table(select: &Select, name: &str) -> bool {
+    if select.with_clause.is_some() {
+        return true;
+    }
+    let core = |columns: &[ResultColumn],
+                from: Option<&FromClause>,
+                where_clause: Option<&Expr>,
+                group_by: &[Expr],
+                having: Option<&Expr>| {
+        from.is_some_and(|f| from_reads_table(f, name))
+            || columns.iter().any(|c| match c {
+                ResultColumn::Expr { expr, .. } => expr_reads_table(expr, name),
+                ResultColumn::Star | ResultColumn::TableStar { .. } => false,
+            })
+            || where_clause.is_some_and(|e| expr_reads_table(e, name))
+            || group_by.iter().any(|e| expr_reads_table(e, name))
+            || having.is_some_and(|e| expr_reads_table(e, name))
+    };
+    core(
+        &select.columns,
+        select.from.as_ref(),
+        select.where_clause.as_ref(),
+        &select.group_by,
+        select.having.as_ref(),
+    ) || select.compound.iter().any(|arm| {
+        core(
+            &arm.columns,
+            arm.from.as_ref(),
+            arm.where_clause.as_ref(),
+            &arm.group_by,
+            arm.having.as_ref(),
+        )
+    }) || select
+        .order_by
+        .iter()
+        .any(|t| expr_reads_table(&t.expr, name))
+        || select.limit.as_ref().is_some_and(|l| {
+            expr_reads_table(&l.limit, name)
+                || l.offset.as_ref().is_some_and(|o| expr_reads_table(o, name))
+        })
+}
+
+fn from_reads_table(from: &FromClause, name: &str) -> bool {
+    std::iter::once(&from.first)
+        .chain(from.joins.iter().map(|j| &j.table))
+        .any(|t| match &t.kind {
+            TableRefKind::Name(table) => table.eq_ignore_ascii_case(name),
+            TableRefKind::Subquery(inner) => select_reads_table(inner, name),
+            TableRefKind::Unnest { expr, .. } => expr_reads_table(expr, name),
+        })
+        || from.joins.iter().any(|j| match &j.constraint {
+            Some(JoinConstraint::On(on)) => expr_reads_table(on, name),
+            Some(JoinConstraint::Using(_)) | None => false,
+        })
+}
+
+fn expr_reads_table(expr: &Expr, name: &str) -> bool {
+    let any = |list: &[Expr]| list.iter().any(|e| expr_reads_table(e, name));
+    match &expr.kind {
+        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => false,
+        ExprKind::Subquery(sub) | ExprKind::Exists { subquery: sub, .. } => {
+            select_reads_table(sub, name)
+        }
+        ExprKind::InSubquery { expr, subquery, .. } => {
+            expr_reads_table(expr, name) || select_reads_table(subquery, name)
+        }
+        ExprKind::InSubqueryMulti {
+            exprs, subquery, ..
+        } => any(exprs) || select_reads_table(subquery, name),
+        ExprKind::FunctionCall { args, tail, .. } => {
+            // FILTER/OVER: not walked, so assume it does.
+            tail.is_some() || matches!(args, FunctionArgs::List(list) if any(list))
+        }
+        ExprKind::Unary { expr, .. }
+        | ExprKind::IsNull { expr, .. }
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::Collate { expr, .. }
+        | ExprKind::Paren(expr) => expr_reads_table(expr, name),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            expr_reads_table(lhs, name) || expr_reads_table(rhs, name)
+        }
+        ExprKind::Between { expr, lo, hi, .. } => {
+            expr_reads_table(expr, name) || expr_reads_table(lo, name) || expr_reads_table(hi, name)
+        }
+        ExprKind::In { expr, list, .. } => expr_reads_table(expr, name) || any(list),
+        ExprKind::Like {
+            expr,
+            pattern,
+            escape,
+            ..
+        } => {
+            expr_reads_table(expr, name)
+                || expr_reads_table(pattern, name)
+                || escape.as_deref().is_some_and(|e| expr_reads_table(e, name))
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            operand
+                .as_deref()
+                .is_some_and(|e| expr_reads_table(e, name))
+                || whens
+                    .iter()
+                    .any(|(w, t)| expr_reads_table(w, name) || expr_reads_table(t, name))
+                || else_.as_deref().is_some_and(|e| expr_reads_table(e, name))
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod mcdc_vectors {
@@ -1644,7 +1841,8 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_stmt_insert_compile_insert_e9674d7a__v1_short_row_is_a_shape_mismatch() {
+    fn mcdc__codegen_row_stmt_insert_compile_insert_with_catalog_e9674d7a__v1_short_row_is_a_shape_mismatch(
+    ) {
         assert!(matches!(
             insert_result("INSERT INTO t VALUES (1)"),
             Err(CodegenError::RowShapeMismatch {
@@ -1656,7 +1854,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_stmt_insert_compile_insert_e9674d7a__v2_full_row_compiles() {
+    fn mcdc__codegen_row_stmt_insert_compile_insert_with_catalog_e9674d7a__v2_full_row_compiles() {
         assert!(insert_result("INSERT INTO t VALUES (1, 2)").is_ok());
     }
 
@@ -1665,8 +1863,8 @@ mod mcdc_vectors {
     /// grammar refuses an empty row outright the leaf is unreachable from
     /// SQL, and this vector records that instead.
     #[test]
-    fn mcdc__codegen_row_stmt_insert_compile_insert_e9674d7a__v3_empty_row_is_not_a_shape_mismatch()
-    {
+    fn mcdc__codegen_row_stmt_insert_compile_insert_with_catalog_e9674d7a__v3_empty_row_is_not_a_shape_mismatch(
+    ) {
         let ParseOutcome::Accepted(insert) = parse_insert("INSERT INTO t VALUES ()") else {
             return;
         };
@@ -1694,5 +1892,75 @@ mod mcdc_vectors {
     fn mcdc__codegen_row_stmt_insert_compile_row_4d66f676__v2_each_column_listed_once_compiles() {
         assert!(insert_result("INSERT INTO t(a, b) VALUES (1, 2)").is_ok());
         assert!(insert_result("INSERT INTO t(a, a) VALUES (1, 2)").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod select_reads_table_tests {
+    use super::select_reads_table;
+    use crate::parser::row::{parse_select, ParseOutcome};
+
+    fn reads(sql: &str) -> bool {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => select_reads_table(&select, "T"),
+            other => panic!("{sql}: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn finds_the_target_wherever_a_table_or_subquery_can_name_it() {
+        for sql in [
+            "SELECT * FROM t",
+            "SELECT * FROM t AS x",
+            "SELECT * FROM a JOIN t ON t.k = a.k",
+            "SELECT * FROM a JOIN b ON b.k IN (SELECT k FROM t)",
+            "SELECT * FROM (SELECT k FROM t) AS s",
+            "SELECT (SELECT max(k) FROM t) FROM a",
+            "SELECT abs((SELECT max(k) FROM t)) FROM a",
+            "SELECT -(SELECT max(k) FROM t) FROM a",
+            "SELECT CAST((SELECT max(k) FROM t) AS TEXT) FROM a",
+            "SELECT 1 + (SELECT max(k) FROM t) FROM a",
+            "SELECT k IS (SELECT max(k) FROM t) FROM a",
+            "SELECT (SELECT max(k) FROM t) IS NULL FROM a",
+            "SELECT * FROM a WHERE EXISTS (SELECT 1 FROM t)",
+            "SELECT * FROM a WHERE NOT EXISTS (SELECT 1 FROM t WHERE t.k = a.k)",
+            "SELECT * FROM a WHERE (k + 1) IN (SELECT k FROM t)",
+            "SELECT * FROM a WHERE (k, k) IN (SELECT k, k FROM t)",
+            "SELECT * FROM a WHERE k IN (1, (SELECT max(k) FROM t))",
+            "SELECT * FROM a WHERE k BETWEEN 0 AND (SELECT max(k) FROM t)",
+            "SELECT * FROM a WHERE k LIKE (SELECT max(k) FROM t)",
+            "SELECT * FROM a WHERE k LIKE 'x' ESCAPE (SELECT max(k) FROM t)",
+            "SELECT CASE WHEN k = 1 THEN (SELECT max(k) FROM t) END FROM a",
+            "SELECT CASE (SELECT max(k) FROM t) WHEN 1 THEN 2 END FROM a",
+            "SELECT CASE WHEN k = 1 THEN 2 ELSE (SELECT max(k) FROM t) END FROM a",
+            "SELECT k FROM a GROUP BY (SELECT max(k) FROM t)",
+            "SELECT k FROM a GROUP BY k HAVING count(*) > (SELECT count(*) FROM t)",
+            "SELECT k FROM a ORDER BY (SELECT max(k) FROM t)",
+            "SELECT k FROM a LIMIT (SELECT count(*) FROM t)",
+            "SELECT k FROM a LIMIT 1 OFFSET (SELECT count(*) FROM t)",
+            "SELECT k FROM a UNION ALL SELECT k FROM t",
+            "SELECT k FROM a UNION SELECT k FROM b WHERE EXISTS (SELECT 1 FROM t)",
+            // FILTER/OVER aren't walked: assumed to read it.
+            "SELECT count(*) FILTER (WHERE k > 0) FROM a",
+        ] {
+            assert!(reads(sql), "{sql}");
+        }
+    }
+
+    #[test]
+    fn a_select_that_never_names_the_target_does_not_read_it() {
+        for sql in [
+            "SELECT 1",
+            "SELECT t.k, ? FROM a AS t",
+            "SELECT * FROM a JOIN b USING (k)",
+            "SELECT * FROM a NATURAL JOIN b",
+            "SELECT k FROM a WHERE k IN (SELECT k FROM b) AND EXISTS (SELECT 1 FROM tt)",
+            "SELECT CASE k WHEN 1 THEN 2 ELSE 3 END, count(*), abs(k) FROM a GROUP BY k \
+             HAVING k > 0 ORDER BY 1 LIMIT 1 OFFSET 1",
+            "SELECT k FROM a UNION SELECT k FROM b",
+            "SELECT * FROM (SELECT k FROM b) AS t",
+        ] {
+            assert!(!reads(sql), "{sql}");
+        }
     }
 }
