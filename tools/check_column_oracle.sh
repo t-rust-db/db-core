@@ -144,6 +144,11 @@ NULL_TYPES_QUERIES=(
   "SELECT count(*) FROM __TABLE__ WHERE ts >= '2026-01-02'"
   "SELECT id FROM __TABLE__ WHERE ts < '2026-01-02 12:00:00' ORDER BY id"
   "SELECT id FROM __TABLE__ WHERE ts = '2026-01-03 00:00:00' ORDER BY id"
+  # #647: date_trunc over a TIMESTAMP column, compared with a quoted
+  # timestamp and as a GROUP BY key (counted: DuckDB prints a TIMESTAMP).
+  "SELECT id FROM __TABLE__ WHERE date_trunc('day', ts) = '2026-01-02' ORDER BY id"
+  "SELECT count(*) FROM __TABLE__ GROUP BY date_trunc('day', ts) ORDER BY 1"
+  "SELECT count(DISTINCT date_trunc('hour', ts)), count(DISTINCT date_trunc('week', ts)) FROM __TABLE__"
   "SELECT id FROM __TABLE__ WHERE lvl LIKE 'err%' ORDER BY id"
   "SELECT id FROM __TABLE__ WHERE lvl ILIKE 'err%' ORDER BY id"
   "SELECT id FROM __TABLE__ WHERE lvl NOT ILIKE 'err%' ORDER BY id"

@@ -468,10 +468,13 @@ pub(crate) fn timestamp_literals(
     select: &mut Select,
     timestamps: &[(String, i64)],
 ) -> Result<(), EngineError> {
+    for_each_expr_mut(select, &mut |e| {
+        timestamp_operator(e, timestamps)?;
+        date_trunc_units(e, timestamps)
+    })?;
     if timestamps.is_empty() {
         return Ok(());
     }
-    for_each_expr_mut(select, &mut |e| timestamp_operator(e, timestamps))?;
     if let Some(e) = select.where_clause.as_mut() {
         rewrite_timestamp_literals(e, timestamps)?;
     }
@@ -519,6 +522,63 @@ fn timestamp_operator(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(
         }
     }
     Ok(())
+}
+
+/// `date_trunc(part, ts)` becomes the column dialect's
+/// `__date_trunc(part, ts, per_second)` with the TIMESTAMP column's units
+/// (#647). As in DuckDB, an unknown part and a second argument that is no
+/// TIMESTAMP column are errors, before any row is read.
+fn date_trunc_units(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(), EngineError> {
+    let span = expr.span;
+    let ExprKind::FunctionCall {
+        name,
+        args: FunctionArgs::List(args),
+        ..
+    } = &mut expr.kind
+    else {
+        return Ok(());
+    };
+    if !name.eq_ignore_ascii_case("date_trunc") || args.len() != 2 {
+        return Ok(());
+    }
+    let compile = |message: String| EngineError::new(ErrorKind::Compile, message);
+    if let Some(ExprKind::Literal(Literal::Str(part))) = args.first().map(|a| &a.kind) {
+        if crate::functions::date_trunc::trunc_unit(part).is_none() {
+            return Err(compile(crate::functions::date_trunc::unknown_part(part)));
+        }
+    }
+    let per_second = args
+        .get(1)
+        .and_then(|a| timestamp_column(a, timestamps))
+        .map(|(_, per_second)| per_second)
+        .ok_or_else(|| {
+            compile("date_trunc(part, ts) takes a TIMESTAMP column for ts".to_string())
+        })?;
+    *name = crate::functions::date_trunc::DATE_TRUNC_FN.to_string();
+    args.push(Expr {
+        kind: ExprKind::Literal(Literal::Integer(per_second)),
+        span,
+    });
+    Ok(())
+}
+
+/// The units per second of a rewritten `__date_trunc(part, ts, units)`
+/// (#647): its result is in its column's units.
+fn date_trunc_result_units(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(args),
+            ..
+        } if name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN) => {
+            match args.get(2).map(|a| &a.kind) {
+                Some(ExprKind::Literal(Literal::Integer(units))) => Some(*units),
+                _ => None,
+            }
+        }
+        ExprKind::Paren(inner) => date_trunc_result_units(inner),
+        _ => None,
+    }
 }
 
 /// Calls `f` on every expression of `select` -- select list, WHERE,
@@ -631,7 +691,8 @@ fn rewrite_timestamp_literals(
             .iter()
             .find(|(c, _)| c.eq_ignore_ascii_case(name))
             .map(|(_, per_second)| *per_second),
-        _ => None,
+        // #647: `date_trunc('day', ts) = '2026-01-05'`.
+        _ => date_trunc_result_units(e),
     };
     match &mut expr.kind {
         ExprKind::Binary {
@@ -2362,6 +2423,62 @@ mod tests {
         }
         assert!(check("SELECT a // 2, a % 2 FROM t WHERE ts > 0").is_ok());
     }
+    // engine_column_date_trunc_units_8a6e38e9 (#647):
+    // `!name.eq_ignore_ascii_case("date_trunc") || args.len() != 2`.
+    use crate::parser::ast::{Expr, ExprKind, FunctionArgs, ResultColumn};
+
+    fn first_item(sql: &str) -> Expr {
+        match crate::parser::column::parse(sql).unwrap().columns.remove(0) {
+            ResultColumn::Expr { expr, .. } => expr,
+            other => panic!("expected an expression: {other:?}"),
+        }
+    }
+
+    fn call_name(expr: &Expr) -> &str {
+        match &expr.kind {
+            ExprKind::FunctionCall { name, .. } => name,
+            _ => "",
+        }
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_date_trunc_units_8a6e38e9__v1_two_arg_date_trunc_is_rewritten() {
+        let ts = [("ts".to_string(), 1_000_000_000)];
+        let mut expr = first_item("SELECT date_trunc('day', ts) FROM t");
+        super::date_trunc_units(&mut expr, &ts).unwrap();
+        assert_eq!(
+            call_name(&expr),
+            crate::functions::date_trunc::DATE_TRUNC_FN
+        );
+        assert_eq!(super::date_trunc_result_units(&expr), Some(1_000_000_000));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_date_trunc_units_8a6e38e9__v2_another_function_is_left_alone() {
+        let ts = [("ts".to_string(), 1_000_000)];
+        let mut expr = first_item("SELECT json_extract(ts, '$.a') FROM t");
+        super::date_trunc_units(&mut expr, &ts).unwrap();
+        assert_eq!(call_name(&expr), "json_extract");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_date_trunc_units_8a6e38e9__v3_another_arity_is_left_alone() {
+        let ts = [("ts".to_string(), 1_000_000)];
+        let mut expr = first_item("SELECT date_trunc('day', ts) FROM t");
+        if let ExprKind::FunctionCall {
+            args: FunctionArgs::List(args),
+            ..
+        } = &mut expr.kind
+        {
+            args.pop();
+        }
+        super::date_trunc_units(&mut expr, &ts).unwrap();
+        assert_eq!(call_name(&expr), "date_trunc");
+    }
+
     use crate::vm::batch::Segment as _;
 
     #[test]

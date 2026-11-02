@@ -572,6 +572,20 @@ fn check_literal_args(name: &str, args: &[AstExpr]) -> Result<()> {
         if let Some(why) = crate::vm::map_fns::literal_arg_error(name, i, value) {
             return Err(unsupported(arg.span, why));
         }
+        // #647: the part is checked against DuckDB's names when the
+        // engine knows the column, so it must be one now.
+        if i == 0
+            && name.eq_ignore_ascii_case("date_trunc")
+            && !matches!(
+                arg.kind,
+                ExprKind::Literal(AstLiteral::Str(_) | AstLiteral::Null)
+            )
+        {
+            return Err(unsupported(
+                arg.span,
+                "date_trunc's part must be a quoted literal ('day', 'hour', ...)".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -883,6 +897,10 @@ pub(crate) fn is_known_scalar_function(name: &str, arity: usize) -> bool {
             | ("logfmt_extract", 2)
             | ("regexp_extract", 3)
             | ("ilike", 2)
+            // #647: as written, and as the engine rewrites it with the
+            // TIMESTAMP column's units.
+            | ("date_trunc", 2)
+            | ("__date_trunc", 3)
     ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::is_map_function_call(name, arity)
 }
@@ -3609,6 +3627,36 @@ mod tests {
     }
 
     // --- ParseError / column_name / ast_binop_allowed ----------------------
+
+    // parser_column_check_literal_args_2c88179f (#647): `i == 0 &&
+    // name.eq_ignore_ascii_case("date_trunc") && !matches!(arg.kind,
+    // Literal(Str | Null))`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_2c88179f__v1_date_trunc_part_from_a_column_is_refused(
+    ) {
+        let err = parse("SELECT date_trunc(s, ts) FROM t").unwrap_err();
+        assert!(err.to_string().contains("quoted literal"), "{err}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_2c88179f__v2_second_argument_may_be_a_column() {
+        assert!(parse("SELECT date_trunc('day', ts) FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_2c88179f__v3_another_function_takes_a_column_first() {
+        assert!(parse("SELECT round(n, 2) FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_2c88179f__v4_quoted_or_null_part_is_accepted() {
+        assert!(parse("SELECT date_trunc('day', ts) FROM t").is_ok());
+        assert!(parse("SELECT date_trunc(NULL, ts) FROM t").is_ok());
+    }
 
     #[test]
     fn parse_error_span_and_display_cover_every_variant() {

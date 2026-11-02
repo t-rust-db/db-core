@@ -300,6 +300,8 @@ fn is_known_scalar_function(name: &str, arity: usize) -> bool {
             | ("logfmt_extract", 2)
             | ("regexp_extract", 3)
             | ("ilike", 2)
+            | ("date_trunc", 2)
+            | ("__date_trunc", 3)
     ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::is_map_function_call(name, arity)
 }

@@ -218,3 +218,111 @@ SELECT count(*) FROM typed_nulls GROUP BY ts % 2
 
 statement error
 SELECT count(*) FROM typed_nulls WHERE (ts) // 2 > 0
+
+# date_trunc(part, ts) over a TIMESTAMP column: the start of the calendar
+# unit, UTC, in the column's units (rows here compare, count and group by
+# it rather than print it: DuckDB prints a TIMESTAMP, db-core its integer).
+# DuckDB's part names and aliases, any case; weeks start on Monday.
+
+query II nosort
+SELECT count(*), count(DISTINCT date_trunc('day', ts)) FROM typed_nulls
+----
+10000
+674
+
+query IIIII nosort
+SELECT count(DISTINCT date_trunc('hour', ts)), count(DISTINCT date_trunc('week', ts)), count(DISTINCT date_trunc('month', ts)), count(DISTINCT date_trunc('quarter', ts)), count(DISTINCT date_trunc('year', ts)) FROM typed_nulls
+----
+9474
+97
+23
+8
+2
+
+query IIIIII nosort
+SELECT count(DISTINCT date_trunc('decade', ts)), count(DISTINCT date_trunc('century', ts)), count(DISTINCT date_trunc('millennium', ts)), count(DISTINCT date_trunc('isoyear', ts)), count(DISTINCT date_trunc('second', ts)), count(DISTINCT date_trunc('ms', ts)) FROM typed_nulls
+----
+1
+1
+1
+2
+9474
+9474
+
+query I nosort
+SELECT count(*) AS n FROM typed_nulls GROUP BY date_trunc('month', ts) ORDER BY 1 DESC LIMIT 3
+----
+526
+437
+436
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE date_trunc('day', ts) = '2026-01-05'
+----
+15
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE date_trunc('month', ts) >= '2027-01-01' AND date_trunc('month', ts) < '2027-03-01'
+----
+830
+
+query I nosort
+SELECT id FROM typed_nulls WHERE date_trunc('hour', ts) = '2026-01-01 03:00:00' ORDER BY id
+----
+2
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE ts IS NOT NULL AND date_trunc('day', ts) = ts
+----
+6
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE date_trunc('day', ts) IS NULL
+----
+526
+
+query TI nosort
+SELECT grp, count(DISTINCT date_trunc('week', ts)) FROM typed_nulls GROUP BY grp ORDER BY grp
+----
+big
+97
+small
+97
+tiny
+97
+NULL
+90
+
+query I nosort
+SELECT count(*) FROM typed_nulls GROUP BY date_trunc('year', ts) HAVING date_trunc('year', ts) = '2027-01-01'
+----
+4341
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE date_trunc('Day', ts) = date_trunc('d', ts) AND date_trunc('HOURS', ts) = date_trunc('h', ts)
+----
+9474
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE date_trunc(NULL, ts) IS NULL
+----
+10000
+
+query II nosort
+SELECT count(*), min(id) FROM typed_nulls GROUP BY date_trunc('day', ts), grp HAVING count(*) > 6 ORDER BY 2 LIMIT 3
+----
+12
+1
+11
+15
+47
+19
+
+statement error
+SELECT date_trunc('fortnight', ts) FROM typed_nulls
+
+statement error
+SELECT date_trunc('day', n) FROM typed_nulls
+
+statement error
+SELECT date_trunc('day', ts + 1) FROM typed_nulls

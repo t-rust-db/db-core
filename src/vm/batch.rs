@@ -6652,6 +6652,9 @@ impl Vm {
                     // sqlite3 ones.
                     let late_json_extract = name.eq_ignore_ascii_case("json_extract");
                     let late_json_string = name.eq_ignore_ascii_case("json_extract_string");
+                    // #647: the column dialect's date_trunc, not a row function.
+                    let date_trunc =
+                        name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN);
                     for row in 0..num_rows {
                         for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
                             *slot = to_scalar_value(&reg[row]);
@@ -6660,6 +6663,8 @@ impl Vm {
                             crate::functions::late_json_extract(&call_args)
                         } else if late_json_string {
                             crate::functions::late_json_extract_string(&call_args)
+                        } else if date_trunc {
+                            crate::functions::date_trunc::call(&call_args)
                         } else {
                             crate::functions::call(name, &call_args)
                         }
