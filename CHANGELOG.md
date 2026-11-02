@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.225.0] - 2026-11-02
+
+### Added
+
+- Column engine: `//` is integer division and `%` the remainder, with DuckDB's sign and zero-divisor rules; both are refused on TIMESTAMP columns, as in DuckDB (#647).
+- Column engine: `date_trunc(part, ts)` over TIMESTAMP columns, for every DuckDB part and alias, in the select list, WHERE, GROUP BY, HAVING and ORDER BY, UTC, in the column's own units (#647).
+
 ## [0.224.3] - 2026-11-02
 
 ### Added
