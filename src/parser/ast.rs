@@ -1263,6 +1263,9 @@ pub enum BinaryOp {
     Mul,
     /// `/`.
     Div,
+    /// `//`: integer division (#647). Column dialect only, as DuckDB's
+    /// operator; sqlite3 has none.
+    IntDiv,
     /// `%`.
     Mod,
     /// `||`.

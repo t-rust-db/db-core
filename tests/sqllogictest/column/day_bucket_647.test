@@ -1,0 +1,220 @@
+# #647: integer division `//` and remainder `%`, as DuckDB has them. Two
+# integers give an integer: `//` truncated toward zero, `%` with the sign
+# of the dividend, NULL for a zero divisor. A DOUBLE or DECIMAL operand
+# makes `//` a float division; `%` stays exact over decimals and is fmod
+# over floats. Neither is defined for a TIMESTAMP column (date_trunc is).
+
+query III nosort
+SELECT id, id // 1000, id % 1000 FROM typed_nulls ORDER BY id LIMIT 5
+----
+1
+0
+1
+2
+0
+2
+3
+0
+3
+4
+0
+4
+5
+0
+5
+
+query II nosort
+SELECT id // 1000 AS b, count(*) FROM production GROUP BY id // 1000 ORDER BY 1
+----
+0
+999
+1
+1000
+2
+1000
+3
+1000
+4
+1000
+5
+1
+
+query III nosort
+SELECT n, n // 7, n % 7 FROM typed_nulls WHERE n < 0 ORDER BY id LIMIT 5
+----
+-463
+-66
+-1
+-426
+-60
+-6
+-389
+-55
+-4
+-352
+-50
+-2
+-315
+-45
+0
+
+query II nosort
+SELECT n % 7 AS r, count(*) FROM typed_nulls GROUP BY 1 ORDER BY 1
+----
+-6
+607
+-5
+607
+-4
+609
+-3
+619
+-2
+618
+-1
+618
+0
+1223
+1
+616
+2
+616
+3
+609
+4
+610
+5
+610
+6
+610
+NULL
+1428
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE n % 7 = 0
+----
+1223
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE n // 100 = -3
+----
+858
+
+query II nosort
+SELECT n // 0, n % 0 FROM typed_nulls WHERE n IS NOT NULL ORDER BY id LIMIT 2
+----
+NULL
+NULL
+NULL
+NULL
+
+query RRR nosort
+SELECT f, f // 2, f % 2 FROM typed_nulls WHERE f IS NOT NULL ORDER BY id LIMIT 3
+----
+1.625
+0.8125
+1.625
+3.25
+1.625
+1.25
+4.875
+2.4375
+0.875
+
+query TTR nosort
+SELECT d, d % 2, d // 2 FROM typed_nulls WHERE d IS NOT NULL ORDER BY id LIMIT 3
+----
+-420.81
+-0.81
+-210.405
+-341.62
+-1.62
+-170.81
+-262.43
+-0.43
+-131.215
+
+query I nosort
+SELECT n // 7 * 7 + n % 7 = n FROM typed_nulls WHERE n IS NOT NULL ORDER BY id LIMIT 3
+----
+1
+1
+1
+
+query IIIIIII nosort
+SELECT 7 // 2 * 2, 7 % 3 * 2, 2 + 7 // 2, 7 // 2 // 2, 7 % 4 % 3, -7 // 2, -7 % 3 FROM typed_nulls LIMIT 1
+----
+6
+2
+5
+1
+0
+-3
+-1
+
+query TI nosort
+SELECT grp, sum(n // 10) FROM typed_nulls GROUP BY grp ORDER BY grp
+----
+big
+-318
+small
+23
+tiny
+-121
+NULL
+90
+
+query IIII nosort
+SELECT n // 100 AS b, count(*), min(n), max(n) FROM typed_nulls GROUP BY 1 ORDER BY 1 LIMIT 6
+----
+-5
+9
+-500
+-500
+-4
+856
+-499
+-400
+-3
+858
+-399
+-300
+-2
+856
+-299
+-200
+-1
+857
+-199
+-100
+0
+1705
+-99
+99
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE n IS NULL AND n // 2 IS NULL
+----
+1428
+
+query I nosort
+SELECT id % 13 AS r FROM typed_nulls ORDER BY r, id LIMIT 4
+----
+0
+0
+0
+0
+
+query R nosort
+SELECT f % 0 FROM typed_nulls WHERE f IS NOT NULL ORDER BY id LIMIT 1
+----
+NULL
+
+statement error
+SELECT ts // 86400000000 FROM typed_nulls
+
+statement error
+SELECT count(*) FROM typed_nulls GROUP BY ts % 2
+
+statement error
+SELECT count(*) FROM typed_nulls WHERE (ts) // 2 > 0

@@ -164,6 +164,8 @@ fn ast_binop_allowed(op: AstBinOp, span: Span) -> Result<()> {
         | AstBinOp::Sub
         | AstBinOp::Mul
         | AstBinOp::Div
+        | AstBinOp::IntDiv
+        | AstBinOp::Mod
         | AstBinOp::Eq
         | AstBinOp::Ne
         | AstBinOp::Lt
@@ -3619,7 +3621,7 @@ mod tests {
             "{truncated}"
         );
 
-        let rejected = parse("SELECT id FROM orders WHERE amount % 2 = 0").unwrap_err();
+        let rejected = parse("SELECT id FROM orders WHERE amount << 2 = 0").unwrap_err();
         let span = rejected.span();
         assert!(!span.is_unknown());
         // #752: a query that parsed but falls outside the subset says so,

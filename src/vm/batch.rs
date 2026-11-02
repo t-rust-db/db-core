@@ -561,6 +561,13 @@ pub enum MapOp {
     Mul,
     /// `a / b` numeric division.
     Div,
+    /// `a // b`, DuckDB's integer division (#647): two integers give an
+    /// integer truncated toward zero, NULL for a zero divisor; any other
+    /// numeric operand divides as a float.
+    IntDiv,
+    /// `a % b`, DuckDB's remainder (#647): the sign of `a`; NULL for a
+    /// zero integer or decimal divisor, `fmod` over floats.
+    Mod,
     /// `a = b` equality comparison.
     Eq,
     /// `a <> b` inequality comparison.
@@ -8835,7 +8842,7 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     }
     use std::cmp::Ordering::{Equal, Greater, Less};
     Ok(match op {
-        MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div => {
+        MapOp::Add | MapOp::Sub | MapOp::Mul | MapOp::Div | MapOp::IntDiv | MapOp::Mod => {
             let decimal = matches!(a, Value::Decimal { .. }) || matches!(b, Value::Decimal { .. });
             return arithmetic(op, a, b).ok_or(if decimal {
                 VmError::DecimalOverflow { opcode: "Map" }
@@ -8911,6 +8918,9 @@ fn arithmetic(op: MapOp, a: &Value, b: &Value) -> Option<Value> {
     let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else {
         return Some(Value::Null);
     };
+    if matches!(op, MapOp::IntDiv | MapOp::Mod) {
+        return div_or_rem(op, a, b, x, y);
+    }
     if op == MapOp::Div {
         return Some(Value::Float(arith_op(op, x, y)));
     }
@@ -8921,6 +8931,52 @@ fn arithmetic(op: MapOp, a: &Value, b: &Value) -> Option<Value> {
         (Some(l), Some(r)) => decimal_arith_op(op, l, r),
         _ => Some(Value::Float(arith_op(op, x, y))),
     }
+}
+
+/// `a // b` or `a % b`, as DuckDB types them (#647). Two integers: an
+/// integer, `//` truncated toward zero and `%` with the sign of `a`, NULL
+/// for a zero divisor, `None` on overflow (`i64::MIN // -1`). `%` with a
+/// decimal (and no float): exact at the larger scale, NULL for a zero
+/// divisor. Otherwise a float: `//` divides (NULL for a zero divisor),
+/// `%` is `fmod` (`nan` for a zero divisor).
+fn div_or_rem(op: MapOp, a: &Value, b: &Value, x: f64, y: f64) -> Option<Value> {
+    if let (Value::Int(x), Value::Int(y)) = (a, b) {
+        if *y == 0 {
+            return Some(Value::Null);
+        }
+        let exact = if op == MapOp::IntDiv {
+            x.checked_div(*y)
+        } else {
+            x.checked_rem(*y)
+        };
+        return exact.map(Value::Int);
+    }
+    if op == MapOp::Mod {
+        if let (Some(l), Some(r)) = (decimal_parts(a), decimal_parts(b)) {
+            return decimal_rem(l, r);
+        }
+        return Some(Value::Float(x % y));
+    }
+    Some(if y == 0.0 {
+        Value::Null
+    } else {
+        Value::Float(x / y)
+    })
+}
+
+/// `a % b` over two decimals at the larger scale (#647); NULL for a zero
+/// divisor, `None` past DECIMAL(38).
+fn decimal_rem((u1, s1): (i128, u8), (u2, s2): (i128, u8)) -> Option<Value> {
+    let scale = s1.max(s2);
+    let l = u1.checked_mul(pow10(u32::from(scale.saturating_sub(s1)))?)?;
+    let r = u2.checked_mul(pow10(u32::from(scale.saturating_sub(s2)))?)?;
+    if r == 0 {
+        return Some(Value::Null);
+    }
+    Some(Value::Decimal {
+        unscaled: l.checked_rem(r)?,
+        scale,
+    })
 }
 
 /// An exact operand as `(unscaled, scale)`: an `Int` at scale 0, a
@@ -10960,6 +11016,76 @@ mod tests {
             ),
             Err(VmError::DecimalOverflow { .. })
         ));
+    }
+
+    /// #647: `//` and `%` as DuckDB has them (checked against DuckDB 1.5).
+    #[test]
+    fn integer_division_and_remainder_as_duckdb() {
+        let map = |op, a: &Value, b: &Value| apply_map_op(op, a, b);
+        let int = Value::Int;
+        // Two integers: `//` truncates toward zero, `%` has the dividend's
+        // sign; a zero divisor is NULL.
+        for (x, y, q, r) in [
+            (7, 2, 3, 1),
+            (-7, 2, -3, -1),
+            (7, -2, -3, 1),
+            (-7, -2, 3, -1),
+        ] {
+            assert_eq!(
+                map(MapOp::IntDiv, &int(x), &int(y)).unwrap(),
+                int(q),
+                "{x} // {y}"
+            );
+            assert_eq!(
+                map(MapOp::Mod, &int(x), &int(y)).unwrap(),
+                int(r),
+                "{x} % {y}"
+            );
+        }
+        assert_eq!(map(MapOp::IntDiv, &int(7), &int(0)).unwrap(), Value::Null);
+        assert_eq!(map(MapOp::Mod, &int(7), &int(0)).unwrap(), Value::Null);
+        // `i64::MIN // -1` and `i64::MIN % -1` overflow, as in DuckDB.
+        assert!(map(MapOp::IntDiv, &int(i64::MIN), &int(-1)).is_err());
+        assert!(map(MapOp::Mod, &int(i64::MIN), &int(-1)).is_err());
+        // A float operand: `//` divides, `%` is fmod; `// 0` is NULL,
+        // `% 0` is NaN.
+        assert_eq!(
+            map(MapOp::IntDiv, &Value::Float(7.5), &int(2)).unwrap(),
+            Value::Float(3.75)
+        );
+        assert_eq!(
+            map(MapOp::Mod, &Value::Float(-7.5), &int(2)).unwrap(),
+            Value::Float(-1.5)
+        );
+        assert_eq!(
+            map(MapOp::IntDiv, &Value::Float(1.0), &int(0)).unwrap(),
+            Value::Null
+        );
+        assert!(matches!(
+            map(MapOp::Mod, &Value::Float(1.0), &int(0)).unwrap(),
+            Value::Float(x) if x.is_nan()
+        ));
+        // Decimals: `%` exact at the larger scale (NULL for a zero
+        // divisor), `//` a float division.
+        assert_eq!(
+            map(MapOp::Mod, &dec(425, 2), &dec(15, 1)).unwrap(),
+            dec(125, 2)
+        );
+        assert_eq!(
+            map(MapOp::Mod, &dec(-42081, 2), &int(2)).unwrap(),
+            dec(-81, 2)
+        );
+        assert_eq!(map(MapOp::Mod, &dec(425, 2), &int(0)).unwrap(), Value::Null);
+        assert_eq!(
+            map(MapOp::IntDiv, &dec(-42081, 2), &int(2)).unwrap(),
+            Value::Float(-210.405)
+        );
+        // NULL in, NULL out.
+        assert_eq!(
+            map(MapOp::IntDiv, &Value::Null, &int(2)).unwrap(),
+            Value::Null
+        );
+        assert_eq!(map(MapOp::Mod, &int(2), &Value::Null).unwrap(), Value::Null);
     }
 
     /// #635 review: decimal range boundaries, and negation -- a decimal

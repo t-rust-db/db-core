@@ -2729,12 +2729,36 @@ impl Parser {
             if prec < min_prec {
                 break;
             }
-            self.advance();
+            let op = self.consume_binary_op(op);
             let rhs = self.binary_expr(prec.saturating_add(1))?;
             lhs = bin(op, lhs, rhs);
             self.cap_chain(&mut lhs, &mut height);
         }
         Ok(lhs)
+    }
+
+    /// Consumes the operator token(s) of `op` and returns the operator
+    /// they make. #647: two adjacent `/` are DuckDB's `//` in the column
+    /// dialect; the row dialect keeps sqlite3's syntax error. Out of line
+    /// so [`Self::binary_expr`]'s recursive frame stays small (#118).
+    #[inline(never)]
+    fn consume_binary_op(&mut self, op: BinaryOp) -> BinaryOp {
+        if self.column && op == BinaryOp::Div && self.next_is_adjacent_slash() {
+            self.advance();
+            self.advance();
+            return BinaryOp::IntDiv;
+        }
+        self.advance();
+        op
+    }
+
+    /// The token after the current `/` is a `/` right against it (`//`).
+    fn next_is_adjacent_slash(&self) -> bool {
+        let here = self.peek().span;
+        let next = self.peek_at(1);
+        next.kind == TokenKind::Slash
+            && next.span.line == here.line
+            && next.span.offset == here.offset.saturating_add(here.len)
     }
 
     fn binary_op(kind: &TokenKind) -> Option<(BinaryOp, u8)> {
@@ -3701,6 +3725,75 @@ mod tests {
         let insert = parser(sql).parse_insert_stmt().unwrap();
         // `end` comes from the last value expr's span, not the closing paren.
         assert_eq!(insert.span.len, u32::try_from(sql.len() - 1).unwrap());
+    }
+
+    /// #647: `//` is DuckDB's integer division in the column dialect, as
+    /// tight as `*`; two `/` with a space between are not it, and the row
+    /// dialect (sqlite3 has no `//`) refuses it.
+    #[test]
+    fn double_slash_is_integer_division_in_the_column_dialect_only() {
+        let column = |sql: &str| parser(sql).column_dialect().parse_select_stmt();
+        let select = column("SELECT a + b // c FROM t").unwrap();
+        let ResultColumn::Expr { expr, .. } = &select.columns[0] else {
+            panic!("expected an expression");
+        };
+        let ExprKind::Binary {
+            op: BinaryOp::Add,
+            rhs,
+            ..
+        } = &expr.kind
+        else {
+            panic!("expected `a + (b // c)`: {expr:?}");
+        };
+        assert!(matches!(
+            rhs.kind,
+            ExprKind::Binary {
+                op: BinaryOp::IntDiv,
+                ..
+            }
+        ));
+        assert!(column("SELECT a / / c FROM t").is_err());
+        assert!(parser("SELECT a // c FROM t").parse_select_stmt().is_err());
+    }
+
+    // parser_row_grammar_consume_binary_op_7b880e0b (#647):
+    // `self.column && op == BinaryOp::Div && self.next_is_adjacent_slash()`.
+    fn first_op(sql: &str) -> Option<BinaryOp> {
+        let select = parser(sql).column_dialect().parse_select_stmt().ok()?;
+        match &select.columns.first()? {
+            ResultColumn::Expr { expr, .. } => match &expr.kind {
+                ExprKind::Binary { op, .. } => Some(*op),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_consume_binary_op_7b880e0b__v1_column_double_slash_is_int_div() {
+        assert_eq!(first_op("SELECT a // b FROM t"), Some(BinaryOp::IntDiv));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_consume_binary_op_7b880e0b__v2_row_dialect_keeps_two_slashes() {
+        assert!(parser("SELECT a // b FROM t").parse_select_stmt().is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_consume_binary_op_7b880e0b__v3_other_op_before_a_slash_is_not_int_div(
+    ) {
+        assert_eq!(first_op("SELECT a %/ b FROM t"), None);
+        assert_eq!(first_op("SELECT a % b FROM t"), Some(BinaryOp::Mod));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_consume_binary_op_7b880e0b__v4_spaced_slashes_are_not_int_div() {
+        assert_eq!(first_op("SELECT a / / b FROM t"), None);
+        assert_eq!(first_op("SELECT a / b FROM t"), Some(BinaryOp::Div));
     }
 
     fn insert_select(sql: &str) -> Select {

@@ -121,6 +121,12 @@ QUERIES=(
   "SELECT amount > 6000 AS big, count(*), sum(id) FROM __TABLE__ GROUP BY amount > 6000 ORDER BY big|SELECT (amount > 6000)::INT AS big, count(*), sum(id) FROM __TABLE__ GROUP BY amount > 6000 ORDER BY big"
   "SELECT region, count(*) FROM __TABLE__ GROUP BY 1 ORDER BY region|SELECT region, count(*) FROM __TABLE__ GROUP BY 1 ORDER BY region"
   "SELECT CASE WHEN amount > 6000 THEN 'big' ELSE 'small' END AS size, region, count(*) FROM __TABLE__ GROUP BY 2, 1 ORDER BY region, size|SELECT CASE WHEN amount > 6000 THEN 'big' ELSE 'small' END AS size, region, count(*) FROM __TABLE__ GROUP BY 2, 1 ORDER BY region, size"
+  # #647: integer division `//` (truncated toward zero) and `%` (sign of
+  # the dividend) as a GROUP BY key, in WHERE and in the select list.
+  "SELECT id // 1000 AS b, count(*), min(id), max(id) FROM __TABLE__ GROUP BY id // 1000 ORDER BY b|SELECT id // 1000 AS b, count(*), min(id), max(id) FROM __TABLE__ GROUP BY id // 1000 ORDER BY b"
+  "SELECT id % 4 AS r, count(*), sum(id // 3) FROM __TABLE__ GROUP BY 1 ORDER BY r|SELECT id % 4 AS r, count(*), sum(id // 3) FROM __TABLE__ GROUP BY 1 ORDER BY r"
+  "SELECT count(*) FROM __TABLE__ WHERE id % 7 = 0 AND id // 100 < 30|SELECT count(*) FROM __TABLE__ WHERE id % 7 = 0 AND id // 100 < 30"
+  "SELECT id, (0 - id) // 7, (0 - id) % 7, id // 7 * 7 + id % 7 FROM __TABLE__ WHERE id < 10 ORDER BY id|SELECT id, (0 - id) // 7, (0 - id) % 7, id // 7 * 7 + id % 7 FROM __TABLE__ WHERE id < 10 ORDER BY id"
 )
 
 echo "building examples/column_oracle (release)..."
