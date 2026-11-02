@@ -478,6 +478,7 @@ fn binop_str(op: BinaryOp) -> &'static str {
         BinaryOp::Sub => "-",
         BinaryOp::Mul => "*",
         BinaryOp::Div => "/",
+        BinaryOp::IntDiv => "//",
         BinaryOp::Mod => "%",
         BinaryOp::Concat => "||",
     }

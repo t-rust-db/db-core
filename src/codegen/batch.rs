@@ -300,6 +300,8 @@ fn is_known_scalar_function(name: &str, arity: usize) -> bool {
             | ("logfmt_extract", 2)
             | ("regexp_extract", 3)
             | ("ilike", 2)
+            | ("date_trunc", 2)
+            | ("__date_trunc", 3)
     ) || crate::functions::takes_any_expression(name, arity)
         || crate::vm::map_fns::is_map_function_call(name, arity)
 }
@@ -1575,6 +1577,8 @@ fn map_bin_op(op: AstBinOp) -> MapOp {
         AstBinOp::Sub => MapOp::Sub,
         AstBinOp::Mul => MapOp::Mul,
         AstBinOp::Div => MapOp::Div,
+        AstBinOp::IntDiv => MapOp::IntDiv,
+        AstBinOp::Mod => MapOp::Mod,
         AstBinOp::Eq => MapOp::Eq,
         AstBinOp::Ne => MapOp::Ne,
         AstBinOp::Lt => MapOp::Lt,
@@ -1585,12 +1589,10 @@ fn map_bin_op(op: AstBinOp) -> MapOp {
         AstBinOp::Or => MapOp::Or,
         AstBinOp::Concat => MapOp::Concat,
         // `parser::column`'s validator rejects every other operator
-        // (bitwise/shift/modulo) before this module ever sees the query --
+        // (bitwise/shift) before this module ever sees the query --
         // reaching here means an unvalidated `Select` was compiled
         // directly. Fall back to `Eq` rather than panicking.
-        AstBinOp::BitAnd | AstBinOp::BitOr | AstBinOp::Shl | AstBinOp::Shr | AstBinOp::Mod => {
-            MapOp::Eq
-        }
+        AstBinOp::BitAnd | AstBinOp::BitOr | AstBinOp::Shl | AstBinOp::Shr => MapOp::Eq,
     }
 }
 
@@ -4222,6 +4224,7 @@ fn bin_op_str(op: AstBinOp) -> &'static str {
         AstBinOp::Sub => "-",
         AstBinOp::Mul => "*",
         AstBinOp::Div => "/",
+        AstBinOp::IntDiv => "//",
         AstBinOp::Eq => "=",
         AstBinOp::Ne => "!=",
         AstBinOp::Lt => "<",

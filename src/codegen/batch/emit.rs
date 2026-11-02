@@ -897,6 +897,7 @@ fn render_binary_op(op: AstBinOp) -> &'static str {
         AstBinOp::Sub => "Sub",
         AstBinOp::Mul => "Mul",
         AstBinOp::Div => "Div",
+        AstBinOp::IntDiv => "IntDiv",
         AstBinOp::Mod => "Mod",
         AstBinOp::Concat => "Concat",
     }
@@ -1077,6 +1078,8 @@ fn render_map_op(op: MapOp) -> String {
         MapOp::Sub => "Sub".to_string(),
         MapOp::Mul => "Mul".to_string(),
         MapOp::Div => "Div".to_string(),
+        MapOp::IntDiv => "IntDiv".to_string(),
+        MapOp::Mod => "Mod".to_string(),
         MapOp::Eq => "Eq".to_string(),
         MapOp::Ne => "Ne".to_string(),
         MapOp::Lt => "Lt".to_string(),

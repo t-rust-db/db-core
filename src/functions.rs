@@ -43,6 +43,8 @@ use crate::value::{len_to_i64, Collation, Value};
 
 // sqlite3 built-ins by family (#651); each adds its own names to
 // [`lookup`] through its own `lookup`.
+#[cfg(feature = "vm-batch")]
+pub(crate) mod date_trunc;
 mod datetime;
 pub(crate) mod fp;
 mod json;

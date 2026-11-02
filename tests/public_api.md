@@ -1373,6 +1373,7 @@ pub db_core::parser::ast::BinaryOp::Div
 pub db_core::parser::ast::BinaryOp::Eq
 pub db_core::parser::ast::BinaryOp::Ge
 pub db_core::parser::ast::BinaryOp::Gt
+pub db_core::parser::ast::BinaryOp::IntDiv
 pub db_core::parser::ast::BinaryOp::Le
 pub db_core::parser::ast::BinaryOp::Lt
 pub db_core::parser::ast::BinaryOp::Mod
@@ -8556,6 +8557,7 @@ pub db_core::vm::batch::MapOp::Ge
 pub db_core::vm::batch::MapOp::Glob
 pub db_core::vm::batch::MapOp::Glob::negated: bool
 pub db_core::vm::batch::MapOp::Gt
+pub db_core::vm::batch::MapOp::IntDiv
 pub db_core::vm::batch::MapOp::IsNotNull
 pub db_core::vm::batch::MapOp::IsNull
 pub db_core::vm::batch::MapOp::Le
@@ -8564,6 +8566,7 @@ pub db_core::vm::batch::MapOp::Like::negated: bool
 pub db_core::vm::batch::MapOp::Like::nocase: bool
 pub db_core::vm::batch::MapOp::Lt
 pub db_core::vm::batch::MapOp::MaskIf
+pub db_core::vm::batch::MapOp::Mod
 pub db_core::vm::batch::MapOp::Mul
 pub db_core::vm::batch::MapOp::Ne
 pub db_core::vm::batch::MapOp::Neg

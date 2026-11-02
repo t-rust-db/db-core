@@ -2070,6 +2070,62 @@ fn unnest_over_an_ingest_table_agrees_with_duckdb_in_every_state() {
     });
 }
 
+/// #647: `date_trunc` over a TIMESTAMP_NANOS column of an ingest table
+/// gives DuckDB's buckets on the same rows (`ranked_events.parquet`, whose
+/// `ts` is in microseconds: DuckDB's `epoch_us` times 1000), in WAL pages
+/// and after the day merge, by the column's nanosecond units; `//` on it is
+/// refused, as in DuckDB.
+#[test]
+fn date_trunc_over_a_nanosecond_column_agrees_with_duckdb() {
+    let t = TempTable::new();
+    let mut w = t.writer_with(ranked_options());
+    for event in &RANKED_EVENTS {
+        w.append_row(ranked_row(event), Ack::Memory).unwrap();
+    }
+    check_date_trunc("WAL pages", |sql| answer(&w, sql));
+    advance_clock(2 * DAY_NS);
+    w.flush_all().unwrap();
+    w.compact().unwrap();
+    check_date_trunc("day merge", |sql| answer(&w, sql));
+}
+
+/// The #647 date_trunc queries over the ranked rows and DuckDB's answers.
+fn check_date_trunc(state: &str, mut run: impl FnMut(&str) -> Answer) {
+    let ns = |micros: i64| Cell::Int(micros * 1000);
+    let int = Cell::Int;
+    assert_eq!(
+        run(
+            "SELECT date_trunc('day', ts) AS d, count(*), min(event_id) FROM logs \
+             GROUP BY 1 ORDER BY 1"
+        ),
+        Ok(vec![
+            vec![ns(1_791_676_800_000_000), int(5), int(1)],
+            vec![ns(1_791_763_200_000_000), int(3), int(6)],
+        ]),
+        "{state}"
+    );
+    assert_eq!(
+        run("SELECT date_trunc('hour', ts) AS h, count(*) FROM logs GROUP BY 1 ORDER BY 1"),
+        Ok(vec![
+            vec![ns(1_791_712_800_000_000), int(3)],
+            vec![ns(1_791_716_400_000_000), int(2)],
+            vec![ns(1_791_795_600_000_000), int(2)],
+            vec![ns(1_791_799_200_000_000), int(1)],
+        ]),
+        "{state}"
+    );
+    assert_eq!(
+        run("SELECT count(*) FROM logs WHERE date_trunc('hour', ts) = '2026-10-11 10:00:00'"),
+        Ok(vec![vec![int(3)]]),
+        "{state}"
+    );
+    let refused = run("SELECT ts // 86400000000000 FROM logs").unwrap_err();
+    assert!(
+        refused.contains("TIMESTAMP column ts"),
+        "{state}: {refused}"
+    );
+}
+
 /// #817: `COUNT(DISTINCT <integer column>)` collects each group's values
 /// instead of grouping by `(keys, x)`; its answers are a model's, in every
 /// state of the table (pages, an hour file and pages, archived), for one
