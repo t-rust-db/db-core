@@ -62,7 +62,7 @@ pub(crate) fn resolve_subquery_schema(
 /// same order, for `*`/`table.*` expansion; an unaliased computed
 /// expression falls back to a positional `columnN` name (`N` 1-based),
 /// same convention SQLite itself uses for an anonymous result column.
-fn subquery_output_columns(
+pub(crate) fn subquery_output_columns(
     subquery: &Select,
     table_refs: &[&TableRef],
     schemas: &[TableSchema],

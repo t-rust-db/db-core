@@ -281,7 +281,7 @@ fn dispatch_insert(
             super::subquery::reject_unparsable_view_refs(&expanded, views)?;
 
             // #939: a FROM-less source has no FROM tables.
-            let Some(from) = &expanded.from else {
+            if expanded.from.is_none() {
                 insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
                 return Ok(compile_insert_with_catalog(
                     &insert,
@@ -290,7 +290,13 @@ fn dispatch_insert(
                     &[],
                     &readable_catalog(schemas),
                 )?);
+            }
+            // #940: a FROM-less UNION arm after one with FROM reads one row.
+            let expanded = super::select::with_one_row_sources(&expanded).into_owned();
+            let no_tables = || CodegenError::Unsupported {
+                reason: "no tables specified".to_string(),
             };
+            let from = expanded.from.as_ref().ok_or_else(no_tables)?;
             let readable = readable_catalog(schemas);
             let mut joined_schemas = vec![resolve_from_table_schema(&from.first, &readable)?];
             for join in &from.joins {
@@ -299,17 +305,10 @@ fn dispatch_insert(
             // #939: a compound source's arm tables, resolved
             // like a plain compound SELECT's.
             for arm in &expanded.compound {
-                let Some(arm_from) = &arm.from else {
-                    return Err(CodegenError::Unsupported {
-                        reason: "INSERT ... SELECT: a UNION arm without FROM after \
-                                 one with FROM is not yet supported"
-                            .to_string(),
-                    }
-                    .into());
-                };
+                let arm_from = arm.from.as_ref().ok_or_else(no_tables)?;
                 arm_schemas.push(resolve_from_table_schema(&arm_from.first, &readable)?);
             }
-            insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
+            insert.source = InsertSource::Select(Box::new(expanded));
             Some(joined_schemas)
         }
         InsertSource::Values(_) | InsertSource::DefaultValues => None,

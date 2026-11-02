@@ -925,3 +925,78 @@ fn insert_select_from_union_bodies_including_one_over_the_target() {
         ]
     );
 }
+
+// #940: a UNION arm may join tables (first arm or later, LEFT JOIN, three
+// tables, aliases, `*`/`t.*` over the join), in a plain SELECT, a CTE
+// body and an INSERT source. sqlite3's rows.
+
+#[test]
+fn union_arms_with_joins() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        (
+            "SELECT a.id, b.t FROM a JOIN b ON b.k = a.k UNION ALL SELECT id, t FROM c",
+            &["1|icf", "1|mcqf", "2|icf", "1|icf", "2|other"][..],
+        ),
+        (
+            "SELECT id, t FROM c UNION SELECT a.id, b.t FROM a JOIN b ON b.k = a.k ORDER BY 1, 2",
+            &["1|icf", "1|mcqf", "2|icf", "2|other"][..],
+        ),
+        (
+            "SELECT a.id, c.t FROM a LEFT JOIN c ON c.id = a.id UNION ALL SELECT 9, 'nine' ORDER BY 1",
+            &["1|icf", "2|other", "3|NULL", "9|nine"][..],
+        ),
+        (
+            "SELECT x.k, y.t FROM a AS x JOIN b AS y ON y.k = x.k \
+             UNION SELECT b.k, c.t FROM b JOIN c ON c.t = b.t ORDER BY 1, 2",
+            &["x|icf", "x|mcqf", "y|icf"][..],
+        ),
+        (
+            "SELECT a.id, b.t, c.t FROM a JOIN b ON b.k = a.k JOIN c ON c.id = a.id \
+             UNION ALL SELECT 0, 'z', 'z' ORDER BY 1, 2",
+            &["0|z|z", "1|icf|icf", "1|mcqf|icf", "2|icf|other"][..],
+        ),
+        (
+            "SELECT * FROM a JOIN c ON c.id = a.id UNION ALL SELECT id, k, id, k FROM a ORDER BY 1, 3",
+            &["1|x|1|icf", "1|x|1|x", "2|y|2|other", "2|y|2|y", "3|z|3|z"][..],
+        ),
+        (
+            "SELECT a.*, b.t FROM a JOIN b ON b.k = a.k \
+             UNION SELECT id, 'q', t FROM c ORDER BY 3 DESC, 2 LIMIT 3",
+            &["2|q|other", "1|x|mcqf", "1|q|icf"][..],
+        ),
+        (
+            "SELECT count(*) FROM (SELECT a.k FROM a JOIN b ON b.k = a.k UNION SELECT t FROM c)",
+            &["4"][..],
+        ),
+        (
+            "WITH u AS (SELECT a.id AS i, b.t AS t FROM a JOIN b ON b.k = a.k \
+             UNION SELECT id, t FROM c) SELECT t, count(*) FROM u GROUP BY t ORDER BY t",
+            &["icf|2", "mcqf|1", "other|1"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+    // Arms of different widths: an error in both engines.
+    assert!(e
+        .run_query("SELECT a.id FROM a JOIN b ON b.k = a.k UNION ALL SELECT id, t FROM c")
+        .is_err());
+}
+
+#[test]
+fn insert_select_from_union_arms_with_joins_including_one_over_the_target() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "INSERT INTO d SELECT a.id, b.t FROM a JOIN b ON b.k = a.k UNION ALL SELECT id, t FROM c",
+        // A joined arm over the target, and a FROM-less arm after it.
+        "INSERT INTO d SELECT d.id + 10, a.k FROM d JOIN a ON a.id = d.id UNION SELECT 99, 'x'",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true),
+        ["1|icf", "1|icf", "1|mcqf", "2|icf", "2|other", "11|x", "12|y", "99|x"]
+    );
+}

@@ -65,6 +65,7 @@ pub(crate) use correlation::{
 };
 pub(crate) use from_clause::materialize_from_subquery;
 pub(crate) use from_clause::resolve_subquery_schema;
+pub(crate) use from_clause::subquery_output_columns;
 pub(crate) use memoize::{compile_memoized_scalar_subquery, memoize_correlated_where_subqueries};
 pub(crate) use scalar::{
     compile_exists, compile_in_subquery, compile_in_subquery_multi, compile_scalar_subquery,

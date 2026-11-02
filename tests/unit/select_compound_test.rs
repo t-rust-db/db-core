@@ -167,20 +167,31 @@ fn compound_arm_column_count_mismatch_is_reported() {
 }
 
 #[test]
-fn compound_arm_with_a_join_is_unsupported() {
+fn compound_arm_with_a_join_runs() {
+    // #940: was refused ("UNION with a JOIN in one of its arms"); the
+    // rows are sqlite3's: {1, 2} UNION {2, 4}.
     let db = TempDb::new("union-join-arm");
     let mut e = open(&db);
     e.run_query(
         "CREATE TABLE uj_a(a INTEGER); \
          CREATE TABLE uj_b(a INTEGER, k INTEGER); \
-         CREATE TABLE uj_c(k INTEGER)",
+         CREATE TABLE uj_c(k INTEGER); \
+         INSERT INTO uj_a VALUES (1), (2); \
+         INSERT INTO uj_b VALUES (2, 10), (3, 20), (4, 10); \
+         INSERT INTO uj_c VALUES (10)",
     )
     .unwrap();
-    let err = e
-        .run_query("SELECT a FROM uj_a UNION SELECT uj_b.a FROM uj_b JOIN uj_c ON uj_b.k = uj_c.k")
-        .unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Compile);
-    assert!(err.message.contains("JOIN"), "{}", err.message);
+    let rows = e
+        .run_query(
+            "SELECT a FROM uj_a UNION SELECT uj_b.a FROM uj_b JOIN uj_c ON uj_b.k = uj_c.k ORDER BY 1",
+        )
+        .unwrap()
+        .rows;
+    let expected = e
+        .run_query("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 4")
+        .unwrap()
+        .rows;
+    assert_eq!(rows, expected);
 }
 
 #[test]
