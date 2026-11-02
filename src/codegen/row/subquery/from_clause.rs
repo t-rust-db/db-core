@@ -30,11 +30,14 @@ pub(crate) fn resolve_subquery_schema(
             reason: "a subquery whose own FROM clause has a JOIN is not yet supported".to_string(),
         });
     }
+    // #940: a FROM-subquery (a CTE or view after expansion) reads as its
+    // synthetic schema, as in a FROM clause.
+    if matches!(from.first.kind, TableRefKind::Subquery(_)) {
+        return resolve_from_table_schema(&from.first, catalog).map(Some);
+    }
     let Some(name) = from.first.name() else {
         return Err(CodegenError::Unsupported {
-            reason: "a subquery-expression's own FROM being itself a subquery is not yet \
-                     supported"
-                .to_string(),
+            reason: "a subquery-expression's own FROM must be a table or a subquery".to_string(),
         });
     };
     let mut schema = catalog
@@ -53,6 +56,34 @@ pub(crate) fn resolve_subquery_schema(
         schema.name = alias.clone();
     }
     Ok(Some(schema))
+}
+
+/// Opens a subquery expression's own FROM source into `cursor` (#940): a
+/// table by its root page, or a FROM-subquery (a CTE or view after
+/// expansion) materialized. That code may run per row, or not at all, so
+/// nothing it materializes goes into the CTE cache.
+pub(crate) fn open_subquery_source(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    subselect: &Select,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+    cursor: i32,
+) -> Result<(), CodegenError> {
+    if let Some(TableRefKind::Subquery(inner)) = subselect.from.as_ref().map(|f| &f.first.kind) {
+        reg.enter_expression_source();
+        let materialized = materialize_from_subquery(em, reg, inner, catalog, cursor);
+        reg.leave_expression_source();
+        return materialized.map(|_| ());
+    }
+    let root_page = valid_table_root_page(schema)?;
+    em.emit(Instruction::new(
+        Opcode::OpenRead,
+        cursor,
+        root_page,
+        schema.database_p3(),
+    ));
+    Ok(())
 }
 
 /// The column names a `FROM`-subquery's own `SELECT` list exposes to the
@@ -628,12 +659,16 @@ mod tests {
     }
 
     #[test]
-    fn resolve_subquery_schema_rejects_nested_subquery_from() {
+    fn resolve_subquery_schema_reads_a_nested_subquery_from() {
+        // #940: a subquery expression's own FROM may be a subquery (a CTE
+        // or view after expansion): its synthetic schema, by its alias.
         let sub = parse("SELECT a FROM (SELECT a FROM t) AS x");
-        let err = resolve_subquery_schema(&sub, &[]).unwrap_err();
-        assert!(
-            matches!(err, CodegenError::Unsupported { reason } if reason.contains("subquery-expression"))
-        );
+        let schema = resolve_subquery_schema(&sub, &[table("t", 2)])
+            .unwrap()
+            .unwrap();
+        assert_eq!(schema.name, "x");
+        assert_eq!(schema.columns, vec!["a".to_string()]);
+        assert!(resolve_subquery_schema(&sub, &[]).is_err(), "no table t");
     }
 
     #[test]

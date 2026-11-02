@@ -3270,9 +3270,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_cache_cte_42033920",
+    "file": "src/codegen/row.rs",
+    "line": 380,
+    "decision": "self.expression_sources > 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_matches_qualifier_e07dbcd2",
     "file": "src/codegen/row.rs",
-    "line": 456,
+    "line": 476,
     "decision": "match &self.alias {\n            Some(alias) => alias.eq_ignore_ascii_case(table),\n            None => self.name.eq_ignore_ascii_case(table),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3282,7 +3292,7 @@
   {
     "id": "codegen_row_resolve_bf15a196",
     "file": "src/codegen/row.rs",
-    "line": 650,
+    "line": 670,
     "decision": "match self.resolve_own(table, name) {\n            Ok(v) => Ok(v),\n            Err(own_err) => match &self.outer {\n                Some(outer) => outer.resolve(table, name),\n                None => Err(own_err),\n            },\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3292,7 +3302,7 @@
   {
     "id": "codegen_row_resolve_df30dc80",
     "file": "src/codegen/row.rs",
-    "line": 652,
+    "line": 672,
     "decision": "match &self.outer {\n                Some(outer) => outer.resolve(table, name),\n                None => Err(own_err),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -3302,7 +3312,7 @@
   {
     "id": "codegen_row_resolve_own_binding_index_1c3e8da2",
     "file": "src/codegen/row.rs",
-    "line": 695,
+    "line": 715,
     "decision": "let Some(table) = table",
     "conditions": 1,
     "vectors_required": 2,
@@ -3312,7 +3322,7 @@
   {
     "id": "codegen_row_resolve_own_binding_index_2723c418",
     "file": "src/codegen/row.rs",
-    "line": 718,
+    "line": 738,
     "decision": "expr::column_index(&binding.schema, name).is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -3322,7 +3332,7 @@
   {
     "id": "codegen_row_resolve_own_binding_index_6fdbf7f4",
     "file": "src/codegen/row.rs",
-    "line": 719,
+    "line": 739,
     "decision": "found.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -14270,20 +14280,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_subquery_flatten_flatten_from_subqueries_5002f7df",
+    "id": "codegen_row_subquery_flatten_flatten_f876c181",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 55,
-    "decision": "try_flatten_one(select)",
+    "line": 61,
+    "decision": "try_flatten_one(select, outer)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_subquery_flatten_try_flatten_one_ea2978ac",
+    "id": "codegen_row_subquery_flatten_try_flatten_one_42659a91",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 69,
-    "decision": "try_flatten_table_ref_at(select, TableRefSlot::First)",
+    "line": 83,
+    "decision": "try_flatten_table_ref_at(select, TableRefSlot::First, outer)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -14292,7 +14302,7 @@
   {
     "id": "codegen_row_subquery_flatten_try_flatten_one_5a91e568",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 81,
+    "line": 95,
     "decision": "!matches!(op, JoinOp::Inner | JoinOp::Cross)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14300,10 +14310,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_subquery_flatten_try_flatten_one_b393b9c6",
+    "id": "codegen_row_subquery_flatten_try_flatten_one_247dd045",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 84,
-    "decision": "try_flatten_table_ref_at(select, TableRefSlot::Join(i))",
+    "line": 98,
+    "decision": "try_flatten_table_ref_at(select, TableRefSlot::Join(i), outer)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -14312,7 +14322,7 @@
   {
     "id": "codegen_row_subquery_flatten_table_ref_at_0df46eda",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 92,
+    "line": 106,
     "decision": "match slot {\n        TableRefSlot::First => Some(&from.first),\n        TableRefSlot::Join(i) => from.joins.get(i).map(|j| &j.table),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14322,7 +14332,7 @@
   {
     "id": "codegen_row_subquery_flatten_try_flatten_table_ref_at_c69021fe",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 113,
+    "line": 127,
     "decision": "!subquery_flatten_safe(inner)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14330,9 +14340,49 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_subquery_flatten_try_flatten_table_ref_at_2246ff95",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 136,
+    "decision": "given_alias.is_none() && require_qualified",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_flatten_try_flatten_table_ref_at_3a00779d",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 160,
+    "decision": "match c {\n            ResultColumn::Expr { expr, .. } => Some(expr),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_subquery_flatten_try_flatten_table_ref_at_4cf91f2d",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 165,
+    "decision": "!columns_qualified_within(&projection, &is_own)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_flatten_try_flatten_table_ref_at_53ecc273",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 171,
+    "decision": "outer && require_qualified && inner_where.as_ref().is_some_and(has_unqualified_column)",
+    "conditions": 3,
+    "vectors_required": 4,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_subquery_flatten_try_flatten_table_ref_at_f4bfa602",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 135,
+    "line": 179,
     "decision": "!rewrite_alias_in_select(select, &alias, &column_map, require_qualified)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14342,7 +14392,7 @@
   {
     "id": "codegen_row_subquery_flatten_try_flatten_table_ref_at_8b72634e",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 139,
+    "line": 183,
     "decision": "let Some(mut pred) = inner_where",
     "conditions": 1,
     "vectors_required": 2,
@@ -14352,7 +14402,7 @@
   {
     "id": "codegen_row_subquery_flatten_try_flatten_table_ref_at_b1cb8939",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 147,
+    "line": 191,
     "decision": "match slot {\n        TableRefSlot::First => Some(&mut from.first),\n        TableRefSlot::Join(i) => from.joins.get_mut(i).map(|j| &mut j.table),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14362,7 +14412,7 @@
   {
     "id": "codegen_row_subquery_flatten_subquery_flatten_safe_fa31beb2",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 174,
+    "line": 218,
     "decision": "inner.distinct.is_some()\n        || inner.having.is_some()\n        || !inner.group_by.is_empty()\n        || inner.limit.is_some()\n        || !inner.compound.is_empty()\n        || select_has_aggregate(inner)",
     "conditions": 6,
     "vectors_required": 7,
@@ -14372,7 +14422,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_20efcd45",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 205,
+    "line": 249,
     "decision": "let ColumnMap::Explicit(columns) = column_map",
     "conditions": 1,
     "vectors_required": 2,
@@ -14382,7 +14432,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_84a93720",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 206,
+    "line": 250,
     "decision": "!require_qualified",
     "conditions": 1,
     "vectors_required": 2,
@@ -14392,7 +14442,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_3fdf491d",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 209,
+    "line": 253,
     "decision": "match col {\n                    ResultColumn::Star => columns\n                        .iter()\n                        .map(|(name, expr)| ResultColumn::Expr {\n                            expr: Expr {\n                                kind: ExprKind::Column {\n                                    table: None,\n                                    catalog: None,\n                                    name: name.clone(),\n                                },\n                                span: expr.span,\n                            },\n                            alias: None,\n                        })\n                        .collect(),\n                    other => vec![other],\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14402,7 +14452,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_522f65d8",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 231,
+    "line": 275,
     "decision": "match col {\n                // A bare `*` expands to the flattened table's own columns,\n                // which a `SELECT *` (or `t.*`) subquery projects too; after\n                // an explicit list it would widen the result (#650).\n                ResultColumn::Star => {\n                    if matches!(column_map, ColumnMap::Explicit(_)) {\n                        return false;\n                    }\n                }\n                ResultColumn::TableStar { table } => {\n                    // `alias.*` has no single underlying expression to\n                    // rewrite to — bail rather than guess.\n                    if table.eq_ignore_ascii_case(alias) {\n                        return false;\n                    }\n                }\n                ResultColumn::Expr {\n                    expr,\n                    alias: column_alias,\n                } => {\n                    let named = match &expr.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    };\n                    if !rewrite_expr(expr, alias, column_map, require_qualified) {\n                        return false;\n                    }\n                    // A bare column is its result column's name. Rewriting\n                    // `v` to the subquery's `a` (from `a AS v`) renamed this\n                    // output column to `a`, so an enclosing `s.v` no longer\n                    // resolved (#887): keep the name it had.\n                    if let (None, Some(name)) = (&column_alias, named) {\n                        let renamed = !matches!(\n                            &expr.kind,\n                            ExprKind::Column { name: now, .. } if now.eq_ignore_ascii_case(&name)\n                        );\n                        if renamed {\n                            *column_alias = Some(name);\n                        }\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14412,7 +14462,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_07b51d2c",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 236,
+    "line": 280,
     "decision": "matches!(column_map, ColumnMap::Explicit(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -14422,7 +14472,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_2db98131",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 243,
+    "line": 287,
     "decision": "table.eq_ignore_ascii_case(alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14432,7 +14482,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_dcd07ea9",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 251,
+    "line": 295,
     "decision": "match &expr.kind {\n                        ExprKind::Column { name, .. } => Some(name.clone()),\n                        _ => None,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14442,7 +14492,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_4583989f",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 255,
+    "line": 299,
     "decision": "!rewrite_expr(expr, alias, column_map, require_qualified)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14452,7 +14502,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_fbba3c6d",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 262,
+    "line": 306,
     "decision": "let (None, Some(name)) = (&column_alias, named)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14462,7 +14512,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_0f69025d",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 267,
+    "line": 311,
     "decision": "renamed",
     "conditions": 1,
     "vectors_required": 2,
@@ -14472,7 +14522,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_58ebaa34",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 274,
+    "line": 318,
     "decision": "let Some(w) = &mut candidate.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -14482,7 +14532,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_565de83d",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 275,
+    "line": 319,
     "decision": "!rewrite_expr(w, alias, column_map, require_qualified)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14492,7 +14542,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_8ef3b9b6",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 280,
+    "line": 324,
     "decision": "!rewrite_expr(e, alias, column_map, require_qualified)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14502,7 +14552,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_bf0b5f42",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 284,
+    "line": 328,
     "decision": "let Some(h) = &mut candidate.having",
     "conditions": 1,
     "vectors_required": 2,
@@ -14512,7 +14562,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_0d401dfc",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 285,
+    "line": 329,
     "decision": "!rewrite_expr(h, alias, column_map, require_qualified)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14522,7 +14572,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_78bddb72",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 290,
+    "line": 334,
     "decision": "!rewrite_expr(&mut term.expr, alias, column_map, require_qualified)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14532,7 +14582,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_3d8792e1",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 294,
+    "line": 338,
     "decision": "let ColumnMap::Repeated(copies) = column_map",
     "conditions": 1,
     "vectors_required": 2,
@@ -14542,7 +14592,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_71a2d962",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 295,
+    "line": 339,
     "decision": "!expand_stars(&mut candidate, alias, *copies)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14552,7 +14602,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_8435716e",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 301,
+    "line": 345,
     "decision": "let Some(from) = &mut candidate.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -14562,7 +14612,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_a87abc7f",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 303,
+    "line": 347,
     "decision": "let Some(JoinConstraint::On(cond)) = &mut join.constraint",
     "conditions": 1,
     "vectors_required": 2,
@@ -14572,7 +14622,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_f2383ab4",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 304,
+    "line": 348,
     "decision": "!rewrite_expr(cond, alias, column_map, require_qualified)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14582,7 +14632,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_alias_in_select_bde636e8",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 312,
+    "line": 356,
     "decision": "ok",
     "conditions": 1,
     "vectors_required": 2,
@@ -14592,7 +14642,7 @@
   {
     "id": "codegen_row_subquery_flatten_expand_stars_739752c8",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 331,
+    "line": 375,
     "decision": "qualifier.eq_ignore_ascii_case(alias)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14602,7 +14652,7 @@
   {
     "id": "codegen_row_subquery_flatten_expand_stars_0735d2b6",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 341,
+    "line": 385,
     "decision": "match col {\n            ResultColumn::Star => qualifiers\n                .iter()\n                .map(|table| ResultColumn::TableStar {\n                    table: table.clone(),\n                })\n                .collect(),\n            other => vec![other],\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14612,7 +14662,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_4624cc36",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 366,
+    "line": 410,
     "decision": "match &mut expr.kind {\n        ExprKind::Literal(_) | ExprKind::Param(_) => true,\n        ExprKind::Column {\n            table,\n            catalog,\n            name,\n        } => {\n            if catalog.is_some() {\n                return true;\n            }\n            let qualifies = match table {\n                Some(t) => t.eq_ignore_ascii_case(alias),\n                None => !require_qualified,\n            };\n            if !qualifies {\n                return true;\n            }\n            match column_map {\n                ColumnMap::Wildcard | ColumnMap::Repeated(_) => {\n                    // The flattened table keeps `alias`; next to a sibling\n                    // join the reference must too, or it turns ambiguous\n                    // against a same-named column there (#650).\n                    if !require_qualified {\n                        *table = None;\n                    }\n                    true\n                }\n                ColumnMap::Explicit(cols) => {\n                    match cols.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) {\n                        // `underlying` is always a bare `Column` (enforced by\n                        // `subquery_column_map`), carrying no qualifier or\n                        // one matching the subquery's own single table — a\n                        // fine reference *inside* that subquery's unambiguous\n                        // scope. The flattened table now lives in the outer\n                        // scope under `alias`: when a sibling join is present,\n                        // re-qualify explicitly so the result can't become\n                        // ambiguous against a same-named column elsewhere in\n                        // the outer FROM. When there is no sibling join,\n                        // leave it unqualified instead — `Scope::single`\n                        // (the codegen path a from-less-join query takes)\n                        // has no notion of the FROM clause's own alias, so a\n                        // qualified reference against it fails to resolve\n                        // even outside this pass — a pre-existing gap\n                        // unrelated to flattening (confirmed against\n                        // `SELECT * FROM t AS x WHERE x.col > 1` on main).\n                        Some((_, underlying)) => {\n                            let ExprKind::Column { name: col_name, .. } = &underlying.kind else {\n                                return false;\n                            };\n                            expr.kind = ExprKind::Column {\n                                table: require_qualified.then(|| alias.to_string()),\n                                catalog: None,\n                                name: col_name.clone(),\n                            };\n                            true\n                        }\n                        None => false,\n                    }\n                }\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => match args {\n            FunctionArgs::Star => true,\n            FunctionArgs::List(list) => list\n                .iter_mut()\n                .all(|e| rewrite_expr(e, alias, column_map, require_qualified)),\n        },\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e) => rewrite_expr(e, alias, column_map, require_qualified),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            rewrite_expr(lhs, alias, column_map, require_qualified)\n                && rewrite_expr(rhs, alias, column_map, require_qualified)\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => {\n            rewrite_expr(e, alias, column_map, require_qualified)\n                && rewrite_expr(lo, alias, column_map, require_qualified)\n                && rewrite_expr(hi, alias, column_map, require_qualified)\n        }\n        ExprKind::In { expr: e, list, .. } => {\n            rewrite_expr(e, alias, column_map, require_qualified)\n                && list\n                    .iter_mut()\n                    .all(|item| rewrite_expr(item, alias, column_map, require_qualified))\n        }\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            rewrite_expr(e, alias, column_map, require_qualified)\n                && rewrite_expr(pattern, alias, column_map, require_qualified)\n                && match escape {\n                    Some(esc) => rewrite_expr(esc, alias, column_map, require_qualified),\n                    None => true,\n                }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            let operand_ok = match operand {\n                Some(o) => rewrite_expr(o, alias, column_map, require_qualified),\n                None => true,\n            };\n            let whens_ok = whens.iter_mut().all(|(w, t)| {\n                rewrite_expr(w, alias, column_map, require_qualified)\n                    && rewrite_expr(t, alias, column_map, require_qualified)\n            });\n            let else_ok = match else_ {\n                Some(e) => rewrite_expr(e, alias, column_map, require_qualified),\n                None => true,\n            };\n            operand_ok && whens_ok && else_ok\n        }\n        ExprKind::Subquery(inner)\n        | ExprKind::Exists {\n            subquery: inner, ..\n        } => !select_references_alias(inner, alias),\n        ExprKind::InSubquery {\n            expr: e, subquery, ..\n        } => {\n            rewrite_expr(e, alias, column_map, require_qualified)\n                && !select_references_alias(subquery, alias)\n        }\n        ExprKind::InSubqueryMulti {\n            exprs, subquery, ..\n        } => {\n            exprs\n                .iter_mut()\n                .all(|e| rewrite_expr(e, alias, column_map, require_qualified))\n                && !select_references_alias(subquery, alias)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14622,7 +14672,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_06ec5ec9",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 373,
+    "line": 417,
     "decision": "catalog.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -14632,7 +14682,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_07ab68c2",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 376,
+    "line": 420,
     "decision": "match table {\n                Some(t) => t.eq_ignore_ascii_case(alias),\n                None => !require_qualified,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14642,7 +14692,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_8476c17f",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 380,
+    "line": 424,
     "decision": "!qualifies",
     "conditions": 1,
     "vectors_required": 2,
@@ -14652,7 +14702,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_b6ccb9a3",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 383,
+    "line": 427,
     "decision": "match column_map {\n                ColumnMap::Wildcard | ColumnMap::Repeated(_) => {\n                    // The flattened table keeps `alias`; next to a sibling\n                    // join the reference must too, or it turns ambiguous\n                    // against a same-named column there (#650).\n                    if !require_qualified {\n                        *table = None;\n                    }\n                    true\n                }\n                ColumnMap::Explicit(cols) => {\n                    match cols.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) {\n                        // `underlying` is always a bare `Column` (enforced by\n                        // `subquery_column_map`), carrying no qualifier or\n                        // one matching the subquery's own single table — a\n                        // fine reference *inside* that subquery's unambiguous\n                        // scope. The flattened table now lives in the outer\n                        // scope under `alias`: when a sibling join is present,\n                        // re-qualify explicitly so the result can't become\n                        // ambiguous against a same-named column elsewhere in\n                        // the outer FROM. When there is no sibling join,\n                        // leave it unqualified instead — `Scope::single`\n                        // (the codegen path a from-less-join query takes)\n                        // has no notion of the FROM clause's own alias, so a\n                        // qualified reference against it fails to resolve\n                        // even outside this pass — a pre-existing gap\n                        // unrelated to flattening (confirmed against\n                        // `SELECT * FROM t AS x WHERE x.col > 1` on main).\n                        Some((_, underlying)) => {\n                            let ExprKind::Column { name: col_name, .. } = &underlying.kind else {\n                                return false;\n                            };\n                            expr.kind = ExprKind::Column {\n                                table: require_qualified.then(|| alias.to_string()),\n                                catalog: None,\n                                name: col_name.clone(),\n                            };\n                            true\n                        }\n                        None => false,\n                    }\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14662,7 +14712,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_84a93720",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 388,
+    "line": 432,
     "decision": "!require_qualified",
     "conditions": 1,
     "vectors_required": 2,
@@ -14672,7 +14722,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_ce2ee1b2",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 394,
+    "line": 438,
     "decision": "match cols.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)) {\n                        // `underlying` is always a bare `Column` (enforced by\n                        // `subquery_column_map`), carrying no qualifier or\n                        // one matching the subquery's own single table — a\n                        // fine reference *inside* that subquery's unambiguous\n                        // scope. The flattened table now lives in the outer\n                        // scope under `alias`: when a sibling join is present,\n                        // re-qualify explicitly so the result can't become\n                        // ambiguous against a same-named column elsewhere in\n                        // the outer FROM. When there is no sibling join,\n                        // leave it unqualified instead — `Scope::single`\n                        // (the codegen path a from-less-join query takes)\n                        // has no notion of the FROM clause's own alias, so a\n                        // qualified reference against it fails to resolve\n                        // even outside this pass — a pre-existing gap\n                        // unrelated to flattening (confirmed against\n                        // `SELECT * FROM t AS x WHERE x.col > 1` on main).\n                        Some((_, underlying)) => {\n                            let ExprKind::Column { name: col_name, .. } = &underlying.kind else {\n                                return false;\n                            };\n                            expr.kind = ExprKind::Column {\n                                table: require_qualified.then(|| alias.to_string()),\n                                catalog: None,\n                                name: col_name.clone(),\n                            };\n                            true\n                        }\n                        None => false,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14682,7 +14732,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_6f321823",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 427,
+    "line": 471,
     "decision": "match args {\n            FunctionArgs::Star => true,\n            FunctionArgs::List(list) => list\n                .iter_mut()\n                .all(|e| rewrite_expr(e, alias, column_map, require_qualified)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14692,7 +14742,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_528d4e70",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 463,
+    "line": 507,
     "decision": "match escape {\n                    Some(esc) => rewrite_expr(esc, alias, column_map, require_qualified),\n                    None => true,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14702,7 +14752,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_8a79f237",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 473,
+    "line": 517,
     "decision": "match operand {\n                Some(o) => rewrite_expr(o, alias, column_map, require_qualified),\n                None => true,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14712,7 +14762,7 @@
   {
     "id": "codegen_row_subquery_flatten_rewrite_expr_6d5f6b18",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 481,
+    "line": 525,
     "decision": "match else_ {\n                Some(e) => rewrite_expr(e, alias, column_map, require_qualified),\n                None => true,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14722,7 +14772,7 @@
   {
     "id": "codegen_row_subquery_flatten_select_references_alias_ee475f6a",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 514,
+    "line": 558,
     "decision": "match c {\n        ResultColumn::Star => false,\n        ResultColumn::TableStar { table } => table.eq_ignore_ascii_case(alias),\n        ResultColumn::Expr { expr, .. } => expr_references_alias(expr, alias),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14732,7 +14782,7 @@
   {
     "id": "codegen_row_subquery_flatten_expr_references_alias_b679f87a",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 550,
+    "line": 594,
     "decision": "match &expr.kind {\n        ExprKind::Literal(_) | ExprKind::Param(_) => false,\n        ExprKind::Column { table, .. } => table\n            .as_deref()\n            .is_some_and(|t| t.eq_ignore_ascii_case(alias)),\n        ExprKind::FunctionCall { args, .. } => match args {\n            FunctionArgs::Star => false,\n            FunctionArgs::List(list) => list.iter().any(|e| expr_references_alias(e, alias)),\n        },\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e) => expr_references_alias(e, alias),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            expr_references_alias(lhs, alias) || expr_references_alias(rhs, alias)\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => {\n            expr_references_alias(e, alias)\n                || expr_references_alias(lo, alias)\n                || expr_references_alias(hi, alias)\n        }\n        ExprKind::In { expr: e, list, .. } => {\n            expr_references_alias(e, alias) || list.iter().any(|i| expr_references_alias(i, alias))\n        }\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            expr_references_alias(e, alias)\n                || expr_references_alias(pattern, alias)\n                || escape\n                    .as_deref()\n                    .is_some_and(|esc| expr_references_alias(esc, alias))\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            operand\n                .as_deref()\n                .is_some_and(|o| expr_references_alias(o, alias))\n                || whens.iter().any(|(w, t)| {\n                    expr_references_alias(w, alias) || expr_references_alias(t, alias)\n                })\n                || else_\n                    .as_deref()\n                    .is_some_and(|e| expr_references_alias(e, alias))\n        }\n        ExprKind::Subquery(inner)\n        | ExprKind::Exists {\n            subquery: inner, ..\n        } => select_references_alias(inner, alias),\n        ExprKind::InSubquery {\n            expr: e, subquery, ..\n        } => expr_references_alias(e, alias) || select_references_alias(subquery, alias),\n        ExprKind::InSubqueryMulti {\n            exprs, subquery, ..\n        } => {\n            exprs.iter().any(|e| expr_references_alias(e, alias))\n                || select_references_alias(subquery, alias)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14742,7 +14792,7 @@
   {
     "id": "codegen_row_subquery_flatten_expr_references_alias_0654eb54",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 555,
+    "line": 599,
     "decision": "match args {\n            FunctionArgs::Star => false,\n            FunctionArgs::List(list) => list.iter().any(|e| expr_references_alias(e, alias)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14750,19 +14800,49 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_subquery_flatten_qualify_with_outer_alias_8a429006",
+    "id": "codegen_row_subquery_flatten_visit_columns_2cfa61a8",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 632,
-    "decision": "match &mut expr.kind {\n        ExprKind::Column { table, .. } => {\n            *table = alias.map(str::to_string);\n        }\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e) => qualify_with_outer_alias(e, alias),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            qualify_with_outer_alias(lhs, alias);\n            qualify_with_outer_alias(rhs, alias);\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => {\n            qualify_with_outer_alias(e, alias);\n            qualify_with_outer_alias(lo, alias);\n            qualify_with_outer_alias(hi, alias);\n        }\n        ExprKind::In { expr: e, list, .. } => {\n            qualify_with_outer_alias(e, alias);\n            for item in list {\n                qualify_with_outer_alias(item, alias);\n            }\n        }\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            qualify_with_outer_alias(e, alias);\n            qualify_with_outer_alias(pattern, alias);\n            if let Some(esc) = escape {\n                qualify_with_outer_alias(esc, alias);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(o) = operand {\n                qualify_with_outer_alias(o, alias);\n            }\n            for (w, t) in whens {\n                qualify_with_outer_alias(w, alias);\n                qualify_with_outer_alias(t, alias);\n            }\n            if let Some(e) = else_ {\n                qualify_with_outer_alias(e, alias);\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(list) = args {\n                for e in list {\n                    qualify_with_outer_alias(e, alias);\n                }\n            }\n        }\n        ExprKind::Literal(_)\n        | ExprKind::Param(_)\n        | ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubquery { .. }\n        | ExprKind::InSubqueryMulti { .. } => {}\n    }",
+    "line": 700,
+    "decision": "match &expr.kind {\n        ExprKind::Column { table, .. } => f(table.as_deref()),\n        ExprKind::Literal(_)\n        | ExprKind::Param(_)\n        | ExprKind::Subquery(_)\n        | ExprKind::Exists { .. } => {}\n        ExprKind::InSubquery { expr, .. } => visit_columns(expr, f),\n        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().for_each(|e| visit_columns(e, f)),\n        ExprKind::Unary { expr, .. }\n        | ExprKind::IsNull { expr, .. }\n        | ExprKind::Cast { expr, .. }\n        | ExprKind::Collate { expr, .. }\n        | ExprKind::Paren(expr) => visit_columns(expr, f),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            visit_columns(lhs, f);\n            visit_columns(rhs, f);\n        }\n        ExprKind::Between { expr, lo, hi, .. } => {\n            visit_columns(expr, f);\n            visit_columns(lo, f);\n            visit_columns(hi, f);\n        }\n        ExprKind::In { expr, list, .. } => {\n            visit_columns(expr, f);\n            list.iter().for_each(|e| visit_columns(e, f));\n        }\n        ExprKind::Like {\n            expr,\n            pattern,\n            escape,\n            ..\n        } => {\n            visit_columns(expr, f);\n            visit_columns(pattern, f);\n            escape.iter().for_each(|e| visit_columns(e, f));\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            operand.iter().for_each(|e| visit_columns(e, f));\n            for (w, t) in whens {\n                visit_columns(w, f);\n                visit_columns(t, f);\n            }\n            else_.iter().for_each(|e| visit_columns(e, f));\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(list) = args {\n                list.iter().for_each(|e| visit_columns(e, f));\n            }\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_subquery_flatten_visit_columns_a77e706f",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 749,
+    "decision": "let FunctionArgs::List(list) = args",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_flatten_qualify_with_outer_alias_7b01a447",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 757,
+    "decision": "match &mut expr.kind {\n        // #940: only the inner table's own columns move to the outer\n        // alias; another qualifier names the enclosing query's row.\n        ExprKind::Column { table, .. } => {\n            let mine = table\n                .as_deref()\n                .is_none_or(|t| own.iter().any(|n| n.eq_ignore_ascii_case(t)));\n            if mine {\n                *table = alias.map(str::to_string);\n            }\n        }\n        ExprKind::Unary { expr: e, .. }\n        | ExprKind::IsNull { expr: e, .. }\n        | ExprKind::Cast { expr: e, .. }\n        | ExprKind::Collate { expr: e, .. }\n        | ExprKind::Paren(e) => qualify_with_outer_alias(e, alias, own),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            qualify_with_outer_alias(lhs, alias, own);\n            qualify_with_outer_alias(rhs, alias, own);\n        }\n        ExprKind::Between {\n            expr: e, lo, hi, ..\n        } => {\n            qualify_with_outer_alias(e, alias, own);\n            qualify_with_outer_alias(lo, alias, own);\n            qualify_with_outer_alias(hi, alias, own);\n        }\n        ExprKind::In { expr: e, list, .. } => {\n            qualify_with_outer_alias(e, alias, own);\n            for item in list {\n                qualify_with_outer_alias(item, alias, own);\n            }\n        }\n        ExprKind::Like {\n            expr: e,\n            pattern,\n            escape,\n            ..\n        } => {\n            qualify_with_outer_alias(e, alias, own);\n            qualify_with_outer_alias(pattern, alias, own);\n            if let Some(esc) = escape {\n                qualify_with_outer_alias(esc, alias, own);\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(o) = operand {\n                qualify_with_outer_alias(o, alias, own);\n            }\n            for (w, t) in whens {\n                qualify_with_outer_alias(w, alias, own);\n                qualify_with_outer_alias(t, alias, own);\n            }\n            if let Some(e) = else_ {\n                qualify_with_outer_alias(e, alias, own);\n            }\n        }\n        ExprKind::FunctionCall { args, .. } => {\n            if let FunctionArgs::List(list) = args {\n                for e in list {\n                    qualify_with_outer_alias(e, alias, own);\n                }\n            }\n        }\n        ExprKind::Literal(_)\n        | ExprKind::Param(_)\n        | ExprKind::Subquery(_)\n        | ExprKind::Exists { .. }\n        | ExprKind::InSubquery { .. }\n        | ExprKind::InSubqueryMulti { .. } => {}\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_flatten_qualify_with_outer_alias_7dc0cb34",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 764,
+    "decision": "mine",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_subquery_flatten_qualify_with_outer_alias_e05c35b7",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 666,
+    "line": 798,
     "decision": "let Some(esc) = escape",
     "conditions": 1,
     "vectors_required": 2,
@@ -14772,7 +14852,7 @@
   {
     "id": "codegen_row_subquery_flatten_qualify_with_outer_alias_1bf37598",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 675,
+    "line": 807,
     "decision": "let Some(o) = operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -14782,7 +14862,7 @@
   {
     "id": "codegen_row_subquery_flatten_qualify_with_outer_alias_56705ec3",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 682,
+    "line": 814,
     "decision": "let Some(e) = else_",
     "conditions": 1,
     "vectors_required": 2,
@@ -14792,7 +14872,7 @@
   {
     "id": "codegen_row_subquery_flatten_qualify_with_outer_alias_a77e706f",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 687,
+    "line": 819,
     "decision": "let FunctionArgs::List(list) = args",
     "conditions": 1,
     "vectors_required": 2,
@@ -14802,7 +14882,7 @@
   {
     "id": "codegen_row_subquery_flatten_and_exprs_56eebeda",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 703,
+    "line": 835,
     "decision": "match existing {\n        Some(e) => Expr {\n            span: e.span,\n            kind: ExprKind::Binary {\n                op: BinaryOp::And,\n                lhs: Box::new(e),\n                rhs: Box::new(addition),\n            },\n        },\n        None => addition,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14812,7 +14892,7 @@
   {
     "id": "codegen_row_subquery_flatten_recurse_into_from_subqueries_596f068e",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 720,
+    "line": 852,
     "decision": "let TableRefKind::Subquery(inner) = &mut from.first.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -14822,7 +14902,7 @@
   {
     "id": "codegen_row_subquery_flatten_recurse_into_from_subqueries_da753eae",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 724,
+    "line": 856,
     "decision": "let TableRefKind::Subquery(inner) = &mut join.table.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -14832,8 +14912,28 @@
   {
     "id": "codegen_row_subquery_flatten_parse_35881293",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 736,
+    "line": 868,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_flatten_scalar_subquery_f8e510e9",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 891,
+    "decision": "match select.columns.first() {\n            Some(ResultColumn::Expr { expr, .. }) => match &expr.kind {\n                ExprKind::Subquery(sub) => sub,\n                other => panic!(\"expected a scalar subquery: {other:?}\"),\n            },\n            other => panic!(\"expected an expression: {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_flatten_scalar_subquery_029212dd",
+    "file": "src/codegen/row/subquery/flatten.rs",
+    "line": 892,
+    "decision": "match &expr.kind {\n                ExprKind::Subquery(sub) => sub,\n                other => panic!(\"expected a scalar subquery: {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -14842,7 +14942,7 @@
   {
     "id": "codegen_row_subquery_flatten_star_qualifiers_0df3b02d",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 756,
+    "line": 981,
     "decision": "match c {\n                ResultColumn::TableStar { table } => table.clone(),\n                ResultColumn::Star => \"*\".to_string(),\n                ResultColumn::Expr { .. } => \"expr\".to_string(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14852,7 +14952,7 @@
   {
     "id": "codegen_row_subquery_flatten_an_outer_star_alone_over_an_explicit_list_flattens_to_it_9d14d4f3",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 802,
+    "line": 1027,
     "decision": "match c {\n                ResultColumn::Expr {\n                    expr:\n                        Expr {\n                            kind: ExprKind::Column { name, .. },\n                            ..\n                        },\n                    alias,\n                } => (name.clone(), alias.clone()),\n                other => panic!(\"{other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14862,7 +14962,7 @@
   {
     "id": "codegen_row_subquery_flatten_sel_2e123bd1",
     "file": "src/codegen/row/subquery/flatten.rs",
-    "line": 1250,
+    "line": 1475,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14880,10 +14980,30 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_subquery_from_clause_resolve_subquery_schema_508057c8",
+    "file": "src/codegen/row/subquery/from_clause.rs",
+    "line": 35,
+    "decision": "matches!(from.first.kind, TableRefKind::Subquery(_))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_subquery_from_clause_resolve_subquery_schema_5c1e8357",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 52,
+    "line": 55,
     "decision": "let Some(alias) = &from.first.alias",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_from_clause_open_subquery_source_482b948a",
+    "file": "src/codegen/row/subquery/from_clause.rs",
+    "line": 73,
+    "decision": "let Some(TableRefKind::Subquery(inner)) = subselect.from.as_ref().map(|f| &f.first.kind)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -14892,7 +15012,7 @@
   {
     "id": "codegen_row_subquery_from_clause_subquery_output_columns_4df5e92f",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 72,
+    "line": 103,
     "decision": "match col {\n            ResultColumn::Star => {\n                for schema in schemas {\n                    out.extend(schema.columns.iter().cloned());\n                }\n            }\n            ResultColumn::TableStar { table } => {\n                if let Some(schema) = table_refs\n                    .iter()\n                    .position(|t| t.alias.as_deref().or(t.name()).unwrap_or(\"\") == table)\n                    .and_then(|idx| schemas.get(idx))\n                {\n                    out.extend(schema.columns.iter().cloned());\n                }\n            }\n            ResultColumn::Expr { expr, alias } => {\n                let name = alias.clone().unwrap_or_else(|| match &expr.kind {\n                    ExprKind::Column { name, .. } => name.clone(),\n                    _ => format!(\"column{}\", i.saturating_add(1)),\n                });\n                out.push(name);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14902,7 +15022,7 @@
   {
     "id": "codegen_row_subquery_from_clause_subquery_output_columns_49ccd54c",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 79,
+    "line": 110,
     "decision": "let Some(schema) = table_refs\n                    .iter()\n                    .position(|t| t.alias.as_deref().or(t.name()).unwrap_or(\"\") == table)\n                    .and_then(|idx| schemas.get(idx))",
     "conditions": 1,
     "vectors_required": 2,
@@ -14912,7 +15032,7 @@
   {
     "id": "codegen_row_subquery_from_clause_subquery_output_columns_44297ebb",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 88,
+    "line": 119,
     "decision": "match &expr.kind {\n                    ExprKind::Column { name, .. } => name.clone(),\n                    _ => format!(\"column{}\", i.saturating_add(1)),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14922,7 +15042,7 @@
   {
     "id": "codegen_row_subquery_from_clause_resolve_from_table_schema_8ab8fb48",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 174,
+    "line": 205,
     "decision": "match &table_ref.kind {\n        crate::parser::ast::TableRefKind::Name(name) => catalog\n            .iter()\n            .find(|s| s.name.eq_ignore_ascii_case(name))\n            .cloned()\n            .ok_or_else(|| CodegenError::Unsupported {\n                reason: format!(\"no such table: {name}\"),\n            }),\n        crate::parser::ast::TableRefKind::Unnest { .. } => Err(CodegenError::Unsupported {\n            reason: \"UNNEST is only available in the column dialect\".into(),\n        }),\n        crate::parser::ast::TableRefKind::Subquery(subquery) => {\n            let table_refs = subquery_own_table_refs(subquery)?;\n            let schemas = resolve_subquery_schemas(&table_refs, catalog)?;\n            let mut schema = subquery_result_schema(subquery, &table_refs, &schemas);\n            // An unaliased subquery (#606) gets a name no identifier can\n            // match, as sqlite3's `(subquery-N)`: its columns resolve only\n            // unqualified.\n            schema.name = table_ref\n                .alias\n                .clone()\n                .unwrap_or_else(|| UNALIASED_SUBQUERY.to_string());\n            Ok(schema)\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14932,7 +15052,7 @@
   {
     "id": "codegen_row_subquery_from_clause_materialize_from_subquery_4ef2d275",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 251,
+    "line": 282,
     "decision": "let Some((source_cursor, schema)) = reg.cached_cte(subquery)",
     "conditions": 1,
     "vectors_required": 2,
@@ -14942,7 +15062,7 @@
   {
     "id": "codegen_row_subquery_from_clause_materialize_from_subquery_dd17d22f",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 262,
+    "line": 293,
     "decision": "subquery.from.is_none() && is_constant_rows(subquery)",
     "conditions": 2,
     "vectors_required": 3,
@@ -14952,7 +15072,7 @@
   {
     "id": "codegen_row_subquery_from_clause_materialize_from_subquery_01b3e0f6",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 267,
+    "line": 298,
     "decision": "!subquery.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -14962,7 +15082,7 @@
   {
     "id": "codegen_row_subquery_from_clause_materialize_from_subquery_8a16b420",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 320,
+    "line": 351,
     "decision": "from.joins.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -14972,7 +15092,7 @@
   {
     "id": "codegen_row_subquery_from_clause_materialize_from_subquery_9d5ac8cd",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 330,
+    "line": 361,
     "decision": "match &from.first.kind {\n            TableRefKind::Name(_) => {\n                let root_page = valid_table_root_page(schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    cursors.table,\n                    root_page,\n                    schema.database_p3(),\n                ));\n            }\n            TableRefKind::Unnest { .. } => {\n                return Err(CodegenError::Unsupported {\n                    reason: \"UNNEST is only available in the column dialect\".into(),\n                })\n            }\n            TableRefKind::Subquery(inner) => {\n                // A subquery-in-FROM nested inside this one (#376: a CTE\n                // whose own body's FROM names another CTE) — materialize\n                // it into the same cursor this level would otherwise\n                // `OpenRead` a real table into.\n                materialize_from_subquery(em, reg, inner, catalog, cursors.table)?;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14982,7 +15102,7 @@
   {
     "id": "codegen_row_subquery_from_clause_materialize_constant_rows_ad08e58a",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 555,
+    "line": 586,
     "decision": "let Some(where_clause) = &subquery.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -14992,7 +15112,7 @@
   {
     "id": "codegen_row_subquery_from_clause_parse_35881293",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 582,
+    "line": 613,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15002,7 +15122,7 @@
   {
     "id": "codegen_row_subquery_from_clause_resolve_subquery_schema_none_when_no_from_0faf7127",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 612,
+    "line": 643,
     "decision": "match &select.columns[0] {\n            ResultColumn::Expr { expr, .. } => match &expr.kind {\n                ExprKind::Subquery(sub) => (**sub).clone(),\n                _ => panic!(\"expected subquery expr\"),\n            },\n            _ => panic!(\"expected Expr result column\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15012,7 +15132,7 @@
   {
     "id": "codegen_row_subquery_from_clause_resolve_subquery_schema_none_when_no_from_632a8ec6",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 613,
+    "line": 644,
     "decision": "match &expr.kind {\n                ExprKind::Subquery(sub) => (**sub).clone(),\n                _ => panic!(\"expected subquery expr\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15022,7 +15142,7 @@
   {
     "id": "codegen_row_subquery_from_clause_parsed_549e9e32",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 784,
+    "line": 819,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15532,7 +15652,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_da51fc79",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 130,
+    "line": 132,
     "decision": "select_has_aggregate(subselect)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15542,7 +15662,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_708a4979",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 156,
+    "line": 158,
     "decision": "try_compile_index_only_count(em, reg, subselect, &schema, cursors, &catalog, &mut sink)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -15552,7 +15672,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_22c5a5d6",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 160,
+    "line": 162,
     "decision": "try_compile_index_only_sum(em, reg, subselect, &schema, cursors, &mut sink)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -15562,7 +15682,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_0aa11878",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 208,
+    "line": 210,
     "decision": "let Some(access) = seek_access",
     "conditions": 1,
     "vectors_required": 2,
@@ -15572,7 +15692,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_0d59820f",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 209,
+    "line": 211,
     "decision": "match &access {\n            JoinAccess::Rowid(operand) | JoinAccess::UniqueIndex { operand, .. } => {\n                compile_value(em, reg, outer_scope, operand)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15582,7 +15702,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_29256153",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 220,
+    "line": 222,
     "decision": "match access {\n            JoinAccess::Rowid(_) => {\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    value_reg,\n                ));\n                em.patch_p2(seek_addr, end_label);\n            }\n            JoinAccess::UniqueIndex { index, .. } => {\n                let index_cursor = reg.alloc_cursor();\n                let root_page = valid_index_root_page(&index)?;\n                let mut open_instr = Instruction::new(\n                    Opcode::OpenRead,\n                    index_cursor,\n                    root_page,\n                    schema.database_p3(),\n                );\n                open_instr.p5 = 1;\n                em.emit(open_instr);\n                let leading_collation = index\n                    .columns\n                    .first()\n                    .map_or(Collation::Binary, |c| c.collation);\n                let seek_instr = Instruction::with_p4(\n                    Opcode::SeekIndexEq,\n                    index_cursor,\n                    0,\n                    value_reg,\n                    P4::SeekKey(vec![leading_collation]),\n                );\n                let seek_addr = em.emit(seek_instr);\n                em.patch_p2(seek_addr, end_label);\n                let rowid_reg = reg.alloc();\n                em.emit(Instruction::new(\n                    Opcode::IdxRowid,\n                    index_cursor,\n                    rowid_reg,\n                    0,\n                ));\n                let table_seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    rowid_reg,\n                ));\n                em.patch_p2(table_seek_addr, end_label);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15592,7 +15712,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_scalar_subquery_bdd98ba4",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 283,
+    "line": 285,
     "decision": "let Some(where_expr) = &subselect.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -15602,7 +15722,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_5f337291",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 337,
+    "line": 339,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -15612,7 +15732,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_0aa11878",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 349,
+    "line": 351,
     "decision": "let Some(access) = seek_access",
     "conditions": 1,
     "vectors_required": 2,
@@ -15622,7 +15742,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_0d59820f",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 351,
+    "line": 353,
     "decision": "match &access {\n            JoinAccess::Rowid(operand) | JoinAccess::UniqueIndex { operand, .. } => {\n                compile_value(em, reg, outer_scope, operand)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15632,7 +15752,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_bae2e0eb",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 369,
+    "line": 373,
     "decision": "match access {\n            JoinAccess::Rowid(_) => {\n                let seek_addr = em.emit(Instruction::new(\n                    Opcode::SeekRowid,\n                    sub_cursor,\n                    0,\n                    value_reg,\n                ));\n                em.patch_p2(seek_addr, not_found);\n            }\n            JoinAccess::UniqueIndex { index, .. } => {\n                let index_cursor = reg.alloc_cursor();\n                let root_page = valid_index_root_page(&index)?;\n                let mut open_instr = Instruction::new(\n                    Opcode::OpenRead,\n                    index_cursor,\n                    root_page,\n                    schema.database_p3(),\n                );\n                open_instr.p5 = 1;\n                em.emit(open_instr);\n                let leading_collation = index\n                    .columns\n                    .first()\n                    .map_or(Collation::Binary, |c| c.collation);\n                let seek_instr = Instruction::with_p4(\n                    Opcode::SeekIndexEq,\n                    index_cursor,\n                    0,\n                    value_reg,\n                    P4::SeekKey(vec![leading_collation]),\n                );\n                let seek_addr = em.emit(seek_instr);\n                em.patch_p2(seek_addr, not_found);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15642,7 +15762,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_f26d549d",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 407,
+    "line": 411,
     "decision": "let Target::Jump(fl) = exists_false",
     "conditions": 1,
     "vectors_required": 2,
@@ -15652,7 +15772,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_ebd65e7f",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 410,
+    "line": 414,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -15662,7 +15782,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_bdd98ba4",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 430,
+    "line": 436,
     "decision": "let Some(where_expr) = &subselect.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -15672,7 +15792,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_f26d549d_2",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 445,
+    "line": 451,
     "decision": "let Target::Jump(fl) = exists_false",
     "conditions": 1,
     "vectors_required": 2,
@@ -15682,7 +15802,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_exists_ebd65e7f_2",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 448,
+    "line": 454,
     "decision": "t_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -15692,7 +15812,7 @@
   {
     "id": "codegen_row_subquery_scalar_emit_hoisted_in_probe_5f337291",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 516,
+    "line": 522,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -15702,7 +15822,7 @@
   {
     "id": "codegen_row_subquery_scalar_emit_hoisted_in_probe_ce924704",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 521,
+    "line": 527,
     "decision": "match targets.on_null {\n        NullTarget::True => true_label,\n        NullTarget::False => false_label,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15712,7 +15832,7 @@
   {
     "id": "codegen_row_subquery_scalar_emit_hoisted_in_probe_5456fdc6",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 550,
+    "line": 556,
     "decision": "false_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -15722,7 +15842,7 @@
   {
     "id": "codegen_row_subquery_scalar_emit_hoisted_in_probe_7d177ee8",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 553,
+    "line": 559,
     "decision": "true_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -15732,7 +15852,7 @@
   {
     "id": "codegen_row_subquery_scalar_materialize_in_subquery_index_bdd98ba4",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 633,
+    "line": 641,
     "decision": "let Some(where_expr) = &subselect.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -15742,7 +15862,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_7fce4a44",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 692,
+    "line": 700,
     "decision": "col_exprs.len() != lhs_exprs.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -15752,7 +15872,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_bdd98ba4",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 731,
+    "line": 741,
     "decision": "let Some(where_expr) = &subselect.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -15762,7 +15882,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_5f337291",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 768,
+    "line": 778,
     "decision": "negated",
     "conditions": 1,
     "vectors_required": 2,
@@ -15772,7 +15892,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_ce924704",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 773,
+    "line": 783,
     "decision": "match targets.on_null {\n        NullTarget::True => true_label,\n        NullTarget::False => false_label,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15782,7 +15902,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_5456fdc6",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 803,
+    "line": 813,
     "decision": "false_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -15792,7 +15912,7 @@
   {
     "id": "codegen_row_subquery_scalar_compile_in_subquery_multi_7d177ee8",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 806,
+    "line": 816,
     "decision": "true_is_new",
     "conditions": 1,
     "vectors_required": 2,
@@ -15802,7 +15922,7 @@
   {
     "id": "codegen_row_subquery_scalar_select_61e1dc48",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 838,
+    "line": 848,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(s) => *s,\n            other => panic!(\"failed to parse {sql:?}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15812,7 +15932,7 @@
   {
     "id": "codegen_row_subquery_scalar_scalar_subquery_star_projection_is_unsupported_3350393b",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 977,
+    "line": 987,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"exactly one expression column\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15822,7 +15942,7 @@
   {
     "id": "codegen_row_subquery_scalar_exists_from_less_is_unsupported_352430e3",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 1034,
+    "line": 1044,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"EXISTS (SELECT ...) requires a FROM clause\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15832,7 +15952,7 @@
   {
     "id": "codegen_row_subquery_scalar_multi_column_in_subquery_arity_mismatch_is_unsupported_a2b5b755",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 1085,
+    "line": 1095,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"left-hand tuple has 2 column(s)\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15842,7 +15962,7 @@
   {
     "id": "codegen_row_subquery_scalar_multi_column_in_subquery_star_is_unsupported_a51adcd2",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 1101,
+    "line": 1111,
     "decision": "match err {\n            CodegenError::Unsupported { reason } => {\n                assert!(reason.contains(\"no * / table.*\"));\n            }\n            other => panic!(\"expected Unsupported, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15852,7 +15972,7 @@
   {
     "id": "codegen_row_subquery_scalar_sel_2e123bd1",
     "file": "src/codegen/row/subquery/scalar.rs",
-    "line": 1134,
+    "line": 1144,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15892,7 +16012,7 @@
   {
     "id": "codegen_row_subquery_views_table_ref_references_table_823225d6",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 124,
+    "line": 128,
     "decision": "match &table_ref.kind {\n        TableRefKind::Name(name) => is_target(name),\n        TableRefKind::Subquery(inner) => select_references_table(inner, is_target),\n        TableRefKind::Unnest { .. } => false,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15902,7 +16022,7 @@
   {
     "id": "codegen_row_subquery_views_reject_unparsable_view_refs_8c71cec7",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 140,
+    "line": 144,
     "decision": "!select_references_table(expanded, &|name: &str| view.name.eq_ignore_ascii_case(name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -15912,7 +16032,7 @@
   {
     "id": "codegen_row_subquery_views_reject_unparsable_view_refs_2ade3957",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 143,
+    "line": 147,
     "decision": "let ParseOutcome::Unsupported { message, .. } | ParseOutcome::Invalid { message, .. } =\n            crate::parser::row::parse_create_view(&view.sql)",
     "conditions": 1,
     "vectors_required": 2,
@@ -15922,7 +16042,7 @@
   {
     "id": "codegen_row_subquery_views_expand_views_in_select_f42b0018",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 160,
+    "line": 164,
     "decision": "let Some(from) = &mut select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -15932,7 +16052,7 @@
   {
     "id": "codegen_row_subquery_views_expand_views_in_select_650d5d42",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 167,
+    "line": 171,
     "decision": "let Some(from) = &mut arm.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -15942,7 +16062,7 @@
   {
     "id": "codegen_row_subquery_views_expand_table_ref_4ae7ff5f",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 183,
+    "line": 191,
     "decision": "match &mut table_ref.kind {\n        TableRefKind::Name(name) => {\n            let Some(view) = views.iter().find(|v| v.name.eq_ignore_ascii_case(name)) else {\n                return Ok(());\n            };\n            if stack\n                .iter()\n                .any(|seen| seen.eq_ignore_ascii_case(&view.name))\n            {\n                return Err(CodegenError::CircularView {\n                    name: view.name.clone(),\n                });\n            }\n            // A view's own stored body may carry its own `WITH` clause\n            // (`CREATE VIEW v AS WITH cte AS (...) SELECT * FROM cte`) —\n            // that never runs through `expand_with_clause` otherwise,\n            // since only the outermost query gets that pass at the top\n            // of `compile_select_program`. Expanding it here, before\n            // recursing for nested views, mirrors the ordering already\n            // used at the top level (CTEs first, then views).\n            // Every view reference inlines the view's body, so it is\n            // charged against the statement's expansion budget (#876).\n            expansion.enter(&view.query)?;\n            let mut query = (*view.query).clone();\n            expand_ctes_in(&mut query, expansion)?;\n            if let Some(columns) = &view.columns {\n                apply_column_aliases(&mut query, columns, &view.name)?;\n            }\n            stack.push(view.name.clone());\n            let result = expand_views_in_select(&mut query, views, stack, expansion);\n            stack.pop();\n            result?;\n            expansion.leave();\n            // Same alias-defaulting rule as CTE substitution (#376): a\n            // bare `FROM view_name` (no explicit alias) needs the\n            // subquery's alias set to the view's own name, since a\n            // `TableRefKind::Subquery`'s alias is mandatory to the rest\n            // of codegen (`resolve_from_table_schema`'s doc comment).\n            let alias = table_ref.alias.clone().or_else(|| Some(view.name.clone()));\n            table_ref.kind = TableRefKind::Subquery(Box::new(query));\n            table_ref.alias = alias;\n            Ok(())\n        }\n        TableRefKind::Subquery(inner) => expand_views_in_select(inner, views, stack, expansion),\n        TableRefKind::Unnest { .. } => Ok(()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15952,7 +16072,7 @@
   {
     "id": "codegen_row_subquery_views_expand_table_ref_6b3e1ab0",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 188,
+    "line": 196,
     "decision": "stack\n                .iter()\n                .any(|seen| seen.eq_ignore_ascii_case(&view.name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -15962,7 +16082,7 @@
   {
     "id": "codegen_row_subquery_views_expand_table_ref_1ab13b46",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 208,
+    "line": 216,
     "decision": "let Some(columns) = &view.columns",
     "conditions": 1,
     "vectors_required": 2,
@@ -15972,7 +16092,7 @@
   {
     "id": "codegen_row_subquery_views_sel_2e123bd1",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 245,
+    "line": 253,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql:?} must parse, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15982,8 +16102,158 @@
   {
     "id": "codegen_row_subquery_views_mcdc__codegen_row_subquery_views_expand_views_08fa764e__v3_referenced_view_is_expanded_into_an_owned_copy_b36fb835",
     "file": "src/codegen/row/subquery/views.rs",
-    "line": 317,
+    "line": 325,
     "decision": "match select.expand_views(&resolved) {\n            Ok(Cow::Owned(expanded)) => assert!(matches!(\n                expanded.from.as_ref().unwrap().first.kind,\n                TableRefKind::Subquery(_)\n            )),\n            other => panic!(\"expected an owned expansion, got {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_each_expression_subquery_mut_62e9cd11",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 22,
+    "decision": "let ResultColumn::Expr { expr, .. } = column",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_each_expression_subquery_mut_f42b0018",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 26,
+    "decision": "let Some(from) = &mut select.from",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_each_expression_subquery_mut_184240fb",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 28,
+    "decision": "let Some(JoinConstraint::On(on)) = &mut join.constraint",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_each_expression_subquery_mut_62e9cd11_2",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 35,
+    "decision": "let ResultColumn::Expr { expr, .. } = column",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_each_expression_subquery_mut_650d5d42",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 39,
+    "decision": "let Some(from) = &mut arm.from",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_each_expression_subquery_mut_184240fb_2",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 41,
+    "decision": "let Some(JoinConstraint::On(on)) = &mut join.constraint",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_expr_mut_bb81c176",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 76,
+    "decision": "match &mut expr.kind {\n        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => Ok(()),\n        ExprKind::Subquery(subquery) | ExprKind::Exists { subquery, .. } => f(subquery),\n        ExprKind::InSubquery { expr, subquery, .. } => {\n            expr_mut(expr, f)?;\n            f(subquery)\n        }\n        ExprKind::InSubqueryMulti {\n            exprs, subquery, ..\n        } => {\n            for e in exprs {\n                expr_mut(e, f)?;\n            }\n            f(subquery)\n        }\n        ExprKind::Unary { expr, .. }\n        | ExprKind::IsNull { expr, .. }\n        | ExprKind::Cast { expr, .. }\n        | ExprKind::Collate { expr, .. }\n        | ExprKind::Paren(expr) => expr_mut(expr, f),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            expr_mut(lhs, f)?;\n            expr_mut(rhs, f)\n        }\n        ExprKind::Between { expr, lo, hi, .. } => {\n            expr_mut(expr, f)?;\n            expr_mut(lo, f)?;\n            expr_mut(hi, f)\n        }\n        ExprKind::In { expr, list, .. } => {\n            expr_mut(expr, f)?;\n            list.iter_mut().try_for_each(|e| expr_mut(e, f))\n        }\n        ExprKind::Like {\n            expr,\n            pattern,\n            escape,\n            ..\n        } => {\n            expr_mut(expr, f)?;\n            expr_mut(pattern, f)?;\n            escape.iter_mut().try_for_each(|e| expr_mut(e, f))\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            operand.iter_mut().try_for_each(|e| expr_mut(e, f))?;\n            for (w, t) in whens {\n                expr_mut(w, f)?;\n                expr_mut(t, f)?;\n            }\n            else_.iter_mut().try_for_each(|e| expr_mut(e, f))\n        }\n        ExprKind::FunctionCall { args, tail, .. } => {\n            if let FunctionArgs::List(list) = args {\n                list.iter_mut().try_for_each(|e| expr_mut(e, f))?;\n            }\n            if let Some(tail) = tail {\n                tail.filter.iter_mut().try_for_each(|e| expr_mut(e, f))?;\n                if let Some(over) = &mut tail.over {\n                    over.partition_by\n                        .iter_mut()\n                        .try_for_each(|e| expr_mut(e, f))?;\n                    over.order_by\n                        .iter_mut()\n                        .try_for_each(|t| expr_mut(&mut t.expr, f))?;\n                }\n            }\n            Ok(())\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_expr_mut_a77e706f",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 132,
+    "decision": "let FunctionArgs::List(list) = args",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_expr_mut_756219c6",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 135,
+    "decision": "let Some(tail) = tail",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_expr_mut_442de5a8",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 137,
+    "decision": "let Some(over) = &mut tail.over",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_any_expression_subquery_62e9cd11",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 162,
+    "decision": "let ResultColumn::Expr { expr, .. } = column",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_any_expression_subquery_62e9cd11_2",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 171,
+    "decision": "let ResultColumn::Expr { expr, .. } = column",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_join_ons_0d4c3c0e",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 208,
+    "decision": "match &j.constraint {\n            Some(JoinConstraint::On(on)) => Some(on),\n            _ => None,\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_subquery_walk_expr_any_5c7f0a5d",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 219,
+    "decision": "match &expr.kind {\n        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => false,\n        ExprKind::Subquery(subquery) | ExprKind::Exists { subquery, .. } => pred(subquery),\n        ExprKind::InSubquery { expr, subquery, .. } => expr_any(expr, pred) || pred(subquery),\n        ExprKind::InSubqueryMulti {\n            exprs, subquery, ..\n        } => exprs.iter().any(|e| expr_any(e, pred)) || pred(subquery),\n        ExprKind::Unary { expr, .. }\n        | ExprKind::IsNull { expr, .. }\n        | ExprKind::Cast { expr, .. }\n        | ExprKind::Collate { expr, .. }\n        | ExprKind::Paren(expr) => expr_any(expr, pred),\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            expr_any(lhs, pred) || expr_any(rhs, pred)\n        }\n        ExprKind::Between { expr, lo, hi, .. } => {\n            expr_any(expr, pred) || expr_any(lo, pred) || expr_any(hi, pred)\n        }\n        ExprKind::In { expr, list, .. } => {\n            expr_any(expr, pred) || list.iter().any(|e| expr_any(e, pred))\n        }\n        ExprKind::Like {\n            expr,\n            pattern,\n            escape,\n            ..\n        } => {\n            expr_any(expr, pred)\n                || expr_any(pattern, pred)\n                || escape.iter().any(|e| expr_any(e, pred))\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            operand.iter().any(|e| expr_any(e, pred))\n                || whens\n                    .iter()\n                    .any(|(w, t)| expr_any(w, pred) || expr_any(t, pred))\n                || else_.iter().any(|e| expr_any(e, pred))\n        }\n        ExprKind::FunctionCall { args, tail, .. } => {\n            let in_args = match args {\n                FunctionArgs::List(list) => list.iter().any(|e| expr_any(e, pred)),\n                FunctionArgs::Star => false,\n            };\n            in_args\n                || tail.as_ref().is_some_and(|tail| {\n                    tail.filter.iter().any(|e| expr_any(e, pred))\n                        || tail.over.as_ref().is_some_and(|over| {\n                            over.partition_by.iter().any(|e| expr_any(e, pred))\n                                || over.order_by.iter().any(|t| expr_any(&t.expr, pred))\n                        })\n                })\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_subquery_walk_expr_any_3e134f6b",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 262,
+    "decision": "match args {\n                FunctionArgs::List(list) => list.iter().any(|e| expr_any(e, pred)),\n                FunctionArgs::Star => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,

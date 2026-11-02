@@ -49,6 +49,7 @@ mod memoize;
 mod pushdown;
 mod scalar;
 mod views;
+mod walk;
 
 use crate::parser::ast::Select;
 
@@ -64,6 +65,7 @@ pub(crate) use correlation::{
     subquery_is_correlated, top_level_and_conjuncts,
 };
 pub(crate) use from_clause::materialize_from_subquery;
+pub(crate) use from_clause::open_subquery_source;
 pub(crate) use from_clause::resolve_subquery_schema;
 pub(crate) use from_clause::subquery_output_columns;
 pub(crate) use memoize::{compile_memoized_scalar_subquery, memoize_correlated_where_subqueries};

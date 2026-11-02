@@ -1000,3 +1000,147 @@ fn insert_select_from_union_arms_with_joins_including_one_over_the_target() {
         ["1|icf", "1|icf", "1|mcqf", "2|icf", "2|other", "11|x", "12|y", "99|x"]
     );
 }
+
+// #940: a subquery expression (scalar, IN, NOT IN, EXISTS) may read a
+// FROM-subquery, a CTE or a view, as in sqlite3: once or per row, also
+// correlated to the outer row inside the derived table. sqlite3's rows.
+
+#[test]
+fn subquery_expressions_over_derived_tables_ctes_and_views() {
+    let (_db, mut e) = fixture();
+    e.run_query("CREATE VIEW vc AS SELECT id, t FROM c")
+        .unwrap();
+    for (sql, expected) in [
+        ("SELECT (SELECT count(*) FROM (SELECT id FROM a))", &["3"][..]),
+        (
+            "WITH u AS (SELECT id FROM a) SELECT (SELECT count(*) FROM u), (SELECT max(id) FROM u)",
+            &["3|3"][..],
+        ),
+        (
+            "WITH u AS (SELECT id, t FROM c) \
+             SELECT a.id, (SELECT t FROM u WHERE u.id = a.id) FROM a ORDER BY 1",
+            &["1|icf", "2|other", "3|NULL"][..],
+        ),
+        (
+            "WITH u AS (SELECT t FROM b UNION SELECT t FROM c) \
+             SELECT count(*) FROM b WHERE t IN (SELECT t FROM u WHERE t <> 'icf')",
+            &["2"][..],
+        ),
+        (
+            "SELECT id FROM a WHERE id NOT IN (SELECT id FROM (SELECT id FROM c)) ORDER BY id",
+            &["3"][..],
+        ),
+        (
+            "SELECT id FROM a WHERE EXISTS (SELECT 1 FROM (SELECT id FROM c) AS x WHERE x.id = a.id) \
+             ORDER BY id",
+            &["1", "2"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM c) SELECT (SELECT max(id) FROM u WHERE id < a.id), a.id \
+             FROM a ORDER BY 2",
+            &["NULL|1", "1|2", "2|3"][..],
+        ),
+        ("SELECT id FROM a WHERE id IN (SELECT id FROM vc) ORDER BY 1", &["1", "2"][..]),
+        ("SELECT (SELECT max(t) FROM (SELECT t FROM vc ORDER BY t))", &["other"][..]),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+/// A CTE used both in FROM and inside expressions, in either order, with
+/// a subquery that runs conditionally or never: what an expression
+/// materializes is never reused by another reference.
+#[test]
+fn a_cte_in_from_and_in_expressions_reads_its_own_rows_every_time() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        (
+            "WITH u AS (SELECT id FROM c) \
+             SELECT a.id, (SELECT count(*) FROM u) FROM a JOIN u ON u.id = a.id ORDER BY 1",
+            &["1|2", "2|2"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM c) SELECT a.id FROM a \
+             WHERE a.id IN (SELECT id FROM u) AND EXISTS (SELECT 1 FROM u WHERE u.id = a.id) ORDER BY 1",
+            &["1", "2"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM c) SELECT a.id, CASE WHEN a.id > 5 \
+             THEN (SELECT count(*) FROM u) ELSE 0 END FROM a JOIN u ON u.id = a.id ORDER BY 1",
+            &["1|0", "2|0"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM c) SELECT count(*) FROM a \
+             WHERE 0 AND a.id IN (SELECT id FROM u) UNION ALL SELECT count(*) FROM u",
+            &["0", "2"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+/// A derived table correlated to the outer row inside a subquery
+/// expression: its WHERE keeps naming the outer row. With an alias, this
+/// gave wrong counts while the fix was in progress (`b.k = a.k` read as
+/// `x.k = x.k`), so it is pinned here.
+#[test]
+fn correlated_derived_tables_inside_subquery_expressions() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        (
+            "SELECT a.k, (SELECT count(*) FROM (SELECT b.t FROM b WHERE b.k = a.k) AS x) FROM a ORDER BY 1",
+            &["x|2", "y|1", "z|0"][..],
+        ),
+        (
+            "SELECT a.k, (SELECT count(*) FROM (SELECT b.t FROM b WHERE b.k = a.k)) FROM a ORDER BY 1",
+            &["x|2", "y|1", "z|0"][..],
+        ),
+        (
+            "SELECT id FROM c WHERE EXISTS (SELECT 1 FROM (SELECT k FROM a WHERE a.id = c.id) AS x) \
+             ORDER BY 1",
+            &["1", "2"][..],
+        ),
+        (
+            "SELECT id FROM c WHERE EXISTS (SELECT 1 FROM (SELECT k FROM a WHERE a.id = c.id)) ORDER BY 1",
+            &["1", "2"][..],
+        ),
+        (
+            "SELECT a.id, (SELECT count(*) FROM (SELECT id FROM c WHERE c.id <> a.id) AS x) FROM a ORDER BY 1",
+            &["1|1", "2|1", "3|2"][..],
+        ),
+        (
+            "SELECT a.id, (SELECT count(*) FROM (SELECT id FROM c WHERE id <> a.id)) FROM a ORDER BY 1",
+            &["1|1", "2|1", "3|2"][..],
+        ),
+        (
+            "SELECT a.id, (SELECT x.t FROM (SELECT t, id FROM c) AS x WHERE x.id = a.id) FROM a ORDER BY 1",
+            &["1|icf", "2|other", "3|NULL"][..],
+        ),
+        (
+            "SELECT a.k, (SELECT count(*) FROM (SELECT k AS kk FROM b) AS x WHERE x.kk = a.k) \
+             FROM a ORDER BY 1",
+            &["x|2", "y|1", "z|0"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+#[test]
+fn insert_update_delete_with_subqueries_over_derived_tables() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "INSERT INTO d VALUES ((SELECT id FROM (SELECT 6000 AS id)), 'expanded')",
+        "INSERT INTO d VALUES (1, 'x'), (2, 'y')",
+        "UPDATE d SET t = 'u' WHERE id IN (SELECT id FROM (SELECT 1 AS id))",
+        "DELETE FROM d WHERE id IN (SELECT id FROM (SELECT 6000 AS id))",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
+        ["1|u", "2|y"]
+    );
+}
