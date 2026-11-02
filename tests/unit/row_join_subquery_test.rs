@@ -850,3 +850,78 @@ fn union_with_select_without_from_arms() {
         assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
     }
 }
+
+// #940: a UNION as the body of a CTE, a view or a FROM-subquery runs every
+// arm (UNION's dedup, its ORDER BY/LIMIT, FROM-less arms). sqlite3's rows.
+
+#[test]
+fn union_bodies_of_ctes_views_and_derived_tables() {
+    let (_db, mut e) = fixture();
+    e.run_query("CREATE VIEW vu AS SELECT k AS name FROM a UNION SELECT t FROM c")
+        .unwrap();
+    for (sql, expected) in [
+        ("WITH u AS (SELECT t FROM b UNION SELECT t FROM c) SELECT count(*) FROM u", &["4"][..]),
+        (
+            "WITH u AS (SELECT k, t FROM b UNION ALL SELECT 'zz', t FROM c) \
+             SELECT k, count(*) FROM u GROUP BY k ORDER BY k",
+            &["w|1", "x|2", "y|1", "zz|2"][..],
+        ),
+        (
+            "SELECT x FROM (SELECT t AS x FROM b UNION SELECT t FROM c ORDER BY 1 LIMIT 3) ORDER BY x",
+            &["icf", "mcqf", "orphan"][..],
+        ),
+        (
+            "SELECT x FROM (SELECT t AS x FROM b UNION ALL SELECT t FROM c) WHERE x > 'm' ORDER BY x",
+            &["mcqf", "orphan", "other"][..],
+        ),
+        (
+            "WITH v AS (SELECT 1 AS n UNION SELECT 1 UNION SELECT 2) SELECT n FROM v ORDER BY n",
+            &["1", "2"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM a UNION SELECT id FROM c) \
+             SELECT a.k, u.id FROM u JOIN a ON a.id = u.id ORDER BY 2",
+            &["x|1", "y|2", "z|3"][..],
+        ),
+        (
+            "WITH u AS (SELECT t FROM b UNION SELECT t FROM c), \
+             w AS (SELECT t FROM u WHERE t <> 'icf') SELECT count(*), min(t) FROM w",
+            &["3|mcqf"][..],
+        ),
+        ("SELECT name FROM vu ORDER BY name", &["icf", "other", "x", "y", "z"][..]),
+        ("SELECT count(*) FROM vu WHERE name IN (SELECT t FROM b)", &["1"][..]),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+#[test]
+fn insert_select_from_union_bodies_including_one_over_the_target() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "WITH u AS (SELECT t FROM b UNION SELECT t FROM c) INSERT INTO d SELECT 5000, t FROM u",
+        // Reads `d` through a UNION derived table: sees it before the
+        // statement (4 rows), plus `c`'s 2.
+        "INSERT INTO d SELECT x.id + 100, x.t FROM \
+         (SELECT id, t FROM d UNION ALL SELECT id, t FROM c) AS x",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true),
+        [
+            "101|icf",
+            "102|other",
+            "5000|icf",
+            "5000|mcqf",
+            "5000|orphan",
+            "5000|other",
+            "5100|icf",
+            "5100|mcqf",
+            "5100|orphan",
+            "5100|other"
+        ]
+    );
+}

@@ -14920,9 +14920,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_subquery_from_clause_materialize_from_subquery_dd17d22f",
+    "file": "src/codegen/row/subquery/from_clause.rs",
+    "line": 262,
+    "decision": "subquery.from.is_none() && is_constant_rows(subquery)",
+    "conditions": 2,
+    "vectors_required": 3,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_subquery_from_clause_materialize_from_subquery_01b3e0f6",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 274,
+    "line": 267,
     "decision": "!subquery.compound.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -14932,7 +14942,7 @@
   {
     "id": "codegen_row_subquery_from_clause_materialize_from_subquery_8a16b420",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 321,
+    "line": 320,
     "decision": "from.joins.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -14942,7 +14952,7 @@
   {
     "id": "codegen_row_subquery_from_clause_materialize_from_subquery_9d5ac8cd",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 331,
+    "line": 330,
     "decision": "match &from.first.kind {\n            TableRefKind::Name(_) => {\n                let root_page = valid_table_root_page(schema)?;\n                em.emit(Instruction::new(\n                    Opcode::OpenRead,\n                    cursors.table,\n                    root_page,\n                    schema.database_p3(),\n                ));\n            }\n            TableRefKind::Unnest { .. } => {\n                return Err(CodegenError::Unsupported {\n                    reason: \"UNNEST is only available in the column dialect\".into(),\n                })\n            }\n            TableRefKind::Subquery(inner) => {\n                // A subquery-in-FROM nested inside this one (#376: a CTE\n                // whose own body's FROM names another CTE) — materialize\n                // it into the same cursor this level would otherwise\n                // `OpenRead` a real table into.\n                materialize_from_subquery(em, reg, inner, catalog, cursors.table)?;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14950,19 +14960,9 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93",
-    "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 418,
-    "decision": "!arms_are_bare\n        || (subquery.where_clause.is_some() && !subquery.compound.is_empty())\n        || !subquery.group_by.is_empty()\n        || subquery.having.is_some()\n        || !subquery.order_by.is_empty()\n        || subquery.limit.is_some()\n        || subquery.distinct.is_some()",
-    "conditions": 8,
-    "vectors_required": 9,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "codegen_row_subquery_from_clause_materialize_constant_rows_ad08e58a",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 466,
+    "line": 555,
     "decision": "let Some(where_clause) = &subquery.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -14972,7 +14972,7 @@
   {
     "id": "codegen_row_subquery_from_clause_parse_35881293",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 493,
+    "line": 582,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"expected Accepted, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14982,7 +14982,7 @@
   {
     "id": "codegen_row_subquery_from_clause_resolve_subquery_schema_none_when_no_from_0faf7127",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 523,
+    "line": 612,
     "decision": "match &select.columns[0] {\n            ResultColumn::Expr { expr, .. } => match &expr.kind {\n                ExprKind::Subquery(sub) => (**sub).clone(),\n                _ => panic!(\"expected subquery expr\"),\n            },\n            _ => panic!(\"expected Expr result column\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -14992,7 +14992,7 @@
   {
     "id": "codegen_row_subquery_from_clause_resolve_subquery_schema_none_when_no_from_632a8ec6",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 524,
+    "line": 613,
     "decision": "match &expr.kind {\n                ExprKind::Subquery(sub) => (**sub).clone(),\n                _ => panic!(\"expected subquery expr\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -15002,7 +15002,7 @@
   {
     "id": "codegen_row_subquery_from_clause_parsed_549e9e32",
     "file": "src/codegen/row/subquery/from_clause.rs",
-    "line": 686,
+    "line": 784,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

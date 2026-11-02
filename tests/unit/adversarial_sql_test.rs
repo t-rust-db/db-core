@@ -223,7 +223,9 @@ fn sql_rows() -> Vec<(&'static str, String, Expect)> {
             "SELECT length(CAST(x'c3' AS TEXT)), upper(CAST(x'80ff' AS TEXT)), substr(CAST(x'e282' AS TEXT),1,1)".into(),
             Rows("1,��,�"),
         ),
-        ("group_concat_sep", "SELECT group_concat(x, zeroblob(100)) FROM (SELECT 1 x UNION SELECT 2)".into(), Error("unsupported: a FROM-less subquery in FROM only supports bare expressio")),
+        // #940: the FROM-less UNION runs; two-argument group_concat is
+        // what db-core still refuses.
+        ("group_concat_sep", "SELECT group_concat(x, zeroblob(100)) FROM (SELECT 1 x UNION SELECT 2)".into(), Error("group_concat with more than one argument is not yet supported")),
         // Clauses with edge values.
         // #940: a FROM-less SELECT reads one row, as in sqlite3.
         ("limit_neg", "SELECT 1 LIMIT -9223372036854775808 OFFSET 9223372036854775807".into(), Rows("")),
