@@ -644,6 +644,80 @@ pub fn compile_select_compound(
     Ok(em.finish())
 }
 
+/// #940: a SELECT core without FROM reads one row, as sqlite3's does --
+/// `SELECT 1 WHERE …`, `SELECT 1 UNION ALL SELECT 2`, `SELECT k FROM a
+/// UNION ALL SELECT 'lit'`, `SELECT count(*) WHERE 1`. Gives such a core
+/// (the first one, when it has a clause a bare expression list can't,
+/// and every FROM-less compound arm) the one-row source `FROM (SELECT
+/// 1)`, so the ordinary scan and compound paths compile it. A `*` stays
+/// FROM-less: sqlite3 refuses it ("no tables specified"), and so does the
+/// constant-row path.
+pub(crate) fn with_one_row_sources(select: &Select) -> std::borrow::Cow<'_, Select> {
+    let has_star = |columns: &[ResultColumn]| {
+        columns
+            .iter()
+            .any(|c| matches!(c, ResultColumn::Star | ResultColumn::TableStar { .. }))
+    };
+    let first_needs = select.from.is_none()
+        && !has_star(&select.columns)
+        && (select.where_clause.is_some()
+            || !select.group_by.is_empty()
+            || select.having.is_some()
+            || select.distinct.is_some()
+            || !select.order_by.is_empty()
+            || select.limit.is_some()
+            || !select.compound.is_empty());
+    let arm_needs =
+        |arm: &crate::parser::ast::CompoundSelect| arm.from.is_none() && !has_star(&arm.columns);
+    if !first_needs && !select.compound.iter().any(arm_needs) {
+        return std::borrow::Cow::Borrowed(select);
+    }
+    let mut out = select.clone();
+    if first_needs {
+        out.from = Some(one_row_source(select.span));
+    }
+    for arm in &mut out.compound {
+        if arm_needs(arm) {
+            arm.from = Some(one_row_source(arm.span));
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// `FROM (SELECT 1)`: one row, no column a query can name.
+fn one_row_source(span: crate::parser::Span) -> crate::parser::ast::FromClause {
+    let one = Expr {
+        kind: ExprKind::Literal(crate::parser::ast::Literal::Integer(1)),
+        span,
+    };
+    let row = Select {
+        with_clause: None,
+        distinct: None,
+        columns: vec![ResultColumn::Expr {
+            expr: one,
+            alias: None,
+        }],
+        from: None,
+        where_clause: None,
+        group_by: Vec::new(),
+        having: None,
+        compound: Vec::new(),
+        order_by: Vec::new(),
+        limit: None,
+        scope: None,
+        span,
+    };
+    crate::parser::ast::FromClause {
+        first: crate::parser::ast::TableRef {
+            kind: crate::parser::ast::TableRefKind::Subquery(Box::new(row)),
+            schema: None,
+            alias: None,
+            span,
+        },
+        joins: Vec::new(),
+    }
+}
+
 /// [`compile_select_compound`]'s body: emits the compound's rows into
 /// `out` (`first` register, column count) instead of `ResultRow`, with
 /// its cursors numbered from `cursor_base` and `end_label` the caller's
@@ -959,6 +1033,35 @@ mod mcdc_vectors {
             ParseOutcome::Accepted(s) => *s,
             other => panic!("{sql}: {other:?}"),
         }
+    }
+
+    // codegen_row_select_entry_with_one_row_sources_1c7260db (#940):
+    // `!first_needs && !select.compound.iter().any(arm_needs)`.
+    #[test]
+    fn mcdc__codegen_row_select_entry_with_one_row_sources_1c7260db__v1_bare_select_is_unchanged() {
+        let select = parsed("SELECT 1");
+        assert!(matches!(
+            super::with_one_row_sources(&select),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_with_one_row_sources_1c7260db__v2_where_gets_a_one_row_source(
+    ) {
+        let out = super::with_one_row_sources(&parsed("SELECT 1 WHERE 1")).into_owned();
+        assert!(out.from.is_some());
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_with_one_row_sources_1c7260db__v3_a_from_less_arm_gets_one() {
+        let out = super::with_one_row_sources(&parsed("SELECT k FROM a UNION ALL SELECT 'lit'"))
+            .into_owned();
+        assert!(out.compound.iter().all(|arm| arm.from.is_some()));
+        // `*` without FROM stays as it is: sqlite3 refuses it.
+        assert!(super::with_one_row_sources(&parsed("SELECT * WHERE 1"))
+            .from
+            .is_none());
     }
 
     // ---------------------------------------------------------------------

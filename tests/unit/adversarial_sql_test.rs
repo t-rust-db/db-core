@@ -147,8 +147,11 @@ fn sql_rows() -> Vec<(&'static str, String, Expect)> {
         ("like_escape_bad", "SELECT 'a' LIKE 'a' ESCAPE 'xy'".into(), Error("ESCAPE expression must be a single character")),
         ("like_huge", format!("SELECT '{}' LIKE '{}b'", "a".repeat(100_000), "%".repeat(50_000)), Error("LIKE or GLOB pattern too complex")),
         // Long chains and deep nesting.
-        ("compound_chain", format!("SELECT 1{}", " UNION SELECT 1".repeat(20_000)), Error("unsupported: a FROM-less SELECT only supports a bare expression list —")),
-        ("compound_chain_all", format!("SELECT 1{}", " UNION ALL SELECT 1".repeat(20_000)), Error("unsupported: a FROM-less SELECT only supports a bare expression list —")),
+        // sqlite3 takes at most 500 terms in a compound SELECT (#940).
+        ("compound_chain", format!("SELECT 1{}", " UNION SELECT 1".repeat(20_000)), Error("too many terms in compound SELECT")),
+        ("compound_chain_all", format!("SELECT 1{}", " UNION ALL SELECT 1".repeat(20_000)), Error("too many terms in compound SELECT")),
+        ("compound_chain_500", format!("SELECT 1{} LIMIT 1", " UNION ALL SELECT 1".repeat(499)), Rows("1")),
+        ("compound_chain_501", format!("SELECT 1{}", " UNION ALL SELECT 1".repeat(500)), Error("too many terms in compound SELECT")),
         ("subquery_nest", format!("SELECT {}1{}", "(SELECT ".repeat(5_000), ")".repeat(5_000)), Error("subquery nesting too deep")),
         (
             "from_subq_nest",
@@ -222,9 +225,12 @@ fn sql_rows() -> Vec<(&'static str, String, Expect)> {
         ),
         ("group_concat_sep", "SELECT group_concat(x, zeroblob(100)) FROM (SELECT 1 x UNION SELECT 2)".into(), Error("unsupported: a FROM-less subquery in FROM only supports bare expressio")),
         // Clauses with edge values.
-        ("limit_neg", "SELECT 1 LIMIT -9223372036854775808 OFFSET 9223372036854775807".into(), Error("unsupported: a FROM-less SELECT only supports a bare expression list —")),
-        ("order_by_huge", "SELECT 1 ORDER BY 9223372036854775807".into(), Error("unsupported: a FROM-less SELECT only supports a bare expression list —")),
-        ("group_by_idx0", "SELECT 1 GROUP BY 0".into(), Error("unsupported: a FROM-less SELECT only supports a bare expression list —")),
+        // #940: a FROM-less SELECT reads one row, as in sqlite3.
+        ("limit_neg", "SELECT 1 LIMIT -9223372036854775808 OFFSET 9223372036854775807".into(), Rows("")),
+        // sqlite3 reads an integer past 32 bits as a constant and returns
+        // the row; db-core refuses it as a position (on any SELECT).
+        ("order_by_huge", "SELECT 1 ORDER BY 9223372036854775807".into(), Error("ORDER BY position 9223372036854775807 is out of range")),
+        ("group_by_idx0", "SELECT 1 GROUP BY 0".into(), Error("1st GROUP BY term out of range - should be between 1 and 1")),
         (
             "recursive_cte_limit",
             "WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT n FROM r LIMIT 5".into(),

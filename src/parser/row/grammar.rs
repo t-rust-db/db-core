@@ -52,6 +52,11 @@ const MAX_EXPR_DEPTH: usize = 200;
 /// "at most 64 tables in a join" (#877).
 const MAX_JOIN_TABLES: usize = 64;
 
+/// Most terms one compound SELECT may have: sqlite3's
+/// `SQLITE_MAX_COMPOUND_SELECT` (500), "too many terms in compound SELECT"
+/// past it (#940).
+const MAX_COMPOUND_SELECT: usize = 500;
+
 /// Height cap for a parsed expression tree, sqlite3's
 /// `SQLITE_MAX_EXPR_DEPTH` (#655). `MAX_EXPR_DEPTH` bounds the parser's
 /// own recursion, but a flat operator chain (`1+1+...`, `a AND b AND
@@ -1553,6 +1558,9 @@ impl Parser {
                 CompoundOp::Union
             };
             compound.push(self.parse_compound_select_arm(union_start, op)?);
+            if compound.len() >= MAX_COMPOUND_SELECT {
+                return self.invalid("too many terms in compound SELECT");
+            }
         }
 
         let mut order_by = Vec::new();

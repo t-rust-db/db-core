@@ -685,6 +685,8 @@ pub fn compile_select_statement(
     stats_by_table: &HashMap<String, Stats>,
 ) -> Result<Program, DispatchError> {
     let select = rewrite_select(select, views)?;
+    // #940: a FROM-less core with WHERE, a compound, … reads one row.
+    let select = super::select::with_one_row_sources(&select).into_owned();
     let readable = readable_catalog(schemas);
     let schemas: &[TableSchema] = &readable;
     let resolve_table = |table_ref: &TableRef| resolve_from_table_schema(table_ref, schemas);

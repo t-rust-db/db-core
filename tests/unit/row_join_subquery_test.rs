@@ -789,3 +789,64 @@ fn with_before_values_update_or_delete_is_still_refused() {
         ["1|seed", "2|seed2"]
     );
 }
+
+// #940: a SELECT core without FROM reads one row, as in sqlite3: with
+// WHERE, GROUP BY/HAVING, DISTINCT, ORDER BY/LIMIT, as an aggregate, and
+// as a UNION arm. The rows are sqlite3 3.54.1's.
+
+#[test]
+fn select_without_from_with_clauses_reads_one_row() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        ("SELECT 1 WHERE EXISTS (SELECT 1 FROM a)", &["1"][..]),
+        ("SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM a)", &[][..]),
+        (
+            "SELECT 'x', (SELECT count(*) FROM c) WHERE (SELECT count(*) FROM b) > 3",
+            &["x|2"][..],
+        ),
+        ("SELECT 1 WHERE NULL", &[][..]),
+        ("SELECT count(*), max(3) WHERE 1", &["1|3"][..]),
+        ("SELECT count(*) WHERE 0", &["0"][..]),
+        ("SELECT sum(5), min('a') WHERE 0", &["NULL|NULL"][..]),
+        ("SELECT DISTINCT 7", &["7"][..]),
+        ("SELECT 3 ORDER BY 1 LIMIT 0", &[][..]),
+        ("SELECT 4 AS v GROUP BY 1 HAVING v > 3", &["4"][..]),
+        ("SELECT 5 LIMIT 1 OFFSET 1", &[][..]),
+        ("SELECT 1, 'two', NULL", &["1|two|NULL"][..]),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+    // sqlite3: "no tables specified".
+    assert!(e.run_query("SELECT * WHERE 1").is_err());
+}
+
+#[test]
+fn union_with_select_without_from_arms() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        ("SELECT 1 UNION ALL SELECT 2", &["1", "2"][..]),
+        (
+            "SELECT 1 UNION SELECT 1 UNION SELECT 2 ORDER BY 1 DESC",
+            &["2", "1"][..],
+        ),
+        ("SELECT 2 UNION ALL SELECT 1 ORDER BY 1 LIMIT 1", &["1"][..]),
+        (
+            "SELECT k FROM a UNION ALL SELECT 'lit'",
+            &["x", "y", "z", "lit"][..],
+        ),
+        (
+            "SELECT 'first' UNION ALL SELECT k FROM a ORDER BY 1",
+            &["first", "x", "y", "z"][..],
+        ),
+        (
+            "SELECT k FROM a UNION SELECT 'x' ORDER BY 1",
+            &["x", "y", "z"][..],
+        ),
+        (
+            "SELECT abs(-2) + 1 AS n WHERE 1 UNION ALL SELECT id FROM c WHERE id > 1 ORDER BY n",
+            &["2", "3"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
