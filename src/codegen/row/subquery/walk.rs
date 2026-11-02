@@ -69,6 +69,15 @@ where
     Ok(())
 }
 
+/// Calls `f` on each subquery directly inside `expr` (#940): an UPDATE's
+/// SET values and WHERE, a DELETE's WHERE.
+pub(super) fn each_subquery_in_expr_mut<F>(expr: &mut Expr, f: &mut F) -> Result<(), CodegenError>
+where
+    F: FnMut(&mut Select) -> Result<(), CodegenError>,
+{
+    expr_mut(expr, f)
+}
+
 fn expr_mut<F>(expr: &mut Expr, f: &mut F) -> Result<(), CodegenError>
 where
     F: FnMut(&mut Select) -> Result<(), CodegenError>,

@@ -763,18 +763,16 @@ fn with_before_insert_over_the_target_sees_it_before_the_statement() {
 }
 
 #[test]
-fn with_before_values_update_or_delete_is_still_refused() {
+fn with_before_values_update_and_delete_run() {
+    // #940: refused until now; sqlite3's rows.
     let (_db, mut e) = insert_fixture();
     for sql in [
         "WITH v AS (SELECT 1) INSERT INTO d VALUES (6000, 'values')",
         "WITH w AS (SELECT 1) UPDATE d SET t = 'x' WHERE id = 1",
         "WITH w AS (SELECT 1) DELETE FROM d WHERE id = 1",
     ] {
-        let err = e.run_query(sql).unwrap_err();
-        assert!(
-            err.to_string().contains("not yet supported"),
-            "{sql}: {err}"
-        );
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
     }
     assert_eq!(
         rows(
@@ -786,7 +784,7 @@ fn with_before_values_update_or_delete_is_still_refused() {
     );
     assert_eq!(
         rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
-        ["1|seed", "2|seed2"]
+        ["2|seed2", "6000|values"]
     );
 }
 
@@ -1142,5 +1140,90 @@ fn insert_update_delete_with_subqueries_over_derived_tables() {
     assert_eq!(
         rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
         ["1|u", "2|y"]
+    );
+}
+
+// #940: WITH before INSERT … VALUES, UPDATE and DELETE: the CTEs feed the
+// statement's subqueries (a CTE named like a real table shadows it there;
+// the statement's own target stays the table). sqlite3's rows.
+
+#[test]
+fn with_before_values_update_and_delete_feeds_their_subqueries() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT DEFAULT 'dflt')",
+        "WITH v AS (SELECT 6000 AS id) INSERT INTO d VALUES ((SELECT id FROM v), 'with')",
+        "WITH v AS (SELECT 7000 AS id) \
+         INSERT INTO d VALUES ((SELECT id FROM v), 'v1'), ((SELECT id + 1 FROM v), 'v2')",
+        "WITH a AS (SELECT 8000 AS id) INSERT INTO d VALUES ((SELECT id FROM a), 'shadow')",
+        "WITH v AS (SELECT count(*) AS n FROM d) INSERT INTO d VALUES ((SELECT n FROM v) + 9000, 'self')",
+        "WITH v AS (SELECT 1) INSERT INTO d(id) VALUES (9500)",
+        "WITH v AS (SELECT 1) INSERT INTO d DEFAULT VALUES",
+        "INSERT INTO d VALUES (1, 'x'), (2, 'y'), (3, 'z')",
+        "WITH w AS (SELECT 1 AS id) UPDATE d SET t = 'u' WHERE id IN (SELECT id FROM w)",
+        "WITH w AS (SELECT max(id) AS m FROM d WHERE id < 10) \
+         UPDATE d SET t = t || '!' WHERE id = (SELECT m FROM w)",
+        "WITH w AS (SELECT k, id FROM a) UPDATE d SET t = (SELECT k FROM w WHERE w.id = d.id) WHERE id = 2",
+        "WITH x AS (SELECT 6000 AS id), y AS (SELECT id + 1000 AS id FROM x) \
+         DELETE FROM d WHERE id IN (SELECT id FROM y) OR id IN (SELECT id FROM x)",
+        "WITH w AS (SELECT id FROM c) DELETE FROM d WHERE EXISTS (SELECT 1 FROM w WHERE w.id + 9000 = d.id)",
+        "WITH t AS (SELECT 9500 AS id) DELETE FROM d WHERE id = (SELECT id FROM t)",
+    ] {
+        e.run_query(sql).unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true),
+        [
+            "NULL|dflt",
+            "1|u",
+            "2|y",
+            "3|z!",
+            "7001|v2",
+            "8000|shadow",
+            "9004|self"
+        ]
+    );
+}
+
+#[test]
+fn with_before_update_shadows_the_target_only_in_subqueries_and_reads_views() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER PRIMARY KEY, t TEXT UNIQUE)",
+        "INSERT INTO d VALUES (1, 'x'), (2, 'y'), (3, 'z')",
+        // `d` in the subquery is the CTE; the UPDATE's target is the table.
+        "WITH d AS (SELECT 2 AS id) UPDATE d SET t = 'cte' WHERE id IN (SELECT id FROM d)",
+        "CREATE VIEW vc AS SELECT id, t FROM c",
+        "UPDATE d SET t = (SELECT t FROM vc WHERE vc.id = d.id) || '#' WHERE id = 1",
+        "WITH w AS (SELECT id FROM vc) DELETE FROM d WHERE id IN (SELECT id FROM w) AND t LIKE '%#'",
+        "WITH v AS (SELECT 3 AS id) INSERT INTO d VALUES ((SELECT id FROM v), 'again') \
+         ON CONFLICT(id) DO UPDATE SET t = excluded.t",
+    ] {
+        e.run_query(sql).unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
+        ["2|cte", "3|again"]
+    );
+}
+
+/// #940: a broken statement led by WITH reports its own syntax error, not
+/// the SELECT grammar's.
+#[test]
+fn a_broken_with_led_statement_reports_its_own_error() {
+    let (_db, mut e) = insert_fixture();
+    let update = e
+        .run_query("WITH w AS (SELECT 1) UPDATE d SET WHERE id = 1")
+        .unwrap_err();
+    assert!(
+        update.to_string().contains("expected identifier"),
+        "{update}"
+    );
+    let select = e
+        .run_query("WITH w AS (SELECT 1) SELECT FROM w")
+        .unwrap_err();
+    assert!(
+        select.to_string().contains("expected column or expression"),
+        "{select}"
     );
 }
