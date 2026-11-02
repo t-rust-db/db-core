@@ -520,8 +520,15 @@ pub fn compile_statement(
                         let expanded = cte_expanded.expand_views(&resolved_views)?;
                         super::subquery::reject_unparsable_view_refs(&expanded, views)?;
 
+                        // #939: a FROM-less source has no FROM tables.
                         let Some(from) = &expanded.from else {
-                            return Err(DispatchError::NoFromClause);
+                            insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
+                            return Ok(compile_insert_with_catalog(
+                                &insert,
+                                schema,
+                                Some(&[]),
+                                &readable_catalog(schemas),
+                            )?);
                         };
                         let readable = readable_catalog(schemas);
                         let mut joined_schemas =
@@ -534,11 +541,13 @@ pub fn compile_statement(
                     }
                     InsertSource::Values(_) | InsertSource::DefaultValues => None,
                 };
+                // Subqueries read through the same catalog a plain SELECT
+                // does (WITHOUT ROWID tables' indexes hidden).
                 Ok(compile_insert_with_catalog(
                     &insert,
                     schema,
                     select_schemas.as_deref(),
-                    schemas,
+                    &readable_catalog(schemas),
                 )?)
             }
             other => Err(parse_error(other)),
@@ -642,7 +651,8 @@ pub fn compile_select_statement(
 
     let Some(from) = &select.from else {
         let no_table = TableSchema::default();
-        return Ok(compile_select_with_catalog(&select, &no_table, &[])?);
+        // A FROM-less SELECT's subqueries read the catalog too (#939).
+        return Ok(compile_select_with_catalog(&select, &no_table, schemas)?);
     };
     let schema = resolve_table(&from.first)?;
 

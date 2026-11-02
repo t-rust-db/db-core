@@ -3,13 +3,14 @@
 //! `FROM`-subquery schema resolution and materialization — see
 //! `super`'s module doc.
 
+use crate::codegen::row::expr::compile_cond;
 use crate::codegen::row::index_maintenance::valid_table_root_page;
 use crate::codegen::row::select::{
     compile_constant_row, compile_select_joined_scan, compile_select_scan, CodegenError,
     ScanCursors,
 };
 use crate::codegen::row::TableSchema;
-use crate::codegen::row::{Emitter, RegAlloc};
+use crate::codegen::row::{CondTargets, Emitter, RegAlloc, Target};
 use crate::parser::ast::{CompoundOp, ExprKind, ResultColumn, Select, TableRef, TableRefKind};
 use crate::vm::row::{Instruction, Opcode, P4};
 
@@ -412,8 +413,10 @@ fn materialize_constant_rows(
             && arm.group_by.is_empty()
             && arm.having.is_none()
     });
+    // #939: a WHERE on a lone FROM-less row (`SELECT … WHERE NOT EXISTS
+    // (…)`, sqlite3's insert-if-missing idiom) keeps or drops that row.
     if !arms_are_bare
-        || subquery.where_clause.is_some()
+        || (subquery.where_clause.is_some() && !subquery.compound.is_empty())
         || !subquery.group_by.is_empty()
         || subquery.having.is_some()
         || !subquery.order_by.is_empty()
@@ -422,7 +425,7 @@ fn materialize_constant_rows(
     {
         return Err(CodegenError::Unsupported {
             reason: "a FROM-less subquery in FROM only supports bare expression lists, joined \
-                     by UNION ALL"
+                     by UNION ALL, or one such list with a WHERE"
                 .to_string(),
         });
     }
@@ -459,7 +462,20 @@ fn materialize_constant_rows(
         ));
         Ok(())
     };
+    let row_skip = em.new_label();
+    if let Some(where_clause) = &subquery.where_clause {
+        let scope = crate::codegen::row::Scope::single(&TableSchema::default(), -1)
+            .with_catalog(catalog.to_vec());
+        compile_cond(
+            em,
+            reg,
+            &scope,
+            where_clause,
+            CondTargets::null_is_false(Target::Fallthrough, Target::Jump(row_skip)),
+        )?;
+    }
     compile_constant_row(em, reg, &subquery.columns, catalog, &mut sink)?;
+    em.place(row_skip);
     for arm in &subquery.compound {
         compile_constant_row(em, reg, &arm.columns, catalog, &mut sink)?;
     }
@@ -705,7 +721,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_0f313274__v1_union_all_rows_insert_one_row_each(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v1_union_all_rows_insert_one_row_each(
     ) {
         let ops = materialize(&parsed("SELECT 1 AS x UNION ALL SELECT 2")).unwrap();
         assert_eq!(
@@ -716,25 +732,39 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_0f313274__v2_plain_union_is_rejected(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v2_plain_union_is_rejected(
     ) {
         rejected(&parsed("SELECT 1 AS x UNION SELECT 2"));
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_0f313274__v3_where_is_rejected(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v3_where_with_a_union_all_arm_is_rejected(
     ) {
-        rejected(&from_less("SELECT 1 FROM t WHERE 1 = 1"));
+        rejected(&from_less(
+            "SELECT 1 FROM t WHERE 1 = 1 UNION ALL SELECT 2 FROM t",
+        ));
+    }
+
+    // #939: a WHERE on a lone row keeps or drops it (the compound leaf of v3).
+    #[test]
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v9_where_on_a_lone_row_is_accepted(
+    ) {
+        let ops = materialize(&from_less("SELECT 1 FROM t WHERE 1 = 1")).unwrap();
+        assert_eq!(
+            ops.iter().filter(|op| **op == Opcode::Insert).count(),
+            1,
+            "{ops:?}"
+        );
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_0f313274__v4_group_by_is_rejected(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v4_group_by_is_rejected(
     ) {
         rejected(&from_less("SELECT 1 FROM t GROUP BY 1"));
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_0f313274__v5_having_is_rejected(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v5_having_is_rejected(
     ) {
         let mut select = parsed("SELECT 1");
         select.having = parsed("SELECT 1 FROM t GROUP BY 1 HAVING 1 = 1").having;
@@ -742,19 +772,19 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_0f313274__v6_order_by_is_rejected(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v6_order_by_is_rejected(
     ) {
         rejected(&from_less("SELECT 1 FROM t ORDER BY 1"));
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_0f313274__v7_limit_is_rejected(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v7_limit_is_rejected(
     ) {
         rejected(&from_less("SELECT 1 FROM t LIMIT 1"));
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_0f313274__v8_distinct_is_rejected(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v8_distinct_is_rejected(
     ) {
         rejected(&parsed("SELECT DISTINCT 1"));
     }

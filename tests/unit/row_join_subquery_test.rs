@@ -527,3 +527,86 @@ fn insert_select_from_nested_and_limited_subqueries() {
         ["1|seed", "2|seed2", "9500|nested", "9600|nested"]
     );
 }
+
+#[test]
+fn insert_select_without_from() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE p (id INTEGER PRIMARY KEY, v TEXT UNIQUE, n REAL)",
+        "INSERT INTO p SELECT 1, 'a', 2",
+        "INSERT INTO p(v) SELECT 'b'",
+        // Reads the target: sees it before the statement.
+        "INSERT INTO p(v, n) SELECT (SELECT max(v) FROM p) || '+', (SELECT count(*) FROM p)",
+        "INSERT INTO p(v, n) SELECT NULL, '3.5'",
+        "INSERT OR IGNORE INTO p(v, n) SELECT 'a', 99",
+        "INSERT INTO p(v, n) SELECT 'a', 7 ON CONFLICT(v) DO UPDATE SET n = excluded.n + p.n",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    let err = e
+        .run_query("INSERT INTO p(v, n) SELECT 'b', 1")
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("UNIQUE constraint failed: p.v"),
+        "{err}"
+    );
+    assert!(e.run_query("INSERT INTO p(v) SELECT 'x', 'y'").is_err());
+    e.run_query(
+        "INSERT INTO p(v, n) SELECT (SELECT max(k) || min(k) FROM a), (SELECT sum(id) FROM a)",
+    )
+    .unwrap();
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT id, v, n, typeof(n) FROM p ORDER BY id",
+            true
+        ),
+        [
+            "1|a|9.0|real",
+            "2|b|NULL|null",
+            "3|b+|2.0|real",
+            "4|NULL|3.5|real",
+            "5|zx|6.0|real"
+        ]
+    );
+}
+
+#[test]
+fn insert_select_without_from_with_where_inserts_only_when_it_holds() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE p (id INTEGER PRIMARY KEY, v TEXT UNIQUE, n REAL)",
+        "INSERT INTO p(v) VALUES ('a'), ('b'), ('c'), ('d')",
+        "INSERT INTO p(v) SELECT 'w' WHERE 1",
+        "INSERT INTO p(v) SELECT 'never' WHERE 0",
+        "INSERT INTO p(v) SELECT 'nul' WHERE NULL",
+        // sqlite3's insert-if-missing idiom: the second one inserts nothing.
+        "INSERT INTO p(v, n) SELECT 'new', 1 WHERE NOT EXISTS (SELECT 1 FROM p WHERE v = 'new')",
+        "INSERT INTO p(v, n) SELECT 'new', 2 WHERE NOT EXISTS (SELECT 1 FROM p WHERE v = 'new')",
+        "INSERT INTO p(v, n) SELECT 'cnt', (SELECT count(*) FROM p) WHERE (SELECT count(*) FROM p) > 3",
+    ] {
+        e.run_query(sql).unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT id, v, n FROM p WHERE id > 4 ORDER BY id",
+            true
+        ),
+        ["5|w|NULL", "6|new|1.0", "7|cnt|6.0"]
+    );
+}
+
+#[test]
+fn select_without_from_reads_tables_in_its_subqueries() {
+    let (_db, mut e) = fixture();
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT (SELECT count(*) FROM c), (SELECT max(t) FROM b)",
+            true
+        ),
+        ["2|orphan"]
+    );
+}

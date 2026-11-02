@@ -434,6 +434,10 @@ pub(crate) fn compile_insert_with_catalog(
             });
         }
         let found = match select_schemas {
+            // #939: a FROM-less source counts its own result columns.
+            Some([]) if select.from.is_none() => {
+                select_result_column_count(select, &TableSchema::default())
+            }
             Some([single]) => select_result_column_count(select, single),
             Some(joined) if joined.len() > 1 => {
                 let Some(from) = &select.from else {
@@ -557,8 +561,16 @@ pub(crate) fn compile_insert_with_catalog(
             // ephemeral table first, as sqlite3 does; inserting while it
             // still scans would let it see (or, after a page split, skip)
             // the statement's own rows.
-            let buffer = select_reads_table(select, &schema.name).then(|| {
+            // #939: a FROM-less source is always buffered: its rows are
+            // materialized (the constant-row path of a FROM-less subquery)
+            // and replayed below, like a buffered scan's.
+            let from_less = select.from.is_none();
+            let buffer = (from_less || select_reads_table(select, &schema.name)).then(|| {
                 let cursor = reg.alloc_cursor();
+                if from_less {
+                    // `materialize_from_subquery` opens it itself.
+                    return cursor;
+                }
                 em.emit(Instruction {
                     opcode: Opcode::OpenEphemeral,
                     p1: cursor,
@@ -622,7 +634,14 @@ pub(crate) fn compile_insert_with_catalog(
                 ));
                 Ok(())
             };
-            if select_schemas.len() > 1 {
+            if from_less {
+                let cursor = buffer.ok_or_else(|| CodegenError::Internal {
+                    reason: "a FROM-less INSERT ... SELECT source has no buffer".to_string(),
+                })?;
+                crate::codegen::row::subquery::materialize_from_subquery(
+                    &mut em, &mut reg, select, catalog, cursor,
+                )?;
+            } else if select_schemas.len() > 1 {
                 // #250: the SELECT's FROM clause has a JOIN — drive the
                 // same nested-loop join scan `compile_select_joined`
                 // uses, with cursor numbers offset above this INSERT's
