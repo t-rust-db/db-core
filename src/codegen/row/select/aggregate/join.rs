@@ -191,6 +191,7 @@ where
         &order_by_plans,
         sort_cursor,
         sorter_open_addr,
+        None,
     )?;
 
     let sort_addr = em.emit(Instruction::new(Opcode::SorterSort, sort_cursor, 0, 0));

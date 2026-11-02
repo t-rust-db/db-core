@@ -550,20 +550,20 @@ pub(super) fn emit_full_joined_row(
 /// all-bindings-concatenated pseudo record `compile_joined_sorted_scan`'s
 /// pass 2 re-opens after sorting — the joined counterpart to
 /// `emit_row_via_sink`/`compile_row_values`'s pseudo-cursor mode.
-/// Restricted to `*`/`table.*`/bare-column result columns: a computed
-/// expression can't be safely re-evaluated against the flat pseudo
-/// record (a bare `Column` maps to one absolute offset, but an arbitrary
-/// expression would need every column reference inside it individually
-/// retargeted — no small task within this ticket's scope), so it
-/// reports a clean `Unsupported` error instead of silently mis-projecting.
+/// A computed result column is not re-evaluated here: pass 1 evaluated
+/// it against the joined row and appended it to the record (see
+/// [`compile_joined_computed_results`]), and `computed` holds each such
+/// column's offset, in `select.columns` order.
 pub(super) fn emit_joined_pseudo_projection(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     select: &Select,
     scope: &Scope,
     pseudo_cursor: i32,
+    computed: &[usize],
 ) -> Result<(i32, usize), CodegenError> {
     let mut regs = Vec::new();
+    let mut computed = computed.iter();
     let read_offset = |em: &mut Emitter, reg: &mut RegAlloc, abs: usize| -> i32 {
         let r = reg.alloc();
         em.emit(Instruction::new(
@@ -626,12 +626,11 @@ pub(super) fn emit_joined_pseudo_projection(
                 regs.push(read_offset(em, reg, abs));
             }
             ResultColumn::Expr { .. } => {
-                return Err(CodegenError::Unsupported {
-                    reason: "ORDER BY combined with a JOIN only supports `*`/`table.*`/bare \
-                             column result columns today — a computed expression in the SELECT \
-                             list can't yet be re-projected from the sorted output"
+                let &abs = computed.next().ok_or_else(|| CodegenError::Internal {
+                    reason: "a computed result column has no offset in the sorted join record"
                         .to_string(),
-                });
+                })?;
+                regs.push(read_offset(em, reg, abs));
             }
         }
     }
@@ -697,6 +696,7 @@ where
 
     let mut null_mask = vec![false; exec_bindings.len()];
     let mut matched_regs: Vec<Option<i32>> = vec![None; exec_bindings.len()];
+    let mut computed = None;
     compile_join_level_for_sort(
         em,
         reg,
@@ -713,6 +713,7 @@ where
         order_by_plans,
         sort_cursor,
         sorter_open_addr,
+        Some(&mut computed),
     )?;
 
     let sort_addr = em.emit(Instruction::new(Opcode::SorterSort, sort_cursor, 0, 0));
@@ -746,7 +747,14 @@ where
     // `emit_joined_pseudo_projection` (it always reads `pseudo_cursor`
     // directly at an absolute offset) — `full_scope` is passed through
     // purely for its `tables`/`dedup_star` structure.
-    let (first, count) = emit_joined_pseudo_projection(em, reg, select, full_scope, pseudo_cursor)?;
+    let (first, count) = emit_joined_pseudo_projection(
+        em,
+        reg,
+        select,
+        full_scope,
+        pseudo_cursor,
+        computed.as_deref().unwrap_or_default(),
+    )?;
     // db-core#219 (carried over from db-core#208): `DISTINCT` combined
     // with `ORDER BY` dedups the *sorted* output on its projected result
     // columns, ahead of `LIMIT`/`OFFSET` so a suppressed duplicate never
@@ -805,6 +813,55 @@ pub(super) fn compile_join_order_by_sort_keys(
     Ok(sort_keys)
 }
 
+/// #937: evaluates each computed result column (anything but `*`,
+/// `table.*` or a bare column) against the joined row being buffered,
+/// as sqlite3 does, so it lands in the sorter record past the row's
+/// columns. Returns each one's offset from `first`, in `select.columns`
+/// order, for [`emit_joined_pseudo_projection`] to read back after the
+/// sort.
+pub(super) fn compile_joined_computed_results(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    select: &Select,
+    first: i32,
+) -> Result<Vec<usize>, CodegenError> {
+    let mut offsets = Vec::new();
+    for col in &select.columns {
+        let ResultColumn::Expr { expr, .. } = col else {
+            continue;
+        };
+        if matches!(strip_collate(expr).kind, ExprKind::Column { .. }) {
+            continue;
+        }
+        let r = compile_value(em, reg, scope, expr)?;
+        offsets.push(key_index(r, first)?);
+    }
+    Ok(offsets)
+}
+
+/// Records the computed-result offsets one emission point produced; every
+/// emission point buffers the same layout, so a second one that differs is
+/// a planner bug, not a row to mis-project.
+pub(super) fn record_computed_offsets(
+    seen: &mut Option<Vec<usize>>,
+    offsets: Vec<usize>,
+) -> Result<(), CodegenError> {
+    match seen {
+        Some(prev) if *prev != offsets => Err(CodegenError::Internal {
+            reason: format!(
+                "sorted join emission points disagree on computed result offsets: \
+                 {prev:?} vs {offsets:?}"
+            ),
+        }),
+        Some(_) => Ok(()),
+        None => {
+            *seen = Some(offsets);
+            Ok(())
+        }
+    }
+}
+
 /// [`compile_join_level`]'s variant for the `ORDER BY`+JOIN sorted path
 /// (#250): shares the exact same traversal — including the #243
 /// single-check-access seek optimization, which this variant used to miss
@@ -832,6 +889,7 @@ pub(super) fn compile_join_level_for_sort(
     order_by_plans: &[JoinOrderPlan],
     sort_cursor: i32,
     sorter_open_addr: usize,
+    mut computed: Option<&mut Option<Vec<usize>>>,
 ) -> Result<(), CodegenError> {
     super::joins::compile_join_level_traverse(
         em,
@@ -862,6 +920,12 @@ pub(super) fn compile_join_level_for_sort(
             };
             let sort_keys = compile_join_order_by_sort_keys(em, reg, scope, order_by_plans, first)?;
             em.patch_p4(sorter_open_addr, P4::SortKey(sort_keys));
+            // The grouped path (`None`) projects from its aggregates
+            // after grouping, never per buffered row.
+            if let Some(computed) = computed.as_deref_mut() {
+                let offsets = compile_joined_computed_results(em, reg, scope, select, first)?;
+                record_computed_offsets(computed, offsets)?;
+            }
 
             let count = record_width(reg.peek(), first)?;
             let record_reg = reg.alloc();
@@ -1269,5 +1333,20 @@ mod tests {
         assert!(matches!(target, JoinOrderTarget::Offset(0)));
         assert!(resolve_join_order_by_target(&lit_int(4), &select, &scope).is_err());
         assert!(resolve_join_order_by_target(&lit_int(0), &select, &scope).is_err());
+    }
+
+    #[test]
+    fn computed_offsets_first_emission_point_sets_the_layout() {
+        let mut seen = None;
+        record_computed_offsets(&mut seen, vec![7, 9]).unwrap();
+        record_computed_offsets(&mut seen, vec![7, 9]).unwrap();
+        assert_eq!(seen, Some(vec![7, 9]));
+    }
+
+    #[test]
+    fn computed_offsets_that_disagree_are_an_internal_error() {
+        let mut seen = Some(vec![7, 9]);
+        let err = record_computed_offsets(&mut seen, vec![7, 10]).unwrap_err();
+        assert!(matches!(err, CodegenError::Internal { reason } if reason.contains("disagree")));
     }
 }
