@@ -206,11 +206,45 @@ pub(crate) struct Emitter {
     labels: Vec<Option<usize>>,
     patches: Vec<(usize, Label)>,
     next_label: usize,
+    /// #950: when on, literal operands are loaded once in a prologue
+    /// block placed after the body (`Init` → loads → `Goto body`).
+    hoist: bool,
+    consts: Vec<Instruction>,
+    const_regs: std::collections::HashMap<String, i32>,
 }
 
 impl Emitter {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Turns on constant hoisting (see [`Emitter::hoisted_const`]).
+    pub(crate) fn enable_const_hoisting(&mut self) {
+        self.hoist = true;
+    }
+
+    /// Sets hoisting on/off, returning the previous setting.
+    pub(crate) fn set_const_hoisting(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.hoist, on)
+    }
+
+    pub(crate) fn hoisting(&self) -> bool {
+        self.hoist
+    }
+
+    /// Returns a register holding the constant `load` (its `p2` is
+    /// overwritten), queueing the load for the prologue. Identical
+    /// constants share one register; the caller must only read it.
+    pub(crate) fn hoisted_const(&mut self, reg: &mut RegAlloc, mut load: Instruction) -> i32 {
+        let key = format!("{:?}/{}/{:?}", load.opcode, load.p1, load.p4);
+        if let Some(r) = self.const_regs.get(&key) {
+            return *r;
+        }
+        let r = reg.alloc();
+        load.p2 = r;
+        self.consts.push(load);
+        self.const_regs.insert(key, r);
+        r
     }
 
     pub(crate) fn emit(&mut self, instr: Instruction) -> usize {
@@ -257,6 +291,7 @@ impl Emitter {
     /// Resolves every pending patch against its placed label's address,
     /// consuming the emitter into a finished [`Program`].
     pub(crate) fn finish(mut self) -> Program {
+        self.append_const_prologue();
         for (addr, label) in &self.patches {
             let Some(resolved) = self.labels.get(label.0).copied().flatten() else {
                 continue; // Every patched label is always placed by construction; skip defensively rather than panic.
@@ -269,6 +304,32 @@ impl Emitter {
             }
         }
         Program::new(self.instructions)
+    }
+
+    /// Appends the queued constant loads after the body, then a `Goto`
+    /// back to where `Init` originally jumped, and redirects `Init`.
+    fn append_const_prologue(&mut self) {
+        if self.consts.is_empty() {
+            return;
+        }
+        let Some(init) = self.instructions.first() else {
+            return;
+        };
+        if init.opcode != Opcode::Init {
+            return;
+        }
+        let Some(label) = self.patches.iter().find(|(a, _)| *a == 0).map(|(_, l)| *l) else {
+            return;
+        };
+        let start = self.instructions.len();
+        let loads = std::mem::take(&mut self.consts);
+        self.instructions.extend(loads);
+        self.goto(label);
+        // Init now targets the prologue; the Goto carries the old label.
+        self.patches.retain(|(a, _)| *a != 0);
+        if let (Some(init), Ok(t)) = (self.instructions.first_mut(), i32::try_from(start)) {
+            init.p2 = t;
+        }
     }
 
     /// Emits an unconditional jump to `label`, patched once placed.

@@ -109,6 +109,7 @@ pub fn compile_select_joined(
     }
 
     let mut em = Emitter::new();
+    em.enable_const_hoisting();
     let mut reg = RegAlloc::new();
 
     let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));

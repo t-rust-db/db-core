@@ -162,6 +162,62 @@ pub(crate) fn expr_collation(scope: &Scope, expr: &Expr) -> Option<Collation> {
     }
 }
 
+/// The load instruction for a literal into register `r`, or `None`
+/// for NULL (fresh registers already read as NULL).
+fn literal_instruction(lit: &Literal, r: i32) -> Result<Option<Instruction>, CodegenError> {
+    Ok(Some(match lit {
+        // #142: `Opcode::Integer`'s P1 is i32-only, so a literal outside
+        // that range (but within i64) loads via `Int64`'s P4-carried i64
+        // immediate instead — the harvested 64-bit counterpart.
+        Literal::Integer(i) => match i32::try_from(*i) {
+            Ok(p1) => Instruction::new(Opcode::Integer, p1, r, 0),
+            Err(_) => Instruction::with_p4(Opcode::Int64, 0, r, 0, P4::Int(*i)),
+        },
+        Literal::True => Instruction::new(Opcode::Integer, 1, r, 0),
+        Literal::False => Instruction::new(Opcode::Integer, 0, r, 0),
+        Literal::Str(s) => Instruction::with_p4(Opcode::String8, 0, r, 0, P4::Str(s.clone())),
+        // #142: a real literal loads as an actual `Value::Real` via the
+        // harvested `Real` opcode (the #138 text-coercion bug).
+        Literal::Float(f) => Instruction::with_p4(Opcode::Real, 0, r, 0, P4::Real(*f)),
+        // #142: a blob literal loads as an actual `Value::Blob` via the
+        // harvested `Blob` opcode.
+        Literal::Blob(bytes) => {
+            let len = i32::try_from(bytes.len()).map_err(|_| CodegenError::Unsupported {
+                reason: format!(
+                    "blob literal of {} bytes does not fit in a P1 operand",
+                    bytes.len()
+                ),
+            })?;
+            Instruction::with_p4(Opcode::Blob, len, r, 0, P4::Blob(bytes.clone()))
+        }
+        Literal::Null => return Ok(None),
+    }))
+}
+
+/// Compiles a read-only operand of an arithmetic/bitwise/concat
+/// expression. A literal operand is loaded once in the program prologue
+/// (#950, sqlite3's `Init` → constants → `Goto` shape) when the emitter
+/// has hoisting on; the register is never written by the consumer.
+fn compile_operand(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    scope: &Scope,
+    expr: &Expr,
+) -> Result<i32, CodegenError> {
+    let mut inner = expr;
+    while let ExprKind::Paren(e) = &inner.kind {
+        inner = e;
+    }
+    if em.hoisting() {
+        if let ExprKind::Literal(lit) = &inner.kind {
+            if let Some(instr) = literal_instruction(lit, 0)? {
+                return Ok(em.hoisted_const(reg, instr));
+            }
+        }
+    }
+    compile_value(em, reg, scope, expr)
+}
+
 /// Compiles `expr` into a fresh register holding its value (value
 /// mode) — used for result columns, function arguments, CASE branch
 /// results, and as the operand feed for jump-mode comparisons.
@@ -177,67 +233,9 @@ pub(crate) fn compile_value(
 
         ExprKind::Literal(lit) => {
             let r = reg.alloc();
-            match lit {
-                Literal::Integer(i) => {
-                    // #142: `Opcode::Integer`'s P1 is i32-only, so a
-                    // literal outside that range (but within i64) loads
-                    // via `Int64`'s P4-carried i64 immediate instead —
-                    // the harvested 64-bit counterpart, not a codegen
-                    // error.
-                    match i32::try_from(*i) {
-                        Ok(p1) => {
-                            em.emit(Instruction::new(Opcode::Integer, p1, r, 0));
-                        }
-                        Err(_) => {
-                            em.emit(Instruction::with_p4(Opcode::Int64, 0, r, 0, P4::Int(*i)));
-                        }
-                    }
-                }
-                Literal::True => {
-                    em.emit(Instruction::new(Opcode::Integer, 1, r, 0));
-                }
-                Literal::False => {
-                    em.emit(Instruction::new(Opcode::Integer, 0, r, 0));
-                }
-                Literal::Str(s) => {
-                    em.emit(Instruction::with_p4(
-                        Opcode::String8,
-                        0,
-                        r,
-                        0,
-                        P4::Str(s.clone()),
-                    ));
-                }
-                // #142: a real literal loads as an actual `Value::Real`
-                // via the harvested `Real` opcode, not `String8` text
-                // relying on coercion at comparison/arithmetic time
-                // (the #138 bug this used to cause).
-                Literal::Float(f) => {
-                    em.emit(Instruction::with_p4(Opcode::Real, 0, r, 0, P4::Real(*f)));
-                }
-                // #142: a blob literal loads as an actual `Value::Blob`
-                // via the harvested `Blob` opcode — hex-text never
-                // actually coerced back to a blob (BLOB affinity never
-                // converts text to blob, matching SQLite), so
-                // `WHERE b = x'41'` always failed under the old scheme.
-                Literal::Blob(bytes) => {
-                    let len =
-                        i32::try_from(bytes.len()).map_err(|_| CodegenError::Unsupported {
-                            reason: format!(
-                                "blob literal of {} bytes does not fit in a P1 operand",
-                                bytes.len()
-                            ),
-                        })?;
-                    em.emit(Instruction::with_p4(
-                        Opcode::Blob,
-                        len,
-                        r,
-                        0,
-                        P4::Blob(bytes.clone()),
-                    ));
-                }
-                Literal::Null => {} // Fresh registers already read as NULL.
-            }
+            if let Some(instr) = literal_instruction(lit, r)? {
+                em.emit(instr);
+            } // NULL: fresh registers already read as NULL.
             Ok(r)
         }
 
@@ -468,8 +466,8 @@ pub(crate) fn compile_value(
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
             ) =>
         {
-            let l = compile_value(em, reg, scope, lhs)?;
-            let r = compile_value(em, reg, scope, rhs)?;
+            let l = compile_operand(em, reg, scope, lhs)?;
+            let r = compile_operand(em, reg, scope, rhs)?;
             let dest = reg.alloc();
             // The caller's own `matches!` filter guarantees `op` is one
             // of these five; any other value is a codegen-internal
@@ -511,8 +509,8 @@ pub(crate) fn compile_value(
                     | BinaryOp::Concat
             ) =>
         {
-            let l = compile_value(em, reg, scope, lhs)?;
-            let r = compile_value(em, reg, scope, rhs)?;
+            let l = compile_operand(em, reg, scope, lhs)?;
+            let r = compile_operand(em, reg, scope, rhs)?;
             let dest = reg.alloc();
             let opcode = match op {
                 BinaryOp::BitAnd => Opcode::BitAnd,

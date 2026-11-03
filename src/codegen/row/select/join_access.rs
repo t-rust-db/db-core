@@ -799,8 +799,10 @@ pub(super) fn compile_join_order_by_sort_keys(
         let index = match &plan.target {
             JoinOrderTarget::Offset(off) => *off,
             JoinOrderTarget::Expr(expr) => {
-                let r = compile_value(em, reg, scope, expr)?;
-                key_index(r, first)?
+                let hoisting = em.set_const_hoisting(false);
+                let r = compile_value(em, reg, scope, expr);
+                em.set_const_hoisting(hoisting);
+                key_index(r?, first)?
             }
         };
         sort_keys.push(SortKeyColumn {
@@ -834,8 +836,12 @@ pub(super) fn compile_joined_computed_results(
         if matches!(strip_collate(expr).kind, ExprKind::Column { .. }) {
             continue;
         }
-        let r = compile_value(em, reg, scope, expr)?;
-        offsets.push(key_index(r, first)?);
+        // Offsets are measured from `first`, so every emission point must
+        // allocate the same registers: no shared (hoisted) constants.
+        let hoisting = em.set_const_hoisting(false);
+        let r = compile_value(em, reg, scope, expr);
+        em.set_const_hoisting(hoisting);
+        offsets.push(key_index(r?, first)?);
     }
     Ok(offsets)
 }
