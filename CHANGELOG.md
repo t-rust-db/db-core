@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.225.3] - 2026-11-03
+
+### Fixed
+
+- Row engine: a GROUP BY or ORDER BY term that sqlite3 folds to an integer (`+1`, `1 IS NOT NULL`, `0 AND a`, `1 IS NULL`) is read as a result position, or refused as out of range, as in sqlite3; an integer past 32 bits is a constant (#954).
+
 ## [0.225.2] - 2026-11-03
 
 ### Fixed
