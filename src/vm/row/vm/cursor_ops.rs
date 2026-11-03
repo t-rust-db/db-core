@@ -100,7 +100,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             }
             let ok = vm
                 .cursor_mut(instr.p1)?
-                .auto_index_insert(key, &collations, rowid);
+                .auto_index_insert(key.into_vec(), &collations, rowid);
             if !ok {
                 return Err(ExecError::MalformedInstruction {
                     opcode: "AutoIndexInsert",
