@@ -108,7 +108,9 @@ fn value_f64(v: &Value) -> f64 {
             Value::Real(r) => r,
             _ => 0.0,
         },
-        Value::Null | Value::Blob(_) => 0.0,
+        // A BLOB's bytes read as text (#946).
+        Value::Blob(b) => value_f64(&Value::Text(String::from_utf8_lossy(b).into_owned().into())),
+        Value::Null => 0.0,
     }
 }
 

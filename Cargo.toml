@@ -93,6 +93,11 @@ path = "tests/unit/without_rowid_write_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_ipk_affinity"
+path = "tests/unit/ipk_affinity_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_upsert"
 path = "tests/unit/upsert_test.rs"
 required-features = ["engine-row"]

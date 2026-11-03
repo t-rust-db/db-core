@@ -616,7 +616,14 @@ pub(crate) fn emit_update_row_body(
         r
     } else {
         match rowid_alias.and_then(|idx| assigned.get(idx).copied().flatten()) {
-            Some(expr) => compile_value(em, reg, scope, expr)?,
+            Some(expr) => {
+                let value = compile_value(em, reg, scope, expr)?;
+                // INTEGER PRIMARY KEY affinity (#946), see `compile_insert`.
+                let r = reg.alloc();
+                em.emit(Instruction::new(Opcode::Copy, value, r, 0));
+                em.emit(Instruction::new(Opcode::MustBeInt, r, 0, 0));
+                r
+            }
             None => {
                 let r = reg.alloc();
                 em.emit(Instruction::new(Opcode::Rowid, TABLE_CURSOR, r, 0));
