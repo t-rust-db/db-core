@@ -108,7 +108,9 @@ fn as_numeric(v: &Value) -> Value {
     match v {
         Value::Integer(_) | Value::Real(_) => v.clone(),
         Value::Text(s) => coerce_text_to_numeric(s),
-        Value::Null | Value::Blob(_) => Value::Integer(0),
+        // sqlite3 reads a BLOB's bytes as text, then as a number (#946).
+        Value::Blob(b) => coerce_text_to_numeric(&String::from_utf8_lossy(b)),
+        Value::Null => Value::Integer(0),
     }
 }
 

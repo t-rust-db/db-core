@@ -876,7 +876,14 @@ fn compile_row(
                 );
                 match explicit {
                     Some(source) => {
-                        let r = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;
+                        let value = compile_column_source(em, reg, schema, TABLE_CURSOR, &source)?;
+                        // INTEGER PRIMARY KEY affinity (#946): a lossless
+                        // TEXT/REAL becomes an INTEGER; anything else is
+                        // sqlite3's `datatype mismatch`. Copied first so a
+                        // shared source register is never rewritten.
+                        let r = reg.alloc();
+                        em.emit(Instruction::new(Opcode::Copy, value, r, 0));
+                        em.emit(Instruction::new(Opcode::MustBeInt, r, 0, 0));
                         // `DO UPDATE` needs the new row's other values (for
                         // `excluded`), so its probe waits until they exist.
                         if let Some(Handler::Update(_)) = handlers.rowid {

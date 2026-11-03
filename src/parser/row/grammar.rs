@@ -41,6 +41,9 @@ pub struct Parser {
     too_tall: bool,
     /// Column dialect (#839): `->` / `->>` parse as JSON calls.
     column: bool,
+    /// The last non-`main` schema a FROM-clause table was qualified with;
+    /// `CREATE VIEW` refuses one in its body (#946).
+    foreign_schema: Option<String>,
 }
 
 /// Recursion-depth cap for `expr`/`not_expr`/`unary_expr`, so pathological
@@ -277,6 +280,7 @@ impl Parser {
             pos: 0,
             depth: 0,
             too_tall: false,
+            foreign_schema: None,
             column: false,
         }
     }
@@ -1247,8 +1251,16 @@ impl Parser {
 
         self.expect_kw(Keyword::AS)?;
         let body_start = self.pos;
+        self.foreign_schema = None;
         let query = self.parse_select_stmt()?;
         let end = query.span;
+        // sqlite3: a view may only read the `main` database (#946).
+        if let Some(schema) = self.foreign_schema.take() {
+            return Err(ParseFail::Invalid {
+                message: format!("view {name} cannot reference objects in database {schema}"),
+                span: end,
+            });
+        }
         // A view has no bind step, so sqlite3 refuses a parameter in its
         // body (#650).
         let has_param = self
@@ -2262,6 +2274,9 @@ impl Parser {
             if self.column {
                 schema = Some(std::mem::replace(&mut name, table));
             } else {
+                if !name.eq_ignore_ascii_case("main") {
+                    self.foreign_schema = Some(name.clone());
+                }
                 name = qualified_name(&name, table);
             }
         }
@@ -3664,6 +3679,55 @@ mod tests {
         parser("CREATE VIEW v AS SELECT 1 WHERE 'a?' = 'b'")
             .parse_create_view_stmt()
             .unwrap();
+    }
+
+    // parser_row_grammar_parse_create_view_stmt_c684abf3 (#946):
+    // `let Some(schema) = self.foreign_schema.take()` -- a view body may
+    // only read the `main` database.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_parse_create_view_stmt_c684abf3__v1_other_database_is_refused() {
+        for sql in [
+            "CREATE VIEW v AS SELECT * FROM r.t",
+            "CREATE VIEW v AS SELECT * FROM temp.t",
+            "CREATE VIEW v AS SELECT * FROM t WHERE a IN (SELECT a FROM r.t)",
+        ] {
+            let err = parser(sql).parse_create_view_stmt().unwrap_err();
+            assert!(
+                matches!(err, ParseFail::Invalid { ref message, .. }
+                    if message.starts_with("view v cannot reference objects in database ")),
+                "{sql}"
+            );
+        }
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_parse_create_view_stmt_c684abf3__v2_main_or_unqualified_parses() {
+        for sql in [
+            "CREATE VIEW v AS SELECT * FROM main.t",
+            "CREATE VIEW v AS SELECT * FROM MAIN.t",
+            "CREATE VIEW v AS SELECT * FROM t",
+        ] {
+            parser(sql).parse_create_view_stmt().unwrap();
+        }
+    }
+
+    // parser_row_grammar_table_ref_53559182 (#946):
+    // `!name.eq_ignore_ascii_case("main")` -- only another schema is
+    // remembered for `CREATE VIEW` to refuse.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_53559182__v1_other_schema_is_remembered() {
+        let mut p = parser("r.t");
+        p.table_ref().unwrap();
+        assert_eq!(p.foreign_schema.as_deref(), Some("r"));
+    }
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_grammar_table_ref_53559182__v2_main_is_not_remembered() {
+        let mut p = parser("main.t");
+        p.table_ref().unwrap();
+        assert_eq!(p.foreign_schema, None);
     }
 
     /// `t0, t1, ...`: a FROM clause body of `n` comma-joined tables.

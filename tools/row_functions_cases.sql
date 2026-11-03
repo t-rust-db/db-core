@@ -147,3 +147,11 @@ CREATE TABLE c650c(a, CHECK (a > :p))
 CREATE TABLE c650d(a CHECK (a > 1))
 EXPLAIN QUERY PLAN SELECT *, t.* FROM (VALUES (1))
 EXPLAIN QUERY PLAN SELECT zzz.* FROM (SELECT 1 AS a) AS b
+SELECT x'35' * 1, x'35' - 0, -x'35', x'3132' / 2, abs(x'2D35')
+SELECT 10 * x'35', 10 + x'35', 10 / CAST('5' AS BLOB), x'35' % 3
+SELECT 60529 / CAST(-693 AS BLOB)
+SELECT x'ff' + 1, x'' + 1, x'31322e35' + 1, x'3178' + 1
+SELECT hex(+x'35'), typeof(+x'35'), x'35' > 4, x'35' = 5
+SELECT sqrt(x'39'), round(x'312e37'), CAST(x'3132' AS INTEGER) + x'31'
+SELECT CASE WHEN CAST(-693 AS BLOB) / 7 THEN 'y' ELSE 'n' END
+SELECT 1 WHERE x'35' * 1 = 5

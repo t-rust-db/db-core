@@ -206,10 +206,7 @@ impl std::fmt::Display for ExecError {
                     "{opcode}: expected a different value type, found {found}"
                 )
             }
-            ExecError::MustBeInt => write!(
-                f,
-                "MustBeInt: value cannot be converted to an integer without data loss"
-            ),
+            ExecError::MustBeInt => write!(f, "datatype mismatch"),
             ExecError::MalformedInstruction { opcode, reason } => {
                 write!(f, "{opcode}: malformed instruction ({reason})")
             }
@@ -1121,7 +1118,11 @@ fn try_to_integer(v: &Value) -> Option<i64> {
         Value::Integer(i) => Some(*i),
         #[allow(clippy::cast_possible_truncation)]
         Value::Real(r) if r.fract() == 0.0 && r.is_finite() && in_i64_range(*r) => Some(*r as i64),
-        Value::Text(s) => s.trim().parse::<i64>().ok(),
+        Value::Text(s) => match crate::coerce::numeric_text(s) {
+            Some(Value::Integer(i)) => Some(i),
+            Some(real) => try_to_integer(&real),
+            None => None,
+        },
         _ => None,
     }
 }

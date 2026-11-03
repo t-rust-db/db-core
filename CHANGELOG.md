@@ -4,6 +4,14 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.225.2] - 2026-11-03
+
+### Fixed
+
+- Row engine: INTEGER PRIMARY KEY on INSERT/UPDATE applies integer affinity; a lossless TEXT or REAL is stored as an integer, others fail with `datatype mismatch` (#946).
+- Row engine: a BLOB operand in arithmetic, unary minus and numeric functions is read as text, then as a number, as sqlite3 does (#946).
+- Row engine: `CREATE VIEW` refuses a schema qualifier other than `main` in its body (#946).
+
 ## [0.225.1] - 2026-11-02
 
 ### Fixed
