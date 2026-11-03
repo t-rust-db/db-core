@@ -83,6 +83,11 @@ path = "tests/unit/index_delete_test.rs"
 required-features = ["engine-row"]
 
 [[test]]
+name = "unit_index_desc"
+path = "tests/unit/index_desc_test.rs"
+required-features = ["engine-row"]
+
+[[test]]
 name = "unit_without_rowid_read"
 path = "tests/unit/without_rowid_read_test.rs"
 required-features = ["engine-row"]

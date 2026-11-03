@@ -49,6 +49,26 @@ pub fn populate_index_from_table(
     index_root_page: u32,
     column_indices: &[usize],
 ) -> Result<(), BtreeError> {
+    populate_index_from_table_ordered(
+        pager,
+        header,
+        table_root_page,
+        index_root_page,
+        column_indices,
+        &[],
+    )
+}
+
+/// [`populate_index_from_table`] for an index whose key columns `desc`
+/// marks `DESC` (#945).
+pub fn populate_index_from_table_ordered(
+    pager: &mut Pager,
+    header: &DatabaseHeader,
+    table_root_page: u32,
+    index_root_page: u32,
+    column_indices: &[usize],
+    desc: &[bool],
+) -> Result<(), BtreeError> {
     let encoding = header.text_encoding;
     // Collect every row's key up front rather than interleaving reads
     // with `insert_entry` writes: the table cursor borrows `pager`
@@ -64,7 +84,11 @@ pub fn populate_index_from_table(
             let values = decode_record(&r.payload, encoding)?;
             let mut key: Vec<Value> = Vec::with_capacity(column_indices.len().saturating_add(1));
             for &idx in column_indices {
-                key.push(values.get(idx).cloned().unwrap_or(Value::Null));
+                key.push(if idx == crate::schema::INDEX_KEY_ROWID {
+                    Value::Integer(r.rowid)
+                } else {
+                    values.get(idx).cloned().unwrap_or(Value::Null)
+                });
             }
             key.push(Value::Integer(r.rowid));
             keys.push(key);
@@ -72,7 +96,7 @@ pub fn populate_index_from_table(
         }
     }
     for key in &keys {
-        super::insert_entry(pager, header, index_root_page, key, encoding)?;
+        super::insert_entry_ordered(pager, header, index_root_page, key, encoding, desc)?;
     }
     Ok(())
 }

@@ -236,6 +236,7 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
                 table_root_page,
                 sql,
                 column_indices,
+                desc,
                 ..
             } = &instr.p4
             else {
@@ -244,19 +245,20 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
                     reason: format!("expected a CreateIndex P4, got {:?}", instr.p4),
                 });
             };
-            let (name, table_name, table_root_page, sql, column_indices) = (
+            let (name, table_name, table_root_page, sql, column_indices, desc) = (
                 name.clone(),
                 table_name.clone(),
                 *table_root_page,
                 sql.clone(),
                 column_indices.clone(),
+                desc.clone(),
             );
             let storage = vm.schema_storage("CreateIndex")?;
             let root = storage
                 .create_index_root()
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
-                .populate_index(root, table_root_page, &column_indices)
+                .populate_index_ordered(root, table_root_page, &column_indices, &desc)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .insert_master_row("index", &name, &table_name, root, &sql)

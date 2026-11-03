@@ -27,7 +27,7 @@ use crate::codegen::row::expr::{column_index, emit_column_read};
 use crate::codegen::row::select::CodegenError;
 use crate::codegen::row::{Emitter, RegAlloc};
 use crate::codegen::row::{IndexSchema, TableSchema};
-use crate::vm::row::{Instruction, Opcode, P4};
+use crate::vm::row::{Instruction, Opcode, SortKeyColumn, P4};
 
 /// Validates a table's `sqlite_master.rootpage` before it's used as an
 /// `OpenRead`/`OpenWrite` operand.
@@ -95,6 +95,26 @@ pub(crate) fn valid_index_root_page(index: &IndexSchema) -> Result<i32, CodegenE
         })
 }
 
+/// The key descriptor an index cursor needs when any key column is `DESC`
+/// (#945), `None` for the all-ascending common case (whose opcodes then
+/// stay exactly as before). Only the `descending` flags are read by the
+/// cursor factory.
+pub(crate) fn index_sort_key(index: &IndexSchema) -> Option<Vec<SortKeyColumn>> {
+    index.columns.iter().any(|c| c.desc).then(|| {
+        index
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| SortKeyColumn {
+                index: i,
+                descending: c.desc,
+                collation: c.collation,
+                nulls_first: false,
+            })
+            .collect()
+    })
+}
+
 /// `OpenWrite`s one write cursor per index on `schema`, starting at
 /// `first_cursor`, with `P5 = 1` selecting `CursorSlot::IndexWrite`
 /// (#194's `OpenWrite` doc).
@@ -109,6 +129,10 @@ pub(crate) fn open_index_cursors(
         let mut instr =
             Instruction::new(Opcode::OpenWrite, cursor, root_page, schema.database_p3());
         instr.p5 = 1;
+        // A `DESC` key column reorders the b-tree: tell the cursor (#945).
+        if let Some(key) = index_sort_key(index) {
+            instr.p4 = P4::SortKey(key);
+        }
         em.emit(instr);
     }
     Ok(())
@@ -148,22 +172,6 @@ pub(crate) fn emit_index_key_ops(
         let mut start = None;
         for col in &index.columns {
             reject_non_binary_key(index, col)?;
-            if col.desc {
-                // No index b-tree comparator anywhere in this codebase
-                // (#171) is aware of per-column sort direction — it
-                // always compares the encoded key ascending. Silently
-                // building the key as if `col` were ascending would
-                // write an index stock `sqlite3` (which does honor
-                // `DESC`) reads back in the wrong order. Reject loudly
-                // instead of writing a key that's byte-for-byte
-                // plausible but semantically backwards.
-                return Err(CodegenError::Unsupported {
-                    reason: format!(
-                        "index {} has a DESC column ({}); descending index keys aren't supported yet",
-                        index.name, col.name
-                    ),
-                });
-            }
             let col_idx =
                 column_index(schema, &col.name).ok_or_else(|| CodegenError::Unsupported {
                     reason: format!(
@@ -224,14 +232,6 @@ pub(crate) fn emit_index_key_ops_from_regs(
         let mut start = None;
         for col in &index.columns {
             reject_non_binary_key(index, col)?;
-            if col.desc {
-                return Err(CodegenError::Unsupported {
-                    reason: format!(
-                        "index {} has a DESC column ({}); descending index keys aren't supported yet",
-                        index.name, col.name
-                    ),
-                });
-            }
             let col_idx =
                 column_index(schema, &col.name).ok_or_else(|| CodegenError::Unsupported {
                     reason: format!(
@@ -320,30 +320,36 @@ mod tests {
     }
 
     #[test]
-    fn emit_index_key_ops_rejects_a_desc_index_column() {
-        // #171: no index b-tree comparator understands per-column sort
-        // direction, so a `DESC` index column is rejected outright
-        // rather than silently built as if it were ascending. Not
-        // reachable through SQL today (the DDL parser doesn't accept a
-        // descending index key yet), so this builds the schema by hand.
+    fn a_desc_index_column_is_maintained_and_its_cursor_carries_the_direction() {
+        // #945: the key is built as for an ascending column; the write
+        // cursor's `OpenWrite` carries the per-column direction so the
+        // b-tree is searched in the order it is stored in.
         let schema = table("t", 2, &["a", "b"]);
         let index = IndexSchema {
             name: "idx_desc".to_string(),
             root_page: 3,
-            columns: vec![IndexedColumn {
-                name: "a".to_string(),
-                desc: true,
-                collation: Collation::Binary,
-            }],
+            columns: vec![
+                IndexedColumn {
+                    name: "a".to_string(),
+                    desc: true,
+                    collation: Collation::Binary,
+                },
+                IndexedColumn {
+                    name: "b".to_string(),
+                    desc: false,
+                    collation: Collation::Binary,
+                },
+            ],
             ..Default::default()
         };
-        let mut em = Emitter::new();
-        let mut reg = RegAlloc::new();
         let schema_with_index = TableSchema {
             indexes: vec![index],
             ..schema
         };
-        let e = emit_index_key_ops(
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::new();
+        open_index_cursors(&mut em, &schema_with_index, 1).unwrap();
+        emit_index_key_ops(
             &mut em,
             &mut reg,
             &schema_with_index,
@@ -352,7 +358,22 @@ mod tests {
             Opcode::IdxInsert,
             None,
         )
-        .unwrap_err();
-        assert!(matches!(e, CodegenError::Unsupported { .. }), "{e:?}");
+        .unwrap();
+        let program = em.finish();
+        let open = &program.instructions[0];
+        assert_eq!(open.opcode, Opcode::OpenWrite);
+        match &open.p4 {
+            P4::SortKey(key) => {
+                assert_eq!(
+                    key.iter().map(|k| k.descending).collect::<Vec<_>>(),
+                    [true, false]
+                );
+            }
+            other => panic!("expected a SortKey, got {other:?}"),
+        }
+        assert!(program
+            .instructions
+            .iter()
+            .any(|i| i.opcode == Opcode::IdxInsert));
     }
 }

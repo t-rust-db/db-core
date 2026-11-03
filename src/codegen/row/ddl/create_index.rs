@@ -6,12 +6,9 @@
 //! registers the row in `sqlite_master`, and bumps the schema cookie —
 //! all at exec time, mirroring `create_table.rs`'s single-opcode shape.
 //!
-//! Column resolution and the `DESC`-column rejection mirror
-//! `codegen::index_maintenance::emit_index_key_ops`'s reasoning exactly:
-//! no index b-tree comparator in this codebase is aware of per-column
-//! sort direction, so a `DESC` column would build a key that reads back
-//! in the wrong order under a comparator that always treats it as
-//! ascending.
+//! `DESC` key columns (#945) travel as per-column flags in the `P4`, so
+//! the b-tree is built (and later searched) in the order sqlite3 reads it
+//! back in.
 
 use crate::codegen::row::expr::column_index;
 use crate::codegen::row::select::CodegenError;
@@ -30,15 +27,8 @@ pub fn compile_create_index(
     source: &str,
 ) -> Result<Program, CodegenError> {
     let mut column_indices = Vec::with_capacity(ci.columns.len());
+    let desc: Vec<bool> = ci.columns.iter().map(|c| c.desc == Some(true)).collect();
     for col in &ci.columns {
-        if col.desc == Some(true) {
-            return Err(CodegenError::Unsupported {
-                reason: format!(
-                    "index {} has a DESC column; descending index keys aren't supported yet",
-                    ci.name
-                ),
-            });
-        }
         let crate::parser::ast::ExprKind::Column { name, .. } = &col.expr.kind else {
             return Err(CodegenError::Unsupported {
                 reason: format!(
@@ -53,7 +43,11 @@ pub fn compile_create_index(
                 ci.name, name
             ),
         })?;
-        column_indices.push(idx);
+        column_indices.push(if Some(idx) == schema.rowid_alias {
+            crate::schema::INDEX_KEY_ROWID
+        } else {
+            idx
+        });
     }
 
     let start = ci.span.offset as usize;
@@ -83,6 +77,7 @@ pub fn compile_create_index(
             sql,
             column_indices,
             unique: ci.unique,
+            desc,
         },
     ));
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
@@ -137,14 +132,17 @@ mod tests {
     }
 
     #[test]
-    fn rejects_desc_column() {
-        let sql = "CREATE INDEX idx_t_b ON t(b DESC)";
+    fn desc_columns_travel_as_flags() {
+        let sql = "CREATE INDEX idx_t_ab ON t(a, b DESC)";
         let ci = match parse_create_index(sql) {
             ParseOutcome::Accepted(c) => c,
             other => panic!("expected Accepted, got {other:?}"),
         };
-        let err = compile_create_index(&ci, &schema(), sql).unwrap_err();
-        assert!(matches!(err, CodegenError::Unsupported { .. }));
+        let program = compile_create_index(&ci, &schema(), sql).unwrap();
+        match &program.instructions[1].p4 {
+            P4::CreateIndex { desc, .. } => assert_eq!(desc, &vec![false, true]),
+            other => panic!("expected P4::CreateIndex, got {other:?}"),
+        }
     }
 
     #[test]

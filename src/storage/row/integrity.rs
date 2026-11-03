@@ -232,7 +232,9 @@ fn check_without_rowid_index<P: PageSource + Clone>(
         match decode_record(&entry.payload, header.text_encoding) {
             Ok(decoded) => {
                 if let Some(p) = &prev {
-                    if compare_index_keys(p, &decoded) == std::cmp::Ordering::Greater {
+                    if compare_index_keys_by(p, &decoded, &index_desc(index))
+                        == std::cmp::Ordering::Greater
+                    {
                         problems.push(format!(
                             "*** in database main *** index {:?}: keys out of order",
                             index.name
@@ -312,7 +314,9 @@ fn check_index<P: PageSource + Clone>(
             .get(..decoded.len().saturating_sub(1))
             .unwrap_or(&[]);
         if let Some(p) = &prev_key {
-            if compare_index_keys(p.as_slice(), key) == std::cmp::Ordering::Greater {
+            if compare_index_keys_by(p.as_slice(), key, &index_desc(index))
+                == std::cmp::Ordering::Greater
+            {
                 problems.push(format!(
                     "*** in database main *** index {:?}: keys out of order",
                     index.name
@@ -354,13 +358,27 @@ fn advance<P: PageSource>(
 /// here (known limitation; matches this checker's scope, not stock
 /// SQLite's full collation-aware `integrity_check`).
 fn compare_index_keys(a: &[Value], b: &[Value]) -> std::cmp::Ordering {
-    for (x, y) in a.iter().zip(b.iter()) {
+    compare_index_keys_by(a, b, &[])
+}
+
+/// [`compare_index_keys`] with `desc[i]` reversing key column `i` (#945).
+fn compare_index_keys_by(a: &[Value], b: &[Value], desc: &[bool]) -> std::cmp::Ordering {
+    for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
         let c = compare_values(x, y);
         if c != std::cmp::Ordering::Equal {
-            return c;
+            return if desc.get(i).copied().unwrap_or(false) {
+                c.reverse()
+            } else {
+                c
+            };
         }
     }
     a.len().cmp(&b.len())
+}
+
+/// The `DESC` flag of each of `index`'s key columns.
+fn index_desc(index: &IndexSchema) -> Vec<bool> {
+    index.columns.iter().map(|c| c.desc).collect()
 }
 
 fn compare_values(a: &Value, b: &Value) -> std::cmp::Ordering {

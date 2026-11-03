@@ -560,6 +560,9 @@ pub enum P4 {
         column_indices: Vec<usize>,
         /// Whether the index enforces a `UNIQUE` constraint.
         unique: bool,
+        /// Per key column, whether it sorts `DESC` (#945); parallel to
+        /// `column_indices`.
+        desc: Vec<bool>,
     },
     /// `DropIndex` (db-core#97): the target index's name/root page.
     DropIndex {

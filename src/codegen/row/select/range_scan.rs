@@ -201,9 +201,10 @@ fn column_affinity(schema: &TableSchema, col_name: &str) -> Affinity {
 /// unindexed column would.
 pub(super) fn find_leading_index(schema: &TableSchema, col_name: &str) -> Option<usize> {
     schema.indexes.iter().position(|idx| {
-        idx.columns.first().is_some_and(|c| {
-            c.name.eq_ignore_ascii_case(col_name) && c.collation == Collation::Binary
-        })
+        !idx.has_desc()
+            && idx.columns.first().is_some_and(|c| {
+                c.name.eq_ignore_ascii_case(col_name) && c.collation == Collation::Binary
+            })
     })
 }
 
@@ -1675,6 +1676,9 @@ fn plan_conjunct_seek(
     let terms = conjunct_terms(where_expr);
     let mut best: Option<(usize, bool, ConjunctSeek)> = None;
     for (index_position, index) in schema.indexes.iter().enumerate() {
+        if index.has_desc() {
+            continue;
+        }
         let mut eq = Vec::new();
         let mut lower = None;
         let mut upper = None;

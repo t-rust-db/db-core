@@ -1602,14 +1602,6 @@ fn emit_unique_probe(
     let mut key_col_indices = Vec::with_capacity(index.columns.len());
     for col in &index.columns {
         crate::codegen::row::index_maintenance::reject_non_binary_key(index, col)?;
-        if col.desc {
-            return Err(CodegenError::Unsupported {
-                reason: format!(
-                    "index {} has a DESC column ({}); descending index keys aren't supported yet",
-                    index.name, col.name
-                ),
-            });
-        }
         let col_idx = column_index(schema, &col.name).ok_or_else(|| CodegenError::Unsupported {
             reason: format!(
                 "index {} references a column or expression this codegen can't resolve: {}",

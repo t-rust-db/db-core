@@ -652,6 +652,7 @@ mod tests {
                     sql: "CREATE INDEX idx ON t(a)".to_string(),
                     column_indices: vec![0],
                     unique: false,
+                    desc: vec![false],
                 },
             ),
             Instruction::with_p4(
