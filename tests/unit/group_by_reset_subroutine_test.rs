@@ -155,3 +155,57 @@ fn implicit_group_over_zero_rows_still_finalizes_empty() {
         .collect();
     assert_eq!(values, vec![vec!["0"]]);
 }
+
+/// #950: group-change detection is sqlite3's one `Compare` + `Jump`, not
+/// the per-column null-aware `Eq`/`IsNull`/`NotNull` ladder.
+#[test]
+fn sorted_group_by_detects_group_change_with_compare_and_jump() {
+    let db = TempDb::new("compare-jump");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE gbcmp(a INTEGER, b INTEGER); \
+         INSERT INTO gbcmp(a, b) VALUES (1, NULL), (3, NULL), (5, 2), (7, 3)",
+    )
+    .unwrap();
+
+    let rows = opcodes(&e, "SELECT b, count(*) FROM gbcmp WHERE a > 0 GROUP BY b");
+
+    assert_eq!(count(&rows, "Compare"), 1, "{rows:?}");
+    assert_eq!(count(&rows, "Jump"), 1, "{rows:?}");
+    assert_eq!(count(&rows, "NotNull"), 0, "{rows:?}");
+
+    // NULL keys still land in one group.
+    let result = e
+        .run_query("SELECT b, count(*) FROM gbcmp WHERE a > 0 GROUP BY b ORDER BY b")
+        .unwrap();
+    assert_eq!(result.rows.len(), 3, "{:?}", result.rows);
+}
+
+/// #950: literal operands load once in the prologue (after the body),
+/// not inside the scan loop.
+#[test]
+fn literal_operands_are_loaded_once_after_the_body() {
+    let db = TempDb::new("hoist");
+    let mut e = open(&db);
+    e.run_query(
+        "CREATE TABLE hz(n INTEGER, x INTEGER); INSERT INTO hz(n, x) VALUES (1, 2), (3, 4)",
+    )
+    .unwrap();
+
+    let rows = opcodes(&e, "SELECT (n + x) * 2 - (x - n) * 3 FROM hz");
+    let ops: Vec<&str> = rows.iter().map(|(o, _)| o.as_str()).collect();
+    let halt = ops.iter().position(|o| *o == "Halt").unwrap();
+    let integers: Vec<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| **o == "Integer")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(integers.len(), 2, "{ops:?}");
+    assert!(integers.iter().all(|&i| i > halt), "{ops:?}");
+
+    let result = e
+        .run_query("SELECT (n + x) * 2 - (x - n) * 3 FROM hz ORDER BY n")
+        .unwrap();
+    assert_eq!(result.rows.len(), 2);
+}

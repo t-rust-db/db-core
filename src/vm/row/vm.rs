@@ -373,6 +373,8 @@ pub struct Vm {
     agg_contexts: Vec<Option<AggState>>,
     rows: Vec<Vec<Value>>,
     once_fired: HashSet<usize>,
+    /// The ordering the last `Compare` found, read by `Jump`.
+    last_compare: Ordering,
     params: Vec<Value>,
     /// Whether this `Vm` is outside an explicit transaction (db-core#89)
     /// -- `true` until `Opcode::Transaction` clears it, restored by
@@ -444,6 +446,7 @@ impl Default for Vm {
             agg_contexts: Vec::new(),
             rows: Vec::new(),
             once_fired: HashSet::new(),
+            last_compare: Ordering::Equal,
             params: Vec::new(),
             autocommit: true,
             connection: ConnectionState::default(),
@@ -1170,6 +1173,7 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         | Opcode::Gosub
         | Opcode::Return
         | Opcode::Halt
+        | Opcode::Jump
         | Opcode::IsNull
         | Opcode::NotNull
         | Opcode::IfNot
@@ -1178,7 +1182,8 @@ fn step(vm: &mut Vm, pc: usize, instr: &Instruction) -> Result<Step, ExecError> 
         | Opcode::IfPos
         | Opcode::IfNotZero
         | Opcode::DecrJumpZero => step_control(vm, pc, instr),
-        Opcode::Eq
+        Opcode::Compare
+        | Opcode::Eq
         | Opcode::Ge
         | Opcode::Gt
         | Opcode::Le
@@ -1362,6 +1367,46 @@ mod tests {
     fn run(instructions: Vec<Instruction>) -> Vec<Vec<Value>> {
         let mut vm = Vm::new();
         execute(&mut vm, &Program::new(instructions)).unwrap()
+    }
+
+    /// `Compare` + `Jump` (#950): lt/eq/gt dispatch, with NULL equal to NULL
+    /// so GROUP BY keeps NULL keys in one group.
+    fn compare_then_jump(a: Value, b: Value) -> i64 {
+        let mut vm = Vm::new();
+        vm.set_register(1, a).unwrap();
+        vm.set_register(2, b).unwrap();
+        let rows = execute(
+            &mut vm,
+            &Program::new(vec![
+                Instruction::with_p4(
+                    Opcode::Compare,
+                    1,
+                    2,
+                    1,
+                    P4::SeekKey(vec![Collation::Binary]),
+                ),
+                Instruction::new(Opcode::Jump, 2, 4, 6),
+                Instruction::new(Opcode::Integer, -1, 5, 0), // pc 2: less
+                Instruction::new(Opcode::Goto, 0, 7, 0),
+                Instruction::new(Opcode::Integer, 0, 5, 0), // pc 4: equal
+                Instruction::new(Opcode::Goto, 0, 7, 0),
+                Instruction::new(Opcode::Integer, 1, 5, 0), // pc 6: greater
+                Instruction::new(Opcode::Halt, 0, 0, 0),
+            ]),
+        );
+        drop(rows);
+        match vm.register(5).unwrap() {
+            Value::Integer(i) => *i,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compare_jump_dispatches_on_ordering_and_groups_nulls() {
+        assert_eq!(compare_then_jump(Value::Integer(1), Value::Integer(2)), -1);
+        assert_eq!(compare_then_jump(Value::Integer(3), Value::Integer(2)), 1);
+        assert_eq!(compare_then_jump(Value::Null, Value::Null), 0);
+        assert_eq!(compare_then_jump(Value::Integer(2), Value::Integer(2)), 0);
     }
 
     #[test]
@@ -3531,7 +3576,7 @@ mod tests {
 
     #[test]
     fn opcode_all_is_sqlite_rs_harvested_inventory() {
-        assert_eq!(Opcode::ALL.len(), 69);
+        assert_eq!(Opcode::ALL.len(), 71);
         assert!(Opcode::ALL.contains(&Opcode::SorterOpen));
         assert!(!Opcode::ALL.contains(&Opcode::AutoCommit));
     }

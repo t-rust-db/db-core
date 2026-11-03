@@ -10059,6 +10059,7 @@ pub db_core::vm::row::program::Opcode::Blob
 pub db_core::vm::row::program::Opcode::Cast
 pub db_core::vm::row::program::Opcode::Checkpoint
 pub db_core::vm::row::program::Opcode::Column
+pub db_core::vm::row::program::Opcode::Compare
 pub db_core::vm::row::program::Opcode::Concat
 pub db_core::vm::row::program::Opcode::Copy
 pub db_core::vm::row::program::Opcode::Count
@@ -10106,6 +10107,7 @@ pub db_core::vm::row::program::Opcode::Int64
 pub db_core::vm::row::program::Opcode::Integer
 pub db_core::vm::row::program::Opcode::IntegrityCheck
 pub db_core::vm::row::program::Opcode::IsNull
+pub db_core::vm::row::program::Opcode::Jump
 pub db_core::vm::row::program::Opcode::Last
 pub db_core::vm::row::program::Opcode::Le
 pub db_core::vm::row::program::Opcode::Lt
@@ -10154,7 +10156,7 @@ pub db_core::vm::row::program::Opcode::Update
 pub db_core::vm::row::program::Opcode::Variable
 pub db_core::vm::row::program::Opcode::WalAutocheckpoint
 impl db_core::vm::row::program::Opcode
-pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 69]
+pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 71]
 impl db_core::vm::row::program::Opcode
 pub fn db_core::vm::row::program::Opcode::register_operands(self) -> db_core::vm::row::program::RegisterOperands
 impl core::clone::Clone for db_core::vm::row::program::Opcode
@@ -10696,6 +10698,7 @@ pub db_core::vm::row::Opcode::Blob
 pub db_core::vm::row::Opcode::Cast
 pub db_core::vm::row::Opcode::Checkpoint
 pub db_core::vm::row::Opcode::Column
+pub db_core::vm::row::Opcode::Compare
 pub db_core::vm::row::Opcode::Concat
 pub db_core::vm::row::Opcode::Copy
 pub db_core::vm::row::Opcode::Count
@@ -10743,6 +10746,7 @@ pub db_core::vm::row::Opcode::Int64
 pub db_core::vm::row::Opcode::Integer
 pub db_core::vm::row::Opcode::IntegrityCheck
 pub db_core::vm::row::Opcode::IsNull
+pub db_core::vm::row::Opcode::Jump
 pub db_core::vm::row::Opcode::Last
 pub db_core::vm::row::Opcode::Le
 pub db_core::vm::row::Opcode::Lt
@@ -10791,7 +10795,7 @@ pub db_core::vm::row::Opcode::Update
 pub db_core::vm::row::Opcode::Variable
 pub db_core::vm::row::Opcode::WalAutocheckpoint
 impl db_core::vm::row::program::Opcode
-pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 69]
+pub const db_core::vm::row::program::Opcode::ALL: [db_core::vm::row::program::Opcode; 71]
 impl db_core::vm::row::program::Opcode
 pub fn db_core::vm::row::program::Opcode::register_operands(self) -> db_core::vm::row::program::RegisterOperands
 impl core::clone::Clone for db_core::vm::row::program::Opcode
