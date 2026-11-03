@@ -229,9 +229,9 @@ fn sql_rows() -> Vec<(&'static str, String, Expect)> {
         // Clauses with edge values.
         // #940: a FROM-less SELECT reads one row, as in sqlite3.
         ("limit_neg", "SELECT 1 LIMIT -9223372036854775808 OFFSET 9223372036854775807".into(), Rows("")),
-        // sqlite3 reads an integer past 32 bits as a constant and returns
-        // the row; db-core refuses it as a position (on any SELECT).
-        ("order_by_huge", "SELECT 1 ORDER BY 9223372036854775807".into(), Error("ORDER BY position 9223372036854775807 is out of range")),
+        // sqlite3 reads an integer past 32 bits as a constant, not a
+        // position, and returns the row (#954).
+        ("order_by_huge", "SELECT 1 ORDER BY 9223372036854775807".into(), Rows("1")),
         ("group_by_idx0", "SELECT 1 GROUP BY 0".into(), Error("1st GROUP BY term out of range - should be between 1 and 1")),
         (
             "recursive_cte_limit",
