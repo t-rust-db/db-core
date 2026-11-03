@@ -1300,7 +1300,10 @@ mod tests {
         };
         let source: Rc<dyn PageSource> =
             Rc::new(VfsPageSource::open(&UnixVfs, db.path(), header.page_size).unwrap());
-        (db, IndexCursorAdapter::new(source, None, header, root))
+        (
+            db,
+            IndexCursorAdapter::new(source, None, header, root, Vec::new()),
+        )
     }
 
     /// Positioning keeps the record encoded; every reader decodes only
