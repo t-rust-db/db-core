@@ -52,6 +52,69 @@ pub(super) fn resolve_order_by(
     Ok(plans)
 }
 
+/// The integer sqlite3's parser folds `expr` to, if it does: an integer
+/// literal, `<non-NULL literal> IS [NOT] NULL` (0 / 1), and an `AND` with
+/// a literal 0 operand (0). Parentheses are transparent; `COLLATE`, unary
+/// signs and every other operator are not.
+fn folded_integer(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::Paren(inner) => folded_integer(inner),
+        ExprKind::Literal(Literal::Integer(n)) => Some(*n),
+        ExprKind::IsNull {
+            expr: inner,
+            negated,
+        } => folded_null_test(inner, *negated),
+        ExprKind::Is { lhs, rhs, negated }
+            if matches!(&strip_parens(rhs).kind, ExprKind::Literal(Literal::Null)) =>
+        {
+            folded_null_test(lhs, *negated)
+        }
+        ExprKind::Binary {
+            op: BinaryOp::And,
+            lhs,
+            rhs,
+        } => (folded_integer(lhs) == Some(0) || folded_integer(rhs) == Some(0)).then_some(0),
+        _ => None,
+    }
+}
+
+/// `inner IS [NOT] NULL` when `inner` is a literal that is not NULL: 0 for
+/// `IS NULL`, 1 for `IS NOT NULL`.
+fn folded_null_test(inner: &Expr, negated: bool) -> Option<i64> {
+    let literal = folded_integer(inner).is_some()
+        || matches!(
+            &strip_parens(inner).kind,
+            ExprKind::Literal(Literal::Float(_) | Literal::Str(_) | Literal::Blob(_))
+        );
+    literal.then_some(i64::from(negated))
+}
+
+fn strip_parens(expr: &Expr) -> &Expr {
+    match &expr.kind {
+        ExprKind::Paren(inner) => strip_parens(inner),
+        _ => expr,
+    }
+}
+
+/// The 1-based result position an ORDER BY / GROUP BY term names by
+/// number, as sqlite3 reads it (#954): what [`folded_integer`] gives, with
+/// unary `+` / `-` applied, when it fits 32 bits. A bigger integer is an
+/// ordinary constant, not a position. The caller checks the range.
+pub(super) fn term_ordinal(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::Paren(inner) => term_ordinal(inner),
+        ExprKind::Unary {
+            op: crate::parser::ast::UnaryOp::Plus,
+            expr: inner,
+        } => term_ordinal(inner),
+        ExprKind::Unary {
+            op: crate::parser::ast::UnaryOp::Minus,
+            expr: inner,
+        } => term_ordinal(inner).and_then(i64::checked_neg),
+        _ => folded_integer(expr).filter(|n| i32::try_from(*n).is_ok()),
+    }
+}
+
 /// Unwraps `expr COLLATE name` (and surrounding parens) down to the
 /// expression the ordering is actually keyed on; the collation itself
 /// is read separately via `collation_of`.
@@ -170,9 +233,10 @@ where
     let mut changed = false;
     let mut group_by = Vec::with_capacity(select.group_by.len());
     for (i, term) in select.group_by.iter().enumerate() {
-        let named = match &strip_collate(term).kind {
-            ExprKind::Literal(Literal::Integer(n)) => Some(
-                usize::try_from(*n)
+        let stripped = strip_collate(term);
+        let named = if let Some(n) = term_ordinal(stripped) {
+            Some(
+                usize::try_from(n)
                     .ok()
                     .and_then(|n| n.checked_sub(1))
                     .and_then(|idx| entries.get(idx))
@@ -184,11 +248,14 @@ where
                             entries.len()
                         ),
                     })?,
-            ),
-            ExprKind::Column {
-                table: None, name, ..
-            } => alias(name),
-            _ => None,
+            )
+        } else {
+            match &stripped.kind {
+                ExprKind::Column {
+                    table: None, name, ..
+                } => alias(name),
+                _ => None,
+            }
         };
         let Some(named) = named else {
             group_by.push(term.clone());
@@ -362,8 +429,9 @@ pub(super) fn resolve_compound_order_by(
     };
     let mut plans = Vec::with_capacity(first.order_by.len());
     for term in &first.order_by {
-        let index = match &strip_collate(&term.expr).kind {
-            ExprKind::Literal(Literal::Integer(n)) => usize::try_from(*n)
+        let stripped = strip_collate(&term.expr);
+        let index = if let Some(n) = term_ordinal(stripped) {
+            usize::try_from(n)
                 .ok()
                 .and_then(|ordinal| ordinal.checked_sub(1))
                 .filter(|&i| i < output_names.len())
@@ -372,33 +440,36 @@ pub(super) fn resolve_compound_order_by(
                         "ORDER BY term out of range - should be between 1 and {}",
                         output_names.len()
                     ),
-                })?,
-            ExprKind::Column { table, name, .. } => table
-                .is_none()
-                .then(|| {
-                    output_names
-                        .iter()
-                        .position(|n| n.eq_ignore_ascii_case(name))
-                })
-                .flatten()
-                .or_else(|| {
-                    entries.iter().position(|entry| match &entry.expr.kind {
-                        ExprKind::Column {
-                            table: entry_table,
-                            name: entry_name,
-                            ..
-                        } => {
-                            entry_name.eq_ignore_ascii_case(name)
-                                && match (table, entry_table) {
-                                    (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),
-                                    _ => true,
-                                }
-                        }
-                        _ => false,
+                })?
+        } else {
+            match &stripped.kind {
+                ExprKind::Column { table, name, .. } => table
+                    .is_none()
+                    .then(|| {
+                        output_names
+                            .iter()
+                            .position(|n| n.eq_ignore_ascii_case(name))
                     })
-                })
-                .ok_or_else(not_a_column)?,
-            _ => return Err(not_a_column()),
+                    .flatten()
+                    .or_else(|| {
+                        entries.iter().position(|entry| match &entry.expr.kind {
+                            ExprKind::Column {
+                                table: entry_table,
+                                name: entry_name,
+                                ..
+                            } => {
+                                entry_name.eq_ignore_ascii_case(name)
+                                    && match (table, entry_table) {
+                                        (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),
+                                        _ => true,
+                                    }
+                            }
+                            _ => false,
+                        })
+                    })
+                    .ok_or_else(not_a_column)?,
+                _ => return Err(not_a_column()),
+            }
         };
         let descending = term.desc.unwrap_or(false);
         plans.push(OrderByPlan {
@@ -418,22 +489,22 @@ pub(super) fn resolve_order_by_target(
     select: &Select,
     schema: &TableSchema,
 ) -> Result<OrderByTarget, CodegenError> {
+    if let Some(n) = term_ordinal(expr) {
+        let entries = order_by_entries(select, schema);
+        let zero_based = usize::try_from(n)
+            .ok()
+            .and_then(|ordinal| ordinal.checked_sub(1));
+        let entry = zero_based
+            .and_then(|zero_based| entries.get(zero_based))
+            .ok_or_else(|| CodegenError::Unsupported {
+                reason: format!(
+                    "ORDER BY position {n} is out of range for a {}-column result set",
+                    entries.len()
+                ),
+            })?;
+        return order_by_target_for_expr(&entry.expr, schema);
+    }
     match &expr.kind {
-        ExprKind::Literal(Literal::Integer(n)) => {
-            let entries = order_by_entries(select, schema);
-            let zero_based = usize::try_from(*n)
-                .ok()
-                .and_then(|ordinal| ordinal.checked_sub(1));
-            let entry = zero_based
-                .and_then(|zero_based| entries.get(zero_based))
-                .ok_or_else(|| CodegenError::Unsupported {
-                    reason: format!(
-                        "ORDER BY position {n} is out of range for a {}-column result set",
-                        entries.len()
-                    ),
-                })?;
-            order_by_target_for_expr(&entry.expr, schema)
-        }
         ExprKind::Column {
             table: None, name, ..
         } => {

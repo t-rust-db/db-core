@@ -10980,9 +10980,49 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_select_order_by_folded_integer_b9aba714",
+    "file": "src/codegen/row/select/order_by.rs",
+    "line": 60,
+    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => folded_integer(inner),\n        ExprKind::Literal(Literal::Integer(n)) => Some(*n),\n        ExprKind::IsNull {\n            expr: inner,\n            negated,\n        } => folded_null_test(inner, *negated),\n        ExprKind::Is { lhs, rhs, negated }\n            if matches!(&strip_parens(rhs).kind, ExprKind::Literal(Literal::Null)) =>\n        {\n            folded_null_test(lhs, *negated)\n        }\n        ExprKind::Binary {\n            op: BinaryOp::And,\n            lhs,\n            rhs,\n        } => (folded_integer(lhs) == Some(0) || folded_integer(rhs) == Some(0)).then_some(0),\n        _ => None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_select_order_by_folded_integer_f0cc8572",
+    "file": "src/codegen/row/select/order_by.rs",
+    "line": 68,
+    "decision": "matches!(&strip_parens(rhs).kind, ExprKind::Literal(Literal::Null))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_order_by_strip_parens_35f2f3c6",
+    "file": "src/codegen/row/select/order_by.rs",
+    "line": 93,
+    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => strip_parens(inner),\n        _ => expr,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_row_select_order_by_term_ordinal_43a3cac8",
+    "file": "src/codegen/row/select/order_by.rs",
+    "line": 104,
+    "decision": "match &expr.kind {\n        ExprKind::Paren(inner) => term_ordinal(inner),\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Plus,\n            expr: inner,\n        } => term_ordinal(inner),\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Minus,\n            expr: inner,\n        } => term_ordinal(inner).and_then(i64::checked_neg),\n        _ => folded_integer(expr).filter(|n| i32::try_from(*n).is_ok()),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "codegen_row_select_order_by_strip_collate_bb10376c",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 59,
+    "line": 122,
     "decision": "match &expr.kind {\n        ExprKind::Collate { expr: inner, .. } | ExprKind::Paren(inner) => strip_collate(inner),\n        _ => expr,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -10992,7 +11032,7 @@
   {
     "id": "codegen_row_select_order_by_output_column_names_201416d7",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 104,
+    "line": 167,
     "decision": "match &entry.expr.kind {\n                ExprKind::Column { name, .. } => name.clone(),\n                _ => format!(\"column{}\", i.saturating_add(1)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11002,7 +11042,7 @@
   {
     "id": "codegen_row_select_order_by_order_by_entries_68d1c705",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 115,
+    "line": 178,
     "decision": "match col {\n            ResultColumn::Star | ResultColumn::TableStar { .. } => {\n                for name in &schema.columns {\n                    out.push(OrderByEntry {\n                        expr: Expr {\n                            kind: ExprKind::Column {\n                                table: None,\n                                catalog: None,\n                                name: name.clone(),\n                            },\n                            span: SYNTHETIC_SPAN,\n                        },\n                        alias: None,\n                    });\n                }\n            }\n            ResultColumn::Expr { expr, alias } => out.push(OrderByEntry {\n                expr: expr.clone(),\n                alias: alias.clone(),\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11012,7 +11052,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_group_terms_6bfa2166",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 154,
+    "line": 217,
     "decision": "select.group_by.is_empty() && select.having.is_none()",
     "conditions": 2,
     "vectors_required": 3,
@@ -11022,7 +11062,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_group_terms_8aadb56c",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 158,
+    "line": 221,
     "decision": "is_column(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11030,10 +11070,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_order_by_resolve_group_terms_d28dfd47",
+    "id": "codegen_row_select_order_by_resolve_group_terms_e714b047",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 173,
-    "decision": "match &strip_collate(term).kind {\n            ExprKind::Literal(Literal::Integer(n)) => Some(\n                usize::try_from(*n)\n                    .ok()\n                    .and_then(|n| n.checked_sub(1))\n                    .and_then(|idx| entries.get(idx))\n                    .map(|e| e.expr.clone())\n                    .ok_or_else(|| CodegenError::Unsupported {\n                        reason: format!(\n                            \"{} GROUP BY term out of range - should be between 1 and {}\",\n                            ordinal(i.saturating_add(1)),\n                            entries.len()\n                        ),\n                    })?,\n            ),\n            ExprKind::Column {\n                table: None, name, ..\n            } => alias(name),\n            _ => None,\n        }",
+    "line": 237,
+    "decision": "let Some(n) = term_ordinal(stripped)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_order_by_resolve_group_terms_c763e8dd",
+    "file": "src/codegen/row/select/order_by.rs",
+    "line": 253,
+    "decision": "match &stripped.kind {\n                ExprKind::Column {\n                    table: None, name, ..\n                } => alias(name),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -11042,7 +11092,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_group_terms_3b2c89bf",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 199,
+    "line": 266,
     "decision": "!aggregates.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -11052,7 +11102,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_group_terms_259399df",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 205,
+    "line": 272,
     "decision": "match &term.kind {\n            ExprKind::Collate { collation, .. } => Expr {\n                kind: ExprKind::Collate {\n                    expr: Box::new(named),\n                    collation: collation.clone(),\n                },\n                span: term.span,\n            },\n            _ => named,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11062,7 +11112,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_group_terms_e050a612",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 216,
+    "line": 283,
     "decision": "match &select.having {\n        Some(having) => {\n            let resolved = resolve_having_aliases(having, &alias)?;\n            changed |= resolved != *having;\n            Some(resolved)\n        }\n        None => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11072,7 +11122,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_joined_group_terms_804b2674",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 267,
+    "line": 334,
     "decision": "match col {\n            ResultColumn::Star => {\n                for (i, binding) in scope.tables.iter().enumerate() {\n                    let suppressed = scope.dedup_star.get(i);\n                    for name in &binding.schema.columns {\n                        if !suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase())) {\n                            entries.push(column(binding, name));\n                        }\n                    }\n                }\n            }\n            ResultColumn::TableStar { table } => {\n                if let Some(binding) = scope.tables.iter().find(|b| b.matches_qualifier(table)) {\n                    entries.extend(\n                        binding\n                            .schema\n                            .columns\n                            .iter()\n                            .map(|name| column(binding, name)),\n                    );\n                }\n            }\n            ResultColumn::Expr { expr, alias } => entries.push(OrderByEntry {\n                expr: expr.clone(),\n                alias: alias.clone(),\n            }),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11082,7 +11132,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_joined_group_terms_8af7c86b",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 272,
+    "line": 339,
     "decision": "!suppressed.is_some_and(|s| s.contains(&name.to_ascii_lowercase()))",
     "conditions": 1,
     "vectors_required": 2,
@@ -11092,7 +11142,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_joined_group_terms_72fd8133",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 279,
+    "line": 346,
     "decision": "let Some(binding) = scope.tables.iter().find(|b| b.matches_qualifier(table))",
     "conditions": 1,
     "vectors_required": 2,
@@ -11102,7 +11152,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_having_aliases_579acdc6",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 309,
+    "line": 376,
     "decision": "let ExprKind::Column {\n        table: None, name, ..\n    } = &expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -11112,7 +11162,7 @@
   {
     "id": "codegen_row_select_order_by_ordinal_8e17aaa5",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 320,
+    "line": 387,
     "decision": "match (n % 10, n % 100) {\n        (1, r) if r != 11 => \"st\",\n        (2, r) if r != 12 => \"nd\",\n        (3, r) if r != 13 => \"rd\",\n        _ => \"th\",\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11122,7 +11172,7 @@
   {
     "id": "codegen_row_select_order_by_ordinal_8792436c",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 321,
+    "line": 388,
     "decision": "r != 11",
     "conditions": 1,
     "vectors_required": 2,
@@ -11132,7 +11182,7 @@
   {
     "id": "codegen_row_select_order_by_ordinal_87924385",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 322,
+    "line": 389,
     "decision": "r != 12",
     "conditions": 1,
     "vectors_required": 2,
@@ -11142,7 +11192,7 @@
   {
     "id": "codegen_row_select_order_by_ordinal_879240d6",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 323,
+    "line": 390,
     "decision": "r != 13",
     "conditions": 1,
     "vectors_required": 2,
@@ -11152,7 +11202,7 @@
   {
     "id": "codegen_row_select_order_by_order_by_target_for_expr_35188573",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 337,
+    "line": 404,
     "decision": "match &expr.kind {\n        ExprKind::Column {\n            table: None, name, ..\n        } => column_index(schema, name)\n            .map(OrderByTarget::Column)\n            .ok_or_else(|| CodegenError::UnknownColumn { name: name.clone() }),\n        _ => Ok(OrderByTarget::Expr(expr.clone())),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11160,10 +11210,20 @@
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_select_order_by_resolve_compound_order_by_785a732c",
+    "id": "codegen_row_select_order_by_resolve_compound_order_by_e714b047",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 365,
-    "decision": "match &strip_collate(&term.expr).kind {\n            ExprKind::Literal(Literal::Integer(n)) => usize::try_from(*n)\n                .ok()\n                .and_then(|ordinal| ordinal.checked_sub(1))\n                .filter(|&i| i < output_names.len())\n                .ok_or_else(|| CodegenError::Unsupported {\n                    reason: format!(\n                        \"ORDER BY term out of range - should be between 1 and {}\",\n                        output_names.len()\n                    ),\n                })?,\n            ExprKind::Column { table, name, .. } => table\n                .is_none()\n                .then(|| {\n                    output_names\n                        .iter()\n                        .position(|n| n.eq_ignore_ascii_case(name))\n                })\n                .flatten()\n                .or_else(|| {\n                    entries.iter().position(|entry| match &entry.expr.kind {\n                        ExprKind::Column {\n                            table: entry_table,\n                            name: entry_name,\n                            ..\n                        } => {\n                            entry_name.eq_ignore_ascii_case(name)\n                                && match (table, entry_table) {\n                                    (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),\n                                    _ => true,\n                                }\n                        }\n                        _ => false,\n                    })\n                })\n                .ok_or_else(not_a_column)?,\n            _ => return Err(not_a_column()),\n        }",
+    "line": 433,
+    "decision": "let Some(n) = term_ordinal(stripped)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_order_by_resolve_compound_order_by_acb2f553",
+    "file": "src/codegen/row/select/order_by.rs",
+    "line": 445,
+    "decision": "match &stripped.kind {\n                ExprKind::Column { table, name, .. } => table\n                    .is_none()\n                    .then(|| {\n                        output_names\n                            .iter()\n                            .position(|n| n.eq_ignore_ascii_case(name))\n                    })\n                    .flatten()\n                    .or_else(|| {\n                        entries.iter().position(|entry| match &entry.expr.kind {\n                            ExprKind::Column {\n                                table: entry_table,\n                                name: entry_name,\n                                ..\n                            } => {\n                                entry_name.eq_ignore_ascii_case(name)\n                                    && match (table, entry_table) {\n                                        (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),\n                                        _ => true,\n                                    }\n                            }\n                            _ => false,\n                        })\n                    })\n                    .ok_or_else(not_a_column)?,\n                _ => return Err(not_a_column()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -11172,8 +11232,8 @@
   {
     "id": "codegen_row_select_order_by_resolve_compound_order_by_28645934",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 385,
-    "decision": "match &entry.expr.kind {\n                        ExprKind::Column {\n                            table: entry_table,\n                            name: entry_name,\n                            ..\n                        } => {\n                            entry_name.eq_ignore_ascii_case(name)\n                                && match (table, entry_table) {\n                                    (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),\n                                    _ => true,\n                                }\n                        }\n                        _ => false,\n                    }",
+    "line": 455,
+    "decision": "match &entry.expr.kind {\n                            ExprKind::Column {\n                                table: entry_table,\n                                name: entry_name,\n                                ..\n                            } => {\n                                entry_name.eq_ignore_ascii_case(name)\n                                    && match (table, entry_table) {\n                                        (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),\n                                        _ => true,\n                                    }\n                            }\n                            _ => false,\n                        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -11182,18 +11242,28 @@
   {
     "id": "codegen_row_select_order_by_resolve_compound_order_by_3ef7ff9a",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 392,
-    "decision": "match (table, entry_table) {\n                                    (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),\n                                    _ => true,\n                                }",
+    "line": 462,
+    "decision": "match (table, entry_table) {\n                                        (Some(t), Some(e)) => t.eq_ignore_ascii_case(e),\n                                        _ => true,\n                                    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_select_order_by_resolve_order_by_target_1a0b3e0c",
+    "id": "codegen_row_select_order_by_resolve_order_by_target_48873524",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 421,
-    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(n)) => {\n            let entries = order_by_entries(select, schema);\n            let zero_based = usize::try_from(*n)\n                .ok()\n                .and_then(|ordinal| ordinal.checked_sub(1));\n            let entry = zero_based\n                .and_then(|zero_based| entries.get(zero_based))\n                .ok_or_else(|| CodegenError::Unsupported {\n                    reason: format!(\n                        \"ORDER BY position {n} is out of range for a {}-column result set\",\n                        entries.len()\n                    ),\n                })?;\n            order_by_target_for_expr(&entry.expr, schema)\n        }\n        ExprKind::Column {\n            table: None, name, ..\n        } => {\n            // Result-column aliases take precedence over table columns\n            // for ORDER BY (unlike WHERE, where aliases aren't visible\n            // at all).\n            let entries = order_by_entries(select, schema);\n            if let Some(entry) = entries\n                .iter()\n                .find(|e| e.alias.as_deref() == Some(name.as_str()))\n            {\n                return order_by_target_for_expr(&entry.expr, schema);\n            }\n            column_index(schema, name)\n                .map(OrderByTarget::Column)\n                .ok_or_else(|| CodegenError::UnknownColumn { name: name.clone() })\n        }\n        _ => order_by_target_for_expr(expr, schema),\n    }",
+    "line": 492,
+    "decision": "let Some(n) = term_ordinal(expr)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_order_by_resolve_order_by_target_e159b88f",
+    "file": "src/codegen/row/select/order_by.rs",
+    "line": 507,
+    "decision": "match &expr.kind {\n        ExprKind::Column {\n            table: None, name, ..\n        } => {\n            // Result-column aliases take precedence over table columns\n            // for ORDER BY (unlike WHERE, where aliases aren't visible\n            // at all).\n            let entries = order_by_entries(select, schema);\n            if let Some(entry) = entries\n                .iter()\n                .find(|e| e.alias.as_deref() == Some(name.as_str()))\n            {\n                return order_by_target_for_expr(&entry.expr, schema);\n            }\n            column_index(schema, name)\n                .map(OrderByTarget::Column)\n                .ok_or_else(|| CodegenError::UnknownColumn { name: name.clone() })\n        }\n        _ => order_by_target_for_expr(expr, schema),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -11202,7 +11272,7 @@
   {
     "id": "codegen_row_select_order_by_resolve_order_by_target_4c77b6a2",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 444,
+    "line": 515,
     "decision": "let Some(entry) = entries\n                .iter()\n                .find(|e| e.alias.as_deref() == Some(name.as_str()))",
     "conditions": 1,
     "vectors_required": 2,
@@ -11212,7 +11282,7 @@
   {
     "id": "codegen_row_select_order_by_resolved_549e9e32",
     "file": "src/codegen/row/select/order_by.rs",
-    "line": 469,
+    "line": 540,
     "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11270,10 +11340,20 @@
     "wildcard_risk": true
   },
   {
-    "id": "codegen_row_select_post_group_ordered_column_33b6355f",
+    "id": "codegen_row_select_post_group_ordered_column_8eb4a395",
     "file": "src/codegen/row/select/post_group.rs",
     "line": 84,
-    "decision": "match &expr.kind {\n        ExprKind::Literal(Literal::Integer(n)) => {\n            let position = usize::try_from(*n).ok()?.checked_sub(1)?;\n            result_expr(select.columns.get(position))\n        }\n        ExprKind::Column {\n            table: None, name, ..\n        } => {\n            let aliased = select.columns.iter().find(|c| {\n                matches!(c, ResultColumn::Expr { alias: Some(a), .. } if a.eq_ignore_ascii_case(name))\n            });\n            match aliased {\n                Some(column) => result_expr(Some(column)),\n                None => bare_column(expr, schema),\n            }\n        }\n        _ => bare_column(expr, schema),\n    }",
+    "decision": "let Some(n) = order_by::term_ordinal(expr)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_post_group_ordered_column_763b3d17",
+    "file": "src/codegen/row/select/post_group.rs",
+    "line": 88,
+    "decision": "match &expr.kind {\n        ExprKind::Column {\n            table: None, name, ..\n        } => {\n            let aliased = select.columns.iter().find(|c| {\n                matches!(c, ResultColumn::Expr { alias: Some(a), .. } if a.eq_ignore_ascii_case(name))\n            });\n            match aliased {\n                Some(column) => result_expr(Some(column)),\n                None => bare_column(expr, schema),\n            }\n        }\n        _ => bare_column(expr, schema),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -11290,10 +11370,20 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_row_select_post_group_named_output_3c8e2ff0",
+    "id": "codegen_row_select_post_group_named_output_2077eacb",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 112,
-    "decision": "match &order_by::strip_collate(expr).kind {\n        ExprKind::Literal(Literal::Integer(n)) => {\n            let index = usize::try_from(*n)\n                .ok()\n                .and_then(|k| k.checked_sub(1))\n                .filter(|k| *k < visible)\n                .ok_or_else(|| CodegenError::Unsupported {\n                    reason: format!(\n                        \"ORDER BY position {n} is out of range for a {visible}-column result set\"\n                    ),\n                })?;\n            Ok(Some(index))\n        }\n        ExprKind::Column {\n            table: None, name, ..\n        } => {\n            // Positions of the visible columns, `*` counting as its\n            // expansion, so an alias's index is its output position.\n            let mut position = 0usize;\n            for column in &select.columns {\n                match column {\n                    ResultColumn::Expr {\n                        alias: Some(alias), ..\n                    } if alias.eq_ignore_ascii_case(name) => return Ok(Some(position)),\n                    ResultColumn::Expr { .. } => position = position.saturating_add(1),\n                    // A single-table SELECT: `*` is the whole schema.\n                    ResultColumn::Star | ResultColumn::TableStar { .. } => {\n                        position = position.saturating_add(star);\n                    }\n                }\n            }\n            Ok(None)\n        }\n        _ => Ok(None),\n    }",
+    "line": 113,
+    "decision": "let Some(n) = order_by::term_ordinal(stripped)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_row_select_post_group_named_output_d79156ec",
+    "file": "src/codegen/row/select/post_group.rs",
+    "line": 125,
+    "decision": "match &stripped.kind {\n        ExprKind::Column {\n            table: None, name, ..\n        } => {\n            // Positions of the visible columns, `*` counting as its\n            // expansion, so an alias's index is its output position.\n            let mut position = 0usize;\n            for column in &select.columns {\n                match column {\n                    ResultColumn::Expr {\n                        alias: Some(alias), ..\n                    } if alias.eq_ignore_ascii_case(name) => return Ok(Some(position)),\n                    ResultColumn::Expr { .. } => position = position.saturating_add(1),\n                    // A single-table SELECT: `*` is the whole schema.\n                    ResultColumn::Star | ResultColumn::TableStar { .. } => {\n                        position = position.saturating_add(star);\n                    }\n                }\n            }\n            Ok(None)\n        }\n        _ => Ok(None),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -11302,7 +11392,7 @@
   {
     "id": "codegen_row_select_post_group_named_output_98480e48",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 132,
+    "line": 133,
     "decision": "match column {\n                    ResultColumn::Expr {\n                        alias: Some(alias), ..\n                    } if alias.eq_ignore_ascii_case(name) => return Ok(Some(position)),\n                    ResultColumn::Expr { .. } => position = position.saturating_add(1),\n                    // A single-table SELECT: `*` is the whole schema.\n                    ResultColumn::Star | ResultColumn::TableStar { .. } => {\n                        position = position.saturating_add(star);\n                    }\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11312,7 +11402,7 @@
   {
     "id": "codegen_row_select_post_group_named_output_6ac853df",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 135,
+    "line": 136,
     "decision": "alias.eq_ignore_ascii_case(name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -11322,7 +11412,7 @@
   {
     "id": "codegen_row_select_post_group_aggregate_query_dc24bbf0",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 163,
+    "line": 164,
     "decision": "match named_output(&term.expr, select, visible, schema.columns.len())? {\n            Some(index) => index,\n            None => {\n                columns.push(ResultColumn::Expr {\n                    expr: term.expr.clone(),\n                    alias: None,\n                });\n                hidden = hidden.saturating_add(1);\n                visible.saturating_add(hidden).saturating_sub(1)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -11332,7 +11422,7 @@
   {
     "id": "codegen_row_select_post_group_compile_post_group_ee1f8129",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 240,
+    "line": 241,
     "decision": "ordered",
     "conditions": 1,
     "vectors_required": 2,
@@ -11342,7 +11432,7 @@
   {
     "id": "codegen_row_select_post_group_compile_post_group_56b6a17b",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 249,
+    "line": 250,
     "decision": "distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -11352,7 +11442,7 @@
   {
     "id": "codegen_row_select_post_group_compile_post_group_56b6a17b_2",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 256,
+    "line": 257,
     "decision": "distinct",
     "conditions": 1,
     "vectors_required": 2,
@@ -11362,7 +11452,7 @@
   {
     "id": "codegen_row_select_post_group_compile_post_group_ee1f8129_2",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 259,
+    "line": 260,
     "decision": "ordered",
     "conditions": 1,
     "vectors_required": 2,
@@ -11372,7 +11462,7 @@
   {
     "id": "codegen_row_select_post_group_compile_post_group_13928563",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 264,
+    "line": 265,
     "decision": "let Some(limit) = &limit",
     "conditions": 1,
     "vectors_required": 2,
@@ -11382,7 +11472,7 @@
   {
     "id": "codegen_row_select_post_group_compile_post_group_ee1f8129_3",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 287,
+    "line": 288,
     "decision": "ordered",
     "conditions": 1,
     "vectors_required": 2,
@@ -11392,7 +11482,7 @@
   {
     "id": "codegen_row_select_post_group_compile_post_group_13928563_2",
     "file": "src/codegen/row/select/post_group.rs",
-    "line": 296,
+    "line": 297,
     "decision": "let Some(limit) = &limit",
     "conditions": 1,
     "vectors_required": 2,
