@@ -592,6 +592,10 @@ pub fn compile_statement(
                             schemas.iter().find(|s| s.name.eq_ignore_ascii_case(name))
                         {
                             vec![schema]
+                        } else if views.iter().any(|v| v.name.eq_ignore_ascii_case(name)) {
+                            // sqlite3 accepts `ANALYZE <view>` and does
+                            // nothing (a view has no rows to count; #945).
+                            Vec::new()
                         } else if schemas
                             .iter()
                             .flat_map(|s| &s.indexes)
@@ -1047,6 +1051,21 @@ mod already_exists_tests {
 
     fn opcodes(program: &crate::vm::row::Program) -> Vec<Opcode> {
         program.instructions.iter().map(|i| i.opcode).collect()
+    }
+
+    // #945: `ANALYZE <view>` is accepted and analyzes nothing (oracle
+    // sqlite3 3.54.1); an unknown name still errors.
+    #[test]
+    fn analyze_of_a_view_compiles_and_of_an_unknown_name_errors() {
+        let p = compile_statement("ANALYZE v", &schemas(), &views()).unwrap();
+        let analyzed = p.instructions.iter().any(
+            |i| matches!(&i.p4, crate::vm::row::P4::Analyze { targets } if !targets.is_empty()),
+        );
+        assert!(!analyzed, "a view has nothing to analyze");
+        assert!(matches!(
+            compile_statement("ANALYZE nosuch", &schemas(), &views()),
+            Err(DispatchError::NoSuchTable(_))
+        ));
     }
 
     // db-core#551: tables and views share one namespace.

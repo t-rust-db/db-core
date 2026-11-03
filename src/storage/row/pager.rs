@@ -1080,6 +1080,12 @@ impl Pager {
         self.release_tx_lock()
     }
 
+    /// The journal mode now in force.
+    #[must_use]
+    pub fn journal_mode(&self) -> JournalMode {
+        self.journal_mode
+    }
+
     /// Switches this database between rollback-journal (`Legacy`) and
     /// WAL journal modes (#388), matching `PRAGMA journal_mode =
     /// WAL|DELETE`. A request for the mode already active is a no-op.

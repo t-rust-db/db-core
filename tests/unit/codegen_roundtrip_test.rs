@@ -656,6 +656,28 @@ fn like_escape_and_negated_like_and_glob() {
 }
 
 #[test]
+fn like_glob_and_escape_accept_operands_that_do_not_land_adjacent() {
+    // #945: an arithmetic operand allocates its registers out of order, so
+    // pattern/text/escape are copied into a contiguous run. Oracle
+    // (sqlite3 3.54.1): `1 - 2 LIKE 'x'` -> 0, `'a' LIKE 'a' || ''` -> 1.
+    let rows = run(
+        &[schema("t", &["a"])],
+        "SELECT 1 - 2 LIKE 'x', a LIKE 'x' || '%', a GLOB 'x' || '*', \
+         a LIKE a + 0 ESCAPE '\\' + 0 FROM t",
+        vec![(1, vec![Value::Text("xy".into())])],
+    );
+    assert_eq!(
+        rows,
+        vec![vec![
+            Value::Integer(0),
+            Value::Integer(1),
+            Value::Integer(1),
+            Value::Integer(0)
+        ]]
+    );
+}
+
+#[test]
 fn unary_plus_minus_not_and_bitnot() {
     let rows = run(
         &[schema("t", &["a"])],

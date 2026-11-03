@@ -503,6 +503,8 @@ pub db_core::codegen::row::IndexSchema::columns: alloc::vec::Vec<db_core::schema
 pub db_core::codegen::row::IndexSchema::name: alloc::string::String
 pub db_core::codegen::row::IndexSchema::root_page: u32
 pub db_core::codegen::row::IndexSchema::unique: bool
+impl db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::has_desc(&self) -> bool
 impl core::clone::Clone for db_core::schema::IndexSchema
 pub fn db_core::schema::IndexSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexSchema
@@ -825,6 +827,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index_ordered(&mut self, u32, u32, &[usize], &[bool]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub struct db_core::engine::row::adapter::IndexCursorAdapter
 impl db_core::vm::row::cursor::Cursor for db_core::engine::row::adapter::IndexCursorAdapter
@@ -871,6 +874,7 @@ impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapte
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::engine::row::adapter::PagerTransaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -2663,6 +2667,8 @@ pub db_core::schema::IndexSchema::columns: alloc::vec::Vec<db_core::schema::Inde
 pub db_core::schema::IndexSchema::name: alloc::string::String
 pub db_core::schema::IndexSchema::root_page: u32
 pub db_core::schema::IndexSchema::unique: bool
+impl db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::has_desc(&self) -> bool
 impl core::clone::Clone for db_core::schema::IndexSchema
 pub fn db_core::schema::IndexSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexSchema
@@ -2725,6 +2731,7 @@ pub fn db_core::schema::ViewSchema::default() -> Self
 impl core::fmt::Debug for db_core::schema::ViewSchema
 pub fn db_core::schema::ViewSchema::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::schema::ViewSchema
+pub const db_core::schema::INDEX_KEY_ROWID: usize
 pub mod db_core::storage
 pub mod db_core::storage::column
 pub mod db_core::storage::column::decode
@@ -6077,6 +6084,7 @@ pub fn db_core::storage::row::btree::IndexCursor<P>::new(P, u32, u32) -> Self
 pub fn db_core::storage::row::btree::IndexCursor<P>::next(&mut self) -> core::result::Result<core::option::Option<db_core::storage::row::btree::IndexRow>, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::IndexCursor<P>::prev(&mut self) -> core::result::Result<core::option::Option<db_core::storage::row::btree::IndexRow>, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::IndexCursor<P>::seek(&mut self, &[db_core::value::Value], db_core::value::TextEncoding) -> core::result::Result<core::option::Option<db_core::storage::row::btree::IndexRow>, db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::IndexCursor<P>::with_desc(self, alloc::vec::Vec<bool>) -> Self
 pub struct db_core::storage::row::btree::IndexRow
 pub db_core::storage::row::btree::IndexRow::payload: db_core::storage::row::btree::Payload
 impl core::clone::Clone for db_core::storage::row::btree::IndexRow
@@ -6130,6 +6138,7 @@ pub fn db_core::storage::row::btree::count_table_rows<P: db_core::storage::row::
 pub fn db_core::storage::row::btree::create_empty_index_root(&mut db_core::storage::row::pager::Pager) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::create_empty_table_root(&mut db_core::storage::row::pager::Pager) -> core::result::Result<u32, db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_entry(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &[db_core::value::Value], db_core::value::TextEncoding) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::delete_entry_ordered(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &[db_core::value::Value], db_core::value::TextEncoding, &[bool]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &str, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, i64) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::delete_stat1_rows_for_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
@@ -6138,10 +6147,12 @@ pub fn db_core::storage::row::btree::ensure_sqlite_stat1_table(&mut db_core::sto
 pub fn db_core::storage::row::btree::free_btree_pages(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::insert_autoindex_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &db_core::storage::row::btree::MasterEntry) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::insert_entry(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &[db_core::value::Value], db_core::value::TextEncoding) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::insert_entry_ordered(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &[db_core::value::Value], db_core::value::TextEncoding, &[bool]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::insert_master_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &db_core::storage::row::btree::MasterEntry) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::insert_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, i64, &[u8]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::insert_stat1_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, &str, core::option::Option<&str>, &str) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::populate_index_from_table(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, u32, &[usize]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
+pub fn db_core::storage::row::btree::populate_index_from_table_ordered(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, u32, &[usize], &[bool]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::test_minimal_db(u32) -> (db_core::storage::row::vfs::MemoryVfs, db_core::storage::row::header::DatabaseHeader)
 pub fn db_core::storage::row::btree::update_row(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, u32, i64, &[u8]) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
 pub fn db_core::storage::row::btree::update_sequence(&mut db_core::storage::row::pager::Pager, &db_core::storage::row::header::DatabaseHeader, &str, i64) -> core::result::Result<(), db_core::storage::row::btree::BtreeError>
@@ -6467,6 +6478,7 @@ pub fn db_core::storage::row::pager::Pager::checkpoint_wal(&mut self, db_core::s
 pub fn db_core::storage::row::pager::Pager::deallocate_page(&mut self, u32) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::flush(&mut self) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::get_page_mut(&mut self, u32) -> core::result::Result<&mut alloc::vec::Vec<u8>, db_core::storage::row::pager::PagerError>
+pub fn db_core::storage::row::pager::Pager::journal_mode(&self) -> db_core::storage::row::header::JournalMode
 pub fn db_core::storage::row::pager::Pager::open<V: db_core::storage::row::vfs::Vfs + core::clone::Clone + 'static>(&V, &std::path::Path, u32) -> core::result::Result<Self, db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::rollback(&mut self) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::set_journal_mode(&mut self, db_core::storage::row::header::JournalMode) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
@@ -6594,6 +6606,8 @@ pub db_core::storage::row::schema::IndexSchema::columns: alloc::vec::Vec<db_core
 pub db_core::storage::row::schema::IndexSchema::name: alloc::string::String
 pub db_core::storage::row::schema::IndexSchema::root_page: u32
 pub db_core::storage::row::schema::IndexSchema::unique: bool
+impl db_core::schema::IndexSchema
+pub fn db_core::schema::IndexSchema::has_desc(&self) -> bool
 impl core::clone::Clone for db_core::schema::IndexSchema
 pub fn db_core::schema::IndexSchema::clone(&self) -> Self
 impl core::cmp::Eq for db_core::schema::IndexSchema
@@ -10183,7 +10197,9 @@ pub db_core::vm::row::program::P4::CollSeq::affinity: u8
 pub db_core::vm::row::program::P4::CollSeq::collation: db_core::value::Collation
 pub db_core::vm::row::program::P4::CreateIndex
 pub db_core::vm::row::program::P4::CreateIndex::column_indices: alloc::vec::Vec<usize>
+pub db_core::vm::row::program::P4::CreateIndex::desc: alloc::vec::Vec<bool>
 pub db_core::vm::row::program::P4::CreateIndex::name: alloc::string::String
+pub db_core::vm::row::program::P4::CreateIndex::root_reg: core::option::Option<i32>
 pub db_core::vm::row::program::P4::CreateIndex::sql: alloc::string::String
 pub db_core::vm::row::program::P4::CreateIndex::table_name: alloc::string::String
 pub db_core::vm::row::program::P4::CreateIndex::table_root_page: u32
@@ -10330,6 +10346,7 @@ pub const db_core::vm::row::program::JOURNAL_MODE_DELETE: i32
 pub const db_core::vm::row::program::JOURNAL_MODE_WAL: i32
 pub const db_core::vm::row::program::OPFLAG_LASTROWID: u16
 pub const db_core::vm::row::program::OPFLAG_NCHANGE: u16
+pub const db_core::vm::row::program::OPFLAG_P2ISREG: u16
 pub const db_core::vm::row::program::SYNCHRONOUS_FULL: i32
 pub const db_core::vm::row::program::SYNCHRONOUS_NORMAL: i32
 pub const db_core::vm::row::program::SYNCHRONOUS_OFF: i32
@@ -10388,6 +10405,7 @@ pub fn db_core::vm::row::schema_storage::SchemaStorage::free_root(&mut self, u32
 pub fn db_core::vm::row::schema_storage::SchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::vm::row::schema_storage::SchemaStorage::populate_index_ordered(&mut self, u32, u32, &[usize], &[bool]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::schema_storage::SchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 impl db_core::vm::row::schema_storage::SchemaStorage for db_core::engine::row::adapter::BtreeSchemaStorage
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::autoincrement_rowid(&mut self, &str, i64) -> core::result::Result<i64, db_core::vm::row::schema_storage::SchemaStorageError>
@@ -10399,6 +10417,7 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index_ordered(&mut self, u32, u32, &[usize], &[bool]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub mod db_core::vm::row::transaction
 pub struct db_core::vm::row::transaction::TransactionError(pub alloc::string::String)
@@ -10417,6 +10436,7 @@ pub trait db_core::vm::row::transaction::Transaction
 pub fn db_core::vm::row::transaction::Transaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::vm::row::transaction::Transaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::vm::row::transaction::Transaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -10427,6 +10447,7 @@ impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapte
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::engine::row::adapter::PagerTransaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -10820,7 +10841,9 @@ pub db_core::vm::row::P4::CollSeq::affinity: u8
 pub db_core::vm::row::P4::CollSeq::collation: db_core::value::Collation
 pub db_core::vm::row::P4::CreateIndex
 pub db_core::vm::row::P4::CreateIndex::column_indices: alloc::vec::Vec<usize>
+pub db_core::vm::row::P4::CreateIndex::desc: alloc::vec::Vec<bool>
 pub db_core::vm::row::P4::CreateIndex::name: alloc::string::String
+pub db_core::vm::row::P4::CreateIndex::root_reg: core::option::Option<i32>
 pub db_core::vm::row::P4::CreateIndex::sql: alloc::string::String
 pub db_core::vm::row::P4::CreateIndex::table_name: alloc::string::String
 pub db_core::vm::row::P4::CreateIndex::table_root_page: u32
@@ -11406,6 +11429,7 @@ pub const db_core::vm::row::JOURNAL_MODE_WAL: i32
 pub const db_core::vm::row::MAX_EPHEMERAL_ROWS: usize
 pub const db_core::vm::row::OPFLAG_LASTROWID: u16
 pub const db_core::vm::row::OPFLAG_NCHANGE: u16
+pub const db_core::vm::row::OPFLAG_P2ISREG: u16
 pub const db_core::vm::row::SYNCHRONOUS_FULL: i32
 pub const db_core::vm::row::SYNCHRONOUS_NORMAL: i32
 pub const db_core::vm::row::SYNCHRONOUS_OFF: i32
@@ -11818,6 +11842,7 @@ pub fn db_core::vm::row::SchemaStorage::free_root(&mut self, u32) -> core::resul
 pub fn db_core::vm::row::SchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::vm::row::SchemaStorage::populate_index_ordered(&mut self, u32, u32, &[usize], &[bool]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::vm::row::SchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 impl db_core::vm::row::schema_storage::SchemaStorage for db_core::engine::row::adapter::BtreeSchemaStorage
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::autoincrement_rowid(&mut self, &str, i64) -> core::result::Result<i64, db_core::vm::row::schema_storage::SchemaStorageError>
@@ -11829,11 +11854,13 @@ pub fn db_core::engine::row::adapter::BtreeSchemaStorage::free_root(&mut self, u
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_autoindex_row(&mut self, &str, &str, u32) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::insert_master_row(&mut self, &str, &str, &str, u32, &str) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index(&mut self, u32, u32, &[usize]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
+pub fn db_core::engine::row::adapter::BtreeSchemaStorage::populate_index_ordered(&mut self, u32, u32, &[usize], &[bool]) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub fn db_core::engine::row::adapter::BtreeSchemaStorage::write_stat1(&mut self, &db_core::vm::row::program::AnalyzeTarget) -> core::result::Result<(), db_core::vm::row::schema_storage::SchemaStorageError>
 pub trait db_core::vm::row::Transaction
 pub fn db_core::vm::row::Transaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::vm::row::Transaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::vm::row::Transaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -11844,6 +11871,7 @@ impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapte
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::engine::row::adapter::PagerTransaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>

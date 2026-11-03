@@ -22,7 +22,8 @@ use crate::vm::row::schema_storage::{SchemaStorage, SchemaStorageError};
 use crate::vm::row::transaction::{Transaction, TransactionError};
 use crate::vm::row::{
     compare, AnalyzeTarget, Cursor, SortKeyColumn, CHECKPOINT_FULL, CHECKPOINT_RESTART,
-    CHECKPOINT_TRUNCATE, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF,
+    CHECKPOINT_TRUNCATE, JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL,
+    SYNCHRONOUS_OFF,
 };
 
 use crate::storage::row::btree::{self, IndexCursor, IndexRow, Payload, TableCursor};
@@ -278,6 +279,8 @@ pub struct IndexCursorAdapter {
     writer: Option<SharedPager>,
     header: DatabaseHeader,
     root_page: u32,
+    /// Which key columns are `DESC` (empty: all ascending, #945).
+    desc: Vec<bool>,
     /// The entry most recently positioned on, `None` after a miss. Its key
     /// record (key columns then the trailing rowid) stays encoded: a
     /// column is decoded only when something reads it (#949).
@@ -294,12 +297,15 @@ impl IndexCursorAdapter {
         writer: Option<SharedPager>,
         header: DatabaseHeader,
         root_page: u32,
+        desc: Vec<bool>,
     ) -> Self {
         IndexCursorAdapter {
-            cursor: IndexCursor::new(source, header.usable_page_size(), root_page),
+            cursor: IndexCursor::new(source, header.usable_page_size(), root_page)
+                .with_desc(desc.clone()),
             writer,
             header,
             root_page,
+            desc,
             current: None,
             entries: Vec::new(),
         }
@@ -364,7 +370,10 @@ impl IndexCursorAdapter {
             // body that still fails to decode (invalid text) has no
             // ordering: report "no entry" rather than a wrong one.
             let key = self.decode_column(col).ok()??;
-            let ordering = compare(&key, p, c);
+            let mut ordering = compare(&key, p, c);
+            if self.desc.get(col).copied().unwrap_or(false) {
+                ordering = ordering.reverse();
+            }
             if !ordering.is_eq() {
                 return Some(ordering);
             }
@@ -441,12 +450,13 @@ impl Cursor for IndexCursorAdapter {
         let Some(writer) = self.writer.as_ref() else {
             return Ok(false);
         };
-        btree::insert_entry(
+        btree::insert_entry_ordered(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             &key,
             self.header.text_encoding,
+            &self.desc,
         )
         .map_err(cursor_err)?;
         Ok(true)
@@ -456,12 +466,13 @@ impl Cursor for IndexCursorAdapter {
         let Some(writer) = self.writer.as_ref() else {
             return Ok(false);
         };
-        btree::delete_entry(
+        btree::delete_entry_ordered(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             key,
             self.header.text_encoding,
+            &self.desc,
         )
         .map_err(cursor_err)?;
         Ok(true)
@@ -594,6 +605,7 @@ impl CursorFactory for StorageFactory {
                 self.writer.clone(),
                 self.header,
                 root,
+                Vec::new(),
             );
             return Ok(Box::new(WithoutRowidCursorAdapter::new(
                 inner,
@@ -621,13 +633,14 @@ impl CursorFactory for StorageFactory {
     fn open_index(
         &mut self,
         root: u32,
-        _key: &[SortKeyColumn],
+        key: &[SortKeyColumn],
     ) -> Result<Box<dyn Cursor>, CursorFactoryError> {
         Ok(Box::new(IndexCursorAdapter::new(
             Rc::clone(&self.source),
             self.writer.clone(),
             self.header,
             root,
+            key.iter().map(|k| k.descending).collect(),
         )))
     }
 }
@@ -914,6 +927,14 @@ impl Transaction for PagerTransaction {
             .map_err(|e| TransactionError(storage_err(e)))
     }
 
+    fn journal_mode(&self) -> Option<i32> {
+        let writer = self.writer.as_ref()?;
+        Some(match writer.borrow().journal_mode() {
+            JournalMode::Wal => JOURNAL_MODE_WAL,
+            JournalMode::Legacy => JOURNAL_MODE_DELETE,
+        })
+    }
+
     fn synchronous(&self) -> Option<i32> {
         let writer = self.writer.as_ref()?;
         Some(writer.borrow().synchronous() as i32)
@@ -1050,6 +1071,24 @@ impl SchemaStorage for BtreeSchemaStorage {
             table_root,
             index_root,
             column_indices,
+        )
+        .map_err(schema_err)
+    }
+
+    fn populate_index_ordered(
+        &mut self,
+        index_root: u32,
+        table_root: u32,
+        column_indices: &[usize],
+        desc: &[bool],
+    ) -> Result<(), SchemaStorageError> {
+        btree::populate_index_from_table_ordered(
+            &mut self.pager.borrow_mut(),
+            &self.header,
+            table_root,
+            index_root,
+            column_indices,
+            desc,
         )
         .map_err(schema_err)
     }
@@ -1261,7 +1300,10 @@ mod tests {
         };
         let source: Rc<dyn PageSource> =
             Rc::new(VfsPageSource::open(&UnixVfs, db.path(), header.page_size).unwrap());
-        (db, IndexCursorAdapter::new(source, None, header, root))
+        (
+            db,
+            IndexCursorAdapter::new(source, None, header, root, Vec::new()),
+        )
     }
 
     /// Positioning keeps the record encoded; every reader decodes only
@@ -1508,6 +1550,28 @@ mod tests {
 
         let rows = e.run_query("PRAGMA integrity_check").unwrap().rows;
         assert_eq!(rows[0][0].to_string(), "ok");
+    }
+
+    /// #945: inside a transaction `PRAGMA journal_mode = <current>` is a
+    /// no-op that answers with the mode (sqlite3); a real change errors.
+    #[test]
+    fn journal_mode_in_a_transaction_only_refuses_a_change() {
+        use crate::engine::{row::RowEngine, Engine};
+
+        let db = TempDb::new("adapter-jm-txn");
+        let mut e = RowEngine::open(db.path()).unwrap();
+        e.run_query("CREATE TABLE jm(a INTEGER)").unwrap();
+        e.run_query("BEGIN; INSERT INTO jm VALUES (1)").unwrap();
+        let rows = e.run_query("PRAGMA journal_mode = DELETE").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "delete");
+        assert!(e.run_query("PRAGMA journal_mode = WAL").is_err());
+        e.run_query("COMMIT").unwrap();
+        e.run_query("PRAGMA journal_mode = WAL").unwrap();
+        e.run_query("BEGIN").unwrap();
+        let rows = e.run_query("PRAGMA journal_mode = WAL").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "wal");
+        assert!(e.run_query("PRAGMA journal_mode = DELETE").is_err());
+        e.run_query("ROLLBACK").unwrap();
     }
 
     /// `BtreeSchemaStorage::create_index_root`/`populate_index`/

@@ -4,6 +4,23 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.226.0] - 2026-11-03
+
+### Added
+
+- Row engine: `DESC` index key columns and expression indexes are created, maintained and read like sqlite3 (`ORDER BY … DESC` walks a `DESC` index, `WHERE <expr> = ?` uses an expression index); sqlite3's `integrity_check` passes on the files db-core writes (#945, #951, #952).
+- `CREATE UNIQUE INDEX` over rows that already collide fails; index expressions with parameters, subqueries or non-deterministic functions are refused (#945).
+
+### Changed
+
+- `P4::CreateIndex` gains `desc` and `root_reg`; new defaulted `Transaction::journal_mode` and `SchemaStorage::populate_index_ordered` (#945).
+- `PRAGMA journal_mode = <current mode>` inside a transaction answers with the mode instead of erroring; `ANALYZE <view>` is a no-op (#945).
+
+### Fixed
+
+- `SELECT 1 - 2 LIKE 'x'` and other LIKE/GLOB operand shapes compile (#945).
+- An index over an `INTEGER PRIMARY KEY` column is keyed on the rowid (it was built from NULLs); `CREATE INDEX … WHERE` is refused instead of built over every row (#945, #958).
+
 ## [0.225.3] - 2026-11-03
 
 ### Fixed

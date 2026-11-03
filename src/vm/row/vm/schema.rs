@@ -38,8 +38,24 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
             Ok(Step::Next)
         }
         Opcode::SetJournalMode => {
+            // sqlite3 only refuses a mode *change* inside a transaction;
+            // re-asserting the current mode is a no-op that still answers
+            // with it (`BEGIN; PRAGMA journal_mode = DELETE;` -> `delete`,
+            // #945). The pager reports its current mode; without one we
+            // cannot tell, so the refusal stays.
             if !vm.autocommit {
-                return Err(ExecError::JournalModeChangeDuringTransaction);
+                let same =
+                    vm.transaction_hook.as_ref().and_then(|h| h.journal_mode()) == Some(instr.p1);
+                if !same {
+                    return Err(ExecError::JournalModeChangeDuringTransaction);
+                }
+                let mode = if instr.p1 == JOURNAL_MODE_WAL {
+                    "wal"
+                } else {
+                    "delete"
+                };
+                vm.emit_row(vec![Value::Text(mode.into())]);
+                return Ok(Step::Next);
             }
             // The attached pager (via the transaction hook) switches its
             // on-disk journal mode; with no hook this is the no-op
@@ -220,6 +236,8 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
                 table_root_page,
                 sql,
                 column_indices,
+                desc,
+                root_reg,
                 ..
             } = &instr.p4
             else {
@@ -228,26 +246,33 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
                     reason: format!("expected a CreateIndex P4, got {:?}", instr.p4),
                 });
             };
-            let (name, table_name, table_root_page, sql, column_indices) = (
+            let (name, table_name, table_root_page, sql, column_indices, desc, root_reg) = (
                 name.clone(),
                 table_name.clone(),
                 *table_root_page,
                 sql.clone(),
                 column_indices.clone(),
+                desc.clone(),
+                *root_reg,
             );
             let storage = vm.schema_storage("CreateIndex")?;
             let root = storage
                 .create_index_root()
                 .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .populate_index(root, table_root_page, &column_indices)
-                .map_err(ExecError::SchemaStorageFailed)?;
+            if root_reg.is_none() {
+                storage
+                    .populate_index_ordered(root, table_root_page, &column_indices, &desc)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
             storage
                 .insert_master_row("index", &name, &table_name, root, &sql)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
                 .map_err(ExecError::SchemaStorageFailed)?;
+            if let Some(root_reg) = root_reg {
+                vm.set_register(root_reg, Value::Integer(i64::from(root)))?;
+            }
             Ok(Step::Next)
         }
         Opcode::DropTable => {

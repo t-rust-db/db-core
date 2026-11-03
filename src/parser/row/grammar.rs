@@ -584,7 +584,7 @@ impl Parser {
             let target = if matches!(self.peek().kind, TokenKind::LParen) {
                 let columns = self.indexed_column_list()?;
                 let where_clause = if self.eat_kw(Keyword::WHERE) {
-                    Some(self.expr()?)
+                    Some(self.expr_collated()?)
                 } else {
                     None
                 };
@@ -605,7 +605,7 @@ impl Parser {
                     assignments.extend(self.assignment()?);
                 }
                 let where_clause = if self.eat_kw(Keyword::WHERE) {
-                    Some(self.expr()?)
+                    Some(self.expr_collated()?)
                 } else {
                     None
                 };
@@ -639,7 +639,7 @@ impl Parser {
 
         let mut end = table_span;
         let mut where_clause = if self.eat_kw(Keyword::WHERE) {
-            let expr = self.expr()?;
+            let expr = self.expr_collated()?;
             end = expr.span;
             Some(expr)
         } else {
@@ -709,7 +709,7 @@ impl Parser {
         }
 
         let mut where_clause = if self.eat_kw(Keyword::WHERE) {
-            Some(self.expr()?)
+            Some(self.expr_collated()?)
         } else {
             None
         };
@@ -772,7 +772,7 @@ impl Parser {
 
         let (name, _) = self.identifier()?;
         self.expect_punct(TokenKind::Eq, "'=' in assignment")?;
-        let value = self.expr()?;
+        let value = self.expr_collated()?;
         Ok(vec![Assignment {
             columns: vec![name],
             value,
@@ -1182,7 +1182,7 @@ impl Parser {
     }
 
     fn indexed_column(&mut self) -> PResult<IndexedColumn> {
-        let expr = self.expr()?;
+        let expr = self.expr_collated()?;
         let desc = if self.eat_kw(Keyword::ASC) {
             Some(false)
         } else if self.eat_kw(Keyword::DESC) {
@@ -1679,18 +1679,18 @@ impl Parser {
         let mut having = None;
         if self.eat_kw(Keyword::GROUP) {
             self.expect_kw(Keyword::BY)?;
-            group_by.push(self.expr()?);
+            group_by.push(self.expr_collated()?);
             while self.eat_punct(&TokenKind::Comma) {
-                group_by.push(self.expr()?);
+                group_by.push(self.expr_collated()?);
             }
             if self.eat_kw(Keyword::HAVING) {
-                having = Some(self.expr()?);
+                having = Some(self.expr_collated()?);
             }
         } else if self.eat_kw(Keyword::HAVING) {
             // #287: HAVING with no GROUP BY filters the single
             // implicit whole-table group's aggregate result — accepted
             // at the grammar level now that codegen supports it.
-            having = Some(self.expr()?);
+            having = Some(self.expr_collated()?);
         }
 
         let mut compound = Vec::new();
@@ -1723,9 +1723,9 @@ impl Parser {
         }
 
         let limit = if self.eat_kw(Keyword::LIMIT) {
-            let limit_expr = self.expr()?;
+            let limit_expr = self.expr_collated()?;
             let offset = if self.eat_kw(Keyword::OFFSET) || self.eat_punct(&TokenKind::Comma) {
-                Some(self.expr()?)
+                Some(self.expr_collated()?)
             } else {
                 None
             };
@@ -1935,12 +1935,12 @@ impl Parser {
         let mut having = None;
         if self.eat_kw(Keyword::GROUP) {
             self.expect_kw(Keyword::BY)?;
-            group_by.push(self.expr()?);
+            group_by.push(self.expr_collated()?);
             while self.eat_punct(&TokenKind::Comma) {
-                group_by.push(self.expr()?);
+                group_by.push(self.expr_collated()?);
             }
             if self.eat_kw(Keyword::HAVING) {
-                having = Some(self.expr()?);
+                having = Some(self.expr_collated()?);
             }
         } else if self.at_kw(Keyword::HAVING) {
             return self.unsupported("HAVING without GROUP BY not yet supported");
@@ -2357,7 +2357,7 @@ impl Parser {
     }
 
     fn ordering_term(&mut self) -> PResult<OrderingTerm> {
-        let expr = self.expr()?;
+        let expr = self.expr_collated()?;
         let desc = if self.eat_kw(Keyword::ASC) {
             Some(false)
         } else if self.eat_kw(Keyword::DESC) {
@@ -2387,6 +2387,19 @@ impl Parser {
 
     pub(super) fn expr(&mut self) -> PResult<Expr> {
         self.with_depth_guard(|this| this.bool_expr(0))
+    }
+
+    /// [`Self::expr`] plus the `COLLATE` sqlite's grammar lets wrap a
+    /// finished postfix null test or `IN (...)` (`0 NOTNULL COLLATE RTRIM`,
+    /// #945). Not folded into `expr` itself: its frame is on the recursive
+    /// path `MAX_EXPR_DEPTH` is sized for (#118) -- for the same reason it
+    /// is only used where no subquery nests through it: not at a select's
+    /// result columns, WHERE or ON (any extra frame there overflows the
+    /// debug stack in `unit_nesting_depth`), which keep refusing the
+    /// postfix-then-COLLATE shape.
+    fn expr_collated(&mut self) -> PResult<Expr> {
+        let e = self.expr()?;
+        self.collate_suffix(e)
     }
 
     /// Precedence climb over `OR` (prec 0) and `AND` (prec 1, binds
@@ -2991,6 +3004,24 @@ impl Parser {
         Ok(lhs)
     }
 
+    #[inline(never)]
+    fn collate_suffix(&mut self, mut lhs: Expr) -> PResult<Expr> {
+        let mut height = 0;
+        while self.eat_kw(Keyword::COLLATE) {
+            let (name, end) = self.identifier()?;
+            let span = join_span(lhs.span, end);
+            lhs = Expr {
+                kind: ExprKind::Collate {
+                    expr: Box::new(lhs),
+                    collation: name,
+                },
+                span,
+            };
+            self.cap_chain(&mut lhs, &mut height);
+        }
+        Ok(lhs)
+    }
+
     fn collate_expr(&mut self) -> PResult<Expr> {
         let mut lhs = self.unary_expr()?;
         let mut height = 0;
@@ -3547,7 +3578,7 @@ fn expr_height(e: &Expr) -> usize {
 }
 
 /// `e`'s direct sub-expressions (subqueries excluded).
-fn children(e: &Expr) -> Vec<&Expr> {
+pub(crate) fn children(e: &Expr) -> Vec<&Expr> {
     match &e.kind {
         ExprKind::Unary { expr, .. }
         | ExprKind::IsNull { expr, .. }
@@ -4806,6 +4837,33 @@ mod tests {
             parse(&collate),
             crate::parser::row::ParseOutcome::Invalid { .. }
         ));
+    }
+
+    /// #945: sqlite accepts `COLLATE` after a postfix null test or an
+    /// `IN (...)` (`0 NOTNULL COLLATE RTRIM`, oracle 3.54.1 -> 1), stacked too.
+    #[test]
+    fn collate_may_follow_a_postfix_null_test() {
+        for sql in [
+            "SELECT 1 ORDER BY 0 NOTNULL COLLATE RTRIM",
+            "SELECT 1 ORDER BY 1 ISNULL COLLATE NOCASE COLLATE BINARY",
+            "SELECT 1 ORDER BY 1 NOT NULL COLLATE NOCASE",
+            "SELECT 1 ORDER BY 1 IN (1) COLLATE NOCASE",
+            "SELECT 1 ORDER BY 1 NOT IN (SELECT 1) COLLATE NOCASE",
+            "CREATE INDEX i ON t (a ISNULL COLLATE NOCASE COLLATE BINARY)",
+        ] {
+            let accepted = if sql.starts_with("CREATE") {
+                matches!(
+                    crate::parser::row::parse_create_index(sql),
+                    crate::parser::row::ParseOutcome::Accepted(_)
+                )
+            } else {
+                matches!(
+                    crate::parser::row::parse_select(sql),
+                    crate::parser::row::ParseOutcome::Accepted(_)
+                )
+            };
+            assert!(accepted, "{sql}");
+        }
     }
 
     /// db-core#219 tagged MC/DC vectors (obligation `parser_row_grammar_function_tail_b001c5a8`, the

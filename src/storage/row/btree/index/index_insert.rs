@@ -47,9 +47,22 @@ pub fn insert_entry(
     key: &[Value],
     encoding: TextEncoding,
 ) -> Result<(), BtreeError> {
+    insert_entry_ordered(pager, header, root_page, key, encoding, &[])
+}
+
+/// [`insert_entry`] into an index whose key columns `desc` marks `DESC`
+/// (#945): entries are ordered with those columns reversed.
+pub fn insert_entry_ordered(
+    pager: &mut Pager,
+    header: &DatabaseHeader,
+    root_page: u32,
+    key: &[Value],
+    encoding: TextEncoding,
+    desc: &[bool],
+) -> Result<(), BtreeError> {
     let usable_size = header.usable_page_size();
     let (ancestors, leaf_page) =
-        match descend_index_tree(pager, root_page, usable_size, key, encoding)? {
+        match descend_index_tree(pager, root_page, usable_size, key, encoding, desc)? {
             IndexDescent::Leaf {
                 ancestors,
                 leaf_page,
@@ -73,6 +86,7 @@ pub fn insert_entry(
         key,
         &payload,
         encoding,
+        desc,
     )
 }
 
@@ -148,6 +162,7 @@ fn insert_into_index_leaf(
     key: &[Value],
     payload: &[u8],
     encoding: TextEncoding,
+    desc: &[bool],
 ) -> Result<(), BtreeError> {
     let header_start = page1_header_start(leaf_page);
     let buf = pager.get_page_mut(leaf_page)?.clone();
@@ -165,6 +180,7 @@ fn insert_into_index_leaf(
         usable_size,
         encoding,
         key,
+        desc,
     )? {
         LeafSearch::Found(..) => return Err(BtreeError::DuplicateKey),
         LeafSearch::NotFound(pos) => pos,
@@ -633,6 +649,81 @@ mod tests {
         assert_eq!(texts, vec!["apple", "banana", "cherry"]);
     }
 
+    /// #945: a `DESC` first column stores entries high-to-low, through
+    /// splits (enough keys to fill several 512-byte pages), and the cursor
+    /// seeks, walks and deletes in that same order.
+    #[test]
+    fn desc_columns_keep_the_tree_in_descending_order_across_splits() {
+        use crate::storage::row::btree::{delete_entry_ordered, IndexCursor};
+        use crate::storage::row::record::decode_record;
+        let page_size = 512u32;
+        let (vfs, header) = minimal_index_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        let desc = [true];
+        let n = 300i64;
+        for i in 0..n {
+            let k = (i * 97) % n;
+            insert_entry_ordered(
+                &mut pager,
+                &header,
+                1,
+                &[Value::Integer(k), Value::Integer(k)],
+                TextEncoding::Utf8,
+                &desc,
+            )
+            .unwrap();
+        }
+        let dup = insert_entry_ordered(
+            &mut pager,
+            &header,
+            1,
+            &[Value::Integer(5), Value::Integer(5)],
+            TextEncoding::Utf8,
+            &desc,
+        );
+        assert!(matches!(dup, Err(BtreeError::DuplicateKey)));
+        let walk = |pager: &Pager| -> Vec<i64> {
+            let mut c =
+                IndexCursor::new(pager, header.usable_page_size(), 1).with_desc(desc.to_vec());
+            let mut out = Vec::new();
+            let mut row = c.first().unwrap();
+            while let Some(r) = row {
+                match decode_record(&r.payload, TextEncoding::Utf8).unwrap()[0] {
+                    Value::Integer(v) => out.push(v),
+                    _ => panic!("integer key"),
+                }
+                row = c.next().unwrap();
+            }
+            out
+        };
+        let expected: Vec<i64> = (0..n).rev().collect();
+        assert_eq!(walk(&pager), expected);
+        // seek: the first entry at or after 100 in index order is 100;
+        // 100 + 0.5 lands on 100 as well (entries below it come first).
+        let mut c = IndexCursor::new(&pager, header.usable_page_size(), 1).with_desc(desc.to_vec());
+        let hit = c
+            .seek(&[Value::Integer(100)], TextEncoding::Utf8)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            decode_record(&hit.payload, TextEncoding::Utf8).unwrap()[0],
+            Value::Integer(100)
+        );
+        for k in (0..n).step_by(3) {
+            delete_entry_ordered(
+                &mut pager,
+                &header,
+                1,
+                &[Value::Integer(k), Value::Integer(k)],
+                TextEncoding::Utf8,
+                &desc,
+            )
+            .unwrap();
+        }
+        let remaining: Vec<i64> = (0..n).rev().filter(|k| k % 3 != 0).collect();
+        assert_eq!(walk(&pager), remaining);
+    }
+
     fn cell_for(pager: &mut Pager, usable_size: u32, encoding: TextEncoding, n: i64) -> Vec<u8> {
         let payload = encode_record(&key(&format!("k{n:04}"), n), encoding);
         encode_index_cell(pager, usable_size, &payload).unwrap()
@@ -671,6 +762,7 @@ mod tests {
             &key("k0005", 5),
             &new_payload,
             TextEncoding::Utf8,
+            &[],
         )
         .unwrap();
 
