@@ -27,6 +27,8 @@ mod varint;
 // The value model is db-core's (ADR 0010, t-rust-db/db-core#83): the b-tree
 // decodes straight into the type `crate::vm::row` executes over.
 pub use crate::value::{compare_text, Collation, TextEncoding, Value};
+#[cfg(feature = "engine-row")]
+pub(crate) use decode::parse_header_checked_into;
 pub use decode::{
     decode_column, decode_record, decode_record_only_into, decode_record_upto, decode_serial_value,
     parse_header_into, record_column_count,

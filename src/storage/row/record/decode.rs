@@ -110,6 +110,35 @@ pub fn parse_header_into(
     Ok(())
 }
 
+/// [`parse_header_into`], plus the length check [`decode_record`] makes:
+/// the bodies the header declares end exactly at the end of `payload`. A
+/// cursor that decodes columns lazily (#949) calls this when it positions,
+/// so a truncated or over-long record is still an error there, without
+/// decoding any body.
+#[cfg(feature = "engine-row")]
+pub(crate) fn parse_header_checked_into(
+    payload: &[u8],
+    entries: &mut Vec<(u64, usize)>,
+) -> Result<(), RecordError> {
+    parse_header_into(payload, entries)?;
+    let end = match entries.last() {
+        Some(&(serial_type, offset)) => offset.saturating_add(serial_type_len(serial_type)),
+        None => {
+            let (header_len, _) = decode_varint_at(payload, 0)?;
+            usize::try_from(header_len).unwrap_or(usize::MAX)
+        }
+    };
+    if end > payload.len() {
+        return Err(RecordError::UnexpectedEof { offset: end });
+    }
+    if end < payload.len() {
+        return Err(RecordError::TrailingData {
+            trailing: payload.len().saturating_sub(end),
+        });
+    }
+    Ok(())
+}
+
 /// Decodes only column `idx` of a record's payload — the header entries
 /// (serial types) for every column are walked to compute their body
 /// sizes/offsets, but only `idx`'s body is decoded/allocated, unlike
@@ -427,6 +456,36 @@ fn decode_utf16(bytes: &[u8], unit_from_bytes: fn([u8; 2]) -> u16) -> Result<Str
 #[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
+
+    /// `parse_header_checked_into` (#949) accepts what `decode_record`
+    /// accepts and refuses a body of the wrong length, without decoding it.
+    #[cfg(feature = "engine-row")]
+    #[test]
+    fn checked_header_parse_requires_the_body_to_fill_the_payload() {
+        let mut entries = Vec::new();
+        // One 1-byte integer (7), then one empty text column.
+        parse_header_checked_into(&[3, 1, 13, 7], &mut entries).unwrap();
+        assert_eq!(entries, [(1, 3), (13, 4)]);
+        // The integer's byte is missing.
+        assert!(matches!(
+            parse_header_checked_into(&[2, 1], &mut entries),
+            Err(RecordError::UnexpectedEof { .. })
+        ));
+        // One byte too many.
+        assert!(matches!(
+            parse_header_checked_into(&[2, 1, 7, 7], &mut entries),
+            Err(RecordError::TrailingData { trailing: 1 })
+        ));
+        // A record with no columns is just its header byte.
+        parse_header_checked_into(&[1], &mut entries).unwrap();
+        assert!(entries.is_empty());
+        assert!(matches!(
+            parse_header_checked_into(&[1, 0], &mut entries),
+            Err(RecordError::TrailingData { trailing: 1 })
+        ));
+        // A broken header is refused by the parse itself.
+        assert!(parse_header_checked_into(&[], &mut entries).is_err());
+    }
 
     fn varint_bytes(mut value: u64) -> Vec<u8> {
         // Minimal varint encoder for building test payloads (mirrors the
