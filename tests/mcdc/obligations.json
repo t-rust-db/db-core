@@ -20202,7 +20202,7 @@
   {
     "id": "engine_row_adapter_ensure_cached_8fe9046d",
     "file": "src/engine/row/adapter.rs",
-    "line": 110,
+    "line": 112,
     "decision": "self.payload.borrow().is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20212,7 +20212,7 @@
   {
     "id": "engine_row_adapter_ensure_cached_c1b5d029",
     "file": "src/engine/row/adapter.rs",
-    "line": 113,
+    "line": 115,
     "decision": "self.current_rowid.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20222,7 +20222,7 @@
   {
     "id": "engine_row_adapter_prev_e03562b5",
     "file": "src/engine/row/adapter.rs",
-    "line": 147,
+    "line": 149,
     "decision": "match self.cursor.prev() {\n            Err(btree::BtreeError::CursorNotPositioned { .. }) => Ok(None),\n            r => r,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20232,7 +20232,7 @@
   {
     "id": "engine_row_adapter_column_f46e2f16",
     "file": "src/engine/row/adapter.rs",
-    "line": 170,
+    "line": 172,
     "decision": "!self.ensure_cached()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -20242,7 +20242,7 @@
   {
     "id": "engine_row_adapter_column_4881755e",
     "file": "src/engine/row/adapter.rs",
-    "line": 178,
+    "line": 180,
     "decision": "match entries.get(col) {\n            Some(&(serial_type, offset)) => {\n                let (value, _) =\n                    decode_serial_value(serial_type, payload, offset, self.header.text_encoding)\n                        .map_err(cursor_err)?;\n                Ok(Some(value))\n            }\n            None => Ok(Some(Value::Null)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20252,7 +20252,7 @@
   {
     "id": "engine_row_adapter_payload_f46e2f16",
     "file": "src/engine/row/adapter.rs",
-    "line": 194,
+    "line": 196,
     "decision": "!self.ensure_cached()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -20260,20 +20260,40 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_row_adapter_compare_leading_5d98fde3",
+    "id": "engine_row_adapter_decode_column_5a46c881",
     "file": "src/engine/row/adapter.rs",
-    "line": 318,
-    "decision": "values.len() <= probe.len()",
+    "line": 330,
+    "decision": "match self.entries.get(col) {\n            Some(&(serial_type, offset)) => {\n                let (value, _) = decode_serial_value(\n                    serial_type,\n                    &row.payload,\n                    offset,\n                    self.header.text_encoding,\n                )\n                .map_err(cursor_err)?;\n                Ok(Some(value))\n            }\n            None => Ok(Some(Value::Null)),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_adapter_compare_leading_c2c00c85",
+    "file": "src/engine/row/adapter.rs",
+    "line": 351,
+    "decision": "self.entries.len() <= probe.len()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
     "wildcard_risk": false
   },
   {
-    "id": "engine_row_adapter_idx_rowid_aafdaf30",
+    "id": "engine_row_adapter_compare_leading_3684e8ff",
     "file": "src/engine/row/adapter.rs",
-    "line": 371,
-    "decision": "match values.last()? {\n            Value::Integer(rowid) => Some(*rowid),\n            _ => None,\n        }",
+    "line": 368,
+    "decision": "!ordering.is_eq()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_adapter_idx_rowid_351d84de",
+    "file": "src/engine/row/adapter.rs",
+    "line": 407,
+    "decision": "match self.decode_column(self.entries.len().checked_sub(1)?) {\n            Ok(Some(Value::Integer(rowid))) => Some(rowid),\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -20282,7 +20302,7 @@
   {
     "id": "engine_row_adapter_seek_index_eq_1016023f",
     "file": "src/engine/row/adapter.rs",
-    "line": 379,
+    "line": 415,
     "decision": "!self.set_current(r)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -20292,7 +20312,7 @@
   {
     "id": "engine_row_adapter_seek_index_eq_3aaa30af",
     "file": "src/engine/row/adapter.rs",
-    "line": 383,
+    "line": 419,
     "decision": "!matched",
     "conditions": 1,
     "vectors_required": 2,
@@ -20302,7 +20322,7 @@
   {
     "id": "engine_row_adapter_without_rowid_layout_639765db",
     "file": "src/engine/row/adapter.rs",
-    "line": 525,
+    "line": 561,
     "decision": "root <= 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -20312,7 +20332,7 @@
   {
     "id": "engine_row_adapter_without_rowid_layout_e163c8d7",
     "file": "src/engine/row/adapter.rs",
-    "line": 534,
+    "line": 570,
     "decision": "!matches!(page.first(), Some(0x02 | 0x0a))",
     "conditions": 1,
     "vectors_required": 2,
@@ -20322,7 +20342,7 @@
   {
     "id": "engine_row_adapter_open_read_904cdfe9",
     "file": "src/engine/row/adapter.rs",
-    "line": 555,
+    "line": 591,
     "decision": "let Some(stored_at) = self.without_rowid_layout(root)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -20332,7 +20352,7 @@
   {
     "id": "engine_row_adapter_open_write_cb2a8617",
     "file": "src/engine/row/adapter.rs",
-    "line": 577,
+    "line": 613,
     "decision": "self.writer.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20342,7 +20362,7 @@
   {
     "id": "engine_row_adapter_stored_row_0b2a2b26",
     "file": "src/engine/row/adapter.rs",
-    "line": 631,
+    "line": 667,
     "decision": "declared.len() > width",
     "conditions": 1,
     "vectors_required": 2,
@@ -20352,7 +20372,7 @@
   {
     "id": "engine_row_adapter_column_4be2004d",
     "file": "src/engine/row/adapter.rs",
-    "line": 670,
+    "line": 706,
     "decision": "match self.stored_at.get(col) {\n            Some(&at) => self.inner.column(at),\n            None => Ok(self.inner.current.as_ref().map(|_| Value::Null)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20362,7 +20382,7 @@
   {
     "id": "engine_row_adapter_seek_index_eq_558f364e",
     "file": "src/engine/row/adapter.rs",
-    "line": 686,
+    "line": 722,
     "decision": "!self.inner.set_current(seeked)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -20372,7 +20392,17 @@
   {
     "id": "engine_row_adapter_seek_index_eq_3aaa30af_2",
     "file": "src/engine/row/adapter.rs",
-    "line": 701,
+    "line": 736,
+    "decision": "!matched",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_row_adapter_seek_index_eq_3aaa30af_3",
+    "file": "src/engine/row/adapter.rs",
+    "line": 742,
     "decision": "!matched",
     "conditions": 1,
     "vectors_required": 2,
@@ -20382,7 +20412,7 @@
   {
     "id": "engine_row_adapter_update_payload_7f0aa288",
     "file": "src/engine/row/adapter.rs",
-    "line": 749,
+    "line": 791,
     "decision": "!self.delete()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -20392,7 +20422,7 @@
   {
     "id": "engine_row_adapter_count_4a9b54d0",
     "file": "src/engine/row/adapter.rs",
-    "line": 763,
+    "line": 805,
     "decision": "entry.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20402,7 +20432,7 @@
   {
     "id": "engine_row_adapter_begin_745e4425",
     "file": "src/engine/row/adapter.rs",
-    "line": 832,
+    "line": 874,
     "decision": "match mode {\n            crate::vm::row::TRANSACTION_MODE_IMMEDIATE => pager.begin_immediate(),\n            crate::vm::row::TRANSACTION_MODE_EXCLUSIVE => pager.begin_exclusive(),\n            _ => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20412,7 +20442,7 @@
   {
     "id": "engine_row_adapter_set_journal_mode_931d7438",
     "file": "src/engine/row/adapter.rs",
-    "line": 864,
+    "line": 906,
     "decision": "mode == JOURNAL_MODE_WAL",
     "conditions": 1,
     "vectors_required": 2,
@@ -20422,7 +20452,7 @@
   {
     "id": "engine_row_adapter_set_synchronous_205dc366",
     "file": "src/engine/row/adapter.rs",
-    "line": 881,
+    "line": 923,
     "decision": "let Some(writer) = self.writer.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20432,7 +20462,7 @@
   {
     "id": "engine_row_adapter_set_synchronous_d6b2ee70",
     "file": "src/engine/row/adapter.rs",
-    "line": 882,
+    "line": 924,
     "decision": "match level {\n                SYNCHRONOUS_OFF => SynchronousMode::Off,\n                SYNCHRONOUS_NORMAL => SynchronousMode::Normal,\n                _ => SynchronousMode::Full,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20442,7 +20472,7 @@
   {
     "id": "engine_row_adapter_wal_autocheckpoint_1ae28184",
     "file": "src/engine/row/adapter.rs",
-    "line": 897,
+    "line": 939,
     "decision": "let Some(frames) = frames",
     "conditions": 1,
     "vectors_required": 2,
@@ -20452,7 +20482,7 @@
   {
     "id": "engine_row_adapter_wal_checkpoint_a2b174b6",
     "file": "src/engine/row/adapter.rs",
-    "line": 907,
+    "line": 949,
     "decision": "match mode {\n            CHECKPOINT_FULL => CheckpointMode::Full,\n            CHECKPOINT_RESTART => CheckpointMode::Restart,\n            CHECKPOINT_TRUNCATE => CheckpointMode::Truncate,\n            _ => CheckpointMode::Passive,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20462,7 +20492,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 977,
+    "line": 1019,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -20472,7 +20502,7 @@
   {
     "id": "engine_row_adapter_count_index_entries_and_avg_eq_f76da1f3",
     "file": "src/engine/row/adapter.rs",
-    "line": 980,
+    "line": 1022,
     "decision": "prev_leading.as_ref() != leading.as_ref()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20482,7 +20512,7 @@
   {
     "id": "engine_row_adapter_delete_master_row_8e51437e",
     "file": "src/engine/row/adapter.rs",
-    "line": 1064,
+    "line": 1106,
     "decision": "match e {\n                // The error carries no name (#658); this caller has it.\n                btree::BtreeError::MasterEntryNotFound => {\n                    SchemaStorageError(format!(\"no sqlite_master {kind} named {name}\"))\n                }\n                other => schema_err(other),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20492,7 +20522,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_c6c2d2df",
     "file": "src/engine/row/adapter.rs",
-    "line": 1127,
+    "line": 1169,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -20502,7 +20532,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_15a637f2",
     "file": "src/engine/row/adapter.rs",
-    "line": 1129,
+    "line": 1171,
     "decision": "let (Some(Value::Text(n)), Some(Value::Integer(seq))) =\n                    (values.first(), values.get(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -20512,7 +20542,7 @@
   {
     "id": "engine_row_adapter_autoincrement_rowid_892d9090",
     "file": "src/engine/row/adapter.rs",
-    "line": 1132,
+    "line": 1174,
     "decision": "&**n == table",
     "conditions": 1,
     "vectors_required": 2,
@@ -51410,9 +51440,39 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_record_decode_parse_header_checked_into_305f84c4",
+    "file": "src/storage/row/record/decode.rs",
+    "line": 124,
+    "decision": "match entries.last() {\n        Some(&(serial_type, offset)) => offset.saturating_add(serial_type_len(serial_type)),\n        None => {\n            let (header_len, _) = decode_varint_at(payload, 0)?;\n            usize::try_from(header_len).unwrap_or(usize::MAX)\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_record_decode_parse_header_checked_into_81f4585d",
+    "file": "src/storage/row/record/decode.rs",
+    "line": 131,
+    "decision": "end > payload.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_record_decode_parse_header_checked_into_21576a53",
+    "file": "src/storage/row/record/decode.rs",
+    "line": 134,
+    "decision": "end < payload.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_record_decode_decode_column_a1d75cc1",
     "file": "src/storage/row/record/decode.rs",
-    "line": 127,
+    "line": 156,
     "decision": "match entries.get(idx) {\n        Some(&(serial_type, offset)) => {\n            let (value, _) = decode_serial_value(serial_type, payload, offset, encoding)?;\n            Ok(value)\n        }\n        None => Ok(Value::Null),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51422,7 +51482,7 @@
   {
     "id": "storage_row_record_decode_decode_record_only_into_2fbc794d",
     "file": "src/storage/row/record/decode.rs",
-    "line": 203,
+    "line": 232,
     "decision": "let [only] = wanted",
     "conditions": 1,
     "vectors_required": 2,
@@ -51432,7 +51492,7 @@
   {
     "id": "storage_row_record_decode_decode_record_only_into_bad31d16",
     "file": "src/storage/row/record/decode.rs",
-    "line": 209,
+    "line": 238,
     "decision": "match entries.get(idx) {\n            Some(&(serial_type, offset)) => {\n                decode_serial_value(serial_type, payload, offset, encoding)?.0\n            }\n            None => Value::Null,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51442,7 +51502,7 @@
   {
     "id": "storage_row_record_decode_decode_single_column_561b05cd",
     "file": "src/storage/row/record/decode.rs",
-    "line": 240,
+    "line": 269,
     "decision": "header_len < n",
     "conditions": 1,
     "vectors_required": 2,
@@ -51452,7 +51512,7 @@
   {
     "id": "storage_row_record_decode_decode_single_column_53ec3529",
     "file": "src/storage/row/record/decode.rs",
-    "line": 249,
+    "line": 278,
     "decision": "pos < header_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -51462,7 +51522,7 @@
   {
     "id": "storage_row_record_decode_decode_single_column_129f7f70",
     "file": "src/storage/row/record/decode.rs",
-    "line": 251,
+    "line": 280,
     "decision": "pos.saturating_add(len) > header_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -51472,7 +51532,7 @@
   {
     "id": "storage_row_record_decode_decode_single_column_3ceaaeb2",
     "file": "src/storage/row/record/decode.rs",
-    "line": 258,
+    "line": 287,
     "decision": "col == idx",
     "conditions": 1,
     "vectors_required": 2,
@@ -51482,7 +51542,7 @@
   {
     "id": "storage_row_record_decode_serial_type_len_5da7f8b8",
     "file": "src/storage/row/record/decode.rs",
-    "line": 272,
+    "line": 301,
     "decision": "match serial_type {\n        0 | 8 | 9 | 10 | 11 => 0,\n        1 => 1,\n        2 => 2,\n        3 => 3,\n        4 => 4,\n        5 => 6,\n        6 | 7 => 8,\n        n if n % 2 == 0 => (n.wrapping_sub(12) / 2) as usize,\n        n => (n.wrapping_sub(13) / 2) as usize,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51492,7 +51552,7 @@
   {
     "id": "storage_row_record_decode_serial_type_len_73183f79",
     "file": "src/storage/row/record/decode.rs",
-    "line": 280,
+    "line": 309,
     "decision": "n % 2 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51502,7 +51562,7 @@
   {
     "id": "storage_row_record_decode_decode_varint_at_197320f3",
     "file": "src/storage/row/record/decode.rs",
-    "line": 292,
+    "line": 321,
     "decision": "match e {\n        RecordError::UnexpectedEof { offset } => RecordError::UnexpectedEof {\n            offset: pos.saturating_add(offset),\n        },\n        other => other,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51512,7 +51572,7 @@
   {
     "id": "storage_row_record_decode_decode_serial_value_1a825468",
     "file": "src/storage/row/record/decode.rs",
-    "line": 325,
+    "line": 354,
     "decision": "match serial_type {\n        0 => Ok((Value::Null, 0)),\n        1 => {\n            let [b0] = take_array(buf, pos)?;\n            Ok((Value::Integer(i64::from(i8::from_be_bytes([b0]))), 1))\n        }\n        2 => {\n            let b = take_array(buf, pos)?;\n            Ok((Value::Integer(i16::from_be_bytes(b) as i64), 2))\n        }\n        3 => {\n            let [b0, b1, b2] = take_array(buf, pos)?;\n            let mut v = ((b0 as i64) << 16) | ((b1 as i64) << 8) | (b2 as i64);\n            if b0 & 0x80 != 0 {\n                v = v.wrapping_sub(1 << 24); // sign-extend 24-bit; magnitude is tiny relative to i64\n            }\n            Ok((Value::Integer(v), 3))\n        }\n        4 => {\n            let b = take_array(buf, pos)?;\n            Ok((Value::Integer(i32::from_be_bytes(b) as i64), 4))\n        }\n        5 => {\n            let bytes: [u8; 6] = take_array(buf, pos)?;\n            let [b0, ..] = bytes;\n            let mut v: i64 = 0;\n            for byte in bytes {\n                v = (v << 8) | byte as i64;\n            }\n            if b0 & 0x80 != 0 {\n                v = v.wrapping_sub(1 << 48); // sign-extend 48-bit; magnitude is tiny relative to i64\n            }\n            Ok((Value::Integer(v), 6))\n        }\n        6 => {\n            let b = take_array(buf, pos)?;\n            Ok((Value::Integer(i64::from_be_bytes(b)), 8))\n        }\n        7 => {\n            let b = take_array(buf, pos)?;\n            let value = f64::from_be_bytes(b);\n            // SQLite decodes a NaN payload as NULL rather than a real NaN\n            // (sqlite3VdbeSerialGet's IsNaN(x) check) — matched here for\n            // binary-compatible read behavior.\n            if value.is_nan() {\n                Ok((Value::Null, 8))\n            } else {\n                Ok((Value::Real(value), 8))\n            }\n        }\n        8 => Ok((Value::Integer(0), 0)),\n        9 => Ok((Value::Integer(1), 0)),\n        // Types 10/11 are reserved/internal (type 10 is SQLite's virtual-table\n        // \"no-change\" marker) and never appear in a well-formed database, but\n        // upstream decodes both as NULL rather than treating them as\n        // corruption — matched here rather than erroring.\n        10 | 11 => Ok((Value::Null, 0)),\n        // n is guaranteed >= 12 here (match arms above exhaustively cover\n        // 0..=11), so n.wrapping_sub(12) never wraps; n itself is an\n        // attacker-controlled varint value, but the resulting length still\n        // flows into take()'s checked_add, so an implausible declared length\n        // errors there rather than overflowing here.\n        n if n % 2 == 0 => {\n            let len = (n.wrapping_sub(12) / 2) as usize;\n            let bytes = take(buf, pos, len)?;\n            Ok((Value::Blob(bytes.into()), len))\n        }\n        // n is guaranteed >= 13 here: odd, and 0..=11 handled above.\n        n => {\n            let len = (n.wrapping_sub(13) / 2) as usize;\n            let bytes = take(buf, pos, len)?;\n            let text = decode_text(bytes, encoding)?;\n            Ok((Value::Text(text), len))\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51522,7 +51582,7 @@
   {
     "id": "storage_row_record_decode_decode_serial_value_73183f79",
     "file": "src/storage/row/record/decode.rs",
-    "line": 387,
+    "line": 416,
     "decision": "n % 2 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51532,7 +51592,7 @@
   {
     "id": "storage_row_record_decode_decode_serial_value_10ee231a",
     "file": "src/storage/row/record/decode.rs",
-    "line": 338,
+    "line": 367,
     "decision": "b0 & 0x80 != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51542,7 +51602,7 @@
   {
     "id": "storage_row_record_decode_decode_serial_value_10ee231a_2",
     "file": "src/storage/row/record/decode.rs",
-    "line": 354,
+    "line": 383,
     "decision": "b0 & 0x80 != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51552,7 +51612,7 @@
   {
     "id": "storage_row_record_decode_decode_serial_value_5e364c1f",
     "file": "src/storage/row/record/decode.rs",
-    "line": 369,
+    "line": 398,
     "decision": "value.is_nan()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51562,7 +51622,7 @@
   {
     "id": "storage_row_record_decode_decode_text_985dc116",
     "file": "src/storage/row/record/decode.rs",
-    "line": 407,
+    "line": 436,
     "decision": "match encoding {\n        TextEncoding::Utf8 => std::str::from_utf8(bytes)\n            .map(Rc::from)\n            .map_err(|_| RecordError::InvalidUtf8),\n        TextEncoding::Utf16Le => decode_utf16(bytes, u16::from_le_bytes).map(Rc::from),\n        TextEncoding::Utf16Be => decode_utf16(bytes, u16::from_be_bytes).map(Rc::from),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51572,7 +51632,7 @@
   {
     "id": "storage_row_record_decode_decode_utf16_bdaee985",
     "file": "src/storage/row/record/decode.rs",
-    "line": 417,
+    "line": 446,
     "decision": "!bytes.len().is_multiple_of(2)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51582,7 +51642,7 @@
   {
     "id": "storage_row_record_decode_varint_bytes_09444ce9",
     "file": "src/storage/row/record/decode.rs",
-    "line": 438,
+    "line": 497,
     "decision": "i != 7",
     "conditions": 1,
     "vectors_required": 2,
@@ -51592,7 +51652,7 @@
   {
     "id": "storage_row_record_decode_varint_bytes_c6634d1d",
     "file": "src/storage/row/record/decode.rs",
-    "line": 442,
+    "line": 501,
     "decision": "value == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51602,7 +51662,7 @@
   {
     "id": "storage_row_record_decode_record_bytes_811a56ee",
     "file": "src/storage/row/record/decode.rs",
-    "line": 466,
+    "line": 525,
     "decision": "hl_bytes.len() + header.len() == header_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -51612,7 +51672,7 @@
   {
     "id": "storage_row_record_decode_real_edge_values_bit_identical_4e256b85",
     "file": "src/storage/row/record/decode.rs",
-    "line": 571,
+    "line": 630,
     "decision": "match &decoded[..] {\n                [Value::Real(r)] => assert_eq!(r.to_bits(), v.to_bits(), \"value {v} bit mismatch\"),\n                other => panic!(\"expected one Real, got {other:?}\"),\n            }",
     "conditions": 0,
     "vectors_required": 0,
