@@ -283,3 +283,108 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
+    use super::*;
+    use crate::parser::row::{parse_select, ParseOutcome};
+
+    fn parsed(sql: &str) -> Select {
+        match parse_select(sql) {
+            ParseOutcome::Accepted(select) => *select,
+            other => panic!("{sql}: {other:?}"),
+        }
+    }
+
+    /// How many subqueries each walker finds directly in `sql`'s
+    /// expressions, both counts checked equal.
+    fn found(sql: &str) -> usize {
+        let mut select = parsed(sql);
+        let mut mutable = 0;
+        each_expression_subquery_mut(&mut select, &mut |_| {
+            mutable += 1;
+            Ok(())
+        })
+        .unwrap();
+        let mut read_only = 0;
+        let any = any_expression_subquery(&select, &mut |_| {
+            read_only += 1;
+            false
+        });
+        assert!(!any, "{sql}");
+        assert_eq!(mutable, read_only, "{sql}");
+        mutable
+    }
+
+    const S: &str = "(SELECT 1 FROM u)";
+
+    /// #940: a subquery is found in every expression position and inside
+    /// every expression form.
+    #[test]
+    fn finds_a_subquery_in_every_position_and_form() {
+        for (sql, n) in [
+            (format!("SELECT {S} FROM t"), 1),
+            (format!("SELECT a FROM t WHERE a = {S}"), 1),
+            (format!("SELECT a FROM t GROUP BY {S}"), 1),
+            (format!("SELECT a FROM t GROUP BY a HAVING count(*) > {S}"), 1),
+            (format!("SELECT a FROM t ORDER BY {S}"), 1),
+            (format!("SELECT a FROM t LIMIT {S} OFFSET {S}"), 2),
+            (format!("SELECT a FROM t JOIN v ON v.a = {S}"), 1),
+            (
+                format!("SELECT a FROM t UNION SELECT {S} FROM w JOIN v ON v.a = {S} WHERE {S} GROUP BY {S} HAVING {S}"),
+                5,
+            ),
+            (format!("SELECT a FROM t WHERE EXISTS {S}"), 1),
+            (format!("SELECT a FROM t WHERE a IN {S}"), 1),
+            (format!("SELECT a FROM t WHERE {S} IN (SELECT b FROM u)"), 2),
+            (format!("SELECT a FROM t WHERE ({S}, a) IN (SELECT b, c FROM u)"), 2),
+            (format!("SELECT a FROM t WHERE NOT -{S} IS NULL"), 1),
+            (format!("SELECT CAST({S} AS TEXT) COLLATE NOCASE FROM t"), 1),
+            (format!("SELECT a FROM t WHERE a IS {S}"), 1),
+            (format!("SELECT a FROM t WHERE a BETWEEN {S} AND {S}"), 2),
+            (format!("SELECT a FROM t WHERE {S} BETWEEN 1 AND 2"), 1),
+            (format!("SELECT a FROM t WHERE a IN (1, {S})"), 1),
+            (format!("SELECT a FROM t WHERE {S} LIKE {S} ESCAPE {S}"), 3),
+            (format!("SELECT CASE {S} WHEN {S} THEN {S} ELSE {S} END FROM t"), 4),
+            (format!("SELECT abs({S}), count(*) FROM t"), 1),
+            (format!("SELECT count(*) FILTER (WHERE a > {S}) FROM t"), 1),
+            (
+                format!("SELECT row_number() OVER (PARTITION BY {S} ORDER BY {S}) FROM t"),
+                2,
+            ),
+            ("SELECT a, 1, ? FROM t WHERE a = 1".to_string(), 0),
+        ] {
+            assert_eq!(found(&sql), n, "{sql}");
+        }
+    }
+
+    #[test]
+    fn stops_at_the_first_match_and_passes_errors_through() {
+        let select = parsed(&format!("SELECT {S}, {S} FROM t"));
+        let mut seen = 0;
+        assert!(any_expression_subquery(&select, &mut |_| {
+            seen += 1;
+            true
+        }));
+        assert_eq!(seen, 1);
+        let mut select = parsed(&format!("SELECT {S} FROM t WHERE a = {S}"));
+        let err = each_expression_subquery_mut(&mut select, &mut |_| {
+            Err(CodegenError::Unsupported {
+                reason: "stop".to_string(),
+            })
+        });
+        assert!(err.is_err());
+        let mut expr = parsed(&format!("SELECT {S} FROM t")).columns.remove(0);
+        let ResultColumn::Expr { expr, .. } = &mut expr else {
+            panic!("expected an expression");
+        };
+        let mut n = 0;
+        each_subquery_in_expr_mut(expr, &mut |_| {
+            n += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(n, 1);
+    }
+}

@@ -16320,6 +16320,16 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_row_subquery_walk_parsed_549e9e32",
+    "file": "src/codegen/row/subquery/walk.rs",
+    "line": 294,
+    "decision": "match parse_select(sql) {\n            ParseOutcome::Accepted(select) => *select,\n            other => panic!(\"{sql}: {other:?}\"),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_row_transaction_compile_begin_64abcc2c",
     "file": "src/codegen/row/transaction.rs",
     "line": 23,
