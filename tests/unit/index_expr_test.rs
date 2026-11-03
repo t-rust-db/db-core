@@ -197,3 +197,86 @@ fn a_unique_expression_index_rejects_duplicates() {
     assert_eq!(rows(&mut e, "SELECT count(*) FROM t"), ["2"]);
     assert_eq!(rows(&mut e, "PRAGMA integrity_check"), ["ok"]);
 }
+
+/// The planner serves `WHERE <index expression> = ?` / `BETWEEN` from the
+/// index, worded as sqlite3 words it (`<expr>`), and a different
+/// expression does not match.
+#[test]
+fn the_planner_uses_an_expression_index_when_the_expression_matches() {
+    let ours = TempDb::new("plan");
+    let mut e = RowEngine::open(&ours.0).unwrap();
+    e.run_query("DROP TABLE t").unwrap();
+    e.run_query(
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, c INT); CREATE INDEX t_l ON t(lower(a)); \
+         INSERT INTO t VALUES (1, 'Ab', 1), (2, 'aB', 2), (3, 'cd', 3), (4, 'AB', 4)",
+    )
+    .unwrap();
+    let plan = |e: &RowEngine, sql: &str| -> String {
+        e.explain_plan(sql)
+            .unwrap()
+            .iter()
+            .map(|r| r.detail.clone())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    assert_eq!(
+        plan(&e, "SELECT * FROM t WHERE lower(a) = 'ab'"),
+        "SEARCH t USING INDEX t_l (<expr>=?)"
+    );
+    assert_eq!(
+        plan(&e, "SELECT * FROM t WHERE 'ab' = lower( a )"),
+        "SEARCH t USING INDEX t_l (<expr>=?)"
+    );
+    assert_eq!(plan(&e, "SELECT * FROM t WHERE upper(a) = 'AB'"), "SCAN t");
+    assert_eq!(
+        rows(&mut e, "SELECT id FROM t WHERE lower(a) = 'ab' ORDER BY id"),
+        ["1", "2", "4"]
+    );
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT id FROM t WHERE lower(a) BETWEEN 'ab' AND 'b' ORDER BY id"
+        ),
+        ["1", "2", "4"]
+    );
+}
+
+/// `CREATE UNIQUE INDEX` over rows that already collide fails, for a plain
+/// column as for an expression, and leaves no half-built index behind;
+/// sqlite3's other index-expression rules are refused too.
+#[test]
+fn create_unique_index_checks_existing_rows_and_expression_rules_hold() {
+    let ours = TempDb::new("create-unique");
+    let mut e = RowEngine::open(&ours.0).unwrap();
+    e.run_query("DROP TABLE t").unwrap();
+    e.run_query(
+        "CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT); \
+         INSERT INTO t VALUES (1, 'x'), (2, 'X'), (3, NULL), (4, NULL)",
+    )
+    .unwrap();
+    assert!(e
+        .run_query("CREATE UNIQUE INDEX u1 ON t(lower(a))")
+        .is_err());
+    assert!(e
+        .run_query("CREATE UNIQUE INDEX u2 ON t(a COLLATE BINARY, id / id)")
+        .is_ok());
+    e.run_query("INSERT INTO t VALUES (5, 'y')").unwrap();
+    assert!(e.run_query("CREATE UNIQUE INDEX u3 ON t(id % 1)").is_err());
+    for bad in [
+        "CREATE INDEX b1 ON t(random())",
+        "CREATE INDEX b2 ON t(a || ?)",
+        "CREATE INDEX b3 ON t((SELECT 1))",
+    ] {
+        assert!(e.run_query(bad).is_err(), "{bad}");
+    }
+    // The failed statements left no index behind: their names are free.
+    for name in ["u1", "u3", "b1", "b2", "b3"] {
+        e.run_query(&format!("CREATE INDEX {name} ON t(id)"))
+            .unwrap();
+    }
+    assert_eq!(rows(&mut e, "PRAGMA integrity_check"), ["ok"]);
+    drop(e);
+    if let Some(verdict) = sqlite3(&ours.0, "PRAGMA integrity_check") {
+        assert_eq!(verdict, ["ok"]);
+    }
+}

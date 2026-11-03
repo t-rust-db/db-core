@@ -3578,7 +3578,7 @@ fn expr_height(e: &Expr) -> usize {
 }
 
 /// `e`'s direct sub-expressions (subqueries excluded).
-fn children(e: &Expr) -> Vec<&Expr> {
+pub(crate) fn children(e: &Expr) -> Vec<&Expr> {
     match &e.kind {
         ExprKind::Unary { expr, .. }
         | ExprKind::IsNull { expr, .. }

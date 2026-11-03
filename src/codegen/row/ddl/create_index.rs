@@ -65,6 +65,7 @@ pub fn compile_create_index(
             });
         } else {
             has_expression = true;
+            check_index_expression(&ci.name, inner)?;
             key_columns.push(IndexedColumn {
                 name: text,
                 desc: col.desc == Some(true),
@@ -91,16 +92,17 @@ pub fn compile_create_index(
         desc,
         root_reg: None,
     };
-    if !has_expression {
+    if !has_expression && !ci.unique {
         em.emit(Instruction::with_p4(Opcode::CreateIndex, 0, 0, 0, p4));
         em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
         return Ok(em.finish());
     }
 
     // An expression key column is evaluated per row, which only the VM can
-    // do: `CreateIndex` allocates and registers the index but leaves it
-    // empty, and the program fills it -- scan the table, build each row's
-    // key, `IdxInsert` (sqlite3's own CREATE INDEX shape; #945).
+    // do, and a UNIQUE index must refuse rows that already collide:
+    // `CreateIndex` allocates and registers the index but leaves it empty,
+    // and the program fills it -- scan the table, build each row's key,
+    // `IdxInsert` (sqlite3's own CREATE INDEX shape; #945).
     let mut reg = RegAlloc::new();
     let root_reg = reg.alloc();
     if let P4::CreateIndex { root_reg: r, .. } = &mut p4 {
@@ -144,6 +146,42 @@ pub fn compile_create_index(
         },
     )?;
     let count = i32::try_from(index.columns.len()).unwrap_or(0);
+    let insert = em.new_label();
+    if ci.unique {
+        // A NULL key part never collides (NULLs are distinct in a UNIQUE
+        // index); otherwise a key already present is sqlite3's error. The
+        // slot after the key receives the other row's rowid.
+        for offset in 0..count {
+            let null = em.emit(Instruction::new(
+                Opcode::IsNull,
+                start.saturating_add(offset),
+                0,
+                0,
+            ));
+            em.patch_p2(null, insert);
+        }
+        let probe = em.emit(Instruction::with_p4(
+            Opcode::NoConflict,
+            INDEX_CURSOR,
+            0,
+            start,
+            P4::Int(i64::from(count)),
+        ));
+        em.patch_p2(probe, insert);
+        let message = if has_expression {
+            format!("UNIQUE constraint failed: index '{}'", ci.name)
+        } else {
+            crate::codegen::row::index_maintenance::unique_violation_message(schema, &index)
+        };
+        em.emit(Instruction::with_p4(
+            Opcode::Halt,
+            crate::codegen::row::insert::SQLITE_CONSTRAINT_UNIQUE,
+            0,
+            0,
+            P4::Str(message),
+        ));
+    }
+    em.place(insert);
     em.emit(Instruction::new(
         Opcode::Rowid,
         TABLE_CURSOR,
@@ -162,6 +200,38 @@ pub fn compile_create_index(
     em.place(end);
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
     Ok(em.finish())
+}
+
+/// sqlite3's rules for an index expression: no parameters, subqueries or
+/// non-deterministic functions (their value could differ from the one
+/// stored when the row is looked up again).
+fn check_index_expression(index: &str, expr: &Expr) -> Result<(), CodegenError> {
+    let mut stack = vec![expr];
+    while let Some(node) = stack.pop() {
+        let prohibited = match &node.kind {
+            ExprKind::Param(_) => Some("parameters"),
+            ExprKind::Subquery(_)
+            | ExprKind::Exists { .. }
+            | ExprKind::InSubquery { .. }
+            | ExprKind::InSubqueryMulti { .. } => Some("subqueries"),
+            ExprKind::FunctionCall { name, .. }
+                if matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "random" | "randomblob" | "changes" | "total_changes" | "last_insert_rowid"
+                ) =>
+            {
+                Some("non-deterministic functions")
+            }
+            _ => None,
+        };
+        if let Some(what) = prohibited {
+            return Err(CodegenError::Unsupported {
+                reason: format!("{what} prohibited in index expressions (index {index})"),
+            });
+        }
+        stack.extend(crate::parser::row::grammar::children(node));
+    }
+    Ok(())
 }
 
 /// The table cursor and the new index's write cursor of the populate loop.
