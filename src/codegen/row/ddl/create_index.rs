@@ -376,6 +376,43 @@ mod tests {
         assert!(matches!(err, CodegenError::Unsupported { .. }), "{err:?}");
     }
 
+    /// Compiles `sql` and says whether the program populates the index
+    /// itself (a table scan with `IdxInsert`) rather than leaving it to
+    /// `CreateIndex`.
+    fn populates_by_program(sql: &str) -> bool {
+        let ci = match parse_create_index(sql) {
+            ParseOutcome::Accepted(c) => c,
+            other => panic!("expected Accepted, got {other:?}"),
+        };
+        let program = compile_create_index(&ci, &schema(), sql).unwrap();
+        program
+            .instructions
+            .iter()
+            .any(|i| i.opcode == Opcode::IdxInsert)
+    }
+
+    // #945: `!has_expression && !ci.unique` -- the one-opcode shape.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_ddl_create_index_compile_create_index_5482207f__v1_plain_non_unique_is_one_opcode(
+    ) {
+        assert!(!populates_by_program("CREATE INDEX i ON t(b)"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_ddl_create_index_compile_create_index_5482207f__v2_an_expression_populates_by_program(
+    ) {
+        assert!(populates_by_program("CREATE INDEX i ON t(a + 1)"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_ddl_create_index_compile_create_index_5482207f__v3_unique_populates_by_program(
+    ) {
+        assert!(populates_by_program("CREATE UNIQUE INDEX i ON t(b)"));
+    }
+
     #[test]
     fn rejects_unresolvable_column() {
         let sql = "CREATE INDEX idx_t_c ON t(c)";
