@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [Unreleased]
+
+### Changed
+
+- Row engine: literal operands of arithmetic, bitwise and concat expressions in a SELECT are loaded once in a prologue (`Init` → constants → `Goto`), as sqlite3 does, instead of on every row (#950).
+- Row engine: GROUP BY group-change detection is one `Compare` + `Jump` (new opcodes, also in sqlite3's EXPLAIN; NULLs group together) instead of a 7-opcode per-column ladder (#950).
+
 ## [0.225.2] - 2026-11-03
 
 ### Fixed
