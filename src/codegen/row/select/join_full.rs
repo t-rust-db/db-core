@@ -67,6 +67,7 @@ pub(super) fn compile_full_join_two_table(
         .collect();
 
     let mut em = Emitter::new();
+    em.enable_const_hoisting();
     let mut reg = RegAlloc::new();
     let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
     let body_start = em.new_label();

@@ -404,8 +404,8 @@ STRING          ::= "'" { any character except "'" } "'" ;
  * or in SHARED above.
  *
  * SQLite publishes NO EBNF. The upstream authorities are:
- *   - src/parse.y (Lemon LALR grammar, action-annotated) -- pinned at 3.53.4:
- *     https://github.com/sqlite/sqlite/blob/version-3.53.4/src/parse.y
+ *   - src/parse.y (Lemon LALR grammar, action-annotated) -- pinned at 3.54.1:
+ *     https://github.com/sqlite/sqlite/blob/version-3.54.1/src/parse.y
  *   - Railroad diagrams (human-readable, generated):
  *     https://www.sqlite.org/syntaxdiagrams.html
  *   - Prose reference:

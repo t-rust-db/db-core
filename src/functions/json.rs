@@ -1,6 +1,6 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
-//! sqlite3's JSON functions: `json`, `json_array`, `json_object`, `json_set`, ... (#651), with sqlite3 3.53.4's semantics.
+//! sqlite3's JSON functions: `json`, `json_array`, `json_object`, `json_set`, ... (#651), with sqlite3 3.54.1's semantics.
 //!
 //! A port of the relevant parts of sqlite3's `json.c`. sqlite3 parses JSON
 //! text into its binary JSONB form and edits that; this module parses into

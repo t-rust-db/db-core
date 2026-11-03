@@ -5,7 +5,7 @@ use super::order_by::{OrderByPlan, OrderByTarget};
 use super::projection::{compile_row_values, emit_row_via_sink, ResultColumnPlan};
 use super::*;
 use crate::codegen::row::index_maintenance::valid_index_root_page;
-use crate::codegen::row::{key_index, record_width};
+use crate::codegen::row::{emit_group_boundary_check, key_index, record_width};
 use std::rc::Rc;
 
 /// Finds a single index on `schema` whose declared column order is a
@@ -461,24 +461,15 @@ where
     let merge_label = em.new_label();
     let first_row_check = em.emit(Instruction::new(Opcode::Eq, have_group_reg, 0, zero_reg));
     em.patch_p2(first_row_check, boundary_label);
-    for ((&cur, &prev), p4) in cur_key_regs.iter().zip(&prev_key_regs).zip(&prefix_p4s) {
-        let a_null = em.new_label();
-        let same_col = em.new_label();
-        let a_null_addr = em.emit(Instruction::new(Opcode::IsNull, cur, 0, 0));
-        em.patch_p2(a_null_addr, a_null);
-        let b_null_addr = em.emit(Instruction::new(Opcode::IsNull, prev, 0, 0));
-        em.patch_p2(b_null_addr, boundary_label);
-        let eq_addr = em.emit(Instruction::with_p4(Opcode::Eq, cur, 0, prev, p4.clone()));
-        em.patch_p2(eq_addr, same_col);
-        let goto_boundary = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-        em.patch_p2(goto_boundary, boundary_label);
-        em.place(a_null);
-        let b_not_null_addr = em.emit(Instruction::new(Opcode::NotNull, prev, 0, 0));
-        em.patch_p2(b_not_null_addr, boundary_label);
-        em.place(same_col);
-    }
-    let goto_merge = em.emit(Instruction::new(Opcode::Goto, 0, 0, 0));
-    em.patch_p2(goto_merge, merge_label);
+    emit_group_boundary_check(
+        em,
+        reg,
+        &cur_key_regs,
+        &prev_key_regs,
+        &prefix_p4s,
+        boundary_label,
+        merge_label,
+    )?;
 
     em.place(boundary_label);
     let skip_flush = em.new_label();

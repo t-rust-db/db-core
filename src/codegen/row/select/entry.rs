@@ -85,6 +85,7 @@ pub fn compile_select_with_catalog_and_stats(
     check_table_star_qualifiers(select, &from.first)?;
 
     let mut em = Emitter::new();
+    em.enable_const_hoisting();
     let mut reg = RegAlloc::new();
 
     let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
@@ -225,6 +226,7 @@ pub(super) fn compile_select_no_from(
     }
 
     let mut em = Emitter::new();
+    em.enable_const_hoisting();
     let mut reg = RegAlloc::new();
 
     let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
