@@ -1,7 +1,7 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
 //! sqlite3's math functions (`SQLITE_ENABLE_MATH_FUNCTIONS`, `func.c`)
-//! (#651), with sqlite3 3.53.4's semantics: an argument is read as a
+//! (#651), with sqlite3 3.54.1's semantics: an argument is read as a
 //! number only when it is one -- an INTEGER, a REAL, or text that is
 //! entirely numeric -- and anything else (NULL, a blob, `'abc'`) gives
 //! NULL. Every result is a REAL, except `ceil`/`floor`/`trunc` of an

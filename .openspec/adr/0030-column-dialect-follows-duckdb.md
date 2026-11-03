@@ -14,7 +14,7 @@ which executor evaluates it".
 The engines have different references, though:
 
 - **The row engine** is a port of sqlite3 and is checked against sqlite3
-  3.53.4 (the row-function oracle, `unit_sqlite_parity`).
+  3.54.1 (the row-function oracle, `unit_sqlite_parity`).
 - **The column engine** (`vm::batch`, the Parquet and ingest-table engines)
   and **the stream engine**, which reuses its planner and VM, are checked
   against DuckDB (ADR 0000 (f), `make check-column-oracle`). #635 already

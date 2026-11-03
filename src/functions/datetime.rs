@@ -1,6 +1,6 @@
 // Copyright 2026 Schuberg Philis
 // SPDX-License-Identifier: Apache-2.0
-//! sqlite3's date and time functions: `date`, `time`, `datetime`, `julianday`, `unixepoch`, `strftime`, `timediff` (#651), with sqlite3 3.53.4's semantics.
+//! sqlite3's date and time functions: `date`, `time`, `datetime`, `julianday`, `unixepoch`, `strftime`, `timediff` (#651), with sqlite3 3.54.1's semantics.
 //!
 //! A port of sqlite3's `date.c`: every value is a `DateTime` holding a
 //! julian day number in milliseconds (`ijd`) and/or the broken-down
