@@ -644,6 +644,122 @@ pub fn compile_select_compound(
     Ok(em.finish())
 }
 
+/// #940: a SELECT core without FROM reads one row, as sqlite3's does --
+/// `SELECT 1 WHERE …`, `SELECT 1 UNION ALL SELECT 2`, `SELECT k FROM a
+/// UNION ALL SELECT 'lit'`, `SELECT count(*) WHERE 1`. Gives such a core
+/// (the first one, when it has a clause a bare expression list can't,
+/// and every FROM-less compound arm) the one-row source `FROM (SELECT
+/// 1)`, so the ordinary scan and compound paths compile it. A `*` stays
+/// FROM-less: sqlite3 refuses it ("no tables specified"), and so does the
+/// constant-row path.
+pub(crate) fn with_one_row_sources(select: &Select) -> std::borrow::Cow<'_, Select> {
+    let has_star = |columns: &[ResultColumn]| {
+        columns
+            .iter()
+            .any(|c| matches!(c, ResultColumn::Star | ResultColumn::TableStar { .. }))
+    };
+    let first_needs = select.from.is_none()
+        && !has_star(&select.columns)
+        && (select.where_clause.is_some()
+            || !select.group_by.is_empty()
+            || select.having.is_some()
+            || select.distinct.is_some()
+            || !select.order_by.is_empty()
+            || select.limit.is_some()
+            || !select.compound.is_empty());
+    let arm_needs =
+        |arm: &crate::parser::ast::CompoundSelect| arm.from.is_none() && !has_star(&arm.columns);
+    if !first_needs && !select.compound.iter().any(arm_needs) {
+        return std::borrow::Cow::Borrowed(select);
+    }
+    let mut out = select.clone();
+    if first_needs {
+        out.from = Some(one_row_source(select.span));
+    }
+    for arm in &mut out.compound {
+        if arm_needs(arm) {
+            arm.from = Some(one_row_source(arm.span));
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// `FROM (SELECT 1)`: one row, no column a query can name.
+fn one_row_source(span: crate::parser::Span) -> crate::parser::ast::FromClause {
+    let one = Expr {
+        kind: ExprKind::Literal(crate::parser::ast::Literal::Integer(1)),
+        span,
+    };
+    let row = Select {
+        with_clause: None,
+        distinct: None,
+        columns: vec![ResultColumn::Expr {
+            expr: one,
+            alias: None,
+        }],
+        from: None,
+        where_clause: None,
+        group_by: Vec::new(),
+        having: None,
+        compound: Vec::new(),
+        order_by: Vec::new(),
+        limit: None,
+        scope: None,
+        span,
+    };
+    crate::parser::ast::FromClause {
+        first: crate::parser::ast::TableRef {
+            kind: crate::parser::ast::TableRefKind::Subquery(Box::new(row)),
+            schema: None,
+            alias: None,
+            span,
+        },
+        joins: Vec::new(),
+    }
+}
+
+/// A compound arm's tables when it has a JOIN (#940): its first table's
+/// `schema`, then each joined table resolved against `catalog`; `None`
+/// for a single-table arm.
+fn joined_arm_tables(
+    select: &Select,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+) -> Result<Option<Vec<TableSchema>>, CodegenError> {
+    let Some(from) = select.from.as_ref().filter(|from| !from.joins.is_empty()) else {
+        return Ok(None);
+    };
+    let mut tables = vec![schema.clone()];
+    for join in &from.joins {
+        tables.push(crate::codegen::row::resolve_from_table_schema(
+            &join.table,
+            catalog,
+        )?);
+    }
+    Ok(Some(tables))
+}
+
+/// The FROM clause's table refs, first then joined, in order.
+fn arm_table_refs(from: &crate::parser::ast::FromClause) -> Vec<&crate::parser::ast::TableRef> {
+    std::iter::once(&from.first)
+        .chain(from.joins.iter().map(|j| &j.table))
+        .collect()
+}
+
+/// An arm's result-column count, over all of its tables when it joins.
+fn arm_column_count(
+    select: &Select,
+    schema: &TableSchema,
+    joined: Option<&[TableSchema]>,
+) -> Result<usize, CodegenError> {
+    match (joined, select.from.as_ref()) {
+        (Some(tables), Some(from)) => {
+            select_result_column_count_joined(select, tables, &arm_table_refs(from))
+        }
+        _ => Ok(select_result_column_count(select, schema)),
+    }
+}
+
 /// [`compile_select_compound`]'s body: emits the compound's rows into
 /// `out` (`first` register, column count) instead of `ResultRow`, with
 /// its cursors numbered from `cursor_base` and `end_label` the caller's
@@ -663,15 +779,6 @@ pub(crate) fn compile_select_compound_scan<F>(
 where
     F: FnMut(&mut Emitter, &mut RegAlloc, i32, i32) -> Result<(), CodegenError>,
 {
-    if first
-        .from
-        .as_ref()
-        .is_some_and(|from| !from.joins.is_empty())
-    {
-        return Err(CodegenError::Unsupported {
-            reason: "UNION with a JOIN in one of its arms is not yet supported".to_string(),
-        });
-    }
     if first.compound.len() != arm_schemas.len() {
         return Err(CodegenError::Unsupported {
             reason: "compile_select_compound: arm_schemas must have one entry per compound arm"
@@ -679,7 +786,9 @@ where
         });
     }
 
-    let expected = select_result_column_count(first, first_schema);
+    // #940: an arm with a JOIN reads all its tables.
+    let first_joined = joined_arm_tables(first, first_schema, catalog)?;
+    let expected = arm_column_count(first, first_schema, first_joined.as_deref())?;
     // `first.order_by`/`first.limit` apply to the whole compound, not
     // any individual arm (#484) — resolved against a synthetic schema
     // naming the compound's own output columns (the first arm's
@@ -690,7 +799,14 @@ where
         name: String::new(),
         database: 0,
         root_page: 0,
-        columns: output_column_names(first, first_schema),
+        columns: match (&first_joined, first.from.as_ref()) {
+            (Some(tables), Some(from)) => crate::codegen::row::subquery::subquery_output_columns(
+                first,
+                &arm_table_refs(from),
+                tables,
+            ),
+            _ => output_column_names(first, first_schema),
+        },
         without_rowid: false,
         strict: false,
         column_types: vec![String::new(); expected],
@@ -705,17 +821,13 @@ where
     let needs_sort = !order_by_plans.is_empty();
     let mut arm_selects = Vec::with_capacity(first.compound.len());
     for (arm, arm_schema) in first.compound.iter().zip(arm_schemas) {
-        if arm.from.as_ref().is_some_and(|from| !from.joins.is_empty()) {
-            return Err(CodegenError::Unsupported {
-                reason: "UNION with a JOIN in one of its arms is not yet supported".to_string(),
-            });
-        }
         let arm_select = arm_as_select(arm);
-        let found = select_result_column_count(&arm_select, arm_schema);
+        let joined = joined_arm_tables(&arm_select, arm_schema, catalog)?;
+        let found = arm_column_count(&arm_select, arm_schema, joined.as_deref())?;
         if found != expected {
             return Err(CodegenError::CompoundColumnMismatch { expected, found });
         }
-        arm_selects.push(arm_select);
+        arm_selects.push((arm_select, joined));
     }
 
     let has_union = first.compound.iter().any(|arm| arm.op == CompoundOp::Union);
@@ -833,8 +945,31 @@ where
                            reg: &mut RegAlloc,
                            arm_index: usize,
                            select: &Select,
-                           schema: &TableSchema|
+                           schema: &TableSchema,
+                           joined: Option<&[TableSchema]>|
      -> Result<(), CodegenError> {
+        // #940: an arm with a JOIN runs the joined scan, which opens its
+        // own cursors from a block reserved here (more than an arm's 4).
+        if let Some(tables) = joined {
+            let base = reg.alloc_cursor();
+            for _ in 0..tables.len().saturating_add(1) {
+                reg.alloc_cursor();
+            }
+            let arm_end = em.new_label();
+            super::compile_select_joined_scan(
+                em,
+                reg,
+                select,
+                tables,
+                catalog,
+                base,
+                arm_end,
+                &std::collections::HashMap::new(),
+                &mut arm_sink,
+            )?;
+            em.place(arm_end);
+            return Ok(());
+        }
         let arm = ScanCursors::for_arm(arm_index);
         let cursors = ScanCursors {
             table: arm.table.saturating_add(cursor_base),
@@ -888,9 +1023,23 @@ where
         limit: None,
         ..first.clone()
     };
-    compile_arm(em, reg, 0, &first_for_scan, first_schema)?;
-    for (i, (arm_select, arm_schema)) in arm_selects.iter().zip(arm_schemas).enumerate() {
-        compile_arm(em, reg, i.saturating_add(1), arm_select, arm_schema)?;
+    compile_arm(
+        em,
+        reg,
+        0,
+        &first_for_scan,
+        first_schema,
+        first_joined.as_deref(),
+    )?;
+    for (i, ((arm_select, joined), arm_schema)) in arm_selects.iter().zip(arm_schemas).enumerate() {
+        compile_arm(
+            em,
+            reg,
+            i.saturating_add(1),
+            arm_select,
+            arm_schema,
+            joined.as_deref(),
+        )?;
     }
 
     if needs_sort {
@@ -959,6 +1108,35 @@ mod mcdc_vectors {
             ParseOutcome::Accepted(s) => *s,
             other => panic!("{sql}: {other:?}"),
         }
+    }
+
+    // codegen_row_select_entry_with_one_row_sources_1c7260db (#940):
+    // `!first_needs && !select.compound.iter().any(arm_needs)`.
+    #[test]
+    fn mcdc__codegen_row_select_entry_with_one_row_sources_1c7260db__v1_bare_select_is_unchanged() {
+        let select = parsed("SELECT 1");
+        assert!(matches!(
+            super::with_one_row_sources(&select),
+            std::borrow::Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_with_one_row_sources_1c7260db__v2_where_gets_a_one_row_source(
+    ) {
+        let out = super::with_one_row_sources(&parsed("SELECT 1 WHERE 1")).into_owned();
+        assert!(out.from.is_some());
+    }
+
+    #[test]
+    fn mcdc__codegen_row_select_entry_with_one_row_sources_1c7260db__v3_a_from_less_arm_gets_one() {
+        let out = super::with_one_row_sources(&parsed("SELECT k FROM a UNION ALL SELECT 'lit'"))
+            .into_owned();
+        assert!(out.compound.iter().all(|arm| arm.from.is_some()));
+        // `*` without FROM stays as it is: sqlite3 refuses it.
+        assert!(super::with_one_row_sources(&parsed("SELECT * WHERE 1"))
+            .from
+            .is_none());
     }
 
     // ---------------------------------------------------------------------

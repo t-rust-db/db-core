@@ -254,6 +254,96 @@ fn dispatch_create_view(
     }
 }
 
+/// A statement led by `WITH` that is no SELECT (#939, #940): an INSERT,
+/// UPDATE or DELETE whose CTEs feed its subqueries. Anything else keeps
+/// the SELECT's parse error.
+fn dispatch_with_led(
+    sql: &str,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+    select_error: ParseOutcome<Select>,
+) -> Result<Program, DispatchError> {
+    // The error of whichever parse got furthest into `sql`: a broken
+    // `WITH … UPDATE d SET` reports the UPDATE's, not the SELECT's.
+    let mut furthest = failure_offset(&select_error).map(|at| (at, parse_error(select_error)));
+    let mut keep = |at: Option<usize>, error: DispatchError| {
+        if at > furthest.as_ref().map(|(f, _)| *f) {
+            furthest = at.map(|at| (at, error));
+        }
+    };
+    match parse_insert(sql) {
+        ParseOutcome::Accepted(insert) => return dispatch_insert(*insert, schemas, views),
+        other => keep(failure_offset(&other), parse_error(other)),
+    }
+    match parse_update(sql) {
+        ParseOutcome::Accepted(update) => return dispatch_update(*update, schemas, views),
+        other => keep(failure_offset(&other), parse_error(other)),
+    }
+    match parse_delete(sql) {
+        ParseOutcome::Accepted(delete) => return dispatch_delete(*delete, schemas, views),
+        other => keep(failure_offset(&other), parse_error(other)),
+    }
+    Err(furthest.map_or_else(
+        || DispatchError::ParseFailed("WITH: no statement parsed".to_string()),
+        |(_, error)| error,
+    ))
+}
+
+/// Where a parse failed, as a byte offset into the statement.
+fn failure_offset<T>(outcome: &ParseOutcome<T>) -> Option<usize> {
+    match outcome {
+        ParseOutcome::Accepted(_) => None,
+        ParseOutcome::Unsupported { span, .. } | ParseOutcome::Invalid { span, .. } => {
+            usize::try_from(span.offset).ok()
+        }
+    }
+}
+
+/// `UPDATE` (also led by `WITH`, #940): its subqueries get a SELECT's
+/// preparation (CTEs, views, flattening) before it compiles.
+fn dispatch_update(
+    mut update: crate::parser::ast::Update,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
+    let schema = schemas
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(&update.table))
+        .ok_or_else(|| DispatchError::NoSuchTable(update.table.clone()))?;
+    let resolved_views = resolve_views(views);
+    for assignment in &mut update.assignments {
+        super::subquery::prepare_expression_subqueries(&mut assignment.value, &resolved_views)?;
+    }
+    if let Some(where_clause) = &mut update.where_clause {
+        super::subquery::prepare_expression_subqueries(where_clause, &resolved_views)?;
+    }
+    Ok(compile_update_with_catalog(
+        &update,
+        schema,
+        &readable_catalog(schemas),
+    )?)
+}
+
+/// `DELETE` (also led by `WITH`, #940): as [`dispatch_update`].
+fn dispatch_delete(
+    mut delete: crate::parser::ast::Delete,
+    schemas: &[TableSchema],
+    views: &[ViewSchema],
+) -> Result<Program, DispatchError> {
+    let schema = schemas
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(&delete.table))
+        .ok_or_else(|| DispatchError::NoSuchTable(delete.table.clone()))?;
+    if let Some(where_clause) = &mut delete.where_clause {
+        super::subquery::prepare_expression_subqueries(where_clause, &resolve_views(views))?;
+    }
+    Ok(compile_delete_with_catalog(
+        &delete,
+        schema,
+        &readable_catalog(schemas),
+    )?)
+}
+
 /// `INSERT` (also led by `WITH`, #939): resolves the SELECT source's
 /// tables (after WITH/view expansion), then compiles.
 fn dispatch_insert(
@@ -281,7 +371,7 @@ fn dispatch_insert(
             super::subquery::reject_unparsable_view_refs(&expanded, views)?;
 
             // #939: a FROM-less source has no FROM tables.
-            let Some(from) = &expanded.from else {
+            if expanded.from.is_none() {
                 insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
                 return Ok(compile_insert_with_catalog(
                     &insert,
@@ -290,7 +380,13 @@ fn dispatch_insert(
                     &[],
                     &readable_catalog(schemas),
                 )?);
+            }
+            // #940: a FROM-less UNION arm after one with FROM reads one row.
+            let expanded = super::select::with_one_row_sources(&expanded).into_owned();
+            let no_tables = || CodegenError::Unsupported {
+                reason: "no tables specified".to_string(),
             };
+            let from = expanded.from.as_ref().ok_or_else(no_tables)?;
             let readable = readable_catalog(schemas);
             let mut joined_schemas = vec![resolve_from_table_schema(&from.first, &readable)?];
             for join in &from.joins {
@@ -299,17 +395,10 @@ fn dispatch_insert(
             // #939: a compound source's arm tables, resolved
             // like a plain compound SELECT's.
             for arm in &expanded.compound {
-                let Some(arm_from) = &arm.from else {
-                    return Err(CodegenError::Unsupported {
-                        reason: "INSERT ... SELECT: a UNION arm without FROM after \
-                                 one with FROM is not yet supported"
-                            .to_string(),
-                    }
-                    .into());
-                };
+                let arm_from = arm.from.as_ref().ok_or_else(no_tables)?;
                 arm_schemas.push(resolve_from_table_schema(&arm_from.first, &readable)?);
             }
-            insert.source = InsertSource::Select(Box::new(expanded.into_owned()));
+            insert.source = InsertSource::Select(Box::new(expanded));
             Some(joined_schemas)
         }
         InsertSource::Values(_) | InsertSource::DefaultValues => None,
@@ -468,12 +557,6 @@ pub fn compile_statement(
     schemas: &[TableSchema],
     views: &[ViewSchema],
 ) -> Result<Program, DispatchError> {
-    let find_schema = |name: &str| -> Result<&TableSchema, DispatchError> {
-        schemas
-            .iter()
-            .find(|s| s.name.eq_ignore_ascii_case(name))
-            .ok_or_else(|| DispatchError::NoSuchTable(name.to_string()))
-    };
     let mut words = sql.split_whitespace();
     let first_word = words.next().unwrap_or("");
     let head = canonical(first_word);
@@ -547,16 +630,7 @@ pub fn compile_statement(
                 compile_select_statement(&select, schemas, views, &HashMap::new())
             }
             // #939: `WITH … INSERT`; anything else keeps the SELECT error.
-            other if head == "WITH" => match parse_insert(sql) {
-                ParseOutcome::Accepted(insert) => dispatch_insert(*insert, schemas, views),
-                ParseOutcome::Unsupported { message, span } => {
-                    Err(parse_error(ParseOutcome::<Select>::Unsupported {
-                        message,
-                        span,
-                    }))
-                }
-                _ => Err(parse_error(other)),
-            },
+            other if head == "WITH" => dispatch_with_led(sql, schemas, views, other),
             other => Err(parse_error(other)),
         },
         "EXPLAIN" => match parse_explain(sql) {
@@ -593,25 +667,11 @@ pub fn compile_statement(
             other => Err(parse_error(other)),
         },
         "UPDATE" => match parse_update(sql) {
-            ParseOutcome::Accepted(update) => {
-                let schema = find_schema(&update.table)?;
-                Ok(compile_update_with_catalog(
-                    &update,
-                    schema,
-                    &readable_catalog(schemas),
-                )?)
-            }
+            ParseOutcome::Accepted(update) => dispatch_update(*update, schemas, views),
             other => Err(parse_error(other)),
         },
         "DELETE" => match parse_delete(sql) {
-            ParseOutcome::Accepted(delete) => {
-                let schema = find_schema(&delete.table)?;
-                Ok(compile_delete_with_catalog(
-                    &delete,
-                    schema,
-                    &readable_catalog(schemas),
-                )?)
-            }
+            ParseOutcome::Accepted(delete) => dispatch_delete(*delete, schemas, views),
             other => Err(parse_error(other)),
         },
         "CREATE" if second == "TABLE" => dispatch_create_table(sql, schemas, views),
@@ -685,6 +745,8 @@ pub fn compile_select_statement(
     stats_by_table: &HashMap<String, Stats>,
 ) -> Result<Program, DispatchError> {
     let select = rewrite_select(select, views)?;
+    // #940: a FROM-less core with WHERE, a compound, … reads one row.
+    let select = super::select::with_one_row_sources(&select).into_owned();
     let readable = readable_catalog(schemas);
     let schemas: &[TableSchema] = &readable;
     let resolve_table = |table_ref: &TableRef| resolve_from_table_schema(table_ref, schemas);

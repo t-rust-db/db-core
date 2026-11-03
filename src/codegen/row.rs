@@ -321,6 +321,12 @@ pub(crate) struct RegAlloc {
         i32,
         crate::codegen::row::TableSchema,
     )>,
+    /// How deep the compile is inside a subquery *expression*'s own FROM
+    /// source (#940). Code emitted there may run per row, or not at all
+    /// (a short-circuit, a WHERE that is never true), so what it
+    /// materializes must not be reused by a later `OpenDup`:
+    /// [`Self::cache_cte`] records nothing while this is above zero.
+    expression_sources: u32,
 }
 
 impl Default for RegAlloc {
@@ -330,6 +336,7 @@ impl Default for RegAlloc {
             next_param: 0,
             next_cursor: 1000,
             materialized_ctes: Vec::new(),
+            expression_sources: 0,
         }
     }
 }
@@ -370,8 +377,21 @@ impl RegAlloc {
         cursor: i32,
         schema: crate::codegen::row::TableSchema,
     ) {
+        if self.expression_sources > 0 {
+            return;
+        }
         self.materialized_ctes
             .push((subquery.clone(), cursor, schema));
+    }
+
+    /// Entering a subquery expression's own FROM source (#940).
+    pub(crate) fn enter_expression_source(&mut self) {
+        self.expression_sources = self.expression_sources.saturating_add(1);
+    }
+
+    /// Leaving it again.
+    pub(crate) fn leave_expression_source(&mut self) {
+        self.expression_sources = self.expression_sources.saturating_sub(1);
     }
 
     pub(crate) fn alloc(&mut self) -> i32 {

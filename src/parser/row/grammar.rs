@@ -52,6 +52,11 @@ const MAX_EXPR_DEPTH: usize = 200;
 /// "at most 64 tables in a join" (#877).
 const MAX_JOIN_TABLES: usize = 64;
 
+/// Most terms one compound SELECT may have: sqlite3's
+/// `SQLITE_MAX_COMPOUND_SELECT` (500), "too many terms in compound SELECT"
+/// past it (#940).
+const MAX_COMPOUND_SELECT: usize = 500;
+
 /// Height cap for a parsed expression tree, sqlite3's
 /// `SQLITE_MAX_EXPR_DEPTH` (#655). `MAX_EXPR_DEPTH` bounds the parser's
 /// own recursion, but a flat operator chain (`1+1+...`, `a AND b AND
@@ -89,6 +94,113 @@ fn match_scope_unit(name: &str) -> Option<(ScopeUnit, u64)> {
         "mb" => Some((ScopeUnit::Bytes, MB)),
         "gb" => Some((ScopeUnit::Bytes, GB)),
         _ => None,
+    }
+}
+
+/// `VALUES (…), (…)` as `SELECT … UNION ALL SELECT …` (#940), for a
+/// `WITH … INSERT … VALUES`: one FROM-less arm per row.
+fn values_as_select(rows: Vec<Vec<Expr>>, span: Span) -> Select {
+    let columns = |row: Vec<Expr>| -> Vec<ResultColumn> {
+        row.into_iter()
+            .map(|expr| ResultColumn::Expr { expr, alias: None })
+            .collect()
+    };
+    let mut rows = rows.into_iter();
+    let first = rows.next().unwrap_or_default();
+    Select {
+        with_clause: None,
+        distinct: None,
+        columns: columns(first),
+        from: None,
+        where_clause: None,
+        group_by: Vec::new(),
+        having: None,
+        compound: rows
+            .map(|row| CompoundSelect {
+                op: CompoundOp::UnionAll,
+                distinct: None,
+                columns: columns(row),
+                from: None,
+                where_clause: None,
+                group_by: Vec::new(),
+                having: None,
+                span,
+            })
+            .collect(),
+        order_by: Vec::new(),
+        limit: None,
+        scope: None,
+        span,
+    }
+}
+
+/// Gives a `WITH … UPDATE/DELETE`'s CTEs to every subquery in `expr`
+/// (#940), as [`attach_leading_with`] gives them to an INSERT's SELECT;
+/// the codegen expands them there.
+fn give_ctes(expr: &mut Expr, outer: &WithClause) {
+    match &mut expr.kind {
+        ExprKind::Subquery(subquery) | ExprKind::Exists { subquery, .. } => {
+            attach_leading_with(subquery, outer.clone());
+        }
+        ExprKind::InSubquery { expr, subquery, .. } => {
+            give_ctes(expr, outer);
+            attach_leading_with(subquery, outer.clone());
+        }
+        ExprKind::InSubqueryMulti {
+            exprs, subquery, ..
+        } => {
+            exprs.iter_mut().for_each(|e| give_ctes(e, outer));
+            attach_leading_with(subquery, outer.clone());
+        }
+        ExprKind::Literal(_) | ExprKind::Param(_) | ExprKind::Column { .. } => {}
+        ExprKind::Unary { expr, .. }
+        | ExprKind::IsNull { expr, .. }
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::Collate { expr, .. }
+        | ExprKind::Paren(expr) => give_ctes(expr, outer),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            give_ctes(lhs, outer);
+            give_ctes(rhs, outer);
+        }
+        ExprKind::Between { expr, lo, hi, .. } => {
+            give_ctes(expr, outer);
+            give_ctes(lo, outer);
+            give_ctes(hi, outer);
+        }
+        ExprKind::In { expr, list, .. } => {
+            give_ctes(expr, outer);
+            list.iter_mut().for_each(|e| give_ctes(e, outer));
+        }
+        ExprKind::Like {
+            expr,
+            pattern,
+            escape,
+            ..
+        } => {
+            give_ctes(expr, outer);
+            give_ctes(pattern, outer);
+            escape.iter_mut().for_each(|e| give_ctes(e, outer));
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            operand.iter_mut().for_each(|e| give_ctes(e, outer));
+            for (w, t) in whens {
+                give_ctes(w, outer);
+                give_ctes(t, outer);
+            }
+            else_.iter_mut().for_each(|e| give_ctes(e, outer));
+        }
+        ExprKind::FunctionCall { args, tail, .. } => {
+            if let FunctionArgs::List(list) = args {
+                list.iter_mut().for_each(|e| give_ctes(e, outer));
+            }
+            if let Some(tail) = tail {
+                tail.filter.iter_mut().for_each(|e| give_ctes(e, outer));
+            }
+        }
     }
 }
 
@@ -421,9 +533,17 @@ impl Parser {
             return self.invalid("expected VALUES, DEFAULT VALUES, or SELECT after INSERT INTO");
         };
 
-        if with_clause.is_some() {
-            return self.unsupported("WITH ... INSERT ... VALUES not yet supported");
-        }
+        // #940: WITH before VALUES -- the rows become `SELECT … UNION ALL
+        // SELECT …`, so the CTEs reach the subqueries in them, as sqlite3's
+        // do. DEFAULT VALUES has no expression a CTE could feed.
+        let source = match (with_clause.take(), source) {
+            (Some(outer), InsertSource::Values(rows)) => {
+                let mut select = values_as_select(rows, start);
+                attach_leading_with(&mut select, outer);
+                InsertSource::Select(Box::new(select))
+            }
+            (_, source) => source,
+        };
         // `DEFAULT VALUES` takes no upsert clause (sqlite3's grammar).
         let upsert = if matches!(source, InsertSource::DefaultValues) {
             Vec::new()
@@ -502,18 +622,28 @@ impl Parser {
     }
 
     pub(super) fn parse_delete_stmt(&mut self) -> PResult<Delete> {
-        let start = self.expect_kw(Keyword::DELETE)?;
+        // #940: `WITH … DELETE`; the CTEs feed the WHERE's subqueries.
+        let with_clause = if self.at_kw(Keyword::WITH) {
+            Some(self.parse_with_clause()?)
+        } else {
+            None
+        };
+        let delete_kw = self.expect_kw(Keyword::DELETE)?;
+        let start = with_clause.as_ref().map_or(delete_kw, |w| w.span);
         self.expect_kw(Keyword::FROM)?;
         let (table, table_span) = self.qualified_table_name()?;
 
         let mut end = table_span;
-        let where_clause = if self.eat_kw(Keyword::WHERE) {
+        let mut where_clause = if self.eat_kw(Keyword::WHERE) {
             let expr = self.expr()?;
             end = expr.span;
             Some(expr)
         } else {
             None
         };
+        if let Some(outer) = &with_clause {
+            where_clause.iter_mut().for_each(|e| give_ctes(e, outer));
+        }
 
         Ok(Delete {
             table,
@@ -550,7 +680,14 @@ impl Parser {
     /// `assignment` is either `column-name "=" expr` or the tuple form
     /// `"(" column-name { "," column-name } ")" "=" "(" expr-list ")"`.
     pub(super) fn parse_update_stmt(&mut self) -> PResult<Update> {
-        let start = self.expect_kw(Keyword::UPDATE)?;
+        // #940: `WITH … UPDATE`; the CTEs feed the SET and WHERE subqueries.
+        let with_clause = if self.at_kw(Keyword::WITH) {
+            Some(self.parse_with_clause()?)
+        } else {
+            None
+        };
+        let update_kw = self.expect_kw(Keyword::UPDATE)?;
+        let start = with_clause.as_ref().map_or(update_kw, |w| w.span);
 
         let or_action = if self.eat_kw(Keyword::OR) {
             Some(self.conflict_action()?)
@@ -567,11 +704,17 @@ impl Parser {
             assignments.extend(self.assignment()?);
         }
 
-        let where_clause = if self.eat_kw(Keyword::WHERE) {
+        let mut where_clause = if self.eat_kw(Keyword::WHERE) {
             Some(self.expr()?)
         } else {
             None
         };
+        if let Some(outer) = &with_clause {
+            for assignment in &mut assignments {
+                give_ctes(&mut assignment.value, outer);
+            }
+            where_clause.iter_mut().for_each(|e| give_ctes(e, outer));
+        }
 
         let end = self
             .tokens
@@ -1553,6 +1696,9 @@ impl Parser {
                 CompoundOp::Union
             };
             compound.push(self.parse_compound_select_arm(union_start, op)?);
+            if compound.len() >= MAX_COMPOUND_SELECT {
+                return self.invalid("too many terms in compound SELECT");
+            }
         }
 
         let mut order_by = Vec::new();
@@ -3841,11 +3987,52 @@ mod tests {
     }
 
     #[test]
-    fn with_before_insert_values_is_unsupported() {
-        assert!(matches!(
-            parser("WITH w AS (SELECT 1) INSERT INTO t VALUES (1)").parse_insert_stmt(),
-            Err(ParseFail::Unsupported { .. })
-        ));
+    fn with_before_insert_values_becomes_a_union_all_select() {
+        // #940: the rows become `SELECT … UNION ALL SELECT …` under the WITH.
+        let select = insert_select("WITH w AS (SELECT 1) INSERT INTO t VALUES (1), (2), (3)");
+        assert_eq!(cte_names(&select), ["w"]);
+        assert_eq!(select.compound.len(), 2);
+        assert!(select
+            .compound
+            .iter()
+            .all(|arm| arm.op == CompoundOp::UnionAll && arm.from.is_none()));
+        // DEFAULT VALUES: nothing a CTE could feed.
+        let insert = parser("WITH w AS (SELECT 1) INSERT INTO t DEFAULT VALUES")
+            .parse_insert_stmt()
+            .unwrap();
+        assert!(matches!(insert.source, InsertSource::DefaultValues));
+    }
+
+    /// #940: a WITH before UPDATE/DELETE is given to every subquery in the
+    /// statement's expressions; the target stays the named table.
+    #[test]
+    fn with_before_update_and_delete_feeds_their_subqueries() {
+        let update = parser(
+            "WITH w AS (SELECT 1 AS id) UPDATE t SET a = (SELECT id FROM w) \
+             WHERE b IN (SELECT id FROM w)",
+        )
+        .parse_update_stmt()
+        .unwrap();
+        assert_eq!(update.table, "t");
+        let ExprKind::Subquery(set) = &update.assignments[0].value.kind else {
+            panic!("expected a scalar subquery");
+        };
+        assert_eq!(cte_names(set), ["w"]);
+        let Some(ExprKind::InSubquery { subquery, .. }) =
+            update.where_clause.as_ref().map(|w| &w.kind)
+        else {
+            panic!("expected IN (SELECT …)");
+        };
+        assert_eq!(cte_names(subquery), ["w"]);
+        let delete =
+            parser("WITH w AS (SELECT 1 AS id) DELETE FROM t WHERE EXISTS (SELECT 1 FROM w)")
+                .parse_delete_stmt()
+                .unwrap();
+        let Some(ExprKind::Exists { subquery, .. }) = delete.where_clause.as_ref().map(|w| &w.kind)
+        else {
+            panic!("expected EXISTS");
+        };
+        assert_eq!(cte_names(subquery), ["w"]);
     }
 
     /// #368 tagged MC/DC vector (obligation `grammar_474`,

@@ -6,7 +6,7 @@
 use super::from_clause::resolve_subquery_schema;
 use super::{select_id, HoistedSubquery};
 use crate::codegen::row::expr::{compile_cond, compile_value};
-use crate::codegen::row::index_maintenance::{valid_index_root_page, valid_table_root_page};
+use crate::codegen::row::index_maintenance::valid_index_root_page;
 use crate::codegen::row::select::join_access::{choose_join_access, JoinAccess};
 use crate::codegen::row::select::{
     compile_grouped_scan, select_has_aggregate, try_compile_index_only_count,
@@ -119,13 +119,15 @@ pub(crate) fn compile_scalar_subquery(
     let sub_cursor = reg.alloc_cursor();
     let schema = std::rc::Rc::new(schema);
 
-    let root_page = valid_table_root_page(&schema)?;
-    em.emit(Instruction::new(
-        Opcode::OpenRead,
+    // #940: a table, or a FROM-subquery materialized.
+    super::open_subquery_source(
+        em,
+        reg,
+        subselect,
+        &schema,
+        &outer_scope.catalog,
         sub_cursor,
-        root_page,
-        schema.database_p3(),
-    ));
+    )?;
 
     if select_has_aggregate(subselect) {
         // #304: the subquery's projected expression contains an
@@ -359,13 +361,15 @@ pub(crate) fn compile_exists(
         // than let it reach either opcode as a malformed target.
         let null_addr = em.emit(Instruction::new(Opcode::IsNull, value_reg, 0, 0));
         em.patch_p2(null_addr, not_found);
-        let root_page = valid_table_root_page(&schema)?;
-        em.emit(Instruction::new(
-            Opcode::OpenRead,
+        // #940: a table, or a FROM-subquery materialized.
+        super::open_subquery_source(
+            em,
+            reg,
+            subselect,
+            &schema,
+            &outer_scope.catalog,
             sub_cursor,
-            root_page,
-            schema.database_p3(),
-        ));
+        )?;
         match access {
             JoinAccess::Rowid(_) => {
                 let seek_addr = em.emit(Instruction::new(
@@ -413,13 +417,15 @@ pub(crate) fn compile_exists(
         return Ok(());
     }
 
-    let root_page = valid_table_root_page(&schema)?;
-    em.emit(Instruction::new(
-        Opcode::OpenRead,
+    // #940: a table, or a FROM-subquery materialized.
+    super::open_subquery_source(
+        em,
+        reg,
+        subselect,
+        &schema,
+        &outer_scope.catalog,
         sub_cursor,
-        root_page,
-        schema.database_p3(),
-    ));
+    )?;
     let not_found = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
     em.patch_p2(rewind_addr, not_found);
@@ -616,13 +622,15 @@ pub(super) fn materialize_in_subquery_index(
     let eph_cursor = reg.alloc_cursor();
     em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
 
-    let root_page = valid_table_root_page(&schema)?;
-    em.emit(Instruction::new(
-        Opcode::OpenRead,
+    // #940: a table, or a FROM-subquery materialized.
+    super::open_subquery_source(
+        em,
+        reg,
+        subselect,
+        &schema,
+        &outer_scope.catalog,
         sub_cursor,
-        root_page,
-        schema.database_p3(),
-    ));
+    )?;
     let scan_end = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
     em.patch_p2(rewind_addr, scan_end);
@@ -714,13 +722,15 @@ pub(crate) fn compile_in_subquery_multi(
     let eph_cursor = reg.alloc_cursor();
     em.emit(Instruction::new(Opcode::OpenEphemeral, eph_cursor, 0, 0));
 
-    let root_page = valid_table_root_page(&schema)?;
-    em.emit(Instruction::new(
-        Opcode::OpenRead,
+    // #940: a table, or a FROM-subquery materialized.
+    super::open_subquery_source(
+        em,
+        reg,
+        subselect,
+        &schema,
+        &outer_scope.catalog,
         sub_cursor,
-        root_page,
-        schema.database_p3(),
-    ));
+    )?;
     let scan_end = em.new_label();
     let rewind_addr = em.emit(Instruction::new(Opcode::Rewind, sub_cursor, 0, 0));
     em.patch_p2(rewind_addr, scan_end);

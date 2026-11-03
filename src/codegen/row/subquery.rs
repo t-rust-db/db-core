@@ -49,6 +49,7 @@ mod memoize;
 mod pushdown;
 mod scalar;
 mod views;
+mod walk;
 
 use crate::parser::ast::Select;
 
@@ -59,12 +60,32 @@ pub use pushdown::push_down_where_predicates;
 pub(crate) use views::reject_unparsable_view_refs;
 pub use views::{resolve_views, ExpandViews, ResolvedView};
 
+/// #940: gives every subquery in `expr` (an UPDATE's SET value or WHERE,
+/// a DELETE's WHERE) the preparation a SELECT gets -- its CTEs (a `WITH …
+/// UPDATE/DELETE`'s, given to it by the parser) and views expanded, its
+/// simple FROM-subqueries flattened.
+pub(crate) fn prepare_expression_subqueries(
+    expr: &mut crate::parser::ast::Expr,
+    views: &[ResolvedView],
+) -> Result<(), crate::codegen::row::select::CodegenError> {
+    walk::each_subquery_in_expr_mut(expr, &mut |subquery| {
+        let mut prepared = expand_with_clause(subquery)?
+            .expand_views(views)?
+            .into_owned();
+        flatten_from_subqueries(&mut prepared);
+        *subquery = prepared;
+        Ok(())
+    })
+}
+
 pub(crate) use correlation::{
     hoist_uncorrelated_where_subqueries, in_list_id, is_comparison_op, subquery_hoistable,
     subquery_is_correlated, top_level_and_conjuncts,
 };
 pub(crate) use from_clause::materialize_from_subquery;
+pub(crate) use from_clause::open_subquery_source;
 pub(crate) use from_clause::resolve_subquery_schema;
+pub(crate) use from_clause::subquery_output_columns;
 pub(crate) use memoize::{compile_memoized_scalar_subquery, memoize_correlated_where_subqueries};
 pub(crate) use scalar::{
     compile_exists, compile_in_subquery, compile_in_subquery_multi, compile_scalar_subquery,

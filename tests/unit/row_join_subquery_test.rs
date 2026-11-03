@@ -763,18 +763,16 @@ fn with_before_insert_over_the_target_sees_it_before_the_statement() {
 }
 
 #[test]
-fn with_before_values_update_or_delete_is_still_refused() {
+fn with_before_values_update_and_delete_run() {
+    // #940: refused until now; sqlite3's rows.
     let (_db, mut e) = insert_fixture();
     for sql in [
         "WITH v AS (SELECT 1) INSERT INTO d VALUES (6000, 'values')",
         "WITH w AS (SELECT 1) UPDATE d SET t = 'x' WHERE id = 1",
         "WITH w AS (SELECT 1) DELETE FROM d WHERE id = 1",
     ] {
-        let err = e.run_query(sql).unwrap_err();
-        assert!(
-            err.to_string().contains("not yet supported"),
-            "{sql}: {err}"
-        );
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
     }
     assert_eq!(
         rows(
@@ -786,6 +784,446 @@ fn with_before_values_update_or_delete_is_still_refused() {
     );
     assert_eq!(
         rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
-        ["1|seed", "2|seed2"]
+        ["2|seed2", "6000|values"]
+    );
+}
+
+// #940: a SELECT core without FROM reads one row, as in sqlite3: with
+// WHERE, GROUP BY/HAVING, DISTINCT, ORDER BY/LIMIT, as an aggregate, and
+// as a UNION arm. The rows are sqlite3 3.54.1's.
+
+#[test]
+fn select_without_from_with_clauses_reads_one_row() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        ("SELECT 1 WHERE EXISTS (SELECT 1 FROM a)", &["1"][..]),
+        ("SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM a)", &[][..]),
+        (
+            "SELECT 'x', (SELECT count(*) FROM c) WHERE (SELECT count(*) FROM b) > 3",
+            &["x|2"][..],
+        ),
+        ("SELECT 1 WHERE NULL", &[][..]),
+        ("SELECT count(*), max(3) WHERE 1", &["1|3"][..]),
+        ("SELECT count(*) WHERE 0", &["0"][..]),
+        ("SELECT sum(5), min('a') WHERE 0", &["NULL|NULL"][..]),
+        ("SELECT DISTINCT 7", &["7"][..]),
+        ("SELECT 3 ORDER BY 1 LIMIT 0", &[][..]),
+        ("SELECT 4 AS v GROUP BY 1 HAVING v > 3", &["4"][..]),
+        ("SELECT 5 LIMIT 1 OFFSET 1", &[][..]),
+        ("SELECT 1, 'two', NULL", &["1|two|NULL"][..]),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+    // sqlite3: "no tables specified".
+    assert!(e.run_query("SELECT * WHERE 1").is_err());
+}
+
+#[test]
+fn union_with_select_without_from_arms() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        ("SELECT 1 UNION ALL SELECT 2", &["1", "2"][..]),
+        (
+            "SELECT 1 UNION SELECT 1 UNION SELECT 2 ORDER BY 1 DESC",
+            &["2", "1"][..],
+        ),
+        ("SELECT 2 UNION ALL SELECT 1 ORDER BY 1 LIMIT 1", &["1"][..]),
+        (
+            "SELECT k FROM a UNION ALL SELECT 'lit'",
+            &["x", "y", "z", "lit"][..],
+        ),
+        (
+            "SELECT 'first' UNION ALL SELECT k FROM a ORDER BY 1",
+            &["first", "x", "y", "z"][..],
+        ),
+        (
+            "SELECT k FROM a UNION SELECT 'x' ORDER BY 1",
+            &["x", "y", "z"][..],
+        ),
+        (
+            "SELECT abs(-2) + 1 AS n WHERE 1 UNION ALL SELECT id FROM c WHERE id > 1 ORDER BY n",
+            &["2", "3"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+// #940: a UNION as the body of a CTE, a view or a FROM-subquery runs every
+// arm (UNION's dedup, its ORDER BY/LIMIT, FROM-less arms). sqlite3's rows.
+
+#[test]
+fn union_bodies_of_ctes_views_and_derived_tables() {
+    let (_db, mut e) = fixture();
+    e.run_query("CREATE VIEW vu AS SELECT k AS name FROM a UNION SELECT t FROM c")
+        .unwrap();
+    for (sql, expected) in [
+        ("WITH u AS (SELECT t FROM b UNION SELECT t FROM c) SELECT count(*) FROM u", &["4"][..]),
+        (
+            "WITH u AS (SELECT k, t FROM b UNION ALL SELECT 'zz', t FROM c) \
+             SELECT k, count(*) FROM u GROUP BY k ORDER BY k",
+            &["w|1", "x|2", "y|1", "zz|2"][..],
+        ),
+        (
+            "SELECT x FROM (SELECT t AS x FROM b UNION SELECT t FROM c ORDER BY 1 LIMIT 3) ORDER BY x",
+            &["icf", "mcqf", "orphan"][..],
+        ),
+        (
+            "SELECT x FROM (SELECT t AS x FROM b UNION ALL SELECT t FROM c) WHERE x > 'm' ORDER BY x",
+            &["mcqf", "orphan", "other"][..],
+        ),
+        (
+            "WITH v AS (SELECT 1 AS n UNION SELECT 1 UNION SELECT 2) SELECT n FROM v ORDER BY n",
+            &["1", "2"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM a UNION SELECT id FROM c) \
+             SELECT a.k, u.id FROM u JOIN a ON a.id = u.id ORDER BY 2",
+            &["x|1", "y|2", "z|3"][..],
+        ),
+        (
+            "WITH u AS (SELECT t FROM b UNION SELECT t FROM c), \
+             w AS (SELECT t FROM u WHERE t <> 'icf') SELECT count(*), min(t) FROM w",
+            &["3|mcqf"][..],
+        ),
+        ("SELECT name FROM vu ORDER BY name", &["icf", "other", "x", "y", "z"][..]),
+        ("SELECT count(*) FROM vu WHERE name IN (SELECT t FROM b)", &["1"][..]),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+#[test]
+fn insert_select_from_union_bodies_including_one_over_the_target() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "WITH u AS (SELECT t FROM b UNION SELECT t FROM c) INSERT INTO d SELECT 5000, t FROM u",
+        // Reads `d` through a UNION derived table: sees it before the
+        // statement (4 rows), plus `c`'s 2.
+        "INSERT INTO d SELECT x.id + 100, x.t FROM \
+         (SELECT id, t FROM d UNION ALL SELECT id, t FROM c) AS x",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true),
+        [
+            "101|icf",
+            "102|other",
+            "5000|icf",
+            "5000|mcqf",
+            "5000|orphan",
+            "5000|other",
+            "5100|icf",
+            "5100|mcqf",
+            "5100|orphan",
+            "5100|other"
+        ]
+    );
+}
+
+// #940: a UNION arm may join tables (first arm or later, LEFT JOIN, three
+// tables, aliases, `*`/`t.*` over the join), in a plain SELECT, a CTE
+// body and an INSERT source. sqlite3's rows.
+
+#[test]
+fn union_arms_with_joins() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        (
+            "SELECT a.id, b.t FROM a JOIN b ON b.k = a.k UNION ALL SELECT id, t FROM c",
+            &["1|icf", "1|mcqf", "2|icf", "1|icf", "2|other"][..],
+        ),
+        (
+            "SELECT id, t FROM c UNION SELECT a.id, b.t FROM a JOIN b ON b.k = a.k ORDER BY 1, 2",
+            &["1|icf", "1|mcqf", "2|icf", "2|other"][..],
+        ),
+        (
+            "SELECT a.id, c.t FROM a LEFT JOIN c ON c.id = a.id UNION ALL SELECT 9, 'nine' ORDER BY 1",
+            &["1|icf", "2|other", "3|NULL", "9|nine"][..],
+        ),
+        (
+            "SELECT x.k, y.t FROM a AS x JOIN b AS y ON y.k = x.k \
+             UNION SELECT b.k, c.t FROM b JOIN c ON c.t = b.t ORDER BY 1, 2",
+            &["x|icf", "x|mcqf", "y|icf"][..],
+        ),
+        (
+            "SELECT a.id, b.t, c.t FROM a JOIN b ON b.k = a.k JOIN c ON c.id = a.id \
+             UNION ALL SELECT 0, 'z', 'z' ORDER BY 1, 2",
+            &["0|z|z", "1|icf|icf", "1|mcqf|icf", "2|icf|other"][..],
+        ),
+        (
+            "SELECT * FROM a JOIN c ON c.id = a.id UNION ALL SELECT id, k, id, k FROM a ORDER BY 1, 3",
+            &["1|x|1|icf", "1|x|1|x", "2|y|2|other", "2|y|2|y", "3|z|3|z"][..],
+        ),
+        (
+            "SELECT a.*, b.t FROM a JOIN b ON b.k = a.k \
+             UNION SELECT id, 'q', t FROM c ORDER BY 3 DESC, 2 LIMIT 3",
+            &["2|q|other", "1|x|mcqf", "1|q|icf"][..],
+        ),
+        (
+            "SELECT count(*) FROM (SELECT a.k FROM a JOIN b ON b.k = a.k UNION SELECT t FROM c)",
+            &["4"][..],
+        ),
+        (
+            "WITH u AS (SELECT a.id AS i, b.t AS t FROM a JOIN b ON b.k = a.k \
+             UNION SELECT id, t FROM c) SELECT t, count(*) FROM u GROUP BY t ORDER BY t",
+            &["icf|2", "mcqf|1", "other|1"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+    // Arms of different widths: an error in both engines.
+    assert!(e
+        .run_query("SELECT a.id FROM a JOIN b ON b.k = a.k UNION ALL SELECT id, t FROM c")
+        .is_err());
+}
+
+#[test]
+fn insert_select_from_union_arms_with_joins_including_one_over_the_target() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "INSERT INTO d SELECT a.id, b.t FROM a JOIN b ON b.k = a.k UNION ALL SELECT id, t FROM c",
+        // A joined arm over the target, and a FROM-less arm after it.
+        "INSERT INTO d SELECT d.id + 10, a.k FROM d JOIN a ON a.id = d.id UNION SELECT 99, 'x'",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true),
+        ["1|icf", "1|icf", "1|mcqf", "2|icf", "2|other", "11|x", "12|y", "99|x"]
+    );
+}
+
+// #940: a subquery expression (scalar, IN, NOT IN, EXISTS) may read a
+// FROM-subquery, a CTE or a view, as in sqlite3: once or per row, also
+// correlated to the outer row inside the derived table. sqlite3's rows.
+
+#[test]
+fn subquery_expressions_over_derived_tables_ctes_and_views() {
+    let (_db, mut e) = fixture();
+    e.run_query("CREATE VIEW vc AS SELECT id, t FROM c")
+        .unwrap();
+    for (sql, expected) in [
+        ("SELECT (SELECT count(*) FROM (SELECT id FROM a))", &["3"][..]),
+        (
+            "WITH u AS (SELECT id FROM a) SELECT (SELECT count(*) FROM u), (SELECT max(id) FROM u)",
+            &["3|3"][..],
+        ),
+        (
+            "WITH u AS (SELECT id, t FROM c) \
+             SELECT a.id, (SELECT t FROM u WHERE u.id = a.id) FROM a ORDER BY 1",
+            &["1|icf", "2|other", "3|NULL"][..],
+        ),
+        (
+            "WITH u AS (SELECT t FROM b UNION SELECT t FROM c) \
+             SELECT count(*) FROM b WHERE t IN (SELECT t FROM u WHERE t <> 'icf')",
+            &["2"][..],
+        ),
+        (
+            "SELECT id FROM a WHERE id NOT IN (SELECT id FROM (SELECT id FROM c)) ORDER BY id",
+            &["3"][..],
+        ),
+        (
+            "SELECT id FROM a WHERE EXISTS (SELECT 1 FROM (SELECT id FROM c) AS x WHERE x.id = a.id) \
+             ORDER BY id",
+            &["1", "2"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM c) SELECT (SELECT max(id) FROM u WHERE id < a.id), a.id \
+             FROM a ORDER BY 2",
+            &["NULL|1", "1|2", "2|3"][..],
+        ),
+        ("SELECT id FROM a WHERE id IN (SELECT id FROM vc) ORDER BY 1", &["1", "2"][..]),
+        ("SELECT (SELECT max(t) FROM (SELECT t FROM vc ORDER BY t))", &["other"][..]),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+/// A CTE used both in FROM and inside expressions, in either order, with
+/// a subquery that runs conditionally or never: what an expression
+/// materializes is never reused by another reference.
+#[test]
+fn a_cte_in_from_and_in_expressions_reads_its_own_rows_every_time() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        (
+            "WITH u AS (SELECT id FROM c) \
+             SELECT a.id, (SELECT count(*) FROM u) FROM a JOIN u ON u.id = a.id ORDER BY 1",
+            &["1|2", "2|2"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM c) SELECT a.id FROM a \
+             WHERE a.id IN (SELECT id FROM u) AND EXISTS (SELECT 1 FROM u WHERE u.id = a.id) ORDER BY 1",
+            &["1", "2"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM c) SELECT a.id, CASE WHEN a.id > 5 \
+             THEN (SELECT count(*) FROM u) ELSE 0 END FROM a JOIN u ON u.id = a.id ORDER BY 1",
+            &["1|0", "2|0"][..],
+        ),
+        (
+            "WITH u AS (SELECT id FROM c) SELECT count(*) FROM a \
+             WHERE 0 AND a.id IN (SELECT id FROM u) UNION ALL SELECT count(*) FROM u",
+            &["0", "2"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+/// A derived table correlated to the outer row inside a subquery
+/// expression: its WHERE keeps naming the outer row. With an alias, this
+/// gave wrong counts while the fix was in progress (`b.k = a.k` read as
+/// `x.k = x.k`), so it is pinned here.
+#[test]
+fn correlated_derived_tables_inside_subquery_expressions() {
+    let (_db, mut e) = fixture();
+    for (sql, expected) in [
+        (
+            "SELECT a.k, (SELECT count(*) FROM (SELECT b.t FROM b WHERE b.k = a.k) AS x) FROM a ORDER BY 1",
+            &["x|2", "y|1", "z|0"][..],
+        ),
+        (
+            "SELECT a.k, (SELECT count(*) FROM (SELECT b.t FROM b WHERE b.k = a.k)) FROM a ORDER BY 1",
+            &["x|2", "y|1", "z|0"][..],
+        ),
+        (
+            "SELECT id FROM c WHERE EXISTS (SELECT 1 FROM (SELECT k FROM a WHERE a.id = c.id) AS x) \
+             ORDER BY 1",
+            &["1", "2"][..],
+        ),
+        (
+            "SELECT id FROM c WHERE EXISTS (SELECT 1 FROM (SELECT k FROM a WHERE a.id = c.id)) ORDER BY 1",
+            &["1", "2"][..],
+        ),
+        (
+            "SELECT a.id, (SELECT count(*) FROM (SELECT id FROM c WHERE c.id <> a.id) AS x) FROM a ORDER BY 1",
+            &["1|1", "2|1", "3|2"][..],
+        ),
+        (
+            "SELECT a.id, (SELECT count(*) FROM (SELECT id FROM c WHERE id <> a.id)) FROM a ORDER BY 1",
+            &["1|1", "2|1", "3|2"][..],
+        ),
+        (
+            "SELECT a.id, (SELECT x.t FROM (SELECT t, id FROM c) AS x WHERE x.id = a.id) FROM a ORDER BY 1",
+            &["1|icf", "2|other", "3|NULL"][..],
+        ),
+        (
+            "SELECT a.k, (SELECT count(*) FROM (SELECT k AS kk FROM b) AS x WHERE x.kk = a.k) \
+             FROM a ORDER BY 1",
+            &["x|2", "y|1", "z|0"][..],
+        ),
+    ] {
+        assert_eq!(rows(&mut e, sql, true), expected, "{sql}");
+    }
+}
+
+#[test]
+fn insert_update_delete_with_subqueries_over_derived_tables() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT)",
+        "INSERT INTO d VALUES ((SELECT id FROM (SELECT 6000 AS id)), 'expanded')",
+        "INSERT INTO d VALUES (1, 'x'), (2, 'y')",
+        "UPDATE d SET t = 'u' WHERE id IN (SELECT id FROM (SELECT 1 AS id))",
+        "DELETE FROM d WHERE id IN (SELECT id FROM (SELECT 6000 AS id))",
+    ] {
+        e.run_query(sql)
+            .unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
+        ["1|u", "2|y"]
+    );
+}
+
+// #940: WITH before INSERT … VALUES, UPDATE and DELETE: the CTEs feed the
+// statement's subqueries (a CTE named like a real table shadows it there;
+// the statement's own target stays the table). sqlite3's rows.
+
+#[test]
+fn with_before_values_update_and_delete_feeds_their_subqueries() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER, t TEXT DEFAULT 'dflt')",
+        "WITH v AS (SELECT 6000 AS id) INSERT INTO d VALUES ((SELECT id FROM v), 'with')",
+        "WITH v AS (SELECT 7000 AS id) \
+         INSERT INTO d VALUES ((SELECT id FROM v), 'v1'), ((SELECT id + 1 FROM v), 'v2')",
+        "WITH a AS (SELECT 8000 AS id) INSERT INTO d VALUES ((SELECT id FROM a), 'shadow')",
+        "WITH v AS (SELECT count(*) AS n FROM d) INSERT INTO d VALUES ((SELECT n FROM v) + 9000, 'self')",
+        "WITH v AS (SELECT 1) INSERT INTO d(id) VALUES (9500)",
+        "WITH v AS (SELECT 1) INSERT INTO d DEFAULT VALUES",
+        "INSERT INTO d VALUES (1, 'x'), (2, 'y'), (3, 'z')",
+        "WITH w AS (SELECT 1 AS id) UPDATE d SET t = 'u' WHERE id IN (SELECT id FROM w)",
+        "WITH w AS (SELECT max(id) AS m FROM d WHERE id < 10) \
+         UPDATE d SET t = t || '!' WHERE id = (SELECT m FROM w)",
+        "WITH w AS (SELECT k, id FROM a) UPDATE d SET t = (SELECT k FROM w WHERE w.id = d.id) WHERE id = 2",
+        "WITH x AS (SELECT 6000 AS id), y AS (SELECT id + 1000 AS id FROM x) \
+         DELETE FROM d WHERE id IN (SELECT id FROM y) OR id IN (SELECT id FROM x)",
+        "WITH w AS (SELECT id FROM c) DELETE FROM d WHERE EXISTS (SELECT 1 FROM w WHERE w.id + 9000 = d.id)",
+        "WITH t AS (SELECT 9500 AS id) DELETE FROM d WHERE id = (SELECT id FROM t)",
+    ] {
+        e.run_query(sql).unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1, 2", true),
+        [
+            "NULL|dflt",
+            "1|u",
+            "2|y",
+            "3|z!",
+            "7001|v2",
+            "8000|shadow",
+            "9004|self"
+        ]
+    );
+}
+
+#[test]
+fn with_before_update_shadows_the_target_only_in_subqueries_and_reads_views() {
+    let (_db, mut e) = fixture();
+    for sql in [
+        "CREATE TABLE d (id INTEGER PRIMARY KEY, t TEXT UNIQUE)",
+        "INSERT INTO d VALUES (1, 'x'), (2, 'y'), (3, 'z')",
+        // `d` in the subquery is the CTE; the UPDATE's target is the table.
+        "WITH d AS (SELECT 2 AS id) UPDATE d SET t = 'cte' WHERE id IN (SELECT id FROM d)",
+        "CREATE VIEW vc AS SELECT id, t FROM c",
+        "UPDATE d SET t = (SELECT t FROM vc WHERE vc.id = d.id) || '#' WHERE id = 1",
+        "WITH w AS (SELECT id FROM vc) DELETE FROM d WHERE id IN (SELECT id FROM w) AND t LIKE '%#'",
+        "WITH v AS (SELECT 3 AS id) INSERT INTO d VALUES ((SELECT id FROM v), 'again') \
+         ON CONFLICT(id) DO UPDATE SET t = excluded.t",
+    ] {
+        e.run_query(sql).unwrap_or_else(|err| panic!("{sql}: {err}"));
+    }
+    assert_eq!(
+        rows(&mut e, "SELECT * FROM d ORDER BY 1", true),
+        ["2|cte", "3|again"]
+    );
+}
+
+/// #940: a broken statement led by WITH reports its own syntax error, not
+/// the SELECT grammar's.
+#[test]
+fn a_broken_with_led_statement_reports_its_own_error() {
+    let (_db, mut e) = insert_fixture();
+    let update = e
+        .run_query("WITH w AS (SELECT 1) UPDATE d SET WHERE id = 1")
+        .unwrap_err();
+    assert!(
+        update.to_string().contains("expected identifier"),
+        "{update}"
+    );
+    let select = e
+        .run_query("WITH w AS (SELECT 1) SELECT FROM w")
+        .unwrap_err();
+    assert!(
+        select.to_string().contains("expected column or expression"),
+        "{select}"
     );
 }

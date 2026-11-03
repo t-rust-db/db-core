@@ -118,6 +118,10 @@ fn select_references_table(select: &Select, is_target: &impl Fn(&str) -> bool) -
         .compound
         .iter()
         .any(|arm| arm.from.as_ref().is_some_and(from_has_target))
+        // #940: and a subquery expression's own FROM, at any depth.
+        || super::walk::any_expression_subquery(select, &mut |subquery| {
+            select_references_table(subquery, is_target)
+        })
 }
 
 fn table_ref_references_table(table_ref: &TableRef, is_target: &impl Fn(&str) -> bool) -> bool {
@@ -171,7 +175,11 @@ fn expand_views_in_select(
             }
         }
     }
-    Ok(())
+    // #940: a view named in a subquery expression's own FROM, as a CTE
+    // already is (#885).
+    super::walk::each_expression_subquery_mut(select, &mut |subquery| {
+        expand_views_in_select(subquery, views, stack, expansion)
+    })
 }
 
 fn expand_table_ref(

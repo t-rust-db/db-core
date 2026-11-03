@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.225.1] - 2026-11-02
+
+### Fixed
+
+- Row engine: a SELECT without FROM reads one row: `WHERE`, aggregates, `DISTINCT`, `ORDER BY`/`LIMIT`, and as `UNION` arms (#940).
+- Row engine: a `UNION` as the body of a CTE, a view or a subquery in `FROM` runs every arm (#940).
+- Row engine: a `UNION` arm may join tables (#940).
+- Row engine: a subquery expression (`IN`, `EXISTS`, scalar) may read a `FROM`-subquery, CTE or view, including a derived table correlated to the outer row (#940).
+- Row engine: `WITH … INSERT … VALUES`, `WITH … UPDATE` and `WITH … DELETE` run; the CTEs feed the statement's subqueries (#940).
+- Row engine: a compound `SELECT` takes at most 500 terms, as in sqlite3 (#940).
+
 ## [0.225.0] - 2026-11-02
 
 ### Added

@@ -6,8 +6,8 @@
 use crate::codegen::row::expr::compile_cond;
 use crate::codegen::row::index_maintenance::valid_table_root_page;
 use crate::codegen::row::select::{
-    compile_constant_row, compile_select_joined_scan, compile_select_scan, CodegenError,
-    ScanCursors,
+    compile_constant_row, compile_select_compound_scan, compile_select_joined_scan,
+    compile_select_scan, with_one_row_sources, CodegenError, ScanCursors,
 };
 use crate::codegen::row::TableSchema;
 use crate::codegen::row::{CondTargets, Emitter, RegAlloc, Target};
@@ -30,11 +30,14 @@ pub(crate) fn resolve_subquery_schema(
             reason: "a subquery whose own FROM clause has a JOIN is not yet supported".to_string(),
         });
     }
+    // #940: a FROM-subquery (a CTE or view after expansion) reads as its
+    // synthetic schema, as in a FROM clause.
+    if matches!(from.first.kind, TableRefKind::Subquery(_)) {
+        return resolve_from_table_schema(&from.first, catalog).map(Some);
+    }
     let Some(name) = from.first.name() else {
         return Err(CodegenError::Unsupported {
-            reason: "a subquery-expression's own FROM being itself a subquery is not yet \
-                     supported"
-                .to_string(),
+            reason: "a subquery-expression's own FROM must be a table or a subquery".to_string(),
         });
     };
     let mut schema = catalog
@@ -55,6 +58,34 @@ pub(crate) fn resolve_subquery_schema(
     Ok(Some(schema))
 }
 
+/// Opens a subquery expression's own FROM source into `cursor` (#940): a
+/// table by its root page, or a FROM-subquery (a CTE or view after
+/// expansion) materialized. That code may run per row, or not at all, so
+/// nothing it materializes goes into the CTE cache.
+pub(crate) fn open_subquery_source(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    subselect: &Select,
+    schema: &TableSchema,
+    catalog: &[TableSchema],
+    cursor: i32,
+) -> Result<(), CodegenError> {
+    if let Some(TableRefKind::Subquery(inner)) = subselect.from.as_ref().map(|f| &f.first.kind) {
+        reg.enter_expression_source();
+        let materialized = materialize_from_subquery(em, reg, inner, catalog, cursor);
+        reg.leave_expression_source();
+        return materialized.map(|_| ());
+    }
+    let root_page = valid_table_root_page(schema)?;
+    em.emit(Instruction::new(
+        Opcode::OpenRead,
+        cursor,
+        root_page,
+        schema.database_p3(),
+    ));
+    Ok(())
+}
+
 /// The column names a `FROM`-subquery's own `SELECT` list exposes to the
 /// enclosing query (#257) — used to build the synthetic [`TableSchema`]
 /// a materialized subquery-in-FROM is bound into `Scope` as.
@@ -62,7 +93,7 @@ pub(crate) fn resolve_subquery_schema(
 /// same order, for `*`/`table.*` expansion; an unaliased computed
 /// expression falls back to a positional `columnN` name (`N` 1-based),
 /// same convention SQLite itself uses for an anonymous result column.
-fn subquery_output_columns(
+pub(crate) fn subquery_output_columns(
     subquery: &Select,
     table_refs: &[&TableRef],
     schemas: &[TableSchema],
@@ -258,26 +289,25 @@ pub(crate) fn materialize_from_subquery(
         return Ok(schema);
     }
 
-    // #382: a compound (`UNION`/`UNION ALL`) body isn't handled by this
-    // materialization path yet — only `subquery`'s own `first` arm would
-    // be scanned into `dest_cursor`, silently dropping every other
-    // arm's rows (discovered via a CTE-body-is-UNION corpus regression).
-    // Reject cleanly here rather than let that data loss reach a
-    // caller, matching the "not yet supported" pattern used just below
-    // for a joined subquery-in-FROM. Fast-follow: teach this function
-    // (and its view-expansion counterpart, `expand_views`, which shares
-    // the same underlying materialization) to loop over every compound
-    // arm like `compile_select_compound` does at the top level.
-    let Some(from) = &subquery.from else {
+    // Bare FROM-less rows keep sqlite3's `SCAN CONSTANT ROW` shape (#611).
+    if subquery.from.is_none() && is_constant_rows(subquery) {
         return materialize_constant_rows(em, reg, subquery, catalog, dest_cursor);
-    };
-    if !subquery.compound.is_empty() {
-        return Err(CodegenError::Unsupported {
-            reason: "a compound (UNION) SELECT as a CTE/view/derived-table body is not yet \
-                     supported"
-                .to_string(),
-        });
     }
+    // #940 (#382's fast-follow): a compound (`UNION`/`UNION ALL`) body
+    // runs every arm, as `compile_select_compound` does at the top level.
+    if !subquery.compound.is_empty() {
+        return materialize_compound(em, reg, subquery, catalog, dest_cursor);
+    }
+    // #940: any other FROM-less body reads one row (`FROM (SELECT 1)`).
+    // The cache stays keyed by the body as written.
+    let original = subquery;
+    let normalized = with_one_row_sources(subquery);
+    let subquery: &Select = &normalized;
+    let Some(from) = &subquery.from else {
+        return Err(CodegenError::Unsupported {
+            reason: "no tables specified".to_string(),
+        });
+    };
 
     let table_refs = subquery_own_table_refs(subquery)?;
     let schemas = resolve_subquery_schemas(&table_refs, catalog)?;
@@ -388,23 +418,108 @@ pub(crate) fn materialize_from_subquery(
     }
     em.place(end_label);
 
-    reg.cache_cte(subquery, dest_cursor, synthetic_schema.clone());
+    reg.cache_cte(original, dest_cursor, synthetic_schema.clone());
 
     Ok(synthetic_schema)
 }
 
-/// A FROM-less subquery (#611), or `VALUES` (a `UNION ALL` of FROM-less
-/// rows), materialized as one ephemeral-table row per arm, as sqlite3's
-/// `SCAN CONSTANT ROW` co-routine. Each arm is a bare expression list:
-/// any clause that presumes a table, a plain `UNION` or an arm with its
-/// own FROM is rejected.
-fn materialize_constant_rows(
+/// A compound body (#940): its arms (a FROM-less one reading one row, as
+/// in sqlite3) run through [`compile_select_compound_scan`] into
+/// `dest_cursor`, UNION's dedup and the compound's ORDER BY/LIMIT
+/// included; the columns are the first arm's.
+fn materialize_compound(
     em: &mut Emitter,
     reg: &mut RegAlloc,
     subquery: &Select,
     catalog: &[TableSchema],
     dest_cursor: i32,
 ) -> Result<TableSchema, CodegenError> {
+    let select = with_one_row_sources(subquery);
+    let no_tables = || CodegenError::Unsupported {
+        reason: "no tables specified".to_string(),
+    };
+    let from = select.from.as_ref().ok_or_else(no_tables)?;
+    let first_schema = resolve_from_table_schema(&from.first, catalog)?;
+    let arm_schemas = select
+        .compound
+        .iter()
+        .map(|arm| {
+            let arm_from = arm.from.as_ref().ok_or_else(no_tables)?;
+            resolve_from_table_schema(&arm_from.first, catalog)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let table_refs = subquery_own_table_refs(&select)?;
+    let schemas = resolve_subquery_schemas(&table_refs, catalog)?;
+    let synthetic_schema = subquery_result_schema(&select, &table_refs, &schemas);
+
+    em.emit(Instruction {
+        opcode: Opcode::OpenEphemeral,
+        p1: dest_cursor,
+        p2: 0,
+        p3: 0,
+        p4: P4::None,
+        p5: 1,
+        comment: None,
+    });
+    let mut sink = |em: &mut Emitter, reg: &mut RegAlloc, first: i32, count: i32| {
+        let rowid_reg = reg.alloc();
+        em.emit(Instruction::new(
+            Opcode::Sequence,
+            dest_cursor,
+            rowid_reg,
+            0,
+        ));
+        let record_reg = reg.alloc();
+        em.emit(Instruction::new(
+            Opcode::MakeRecord,
+            first,
+            count,
+            record_reg,
+        ));
+        em.emit(Instruction::new(
+            Opcode::Insert,
+            dest_cursor,
+            rowid_reg,
+            record_reg,
+        ));
+        Ok(())
+    };
+    // The compound numbers its cursors from `cursor_base` by arithmetic
+    // (4 per arm, then the dedup, sorter and pseudo cursors): reserve them
+    // all so a later `alloc_cursor` can't hand one out again.
+    let cursor_base = reg.alloc_cursor();
+    for _ in 0..select
+        .compound
+        .len()
+        .saturating_add(1)
+        .saturating_mul(4)
+        .saturating_add(2)
+    {
+        reg.alloc_cursor();
+    }
+    let end_label = em.new_label();
+    compile_select_compound_scan(
+        em,
+        reg,
+        &select,
+        &first_schema,
+        &arm_schemas,
+        catalog,
+        cursor_base,
+        end_label,
+        &mut sink,
+    )?;
+    em.place(end_label);
+    reg.cache_cte(subquery, dest_cursor, synthetic_schema.clone());
+    Ok(synthetic_schema)
+}
+
+/// Whether a FROM-less `subquery` is bare constant rows (#611): a bare
+/// expression list, or `VALUES` (a `UNION ALL` of such lists), or one such
+/// list with a WHERE (#939). Anything else (a plain `UNION`, a clause that
+/// presumes a table, an arm with its own FROM) reads one row per core
+/// instead (#940).
+fn is_constant_rows(subquery: &Select) -> bool {
     let arms_are_bare = subquery.compound.iter().all(|arm| {
         arm.op == CompoundOp::UnionAll
             && arm.distinct.is_none()
@@ -415,20 +530,25 @@ fn materialize_constant_rows(
     });
     // #939: a WHERE on a lone FROM-less row (`SELECT … WHERE NOT EXISTS
     // (…)`, sqlite3's insert-if-missing idiom) keeps or drops that row.
-    if !arms_are_bare
+    !(!arms_are_bare
         || (subquery.where_clause.is_some() && !subquery.compound.is_empty())
         || !subquery.group_by.is_empty()
         || subquery.having.is_some()
         || !subquery.order_by.is_empty()
         || subquery.limit.is_some()
-        || subquery.distinct.is_some()
-    {
-        return Err(CodegenError::Unsupported {
-            reason: "a FROM-less subquery in FROM only supports bare expression lists, joined \
-                     by UNION ALL, or one such list with a WHERE"
-                .to_string(),
-        });
-    }
+        || subquery.distinct.is_some())
+}
+
+/// A FROM-less subquery that [`is_constant_rows`], materialized as one
+/// ephemeral-table row per arm, as sqlite3's `SCAN CONSTANT ROW`
+/// co-routine.
+fn materialize_constant_rows(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    subquery: &Select,
+    catalog: &[TableSchema],
+    dest_cursor: i32,
+) -> Result<TableSchema, CodegenError> {
     let synthetic_schema = subquery_result_schema(subquery, &[], &[]);
     em.emit(Instruction {
         opcode: Opcode::OpenEphemeral,
@@ -539,12 +659,16 @@ mod tests {
     }
 
     #[test]
-    fn resolve_subquery_schema_rejects_nested_subquery_from() {
+    fn resolve_subquery_schema_reads_a_nested_subquery_from() {
+        // #940: a subquery expression's own FROM may be a subquery (a CTE
+        // or view after expansion): its synthetic schema, by its alias.
         let sub = parse("SELECT a FROM (SELECT a FROM t) AS x");
-        let err = resolve_subquery_schema(&sub, &[]).unwrap_err();
-        assert!(
-            matches!(err, CodegenError::Unsupported { reason } if reason.contains("subquery-expression"))
-        );
+        let schema = resolve_subquery_schema(&sub, &[table("t", 2)])
+            .unwrap()
+            .unwrap();
+        assert_eq!(schema.name, "x");
+        assert_eq!(schema.columns, vec!["a".to_string()]);
+        assert!(resolve_subquery_schema(&sub, &[]).is_err(), "no table t");
     }
 
     #[test]
@@ -613,12 +737,21 @@ mod tests {
     }
 
     #[test]
-    fn materialize_from_subquery_rejects_compound() {
+    fn materialize_from_subquery_runs_every_arm_of_a_compound() {
+        // #940: a UNION body runs both arms (it was refused before).
         let subquery = parse("SELECT a FROM t UNION SELECT a FROM t2");
+        let catalog = vec![table("t", 2), table("t2", 3)];
         let mut em = Emitter::new();
         let mut reg = RegAlloc::default();
-        let err = materialize_from_subquery(&mut em, &mut reg, &subquery, &[], 1).unwrap_err();
-        assert!(matches!(err, CodegenError::Unsupported { reason } if reason.contains("UNION")));
+        let schema = materialize_from_subquery(&mut em, &mut reg, &subquery, &catalog, 1).unwrap();
+        assert_eq!(schema.columns, vec!["a".to_string()]);
+        let opens = em
+            .finish()
+            .instructions
+            .iter()
+            .filter(|i| i.opcode == Opcode::OpenRead)
+            .count();
+        assert_eq!(opens, 2, "both arms scan their table");
     }
 
     #[test]
@@ -696,7 +829,6 @@ mod mcdc_vectors {
     // is grafted onto a FROM-less body from a parsed donor so the parser's
     // own grammar isn't what's under test.
     // ---------------------------------------------------------------------
-    const REJECTION: &str = "a FROM-less subquery in FROM only supports bare expression lists";
 
     fn from_less(sql_with_from: &str) -> Select {
         let mut select = parsed(sql_with_from);
@@ -715,14 +847,50 @@ mod mcdc_vectors {
         Ok(em.finish().instructions.iter().map(|i| i.opcode).collect())
     }
 
-    fn rejected(subquery: &Select) {
-        let e = materialize(subquery).unwrap_err();
-        assert!(e.contains(REJECTION), "{e}");
+    // codegen_row_subquery_from_clause_materialize_from_subquery_dd17d22f
+    // (#940): `subquery.from.is_none() && is_constant_rows(subquery)`. The
+    // constant-row path emits its rows without a scan (no `Rewind`).
+    fn scans(sql: &str) -> bool {
+        let catalog = vec![TableSchema {
+            name: "t".to_string(),
+            root_page: 2,
+            columns: vec!["a".to_string()],
+            ..Default::default()
+        }];
+        let mut em = Emitter::new();
+        let mut reg = RegAlloc::default();
+        materialize_from_subquery(&mut em, &mut reg, &parsed(sql), &catalog, 1).unwrap();
+        em.finish()
+            .instructions
+            .iter()
+            .any(|i| i.opcode == Opcode::Rewind)
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v1_union_all_rows_insert_one_row_each(
+    fn mcdc__codegen_row_subquery_from_clause_materialize_from_subquery_dd17d22f__v1_bare_rows_take_the_constant_path(
     ) {
+        assert!(!scans("SELECT 1 AS x UNION ALL SELECT 2"));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_subquery_from_clause_materialize_from_subquery_dd17d22f__v2_a_table_body_scans(
+    ) {
+        assert!(scans("SELECT a FROM t"));
+    }
+
+    #[test]
+    fn mcdc__codegen_row_subquery_from_clause_materialize_from_subquery_dd17d22f__v3_other_from_less_bodies_read_one_row(
+    ) {
+        assert!(scans("SELECT 1 AS x ORDER BY 1"));
+    }
+
+    /// Not bare constant rows: such a body reads one row per core (#940).
+    fn rejected(subquery: &Select) {
+        assert!(!super::is_constant_rows(subquery), "{subquery:?}");
+    }
+
+    #[test]
+    fn constant_rows_union_all_rows_insert_one_row_each() {
         let ops = materialize(&parsed("SELECT 1 AS x UNION ALL SELECT 2")).unwrap();
         assert_eq!(
             ops.iter().filter(|op| **op == Opcode::Insert).count(),
@@ -732,14 +900,12 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v2_plain_union_is_rejected(
-    ) {
+    fn constant_rows_plain_union_is_rejected() {
         rejected(&parsed("SELECT 1 AS x UNION SELECT 2"));
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v3_where_with_a_union_all_arm_is_rejected(
-    ) {
+    fn constant_rows_where_with_a_union_all_arm_is_rejected() {
         rejected(&from_less(
             "SELECT 1 FROM t WHERE 1 = 1 UNION ALL SELECT 2 FROM t",
         ));
@@ -747,8 +913,7 @@ mod mcdc_vectors {
 
     // #939: a WHERE on a lone row keeps or drops it (the compound leaf of v3).
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v9_where_on_a_lone_row_is_accepted(
-    ) {
+    fn constant_rows_where_on_a_lone_row_is_accepted() {
         let ops = materialize(&from_less("SELECT 1 FROM t WHERE 1 = 1")).unwrap();
         assert_eq!(
             ops.iter().filter(|op| **op == Opcode::Insert).count(),
@@ -758,34 +923,29 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v4_group_by_is_rejected(
-    ) {
+    fn constant_rows_group_by_is_rejected() {
         rejected(&from_less("SELECT 1 FROM t GROUP BY 1"));
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v5_having_is_rejected(
-    ) {
+    fn constant_rows_having_is_rejected() {
         let mut select = parsed("SELECT 1");
         select.having = parsed("SELECT 1 FROM t GROUP BY 1 HAVING 1 = 1").having;
         rejected(&select);
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v6_order_by_is_rejected(
-    ) {
+    fn constant_rows_order_by_is_rejected() {
         rejected(&from_less("SELECT 1 FROM t ORDER BY 1"));
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v7_limit_is_rejected(
-    ) {
+    fn constant_rows_limit_is_rejected() {
         rejected(&from_less("SELECT 1 FROM t LIMIT 1"));
     }
 
     #[test]
-    fn mcdc__codegen_row_subquery_from_clause_materialize_constant_rows_3d8abe93__v8_distinct_is_rejected(
-    ) {
+    fn constant_rows_distinct_is_rejected() {
         rejected(&parsed("SELECT DISTINCT 1"));
     }
 }

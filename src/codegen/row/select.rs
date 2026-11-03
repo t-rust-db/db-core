@@ -251,7 +251,7 @@ pub(crate) use aggregate::{
 pub(crate) use entry::{
     check_having_clauses, check_table_star_qualifiers, compile_constant_row,
     compile_select_compound_scan, compile_select_scan, select_result_column_count,
-    select_result_column_count_joined,
+    select_result_column_count_joined, with_one_row_sources,
 };
 pub(crate) use joins::compile_select_joined_scan;
 pub(crate) use limit_scan::{is_rowid_reference, top_level_equality_operands};

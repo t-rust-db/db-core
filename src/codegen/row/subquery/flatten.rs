@@ -52,8 +52,22 @@ use crate::parser::ast::{
 /// (either genuinely ineligible, or newly exposed one level up) so
 /// flattening chains through nested views/CTEs.
 pub fn flatten_from_subqueries(select: &mut Select) {
-    while try_flatten_one(select) {}
-    recurse_into_from_subqueries(select);
+    flatten(select, false);
+}
+
+/// [`flatten_from_subqueries`]; `outer` says `select` is (inside) a
+/// subquery expression, whose WHERE may name the enclosing query's row.
+fn flatten(select: &mut Select, outer: bool) {
+    while try_flatten_one(select, outer) {}
+    recurse_into_from_subqueries(select, outer);
+    // #940: and a subquery expression's own FROM, as sqlite3 flattens
+    // there too -- which also lets a derived table correlated to the
+    // outer query (`(SELECT count(*) FROM (SELECT … WHERE b.k = a.k))`)
+    // compile, its WHERE now in the subquery that sees the outer row.
+    let _never_fails = super::walk::each_expression_subquery_mut(select, &mut |subquery| {
+        flatten(subquery, true);
+        Ok(())
+    });
 }
 
 #[derive(Clone, Copy)]
@@ -62,11 +76,11 @@ enum TableRefSlot {
     Join(usize),
 }
 
-fn try_flatten_one(select: &mut Select) -> bool {
+fn try_flatten_one(select: &mut Select, outer: bool) -> bool {
     let Some(num_joins) = select.from.as_ref().map(|f| f.joins.len()) else {
         return false;
     };
-    if try_flatten_table_ref_at(select, TableRefSlot::First) {
+    if try_flatten_table_ref_at(select, TableRefSlot::First, outer) {
         return true;
     }
     for i in 0..num_joins {
@@ -81,7 +95,7 @@ fn try_flatten_one(select: &mut Select) -> bool {
         if !matches!(op, JoinOp::Inner | JoinOp::Cross) {
             continue;
         }
-        if try_flatten_table_ref_at(select, TableRefSlot::Join(i)) {
+        if try_flatten_table_ref_at(select, TableRefSlot::Join(i), outer) {
             return true;
         }
     }
@@ -95,7 +109,7 @@ fn table_ref_at(from: &crate::parser::ast::FromClause, slot: TableRefSlot) -> Op
     }
 }
 
-fn try_flatten_table_ref_at(select: &mut Select, slot: TableRefSlot) -> bool {
+fn try_flatten_table_ref_at(select: &mut Select, slot: TableRefSlot, outer: bool) -> bool {
     let require_qualified = select
         .from
         .as_ref()
@@ -116,9 +130,12 @@ fn try_flatten_table_ref_at(select: &mut Select, slot: TableRefSlot) -> bool {
     let Some(column_map) = subquery_column_map(inner) else {
         return false;
     };
-    let Some(alias) = table_ref.alias.clone() else {
+    // #940: an unaliased derived table can be flattened only as its
+    // FROM's one table -- nothing could qualify a reference to it.
+    let given_alias = table_ref.alias.clone();
+    if given_alias.is_none() && require_qualified {
         return false;
-    };
+    }
     let Some(inner_from) = inner.from.as_ref() else {
         return false;
     };
@@ -126,7 +143,34 @@ fn try_flatten_table_ref_at(select: &mut Select, slot: TableRefSlot) -> bool {
         return false;
     };
     let inner_table_name = inner_table_name.clone();
+    let alias = given_alias
+        .clone()
+        .unwrap_or_else(|| super::from_clause::UNALIASED_SUBQUERY.to_string());
+    // #940: the names the inner query's own table goes by. Anything else
+    // a column names is the enclosing query's row (a correlated derived
+    // table inside a subquery expression): kept as written below, never
+    // retargeted at the flattened table.
+    let own: Vec<String> = std::iter::once(inner_table_name.clone())
+        .chain(inner_from.first.alias.clone())
+        .collect();
+    let is_own = |q: &str| own.iter().any(|n| n.eq_ignore_ascii_case(q));
+    let projection: Vec<&Expr> = inner
+        .columns
+        .iter()
+        .filter_map(|c| match c {
+            ResultColumn::Expr { expr, .. } => Some(expr),
+            _ => None,
+        })
+        .collect();
+    if !columns_qualified_within(&projection, &is_own) {
+        return false;
+    }
     let inner_where = inner.where_clause.clone();
+    // Inside a subquery expression an unqualified column may be the
+    // outer row's; qualifying it with the flattened table would rebind it.
+    if outer && require_qualified && inner_where.as_ref().is_some_and(has_unqualified_column) {
+        return false;
+    }
 
     // Every reference to `alias` outside this table's own FROM slot
     // must be provably rewritable (or provably absent) before any
@@ -137,7 +181,7 @@ fn try_flatten_table_ref_at(select: &mut Select, slot: TableRefSlot) -> bool {
     }
 
     if let Some(mut pred) = inner_where {
-        qualify_with_outer_alias(&mut pred, require_qualified.then_some(alias.as_str()));
+        qualify_with_outer_alias(&mut pred, require_qualified.then_some(alias.as_str()), &own);
         select.where_clause = Some(and_exprs(select.where_clause.take(), pred));
     }
 
@@ -155,7 +199,7 @@ fn try_flatten_table_ref_at(select: &mut Select, slot: TableRefSlot) -> bool {
     *target = TableRef {
         kind: TableRefKind::Name(inner_table_name),
         schema: None,
-        alias: Some(alias),
+        alias: given_alias,
         span,
     };
     true
@@ -628,31 +672,119 @@ fn expr_references_alias(expr: &Expr, alias: &str) -> bool {
 /// explicitly qualified reference against it fails to resolve even
 /// outside this pass — a pre-existing gap unrelated to flattening
 /// (confirmed against `SELECT * FROM t AS x WHERE x.col > 1` on main).
-fn qualify_with_outer_alias(expr: &mut Expr, alias: Option<&str>) {
+/// Whether every qualified column in `exprs` names one of the inner
+/// query's own table names (`is_own`) -- an outer reference in a derived
+/// table's select list can't be carried through flattening (#940).
+fn columns_qualified_within(exprs: &[&Expr], is_own: &impl Fn(&str) -> bool) -> bool {
+    let mut ok = true;
+    for e in exprs {
+        visit_columns(e, &mut |table: Option<&str>| {
+            ok = ok && table.is_none_or(is_own);
+        });
+    }
+    ok
+}
+
+/// Whether `expr` has a column reference without a table qualifier.
+fn has_unqualified_column(expr: &Expr) -> bool {
+    let mut found = false;
+    visit_columns(expr, &mut |table: Option<&str>| {
+        found = found || table.is_none();
+    });
+    found
+}
+
+/// Calls `f` with the qualifier of each column reference in `expr`
+/// (subqueries left out: their columns are their own).
+fn visit_columns<F: FnMut(Option<&str>)>(expr: &Expr, f: &mut F) {
+    match &expr.kind {
+        ExprKind::Column { table, .. } => f(table.as_deref()),
+        ExprKind::Literal(_)
+        | ExprKind::Param(_)
+        | ExprKind::Subquery(_)
+        | ExprKind::Exists { .. } => {}
+        ExprKind::InSubquery { expr, .. } => visit_columns(expr, f),
+        ExprKind::InSubqueryMulti { exprs, .. } => exprs.iter().for_each(|e| visit_columns(e, f)),
+        ExprKind::Unary { expr, .. }
+        | ExprKind::IsNull { expr, .. }
+        | ExprKind::Cast { expr, .. }
+        | ExprKind::Collate { expr, .. }
+        | ExprKind::Paren(expr) => visit_columns(expr, f),
+        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
+            visit_columns(lhs, f);
+            visit_columns(rhs, f);
+        }
+        ExprKind::Between { expr, lo, hi, .. } => {
+            visit_columns(expr, f);
+            visit_columns(lo, f);
+            visit_columns(hi, f);
+        }
+        ExprKind::In { expr, list, .. } => {
+            visit_columns(expr, f);
+            list.iter().for_each(|e| visit_columns(e, f));
+        }
+        ExprKind::Like {
+            expr,
+            pattern,
+            escape,
+            ..
+        } => {
+            visit_columns(expr, f);
+            visit_columns(pattern, f);
+            escape.iter().for_each(|e| visit_columns(e, f));
+        }
+        ExprKind::Case {
+            operand,
+            whens,
+            else_,
+        } => {
+            operand.iter().for_each(|e| visit_columns(e, f));
+            for (w, t) in whens {
+                visit_columns(w, f);
+                visit_columns(t, f);
+            }
+            else_.iter().for_each(|e| visit_columns(e, f));
+        }
+        ExprKind::FunctionCall { args, .. } => {
+            if let FunctionArgs::List(list) = args {
+                list.iter().for_each(|e| visit_columns(e, f));
+            }
+        }
+    }
+}
+
+fn qualify_with_outer_alias(expr: &mut Expr, alias: Option<&str>, own: &[String]) {
     match &mut expr.kind {
+        // #940: only the inner table's own columns move to the outer
+        // alias; another qualifier names the enclosing query's row.
         ExprKind::Column { table, .. } => {
-            *table = alias.map(str::to_string);
+            let mine = table
+                .as_deref()
+                .is_none_or(|t| own.iter().any(|n| n.eq_ignore_ascii_case(t)));
+            if mine {
+                *table = alias.map(str::to_string);
+            }
         }
         ExprKind::Unary { expr: e, .. }
         | ExprKind::IsNull { expr: e, .. }
         | ExprKind::Cast { expr: e, .. }
         | ExprKind::Collate { expr: e, .. }
-        | ExprKind::Paren(e) => qualify_with_outer_alias(e, alias),
+        | ExprKind::Paren(e) => qualify_with_outer_alias(e, alias, own),
         ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
-            qualify_with_outer_alias(lhs, alias);
-            qualify_with_outer_alias(rhs, alias);
+            qualify_with_outer_alias(lhs, alias, own);
+            qualify_with_outer_alias(rhs, alias, own);
         }
         ExprKind::Between {
             expr: e, lo, hi, ..
         } => {
-            qualify_with_outer_alias(e, alias);
-            qualify_with_outer_alias(lo, alias);
-            qualify_with_outer_alias(hi, alias);
+            qualify_with_outer_alias(e, alias, own);
+            qualify_with_outer_alias(lo, alias, own);
+            qualify_with_outer_alias(hi, alias, own);
         }
         ExprKind::In { expr: e, list, .. } => {
-            qualify_with_outer_alias(e, alias);
+            qualify_with_outer_alias(e, alias, own);
             for item in list {
-                qualify_with_outer_alias(item, alias);
+                qualify_with_outer_alias(item, alias, own);
             }
         }
         ExprKind::Like {
@@ -661,10 +793,10 @@ fn qualify_with_outer_alias(expr: &mut Expr, alias: Option<&str>) {
             escape,
             ..
         } => {
-            qualify_with_outer_alias(e, alias);
-            qualify_with_outer_alias(pattern, alias);
+            qualify_with_outer_alias(e, alias, own);
+            qualify_with_outer_alias(pattern, alias, own);
             if let Some(esc) = escape {
-                qualify_with_outer_alias(esc, alias);
+                qualify_with_outer_alias(esc, alias, own);
             }
         }
         ExprKind::Case {
@@ -673,20 +805,20 @@ fn qualify_with_outer_alias(expr: &mut Expr, alias: Option<&str>) {
             else_,
         } => {
             if let Some(o) = operand {
-                qualify_with_outer_alias(o, alias);
+                qualify_with_outer_alias(o, alias, own);
             }
             for (w, t) in whens {
-                qualify_with_outer_alias(w, alias);
-                qualify_with_outer_alias(t, alias);
+                qualify_with_outer_alias(w, alias, own);
+                qualify_with_outer_alias(t, alias, own);
             }
             if let Some(e) = else_ {
-                qualify_with_outer_alias(e, alias);
+                qualify_with_outer_alias(e, alias, own);
             }
         }
         ExprKind::FunctionCall { args, .. } => {
             if let FunctionArgs::List(list) = args {
                 for e in list {
-                    qualify_with_outer_alias(e, alias);
+                    qualify_with_outer_alias(e, alias, own);
                 }
             }
         }
@@ -713,16 +845,16 @@ fn and_exprs(existing: Option<Expr>, addition: Expr) -> Expr {
     }
 }
 
-fn recurse_into_from_subqueries(select: &mut Select) {
+fn recurse_into_from_subqueries(select: &mut Select, outer: bool) {
     let Some(from) = &mut select.from else {
         return;
     };
     if let TableRefKind::Subquery(inner) = &mut from.first.kind {
-        flatten_from_subqueries(inner);
+        flatten(inner, outer);
     }
     for join in &mut from.joins {
         if let TableRefKind::Subquery(inner) = &mut join.table.kind {
-            flatten_from_subqueries(inner);
+            flatten(inner, outer);
         }
     }
 }
@@ -743,6 +875,99 @@ mod tests {
         let mut select = parse(sql);
         flatten_from_subqueries(&mut select);
         select
+    }
+
+    /// Whether `select`'s first FROM table is a plain table after
+    /// flattening (rather than still a subquery).
+    fn first_is_table(select: &Select) -> bool {
+        matches!(
+            select.from.as_ref().map(|f| &f.first.kind),
+            Some(TableRefKind::Name(_))
+        )
+    }
+
+    /// The first select item's scalar subquery.
+    fn scalar_subquery(select: &Select) -> &Select {
+        match select.columns.first() {
+            Some(ResultColumn::Expr { expr, .. }) => match &expr.kind {
+                ExprKind::Subquery(sub) => sub,
+                other => panic!("expected a scalar subquery: {other:?}"),
+            },
+            other => panic!("expected an expression: {other:?}"),
+        }
+    }
+
+    // codegen_row_subquery_flatten_try_flatten_table_ref_at_2246ff95 (#940):
+    // `given_alias.is_none() && require_qualified`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_try_flatten_table_ref_at_2246ff95__v1_unaliased_beside_a_join_stays(
+    ) {
+        assert!(!first_is_table(&flatten(
+            "SELECT * FROM (SELECT a FROM t) JOIN u ON 1"
+        )));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_try_flatten_table_ref_at_2246ff95__v2_aliased_beside_a_join_flattens(
+    ) {
+        assert!(first_is_table(&flatten(
+            "SELECT s.a FROM (SELECT a FROM t) AS s JOIN u ON u.b = s.a"
+        )));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_try_flatten_table_ref_at_2246ff95__v3_unaliased_alone_flattens(
+    ) {
+        assert!(first_is_table(&flatten("SELECT a FROM (SELECT a FROM t)")));
+    }
+
+    // codegen_row_subquery_flatten_try_flatten_table_ref_at_53ecc273 (#940):
+    // `outer && require_qualified && inner_where…has_unqualified_column`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_try_flatten_table_ref_at_53ecc273__v1_unqualified_in_a_joined_expression_stays(
+    ) {
+        let top = flatten(
+            "SELECT (SELECT count(*) FROM (SELECT a FROM t WHERE a = k) AS x \
+             JOIN u ON u.b = x.a) FROM o",
+        );
+        assert!(!first_is_table(scalar_subquery(&top)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_try_flatten_table_ref_at_53ecc273__v2_at_top_level_it_flattens(
+    ) {
+        assert!(first_is_table(&flatten(
+            "SELECT x.a FROM (SELECT a FROM t WHERE a = 1) AS x JOIN u ON u.b = x.a"
+        )));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_try_flatten_table_ref_at_53ecc273__v3_one_table_in_the_expression_flattens(
+    ) {
+        let top =
+            flatten("SELECT (SELECT count(*) FROM (SELECT a FROM t WHERE a = k) AS x) FROM o");
+        assert!(first_is_table(scalar_subquery(&top)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_row_subquery_flatten_try_flatten_table_ref_at_53ecc273__v4_qualified_columns_flatten(
+    ) {
+        let top = flatten(
+            "SELECT (SELECT count(*) FROM (SELECT a FROM t WHERE t.a = o.k) AS x \
+             JOIN u ON u.b = x.a) FROM o",
+        );
+        let sub = scalar_subquery(&top);
+        assert!(first_is_table(sub));
+        // The outer row's `o.k` keeps its qualifier; `t.a` moves to `x`.
+        let text = format!("{}", sub.where_clause.as_ref().unwrap());
+        assert!(text.contains("o.k") && text.contains("x.a"), "{text}");
     }
 
     fn is_flattened(sql: &str) -> bool {
