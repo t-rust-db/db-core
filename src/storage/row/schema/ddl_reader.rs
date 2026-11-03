@@ -350,10 +350,15 @@ fn is_unique_index(sql: &str) -> bool {
 }
 
 /// Splits a single indexed-column definition (`col`, `col DESC`, `col
-/// COLLATE NOCASE ASC`, ...) into its column name and sort direction.
-/// Expression indexes (`lower(col)`) are kept as raw text in `name` —
-/// this reader doesn't parse expressions, matching the rest of this
-/// module's "nothing more than the corpus needs" scope.
+/// COLLATE NOCASE ASC`, `lower(col) DESC`, ...) into its key part, sort
+/// direction and collation. A plain column is its unquoted name; anything
+/// else is an expression (#945), kept as its raw text in `name` -- this
+/// reader doesn't parse expressions, matching the rest of this module's
+/// "nothing more than the corpus needs" scope.
+///
+/// Trailing `COLLATE name` suffixes are peeled off the end; a `COLLATE`
+/// inside the expression (`a COLLATE nocase || b`) stays in its text. As
+/// in sqlite3 the leftmost `COLLATE` wins when several are stacked.
 fn indexed_column(def: &str) -> IndexedColumn {
     let mut span = def.trim();
     let mut desc = false;
@@ -364,19 +369,50 @@ fn indexed_column(def: &str) -> IndexedColumn {
         span = span.get(..split).unwrap_or(span).trim_end();
     }
 
-    let collation = column_collation(span);
-
-    if let Some(pos) = find_ignore_case(span, " COLLATE ") {
-        span = span.get(..pos).unwrap_or(span).trim_end();
+    let mut collation = Collation::Binary;
+    while let Some((rest, name)) = split_trailing_collate(span) {
+        collation = collation_named(name);
+        span = rest;
     }
 
+    let unquoted = span
+        .trim_matches(['"', '`', '['].as_ref())
+        .trim_matches([']'].as_ref());
+    // A bare identifier (possibly quoted, possibly dotted) is a column.
+    let plain = span.len() != unquoted.len() && !unquoted.contains(['"', '`', '[', ']', '(', ')'])
+        || span
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.');
     IndexedColumn {
-        name: span
-            .trim_matches(['"', '`', '['].as_ref())
-            .trim_matches([']'].as_ref())
-            .to_string(),
+        name: if plain { unquoted } else { span }.to_string(),
         desc,
         collation,
+    }
+}
+
+/// `span` split before a trailing ` COLLATE name`, where `name` is a single
+/// token (no whitespace, parentheses or operators).
+fn split_trailing_collate(span: &str) -> Option<(&str, &str)> {
+    let lower = span.to_ascii_lowercase();
+    let pos = lower.rfind(" collate ")?;
+    let name = span.get(pos.saturating_add(" collate ".len())..)?.trim();
+    let token = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '"' | '`' | '[' | ']'));
+    token.then(|| (span.get(..pos).unwrap_or(span).trim_end(), name))
+}
+
+fn collation_named(name: &str) -> Collation {
+    let name = name
+        .trim_matches(['"', '`', '['].as_ref())
+        .trim_matches([']'].as_ref());
+    if name.eq_ignore_ascii_case("NOCASE") {
+        Collation::NoCase
+    } else if name.eq_ignore_ascii_case("RTRIM") {
+        Collation::RTrim
+    } else {
+        Collation::Binary
     }
 }
 

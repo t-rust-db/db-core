@@ -653,6 +653,7 @@ mod tests {
                     column_indices: vec![0],
                     unique: false,
                     desc: vec![false],
+                    root_reg: None,
                 },
             ),
             Instruction::with_p4(

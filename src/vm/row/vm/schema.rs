@@ -237,6 +237,7 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
                 sql,
                 column_indices,
                 desc,
+                root_reg,
                 ..
             } = &instr.p4
             else {
@@ -245,27 +246,33 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
                     reason: format!("expected a CreateIndex P4, got {:?}", instr.p4),
                 });
             };
-            let (name, table_name, table_root_page, sql, column_indices, desc) = (
+            let (name, table_name, table_root_page, sql, column_indices, desc, root_reg) = (
                 name.clone(),
                 table_name.clone(),
                 *table_root_page,
                 sql.clone(),
                 column_indices.clone(),
                 desc.clone(),
+                *root_reg,
             );
             let storage = vm.schema_storage("CreateIndex")?;
             let root = storage
                 .create_index_root()
                 .map_err(ExecError::SchemaStorageFailed)?;
-            storage
-                .populate_index_ordered(root, table_root_page, &column_indices, &desc)
-                .map_err(ExecError::SchemaStorageFailed)?;
+            if root_reg.is_none() {
+                storage
+                    .populate_index_ordered(root, table_root_page, &column_indices, &desc)
+                    .map_err(ExecError::SchemaStorageFailed)?;
+            }
             storage
                 .insert_master_row("index", &name, &table_name, root, &sql)
                 .map_err(ExecError::SchemaStorageFailed)?;
             storage
                 .bump_schema_cookie()
                 .map_err(ExecError::SchemaStorageFailed)?;
+            if let Some(root_reg) = root_reg {
+                vm.set_register(root_reg, Value::Integer(i64::from(root)))?;
+            }
             Ok(Step::Next)
         }
         Opcode::DropTable => {

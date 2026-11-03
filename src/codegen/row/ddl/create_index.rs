@@ -11,11 +11,14 @@
 //! back in.
 
 use crate::codegen::row::expr::column_index;
+use crate::codegen::row::index_maintenance::{
+    emit_index_key_columns, index_sort_key, valid_table_root_page, KeySource,
+};
 use crate::codegen::row::select::CodegenError;
-use crate::codegen::row::Emitter;
-use crate::codegen::row::TableSchema;
-use crate::parser::ast::CreateIndex;
-use crate::vm::row::{Instruction, Opcode, Program, P4};
+use crate::codegen::row::{Emitter, IndexSchema, IndexedColumn, RegAlloc, TableSchema};
+use crate::parser::ast::{CreateIndex, Expr, ExprKind};
+use crate::value::Collation;
+use crate::vm::row::{Instruction, Opcode, Program, OPFLAG_P2ISREG, P4};
 
 /// Compiles `CREATE INDEX` into a single `Opcode::CreateIndex` instruction
 /// that allocates the index's root page, populates it from the target
@@ -26,38 +29,51 @@ pub fn compile_create_index(
     schema: &TableSchema,
     source: &str,
 ) -> Result<Program, CodegenError> {
-    let mut column_indices = Vec::with_capacity(ci.columns.len());
-    let desc: Vec<bool> = ci.columns.iter().map(|c| c.desc == Some(true)).collect();
-    for col in &ci.columns {
-        let crate::parser::ast::ExprKind::Column { name, .. } = &col.expr.kind else {
-            return Err(CodegenError::Unsupported {
-                reason: format!(
-                    "index {} indexes an expression, not a plain column; not supported yet",
-                    ci.name
-                ),
-            });
-        };
-        let idx = column_index(schema, name).ok_or_else(|| CodegenError::Unsupported {
+    if ci.where_clause.is_some() {
+        // Built over every row, a partial index would not be the one
+        // sqlite3 reads back (it expects only the rows the WHERE keeps).
+        return Err(CodegenError::Unsupported {
             reason: format!(
-                "index {} references a column this codegen can't resolve: {}",
-                ci.name, name
+                "partial index {} (CREATE INDEX ... WHERE) isn't supported yet",
+                ci.name
             ),
-        })?;
-        column_indices.push(if Some(idx) == schema.rowid_alias {
-            crate::schema::INDEX_KEY_ROWID
-        } else {
-            idx
         });
     }
+    let mut column_indices = Vec::with_capacity(ci.columns.len());
+    let mut key_columns = Vec::with_capacity(ci.columns.len());
+    let mut has_expression = false;
+    let desc: Vec<bool> = ci.columns.iter().map(|c| c.desc == Some(true)).collect();
+    for col in &ci.columns {
+        let (inner, collation) = key_term(&col.expr);
+        let text = span_text(source, inner.span)?;
+        if let crate::parser::ast::ExprKind::Column { name, .. } = &inner.kind {
+            let idx = column_index(schema, name).ok_or_else(|| CodegenError::Unsupported {
+                reason: format!(
+                    "index {} references a column this codegen can't resolve: {}",
+                    ci.name, name
+                ),
+            })?;
+            column_indices.push(if Some(idx) == schema.rowid_alias {
+                crate::schema::INDEX_KEY_ROWID
+            } else {
+                idx
+            });
+            key_columns.push(IndexedColumn {
+                name: name.clone(),
+                desc: col.desc == Some(true),
+                collation,
+            });
+        } else {
+            has_expression = true;
+            key_columns.push(IndexedColumn {
+                name: text,
+                desc: col.desc == Some(true),
+                collation,
+            });
+        }
+    }
 
-    let start = ci.span.offset as usize;
-    let end = start.saturating_add(ci.span.len as usize);
-    let sql = source
-        .get(start..end)
-        .ok_or_else(|| CodegenError::Unsupported {
-            reason: "CREATE INDEX statement span out of bounds of the source text".to_string(),
-        })?
-        .to_string();
+    let sql = span_text(source, ci.span)?;
 
     let mut em = Emitter::new();
     let init_addr = em.emit(Instruction::new(Opcode::Init, 0, 0, 0));
@@ -65,23 +81,130 @@ pub fn compile_create_index(
     em.place(body_start);
     em.patch_p2(init_addr, body_start);
 
-    em.emit(Instruction::with_p4(
-        Opcode::CreateIndex,
-        0,
-        0,
-        0,
-        P4::CreateIndex {
-            name: ci.name.clone(),
-            table_name: schema.name.clone(),
-            table_root_page: schema.root_page,
-            sql,
-            column_indices,
-            unique: ci.unique,
-            desc,
-        },
+    let mut p4 = P4::CreateIndex {
+        name: ci.name.clone(),
+        table_name: schema.name.clone(),
+        table_root_page: schema.root_page,
+        sql,
+        column_indices,
+        unique: ci.unique,
+        desc,
+        root_reg: None,
+    };
+    if !has_expression {
+        em.emit(Instruction::with_p4(Opcode::CreateIndex, 0, 0, 0, p4));
+        em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
+        return Ok(em.finish());
+    }
+
+    // An expression key column is evaluated per row, which only the VM can
+    // do: `CreateIndex` allocates and registers the index but leaves it
+    // empty, and the program fills it -- scan the table, build each row's
+    // key, `IdxInsert` (sqlite3's own CREATE INDEX shape; #945).
+    let mut reg = RegAlloc::new();
+    let root_reg = reg.alloc();
+    if let P4::CreateIndex { root_reg: r, .. } = &mut p4 {
+        *r = Some(root_reg);
+    }
+    em.emit(Instruction::with_p4(Opcode::CreateIndex, 0, 0, 0, p4));
+    let table_root = valid_table_root_page(schema)?;
+    em.emit(Instruction::new(
+        Opcode::OpenRead,
+        TABLE_CURSOR,
+        table_root,
+        schema.database_p3(),
     ));
+    let index = IndexSchema {
+        name: ci.name.clone(),
+        unique: ci.unique,
+        columns: key_columns,
+        root_page: 0,
+    };
+    let mut open = Instruction::new(Opcode::OpenWrite, INDEX_CURSOR, root_reg, 0);
+    open.p5 = 1 | OPFLAG_P2ISREG;
+    if let Some(key) = index_sort_key(&index) {
+        open.p4 = P4::SortKey(key);
+    }
+    em.emit(open);
+    let end = em.new_label();
+    let rewind = em.emit(Instruction::new(Opcode::Rewind, TABLE_CURSOR, 0, 0));
+    em.patch_p2(rewind, end);
+    let top = em.new_label();
+    em.place(top);
+    let start = emit_index_key_columns(
+        &mut em,
+        &mut reg,
+        schema,
+        &index,
+        1,
+        &KeySource::Cursor {
+            schema: schema.clone(),
+            cursor: TABLE_CURSOR,
+            record: false,
+        },
+    )?;
+    let count = i32::try_from(index.columns.len()).unwrap_or(0);
+    em.emit(Instruction::new(
+        Opcode::Rowid,
+        TABLE_CURSOR,
+        start.saturating_add(count),
+        0,
+    ));
+    em.emit(Instruction::with_p4(
+        Opcode::IdxInsert,
+        INDEX_CURSOR,
+        start,
+        0,
+        P4::Int(i64::from(count.saturating_add(1))),
+    ));
+    let next = em.emit(Instruction::new(Opcode::Next, TABLE_CURSOR, 0, 0));
+    em.patch_p2(next, top);
+    em.place(end);
     em.emit(Instruction::new(Opcode::Halt, 0, 0, 0));
     Ok(em.finish())
+}
+
+/// The table cursor and the new index's write cursor of the populate loop.
+const TABLE_CURSOR: i32 = 0;
+const INDEX_CURSOR: i32 = 1;
+
+/// `term` without its `COLLATE` wrappers and parentheses, and the
+/// collation it declares: the *innermost* (leftmost) `COLLATE` wins, as in
+/// sqlite3 (`x COLLATE a COLLATE b` collates by `a`).
+fn key_term(term: &Expr) -> (&Expr, Collation) {
+    let mut expr = term;
+    let mut collation = Collation::Binary;
+    loop {
+        match &expr.kind {
+            ExprKind::Paren(inner) => expr = inner,
+            ExprKind::Collate {
+                expr: inner,
+                collation: name,
+            } => {
+                collation = if name.eq_ignore_ascii_case("NOCASE") {
+                    Collation::NoCase
+                } else if name.eq_ignore_ascii_case("RTRIM") {
+                    Collation::RTrim
+                } else {
+                    Collation::Binary
+                };
+                expr = inner;
+            }
+            _ => return (expr, collation),
+        }
+    }
+}
+
+/// The source text a parser span covers.
+fn span_text(source: &str, span: crate::parser::Span) -> Result<String, CodegenError> {
+    let start = span.offset as usize;
+    let end = start.saturating_add(span.len as usize);
+    source
+        .get(start..end)
+        .map(str::to_string)
+        .ok_or_else(|| CodegenError::Unsupported {
+            reason: "CREATE INDEX span out of bounds of the source text".to_string(),
+        })
 }
 
 #[cfg(test)]
@@ -146,19 +269,41 @@ mod tests {
     }
 
     #[test]
-    fn rejects_expression_column() {
-        let sql = "CREATE INDEX idx_t_expr ON t(a + 1)";
+    fn expression_columns_are_populated_by_a_row_loop() {
+        // #945: the VM cannot evaluate an expression inside `CreateIndex`,
+        // so the program scans the table and `IdxInsert`s each row's key.
+        let sql = "CREATE INDEX idx_t_expr ON t(a + 1, b DESC)";
+        let ci = match parse_create_index(sql) {
+            ParseOutcome::Accepted(c) => c,
+            other => panic!("expected Accepted, got {other:?}"),
+        };
+        let program = compile_create_index(&ci, &schema(), sql).unwrap();
+        let ops: Vec<Opcode> = program.instructions.iter().map(|i| i.opcode).collect();
+        assert!(
+            ops.contains(&Opcode::IdxInsert) && ops.contains(&Opcode::Rewind),
+            "{ops:?}"
+        );
+        match &program.instructions[1].p4 {
+            P4::CreateIndex { root_reg, .. } => assert!(root_reg.is_some()),
+            other => panic!("expected P4::CreateIndex, got {other:?}"),
+        }
+        let open = program
+            .instructions
+            .iter()
+            .find(|i| i.opcode == Opcode::OpenWrite)
+            .unwrap();
+        assert_eq!(open.p5 & OPFLAG_P2ISREG, OPFLAG_P2ISREG);
+    }
+
+    #[test]
+    fn a_partial_index_is_refused_rather_than_built_over_every_row() {
+        let sql = "CREATE INDEX idx_t_p ON t(a) WHERE b > 1";
         let ci = match parse_create_index(sql) {
             ParseOutcome::Accepted(c) => c,
             other => panic!("expected Accepted, got {other:?}"),
         };
         let err = compile_create_index(&ci, &schema(), sql).unwrap_err();
-        match err {
-            CodegenError::Unsupported { reason } => {
-                assert!(reason.contains("indexes an expression"), "{reason}");
-            }
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
+        assert!(matches!(err, CodegenError::Unsupported { .. }), "{err:?}");
     }
 
     #[test]

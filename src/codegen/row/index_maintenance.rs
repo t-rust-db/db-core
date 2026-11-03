@@ -17,14 +17,15 @@
 //! `Opcode::Copy` from those registers instead, with no cursor re-seek
 //! or re-read.
 //!
-//! `DESC` index columns are rejected (`CodegenError::Unsupported`)
-//! rather than silently mis-keyed: no index b-tree comparator in this
-//! codebase (#171) is aware of per-column sort direction, so a `DESC`
-//! column would otherwise get built into the key as if it were
-//! ascending — a plausible-looking but semantically backwards key.
+//! `DESC` key columns (#945) need no special key building: the key holds
+//! the raw values, and the cursor (opened with a `P4::SortKey`) orders its
+//! b-tree with those columns reversed. An *expression* key column is
+//! evaluated per row ([`emit_index_key_columns`]) from the table cursor or
+//! from the staged row's registers.
 
-use crate::codegen::row::expr::{column_index, emit_column_read};
+use crate::codegen::row::expr::{column_index, compile_value, emit_column_read};
 use crate::codegen::row::select::CodegenError;
+use crate::codegen::row::Scope;
 use crate::codegen::row::{Emitter, RegAlloc};
 use crate::codegen::row::{IndexSchema, TableSchema};
 use crate::vm::row::{Instruction, Opcode, SortKeyColumn, P4};
@@ -138,6 +139,170 @@ pub(crate) fn open_index_cursors(
     Ok(())
 }
 
+/// Where an index's key columns are read from.
+pub(crate) enum KeySource {
+    /// A cursor's current row: the table b-tree, or (`record`) a pseudo
+    /// cursor re-reading a staged row's record. `schema` is that row's.
+    Cursor {
+        schema: TableSchema,
+        cursor: i32,
+        record: bool,
+    },
+    /// A staged row: one register per table column in `col_regs` (the
+    /// rowid-alias column's own register holds NULL, so its live value is
+    /// `rowid_reg`), the rowid in `rowid_reg`.
+    Regs { col_regs: Vec<i32>, rowid_reg: i32 },
+}
+
+/// `index`'s key column `col` as an expression: `None` for a plain column
+/// of `schema`; otherwise `col.name` is the expression's raw text
+/// (`sqlite_master`'s `CREATE INDEX`, #945), parsed here.
+pub(crate) fn key_column_expr(
+    schema: &TableSchema,
+    index: &IndexSchema,
+    col: &crate::codegen::row::IndexedColumn,
+) -> Result<Option<crate::parser::ast::Expr>, CodegenError> {
+    use crate::parser::row::error::ParseOutcome;
+    if column_index(schema, &col.name).is_some() {
+        return Ok(None);
+    }
+    let unresolved = || CodegenError::Unsupported {
+        reason: format!(
+            "index {} references a column or expression this codegen can't resolve: {}",
+            index.name, col.name
+        ),
+    };
+    match crate::parser::row::parse_select(&format!("SELECT {}", col.name)) {
+        ParseOutcome::Accepted(select) if select.columns.len() == 1 => {
+            match select.columns.into_iter().next() {
+                Some(crate::parser::ast::ResultColumn::Expr { expr, .. }) => Ok(Some(expr)),
+                _ => Err(unresolved()),
+            }
+        }
+        _ => Err(unresolved()),
+    }
+}
+
+/// Emits `index`'s key columns from `source` into `index.columns.len() +
+/// extra` fresh *contiguous* registers (the `extra` trailing ones are for
+/// the caller: the rowid, a probe's conflict register) and returns the
+/// first. A plain column is read (`Column`) or copied; an expression
+/// column is compiled against the row and copied into its slot.
+pub(crate) fn emit_index_key_columns(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    schema: &TableSchema,
+    index: &IndexSchema,
+    extra: usize,
+    source: &KeySource,
+) -> Result<i32, CodegenError> {
+    let mut exprs = Vec::with_capacity(index.columns.len());
+    for col in &index.columns {
+        reject_non_binary_key(index, col)?;
+        exprs.push(key_column_expr(schema, index, col)?);
+    }
+    // Every slot first, so the key is one contiguous run whatever the
+    // expressions allocate while compiling.
+    let slots: Vec<i32> = (0..index.columns.len().saturating_add(extra))
+        .map(|_| reg.alloc())
+        .collect();
+    let start = slots
+        .first()
+        .copied()
+        .ok_or_else(|| CodegenError::Internal {
+            reason: format!("index {} has no key columns", index.name),
+        })?;
+
+    let expr_scope = if exprs.iter().any(Option::is_some) {
+        Some(match source {
+            KeySource::Cursor {
+                schema,
+                cursor,
+                record,
+            } => {
+                let scope = Scope::single(schema, *cursor);
+                if *record {
+                    scope.with_record_cursors()
+                } else {
+                    scope
+                }
+            }
+            KeySource::Regs {
+                col_regs,
+                rowid_reg,
+            } => {
+                // The staged row as a record a pseudo cursor re-reads; the
+                // rowid-alias column carries the rowid there.
+                let block: Vec<i32> = (0..col_regs.len()).map(|_| reg.alloc()).collect();
+                for (i, (&src, &dest)) in col_regs.iter().zip(&block).enumerate() {
+                    let src = if Some(i) == schema.rowid_alias {
+                        *rowid_reg
+                    } else {
+                        src
+                    };
+                    em.emit(Instruction::new(Opcode::Copy, src, dest, 0));
+                }
+                let record_reg = reg.alloc();
+                // A cursor number no other cursor of the statement uses
+                // (#945): the allocator's own, above every fixed constant.
+                let pseudo_cursor = reg.alloc_cursor();
+                em.emit(Instruction::new(
+                    Opcode::MakeRecord,
+                    block.first().copied().unwrap_or(0),
+                    i32::try_from(block.len()).unwrap_or(0),
+                    record_reg,
+                ));
+                em.emit(Instruction::new(
+                    Opcode::OpenPseudo,
+                    pseudo_cursor,
+                    record_reg,
+                    0,
+                ));
+                Scope::single(schema, pseudo_cursor).with_record_cursors()
+            }
+        })
+    } else {
+        None
+    };
+
+    for (i, (col, expr)) in index.columns.iter().zip(&exprs).enumerate() {
+        let dest = slots.get(i).copied().unwrap_or(start);
+        if let (Some(expr), Some(scope)) = (expr, &expr_scope) {
+            let value = compile_value(em, reg, scope, expr)?;
+            em.emit(Instruction::new(Opcode::Copy, value, dest, 0));
+            continue;
+        }
+        let col_idx = column_index(schema, &col.name).ok_or_else(|| CodegenError::Internal {
+            reason: format!("index {} column {} lost its position", index.name, col.name),
+        })?;
+        match source {
+            KeySource::Cursor { schema, cursor, .. } => {
+                emit_column_read(em, schema, *cursor, col_idx, dest)?
+            }
+            KeySource::Regs {
+                col_regs,
+                rowid_reg,
+            } => {
+                let src = if Some(col_idx) == schema.rowid_alias {
+                    *rowid_reg
+                } else {
+                    col_regs
+                        .get(col_idx)
+                        .copied()
+                        .ok_or_else(|| CodegenError::Unsupported {
+                            reason: format!(
+                                "index {} references column {} outside the row's register run",
+                                index.name, col.name
+                            ),
+                        })?
+                };
+                em.emit(Instruction::new(Opcode::Copy, src, dest, 0));
+            }
+        }
+    }
+    Ok(start)
+}
+
 /// For every index on `schema`, reads the current row at `table_cursor`
 /// into a fresh contiguous register block (index columns in declared
 /// order, then rowid) and emits `opcode` (`IdxInsert` or `IdxDelete`)
@@ -169,33 +334,26 @@ pub(crate) fn emit_index_key_ops(
             continue;
         }
         let index_cursor = first_index_cursor.saturating_add(i32::try_from(i).unwrap_or(0));
-        let mut start = None;
-        for col in &index.columns {
-            reject_non_binary_key(index, col)?;
-            let col_idx =
-                column_index(schema, &col.name).ok_or_else(|| CodegenError::Unsupported {
-                    reason: format!(
-                        "index {} references a column or expression this codegen can't resolve: {}",
-                        index.name, col.name
-                    ),
-                })?;
-            let r = reg.alloc();
-            if start.is_none() {
-                start = Some(r);
-            }
-            emit_column_read(em, schema, table_cursor, col_idx, r)?;
-        }
-        let rowid_reg = reg.alloc();
-        if start.is_none() {
-            start = Some(rowid_reg);
-        }
+        let start = emit_index_key_columns(
+            em,
+            reg,
+            schema,
+            index,
+            1,
+            &KeySource::Cursor {
+                schema: schema.clone(),
+                cursor: table_cursor,
+                record: false,
+            },
+        )?;
+        let rowid_reg = start.saturating_add(i32::try_from(index.columns.len()).unwrap_or(0));
         em.emit(Instruction::new(Opcode::Rowid, table_cursor, rowid_reg, 0));
 
         let count = i32::try_from(index.columns.len().saturating_add(1)).unwrap_or(0);
         em.emit(Instruction::with_p4(
             opcode,
             index_cursor,
-            start.unwrap_or(rowid_reg),
+            start,
             0,
             P4::Int(i64::from(count)),
         ));
@@ -229,49 +387,25 @@ pub(crate) fn emit_index_key_ops_from_regs(
             continue;
         }
         let index_cursor = first_index_cursor.saturating_add(i32::try_from(i).unwrap_or(0));
-        let mut start = None;
-        for col in &index.columns {
-            reject_non_binary_key(index, col)?;
-            let col_idx =
-                column_index(schema, &col.name).ok_or_else(|| CodegenError::Unsupported {
-                    reason: format!(
-                        "index {} references a column or expression this codegen can't resolve: {}",
-                        index.name, col.name
-                    ),
-                })?;
-            // The rowid-alias column's own register holds NULL (readers
-            // substitute the cursor's actual rowid instead — see
-            // `emit_column_read`), so its live value is `rowid_reg`, not
-            // `col_regs[col_idx]`.
-            let src = if Some(col_idx) == schema.rowid_alias {
-                rowid_reg
-            } else {
-                *col_regs
-                    .get(col_idx)
-                    .ok_or_else(|| CodegenError::Unsupported {
-                        reason: format!(
-                            "index {} references column {} outside the row's register run",
-                            index.name, col.name
-                        ),
-                    })?
-            };
-            let r = reg.alloc();
-            if start.is_none() {
-                start = Some(r);
-            }
-            em.emit(Instruction::new(Opcode::Copy, src, r, 0));
-        }
-        let key_rowid_reg = reg.alloc();
-        if start.is_none() {
-            start = Some(key_rowid_reg);
-        }
+        let start = emit_index_key_columns(
+            em,
+            reg,
+            schema,
+            index,
+            1,
+            &KeySource::Regs {
+                col_regs: col_regs.to_vec(),
+                rowid_reg,
+            },
+        )?;
+        let key_rowid_reg = start.saturating_add(i32::try_from(index.columns.len()).unwrap_or(0));
         em.emit(Instruction::new(Opcode::Copy, rowid_reg, key_rowid_reg, 0));
 
         let count = i32::try_from(index.columns.len().saturating_add(1)).unwrap_or(0);
         em.emit(Instruction::with_p4(
             Opcode::IdxInsert,
             index_cursor,
-            start.unwrap_or(key_rowid_reg),
+            start,
             0,
             P4::Int(i64::from(count)),
         ));

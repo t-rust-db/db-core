@@ -1598,33 +1598,25 @@ fn emit_unique_probe(
     index_cursor: i32,
     index: &crate::codegen::row::IndexSchema,
 ) -> Result<(i32, Label), CodegenError> {
-    let mut start = None;
-    let mut key_col_indices = Vec::with_capacity(index.columns.len());
-    for col in &index.columns {
-        crate::codegen::row::index_maintenance::reject_non_binary_key(index, col)?;
-        let col_idx = column_index(schema, &col.name).ok_or_else(|| CodegenError::Unsupported {
-            reason: format!(
-                "index {} references a column or expression this codegen can't resolve: {}",
-                index.name, col.name
-            ),
-        })?;
-        key_col_indices.push(col_idx);
-        let r = reg.alloc();
-        if start.is_none() {
-            start = Some(r);
-        }
-        crate::codegen::row::expr::emit_column_read(em, check_schema, CHECK_CURSOR, col_idx, r)?;
-    }
-    let start = start.ok_or_else(|| CodegenError::Internal {
-        reason: "unique index has no key columns to probe".to_string(),
-    })?;
-    let count = i32::try_from(key_col_indices.len()).unwrap_or(0);
+    let count = i32::try_from(index.columns.len()).unwrap_or(0);
     // `NoConflict`'s contract (`src/vdbe/cursor.rs::no_conflict`): the
     // register immediately after the probe range receives the
-    // conflicting row's rowid on a fallthrough (conflict) — reserved
-    // here even when the caller doesn't need it (`Ignore`/`Abort`/etc.),
-    // to keep the register layout uniform.
-    let conflict_rowid_reg = reg.alloc();
+    // conflicting row's rowid on a fallthrough (conflict) -- the one
+    // extra slot, reserved even when the caller doesn't need it
+    // (`Ignore`/`Abort`/etc.), to keep the register layout uniform.
+    let start = crate::codegen::row::index_maintenance::emit_index_key_columns(
+        em,
+        reg,
+        schema,
+        index,
+        1,
+        &crate::codegen::row::index_maintenance::KeySource::Cursor {
+            schema: check_schema.clone(),
+            cursor: CHECK_CURSOR,
+            record: true,
+        },
+    )?;
+    let conflict_rowid_reg = start.saturating_add(count);
 
     let no_conflict = em.new_label();
     // A NULL in any key column never conflicts: sqlite3 treats NULLs as

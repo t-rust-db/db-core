@@ -38,6 +38,12 @@ pub const OPFLAG_LASTROWID: u16 = 0x20;
 /// `PRAGMA journal_mode`'s two supported values, carried through
 /// `Opcode::SetJournalMode`'s `p1` (db-core#97).
 pub const JOURNAL_MODE_DELETE: i32 = 0;
+
+/// `OpenRead`/`OpenWrite` `P5` bit: `P2` names a register holding the root
+/// page rather than being the page itself (sqlite3's `OPFLAG_P2ISREG`).
+/// The other `P5` bits are unchanged: nonzero (`1`) still marks an index
+/// cursor (#945).
+pub const OPFLAG_P2ISREG: u16 = 0x02;
 /// `PRAGMA journal_mode = WAL`.
 pub const JOURNAL_MODE_WAL: i32 = 1;
 
@@ -563,6 +569,12 @@ pub enum P4 {
         /// Per key column, whether it sorts `DESC` (#945); parallel to
         /// `column_indices`.
         desc: Vec<bool>,
+        /// `Some(reg)` for an index with expression key columns (#945): the
+        /// VM does not populate it (the program does, row by row), and
+        /// stores the new root page in `reg` for an `OpenWrite` with
+        /// [`OPFLAG_P2ISREG`] to open. `None`: populated from
+        /// `column_indices`.
+        root_reg: Option<i32>,
     },
     /// `DropIndex` (db-core#97): the target index's name/root page.
     DropIndex {

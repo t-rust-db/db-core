@@ -784,16 +784,7 @@ pub(crate) fn emit_update_row_body(
             continue;
         }
         emit_update_unique_check(
-            em,
-            reg,
-            schema,
-            index,
-            position,
-            &col_regs,
-            rowid_alias,
-            rowid_reg,
-            action,
-            row_skip,
+            em, reg, schema, index, position, &col_regs, rowid_reg, action, row_skip,
         )?;
     }
 
@@ -891,7 +882,6 @@ fn emit_update_unique_check(
     index: &crate::codegen::row::IndexSchema,
     position: usize,
     col_regs: &[i32],
-    rowid_alias: Option<usize>,
     rowid_reg: i32,
     action: ConflictAction,
     row_skip: Label,
@@ -904,41 +894,21 @@ fn emit_update_unique_check(
             ),
         });
     }
-    let mut start = None;
-    for col in &index.columns {
-        crate::codegen::row::index_maintenance::reject_non_binary_key(index, col)?;
-        let col_idx = column_index(schema, &col.name).ok_or_else(|| CodegenError::Unsupported {
-            reason: format!(
-                "index {} references a column or expression this codegen can't resolve: {}",
-                index.name, col.name
-            ),
-        })?;
-        // The rowid-alias column's own register holds NULL; its live
-        // value is the rowid.
-        let src = if Some(col_idx) == rowid_alias {
-            rowid_reg
-        } else {
-            col_regs
-                .get(col_idx)
-                .copied()
-                .ok_or_else(|| CodegenError::Internal {
-                    reason: format!(
-                        "no register for column {} of index {}",
-                        col.name, index.name
-                    ),
-                })?
-        };
-        let r = reg.alloc();
-        start.get_or_insert(r);
-        em.emit(Instruction::new(Opcode::Copy, src, r, 0));
-    }
-    let start = start.ok_or_else(|| CodegenError::Internal {
-        reason: "unique index has no key columns to probe".to_string(),
-    })?;
     let count = i32::try_from(index.columns.len()).unwrap_or(0);
     // `NoConflict` writes the conflicting entry's rowid to the register
-    // right after the probe key.
-    let conflict_rowid_reg = reg.alloc();
+    // right after the probe key: the one extra slot.
+    let start = crate::codegen::row::index_maintenance::emit_index_key_columns(
+        em,
+        reg,
+        schema,
+        index,
+        1,
+        &crate::codegen::row::index_maintenance::KeySource::Regs {
+            col_regs: col_regs.to_vec(),
+            rowid_reg,
+        },
+    )?;
+    let conflict_rowid_reg = start.saturating_add(count);
     let no_conflict = em.new_label();
     for offset in 0..count {
         let null_addr = em.emit(Instruction::new(

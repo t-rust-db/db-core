@@ -3,6 +3,7 @@
 //! [`super::step`]'s cursor ops opcode family (#661, #670).
 
 use super::*;
+use crate::vm::row::OPFLAG_P2ISREG;
 
 /// [`step`] for one family: opening, moving and reading table and index cursors. `step` sends
 /// only these opcodes here.
@@ -140,6 +141,20 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             // P3 is the database (#924, ADR 0043): 0 is `main`.
             let db =
                 u32::try_from(instr.p3).map_err(|_| ExecError::AttachedDatabasesUnsupported)?;
+            let root = if instr.p5 & OPFLAG_P2ISREG != 0 {
+                // The root page lives in register P2 (a `CreateIndex` that
+                // leaves population to the program, #945).
+                u32::try_from(register_as_i64(vm, instr.p2)?).map_err(|_| {
+                    ExecError::MalformedInstruction {
+                        opcode: "OpenWrite",
+                        reason: "the root-page register holds no valid page number".to_string(),
+                    }
+                })?
+            } else {
+                #[allow(clippy::cast_sign_loss)]
+                let page = instr.p2 as u32;
+                page
+            };
             let Some(factory) = vm.cursor_factory.as_deref_mut() else {
                 if db != 0 {
                     return Err(ExecError::AttachedDatabasesUnsupported);
@@ -153,8 +168,6 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             if !factory.use_database(db) {
                 return Err(ExecError::AttachedDatabasesUnsupported);
             }
-            #[allow(clippy::cast_sign_loss)]
-            let root = instr.p2 as u32;
             // sqlite-rs flags an index cursor with `p5 != 0` (no key
             // descriptor); a `P4::SortKey` carries one when the planner has it.
             let cursor = match (&instr.p4, instr.p5, instr.opcode) {
