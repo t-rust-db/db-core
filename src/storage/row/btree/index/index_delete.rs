@@ -39,7 +39,7 @@
 //! an interior page's own last entry; if the whole subtree is drained
 //! the matched entry is removed outright instead of swapped.
 
-use crate::storage::row::btree::index::insert::{insert_entry, write_interior_splitting};
+use crate::storage::row::btree::index::insert::{insert_entry_ordered, write_interior_splitting};
 use crate::storage::row::btree::index::{
     build_index_interior_cell, collect_index_interior_entries, collect_index_leaf_cells,
     decode_payload_len, descend_index_tree, search_index_leaf, write_index_interior_page,
@@ -110,14 +110,29 @@ pub fn delete_entry(
     key: &[Value],
     encoding: TextEncoding,
 ) -> Result<(), BtreeError> {
+    delete_entry_ordered(pager, header, root_page, key, encoding, &[])
+}
+
+/// [`delete_entry`] from an index whose key columns `desc` marks `DESC`
+/// (#945).
+pub fn delete_entry_ordered(
+    pager: &mut Pager,
+    header: &DatabaseHeader,
+    root_page: u32,
+    key: &[Value],
+    encoding: TextEncoding,
+    desc: &[bool],
+) -> Result<(), BtreeError> {
     let usable_size = header.usable_page_size();
-    match descend_index_tree(pager, root_page, usable_size, key, encoding)? {
+    match descend_index_tree(pager, root_page, usable_size, key, encoding, desc)? {
         IndexDescent::Leaf {
             ancestors,
             leaf_page,
         } => {
-            delete_from_leaf(pager, usable_size, leaf_page, key, encoding)?;
-            repair_if_empty(pager, header, root_page, encoding, &ancestors, leaf_page)
+            delete_from_leaf(pager, usable_size, leaf_page, key, encoding, desc)?;
+            repair_if_empty(
+                pager, header, root_page, encoding, &ancestors, leaf_page, desc,
+            )
         }
         IndexDescent::InteriorMatch {
             ancestors,
@@ -131,6 +146,7 @@ pub fn delete_entry(
             ancestors,
             interior_page,
             entry_child,
+            desc,
         ),
     }
 }
@@ -145,6 +161,7 @@ fn delete_from_leaf(
     leaf_page: u32,
     key: &[Value],
     encoding: TextEncoding,
+    desc: &[bool],
 ) -> Result<(), BtreeError> {
     let header_start = page1_header_start(leaf_page);
     let buf = pager.get_page_mut(leaf_page)?.clone();
@@ -159,6 +176,7 @@ fn delete_from_leaf(
         usable_size,
         encoding,
         key,
+        desc,
     )? {
         LeafSearch::Found(pos, cell) => (pos, cell),
         LeafSearch::NotFound(_) => return Err(BtreeError::KeyNotFound),
@@ -181,6 +199,7 @@ fn delete_from_leaf(
 /// insert would; so the predecessor's leaf is found again afterwards, by
 /// descending for it, rather than trusting a path recorded before the
 /// split. A leaf emptied by the removal is repaired.
+#[allow(clippy::too_many_arguments)]
 fn delete_interior_entry(
     pager: &mut Pager,
     header: &DatabaseHeader,
@@ -189,6 +208,7 @@ fn delete_interior_entry(
     ancestors: Vec<u32>,
     interior_page: u32,
     entry_child: u32,
+    desc: &[bool],
 ) -> Result<(), BtreeError> {
     let usable_size = header.usable_page_size();
     let Some((predecessor_key, predecessor_bytes)) =
@@ -203,6 +223,7 @@ fn delete_interior_entry(
             &ancestors,
             interior_page,
             entry_child,
+            desc,
         );
     };
 
@@ -244,7 +265,14 @@ fn delete_interior_entry(
         mut ancestors,
         interior_page,
         entry_child,
-    } = descend_index_tree(pager, root_page, usable_size, &predecessor_key, encoding)?
+    } = descend_index_tree(
+        pager,
+        root_page,
+        usable_size,
+        &predecessor_key,
+        encoding,
+        desc,
+    )?
     else {
         return Err(BtreeError::Internal(
             "the predecessor must be an interior entry after the swap",
@@ -257,7 +285,7 @@ fn delete_interior_entry(
     let cells =
         collect_index_leaf_cells(pager, &leaf_buf, leaf_start, leaf, usable_size, encoding)?;
     let matches_predecessor = cells.last().is_some_and(|(key, _)| {
-        crate::storage::row::btree::index::compare_keys(key, &predecessor_key)
+        crate::storage::row::btree::index::compare_keys_by(key, &predecessor_key, desc)
             == std::cmp::Ordering::Equal
     });
     if !matches_predecessor {
@@ -268,7 +296,7 @@ fn delete_interior_entry(
     let last = cells.len().saturating_sub(1);
     let buf = pager.get_page_mut(leaf)?;
     splice_delete_cell(buf, leaf_start, leaf, usable_size, last, false)?;
-    repair_if_empty(pager, header, root_page, encoding, &path, leaf)
+    repair_if_empty(pager, header, root_page, encoding, &path, leaf, desc)
 }
 
 /// Follows the rightmost child at every level from `page`, appending each
@@ -328,12 +356,13 @@ fn repair_if_empty(
     encoding: TextEncoding,
     ancestors: &[u32],
     page: u32,
+    desc: &[bool],
 ) -> Result<(), BtreeError> {
     let buf = pager.get_page_mut(page)?.clone();
     if read_num_cells(&buf, page1_header_start(page), page)? > 0 {
         return Ok(());
     }
-    repair_emptied_page(pager, header, root_page, encoding, ancestors, page)
+    repair_emptied_page(pager, header, root_page, encoding, ancestors, page, desc)
 }
 
 /// Takes `page`, which has just lost its last cell, out of the tree it is
@@ -351,6 +380,7 @@ fn repair_if_empty(
 ///   neighbouring subtree. If the leaf was the rightmost child, the last
 ///   entry's child takes its place the same way. A parent left with no
 ///   entries is then repaired in turn.
+#[allow(clippy::too_many_arguments)]
 fn repair_emptied_page(
     pager: &mut Pager,
     header: &DatabaseHeader,
@@ -358,6 +388,7 @@ fn repair_emptied_page(
     encoding: TextEncoding,
     ancestors: &[u32],
     page: u32,
+    desc: &[bool],
 ) -> Result<(), BtreeError> {
     let usable_size = header.usable_page_size();
     let mut page = page;
@@ -482,7 +513,7 @@ fn repair_emptied_page(
     }
 
     for (key, bytes) in displaced {
-        insert_entry(pager, header, root_page, &key, encoding)?;
+        insert_entry_ordered(pager, header, root_page, &key, encoding, desc)?;
         free_overflow_chain(pager, overflow_page_of(&bytes, usable_size)?)?;
     }
     Ok(())
@@ -508,6 +539,7 @@ fn write_interior(
 /// Handles a delete target found at interior level when the tree already
 /// holds empty pages -- see the module doc for the predecessor-swap
 /// algorithm this falls back to.
+#[allow(clippy::too_many_arguments)]
 fn delete_via_predecessor_swap(
     pager: &mut Pager,
     header: &DatabaseHeader,
@@ -516,6 +548,7 @@ fn delete_via_predecessor_swap(
     ancestors: &[u32],
     interior_page: u32,
     entry_child: u32,
+    desc: &[bool],
 ) -> Result<(), BtreeError> {
     let usable_size = header.usable_page_size();
     match extract_max_entry(pager, usable_size, entry_child, encoding, 0)? {
@@ -562,7 +595,15 @@ fn delete_via_predecessor_swap(
     }
     // Dropping the separator may have left the interior page with no
     // entries: repair it as any emptied page is.
-    repair_if_empty(pager, header, root_page, encoding, ancestors, interior_page)
+    repair_if_empty(
+        pager,
+        header,
+        root_page,
+        encoding,
+        ancestors,
+        interior_page,
+        desc,
+    )
 }
 
 /// Recursively finds and physically removes the maximum entry within the

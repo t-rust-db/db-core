@@ -406,16 +406,14 @@ fn create_table_without_rowid_is_refused() {
 }
 
 #[test]
-fn a_desc_index_column_is_rejected_at_create_index_time() {
-    // No index b-tree comparator is DESC-aware (#171) -- rather than
-    // silently building an ascending-looking key that reads back
-    // backwards, `CREATE INDEX ... (col DESC)` itself is refused, so
-    // no row-maintenance codepath (INSERT/UPDATE/DELETE) ever sees a
-    // DESC-declared index on a live schema.
+fn a_desc_index_column_is_created_and_enforces_unique() {
+    // #945: `DESC` key columns are built, maintained and searched in their
+    // own order (end to end against sqlite3 in `index_desc_test.rs`).
     let db = TempDb::new("desc-index");
     let mut e = open(&db);
     e.run_query("CREATE TABLE di(a INTEGER)").unwrap();
-    let err = e.run_query("CREATE INDEX di_a ON di(a DESC)").unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Compile);
-    assert!(err.message.contains("DESC"), "{}", err.message);
+    e.run_query("CREATE UNIQUE INDEX di_a ON di(a DESC)")
+        .unwrap();
+    e.run_query("INSERT INTO di VALUES (1), (2)").unwrap();
+    assert!(e.run_query("INSERT INTO di VALUES (2)").is_err());
 }

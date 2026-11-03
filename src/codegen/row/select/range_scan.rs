@@ -66,6 +66,64 @@ pub(super) fn where_col(expr: &Expr) -> Option<&str> {
     }
 }
 
+/// The `name` text of the index key column that `expr` is the expression
+/// of (#945): an index on `lower(a)` serves `WHERE lower(a) = ?`. The
+/// match is structural (both sides parsed and printed), never by raw text,
+/// so `lower( a )` matches and `lower(b)` does not. Only a leading key
+/// column that is no table column is an expression.
+fn expression_index_key(schema: &TableSchema, expr: &Expr) -> Option<String> {
+    use crate::parser::row::error::ParseOutcome;
+    if matches!(
+        expr.kind,
+        ExprKind::Column { .. } | ExprKind::Literal(_) | ExprKind::Param(_)
+    ) {
+        return None;
+    }
+    let wanted = expr.to_string();
+    schema.indexes.iter().find_map(|index| {
+        let col = index.columns.first()?;
+        if col.name.is_empty()
+            || schema
+                .columns
+                .iter()
+                .any(|c| c.eq_ignore_ascii_case(&col.name))
+        {
+            return None;
+        }
+        let ParseOutcome::Accepted(select) =
+            crate::parser::row::parse_select(&format!("SELECT {}", col.name))
+        else {
+            return None;
+        };
+        match select.columns.first()? {
+            crate::parser::ast::ResultColumn::Expr { expr: key, .. }
+                if key.to_string() == wanted =>
+            {
+                Some(col.name.clone())
+            }
+            _ => None,
+        }
+    })
+}
+
+/// The index-lookup key of a `WHERE` operand: a plain column's name, or
+/// the text of the index expression it equals ([`expression_index_key`]).
+fn where_key(schema: &TableSchema, expr: &Expr) -> Option<String> {
+    where_col(expr)
+        .map(str::to_string)
+        .or_else(|| expression_index_key(schema, expr))
+}
+
+/// What `EXPLAIN QUERY PLAN` calls the key term: the column, or sqlite3's
+/// `<expr>` for an expression.
+fn eqp_term(col: &Expr, key: &str) -> String {
+    if where_col(col).is_some() {
+        key.to_string()
+    } else {
+        "<expr>".to_string()
+    }
+}
+
 /// Same operand restriction as `limit_scan.rs`'s fast paths: a literal
 /// (int/float/string — string included here since `BETWEEN`/`IN` over a
 /// text column is common, unlike the rowid-seek path's integer-only
@@ -201,9 +259,10 @@ fn column_affinity(schema: &TableSchema, col_name: &str) -> Affinity {
 /// unindexed column would.
 pub(super) fn find_leading_index(schema: &TableSchema, col_name: &str) -> Option<usize> {
     schema.indexes.iter().position(|idx| {
-        idx.columns.first().is_some_and(|c| {
-            c.name.eq_ignore_ascii_case(col_name) && c.collation == Collation::Binary
-        })
+        !idx.has_desc()
+            && idx.columns.first().is_some_and(|c| {
+                c.name.eq_ignore_ascii_case(col_name) && c.collation == Collation::Binary
+            })
     })
 }
 
@@ -402,12 +461,14 @@ where
     let Some(where_expr) = &select.where_clause else {
         return Ok(false);
     };
-    let Some((col, lo, hi, equality)) = as_bounds(where_expr) else {
+    let Some((col, lo, hi, equality)) = as_bounds_with(where_expr, expr_sides(schema, where_expr))
+    else {
         return Ok(false);
     };
-    let Some(col_name) = where_col(col) else {
+    let Some(col_name) = where_key(schema, col) else {
         return Ok(false);
     };
+    let col_name = col_name.as_str();
     let scope = Scope::single_shared(schema, cursors.table).with_catalog(catalog);
     if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
         return Ok(false);
@@ -419,10 +480,16 @@ where
         return Ok(false);
     };
     let affinity = column_affinity(schema, col_name);
-    if !operand_matches_column_affinity(lo, affinity)
-        || !operand_matches_column_affinity(hi, affinity)
-    {
-        return Ok(false);
+    // An index expression has no affinity: its operand compares raw.
+    // (Kept nested, not collapsed: the inner `||` is an MC/DC obligation whose
+    // tagged vectors name it.)
+    #[allow(clippy::collapsible_if)]
+    if where_col(col).is_some() {
+        if !operand_matches_column_affinity(lo, affinity)
+            || !operand_matches_column_affinity(hi, affinity)
+        {
+            return Ok(false);
+        }
     }
     // #498: an equality probe is never demoted; a closed range is, when
     // the histogram says it covers most of the table.
@@ -509,7 +576,7 @@ pub(super) fn range_row_seek_index_position(
     covering: bool,
 ) -> Option<usize> {
     let scope = Scope::single(schema, 0).with_catalog(catalog);
-    let recognized = as_bounds(where_expr).is_some()
+    let recognized = as_bounds_with(where_expr, expr_sides(schema, where_expr)).is_some()
         || as_forward_comparison(where_expr).is_some()
         || plan_exact_conjunct_seek(where_expr, schema, &scope, stats, covering).is_some();
     if recognized {
@@ -559,10 +626,13 @@ where
         })?;
         return Ok(true);
     }
-    if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
-        let Some(col_name) = where_col(col) else {
+    if let Some((col, lo, hi, equality)) =
+        as_bounds_with(where_expr, expr_sides(schema, where_expr))
+    {
+        let Some(col_name) = where_key(schema, col) else {
             return Ok(false);
         };
+        let col_name = col_name.as_str();
         if !is_constant_operand(lo, scope) || !is_constant_operand(hi, scope) {
             return Ok(false);
         }
@@ -573,10 +643,16 @@ where
             return Ok(false);
         };
         let affinity = column_affinity(schema, col_name);
-        if !operand_matches_column_affinity(lo, affinity)
-            || !operand_matches_column_affinity(hi, affinity)
-        {
-            return Ok(false);
+        // An index expression has no affinity: its operand compares raw.
+        // (Kept nested, not collapsed: the inner `||` is an MC/DC obligation whose
+        // tagged vectors name it.)
+        #[allow(clippy::collapsible_if)]
+        if where_col(col).is_some() {
+            if !operand_matches_column_affinity(lo, affinity)
+                || !operand_matches_column_affinity(hi, affinity)
+            {
+                return Ok(false);
+            }
         }
         if !equality
             && !range_seek_wins(
@@ -1307,17 +1383,26 @@ fn range_seek_index_position_with(
     if let Some(plan) = plan_exact_conjunct_seek(where_expr, schema, &scope, stats, covering) {
         return Some(plan.index_position);
     }
-    if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
-        let col_name = where_col(col)?;
+    if let Some((col, lo, hi, equality)) =
+        as_bounds_with(where_expr, expr_sides(schema, where_expr))
+    {
+        let col_name = where_key(schema, col)?;
+        let col_name = col_name.as_str();
         if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
             return None;
         }
         let index_position = find_leading_index(schema, col_name)?;
         let affinity = column_affinity(schema, col_name);
-        if !operand_matches_column_affinity(lo, affinity)
-            || !operand_matches_column_affinity(hi, affinity)
-        {
-            return None;
+        // An index expression has no affinity: its operand compares raw.
+        // (Kept nested, not collapsed: the inner `||` is an MC/DC obligation whose
+        // tagged vectors name it.)
+        #[allow(clippy::collapsible_if)]
+        if where_col(col).is_some() {
+            if !operand_matches_column_affinity(lo, affinity)
+                || !operand_matches_column_affinity(hi, affinity)
+            {
+                return None;
+            }
         }
         if !equality
             && !range_seek_wins(
@@ -1424,18 +1509,28 @@ pub(super) fn find_range_seek_detail(
             return conjunct_seek_detail(&plan, schema, table_display);
         }
     }
-    if let Some((col, lo, hi, equality)) = as_bounds(where_expr) {
-        let col_name = where_col(col)?;
+    if let Some((col, lo, hi, equality)) =
+        as_bounds_with(where_expr, expr_sides(schema, where_expr))
+    {
+        let col_name = where_key(schema, col)?;
+        let col_name = col_name.as_str();
+        let term = eqp_term(col, col_name);
         if !is_constant_operand(lo, &scope) || !is_constant_operand(hi, &scope) {
             return None;
         }
         let index_position = find_leading_index(schema, col_name)?;
         let index = schema.indexes.get(index_position)?;
         let affinity = column_affinity(schema, col_name);
-        if !operand_matches_column_affinity(lo, affinity)
-            || !operand_matches_column_affinity(hi, affinity)
-        {
-            return None;
+        // An index expression has no affinity: its operand compares raw.
+        // (Kept nested, not collapsed: the inner `||` is an MC/DC obligation whose
+        // tagged vectors name it.)
+        #[allow(clippy::collapsible_if)]
+        if where_col(col).is_some() {
+            if !operand_matches_column_affinity(lo, affinity)
+                || !operand_matches_column_affinity(hi, affinity)
+            {
+                return None;
+            }
         }
         if !equality
             && !range_seek_wins(
@@ -1454,12 +1549,12 @@ pub(super) fn find_range_seek_detail(
         // empirically, sqlite3 3.53.4).
         return Some(if equality {
             format!(
-                "SEARCH {table_display} USING INDEX {} ({col_name}=?)",
+                "SEARCH {table_display} USING INDEX {} ({term}=?)",
                 index.name
             )
         } else {
             format!(
-                "SEARCH {table_display} USING INDEX {} ({col_name}>? AND {col_name}<?)",
+                "SEARCH {table_display} USING INDEX {} ({term}>? AND {term}<?)",
                 index.name
             )
         });
@@ -1580,6 +1675,45 @@ fn as_bounds(where_expr: &Expr) -> Option<(&Expr, &Expr, &Expr, bool)> {
     }
 }
 
+/// Which sides of an `=` are an index expression (#945): `(lhs, rhs)`.
+fn expr_sides(schema: &TableSchema, where_expr: &Expr) -> (bool, bool) {
+    match &where_expr.kind {
+        ExprKind::Binary {
+            op: BinaryOp::Eq,
+            lhs,
+            rhs,
+        } => (
+            expression_index_key(schema, lhs).is_some(),
+            expression_index_key(schema, rhs).is_some(),
+        ),
+        _ => (false, false),
+    }
+}
+
+/// [`as_bounds`] that also recognizes `<index expression> = lit`, `sides`
+/// being [`expr_sides`] of the same expression (#945). (Passed rather than
+/// computed here: the qualified subset admits only one borrowed input to a
+/// function returning borrows.)
+fn as_bounds_with(where_expr: &Expr, sides: (bool, bool)) -> Option<(&Expr, &Expr, &Expr, bool)> {
+    if let Some(bounds) = as_bounds(where_expr) {
+        return Some(bounds);
+    }
+    let ExprKind::Binary {
+        op: BinaryOp::Eq,
+        lhs,
+        rhs,
+    } = &where_expr.kind
+    else {
+        return None;
+    };
+    let (col, lit) = match sides {
+        (true, _) => (lhs.as_ref(), rhs.as_ref()),
+        (false, true) => (rhs.as_ref(), lhs.as_ref()),
+        (false, false) => return None,
+    };
+    Some((col, lit, lit, true))
+}
+
 /// One indexable comparison of a column against a constant operand,
 /// pulled out of a top-level `AND` chain (#695).
 #[derive(Clone, Copy, PartialEq)]
@@ -1675,6 +1809,9 @@ fn plan_conjunct_seek(
     let terms = conjunct_terms(where_expr);
     let mut best: Option<(usize, bool, ConjunctSeek)> = None;
     for (index_position, index) in schema.indexes.iter().enumerate() {
+        if index.has_desc() {
+            continue;
+        }
         let mut eq = Vec::new();
         let mut lower = None;
         let mut upper = None;
@@ -2227,6 +2364,51 @@ mod mcdc_vectors {
             rowid_alias: if alias { Some(0) } else { None },
             ..Default::default()
         }
+    }
+
+    /// `schema(..)` with its one index keyed on `key` (a column name or the
+    /// text of an expression).
+    fn keyed_on(key: &str) -> TableSchema {
+        let mut schema = schema("TEXT", true, false);
+        schema.indexes[0].columns[0].name = key.to_string();
+        schema
+    }
+
+    // #945 `expression_index_key`'s decision `col.name.is_empty() ||
+    // <names a table column>`: both false -> the key is parsed and compared.
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_expression_index_key_265206ea__v1_an_expression_key_matches(
+    ) {
+        let wanted = where_of("SELECT 1 FROM t WHERE lower(b) = 'x'");
+        let ExprKind::Binary { lhs, .. } = &wanted.kind else {
+            panic!("equality");
+        };
+        assert_eq!(
+            super::expression_index_key(&keyed_on("lower(b)"), lhs).as_deref(),
+            Some("lower(b)")
+        );
+    }
+
+    // First leaf true: an empty key text names no expression.
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_expression_index_key_265206ea__v2_an_empty_key_never_matches(
+    ) {
+        let wanted = where_of("SELECT 1 FROM t WHERE lower(b) = 'x'");
+        let ExprKind::Binary { lhs, .. } = &wanted.kind else {
+            panic!("equality");
+        };
+        assert_eq!(super::expression_index_key(&keyed_on(""), lhs), None);
+    }
+
+    // Second leaf true: a key that is a table column is a plain column.
+    #[test]
+    fn mcdc__codegen_row_select_range_scan_expression_index_key_265206ea__v3_a_column_key_is_not_an_expression(
+    ) {
+        let wanted = where_of("SELECT 1 FROM t WHERE lower(b) = 'x'");
+        let ExprKind::Binary { lhs, .. } = &wanted.kind else {
+            panic!("equality");
+        };
+        assert_eq!(super::expression_index_key(&keyed_on("b"), lhs), None);
     }
 
     fn compile(sql: &str, schema: &TableSchema) -> Program {

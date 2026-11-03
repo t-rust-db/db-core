@@ -367,6 +367,20 @@ pub struct IndexSchema {
     pub root_page: u32,
 }
 
+impl IndexSchema {
+    /// Whether any key column sorts `DESC`: such an index is stored in an
+    /// order the ascending seek/range walks do not follow (#945).
+    #[must_use]
+    pub fn has_desc(&self) -> bool {
+        self.columns.iter().any(|c| c.desc)
+    }
+}
+
+/// The `column_indices` entry (`P4::CreateIndex`, `populate_index`) that
+/// stands for the table's rowid: an `INTEGER PRIMARY KEY` column is stored
+/// as NULL in the row record, so an index over it keys on the rowid (#945).
+pub const INDEX_KEY_ROWID: usize = usize::MAX;
+
 /// One column (or expression, kept as raw text) in an index's key.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexedColumn {

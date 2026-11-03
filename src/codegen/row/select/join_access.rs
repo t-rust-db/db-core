@@ -110,7 +110,8 @@ pub(in crate::codegen::row) fn choose_join_access(
         return None;
     };
     let index = binding.schema.indexes.iter().find(|idx| {
-        idx.unique
+        !idx.has_desc()
+            && idx.unique
             && idx.columns.len() == 1
             && idx
                 .columns

@@ -22,12 +22,15 @@ use crate::vm::row::schema_storage::{SchemaStorage, SchemaStorageError};
 use crate::vm::row::transaction::{Transaction, TransactionError};
 use crate::vm::row::{
     compare, AnalyzeTarget, Cursor, SortKeyColumn, CHECKPOINT_FULL, CHECKPOINT_RESTART,
-    CHECKPOINT_TRUNCATE, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF,
+    CHECKPOINT_TRUNCATE, JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL,
+    SYNCHRONOUS_OFF,
 };
 
 use crate::storage::row::btree::{self, IndexCursor, IndexRow, Payload, TableCursor};
 use crate::storage::row::header::{DatabaseHeader, JournalMode, SynchronousMode};
-use crate::storage::row::record::{decode_record, decode_serial_value, parse_header_into, Value};
+use crate::storage::row::record::{
+    decode_record, decode_serial_value, parse_header_checked_into, parse_header_into, Value,
+};
 use crate::storage::row::vfs::{PageError, PageSource};
 
 type SharedPager = Rc<RefCell<crate::storage::row::pager::Pager>>;
@@ -276,9 +279,16 @@ pub struct IndexCursorAdapter {
     writer: Option<SharedPager>,
     header: DatabaseHeader,
     root_page: u32,
-    /// The entry most recently positioned on and its decoded key record
-    /// (key columns then the trailing rowid), `None` after a miss.
-    current: Option<(IndexRow, Vec<Value>)>,
+    /// Which key columns are `DESC` (empty: all ascending, #945).
+    desc: Vec<bool>,
+    /// The entry most recently positioned on, `None` after a miss. Its key
+    /// record (key columns then the trailing rowid) stays encoded: a
+    /// column is decoded only when something reads it (#949).
+    current: Option<IndexRow>,
+    /// The current entry's header entries (serial type, body offset per
+    /// column), parsed when the cursor is positioned. Its allocation is
+    /// reused for every entry, so positioning allocates nothing.
+    entries: Vec<(u64, usize)>,
 }
 
 impl IndexCursorAdapter {
@@ -287,16 +297,23 @@ impl IndexCursorAdapter {
         writer: Option<SharedPager>,
         header: DatabaseHeader,
         root_page: u32,
+        desc: Vec<bool>,
     ) -> Self {
         IndexCursorAdapter {
-            cursor: IndexCursor::new(source, header.usable_page_size(), root_page),
+            cursor: IndexCursor::new(source, header.usable_page_size(), root_page)
+                .with_desc(desc.clone()),
             writer,
             header,
             root_page,
+            desc,
             current: None,
+            entries: Vec::new(),
         }
     }
 
+    /// Positions on `row`. The header is walked and the body length
+    /// checked (a malformed record is an error here, as when the whole
+    /// record was decoded), but no column body is decoded.
     fn set_current(
         &mut self,
         row: Result<Option<IndexRow>, btree::BtreeError>,
@@ -305,32 +322,63 @@ impl IndexCursorAdapter {
         let Some(row) = row.map_err(cursor_err)? else {
             return Ok(false);
         };
-        let values = decode_record(&row.payload, self.header.text_encoding).map_err(cursor_err)?;
-        self.current = Some((row, values));
+        parse_header_checked_into(&row.payload, &mut self.entries).map_err(cursor_err)?;
+        self.current = Some(row);
         Ok(true)
+    }
+
+    /// Column `col` of the current entry, decoded now; a column past the
+    /// record's end is NULL. `Ok(None)` when there is no current entry.
+    fn decode_column(&self, col: usize) -> CursorResult<Option<Value>> {
+        let Some(row) = self.current.as_ref() else {
+            return Ok(None);
+        };
+        match self.entries.get(col) {
+            Some(&(serial_type, offset)) => {
+                let (value, _) = decode_serial_value(
+                    serial_type,
+                    &row.payload,
+                    offset,
+                    self.header.text_encoding,
+                )
+                .map_err(cursor_err)?;
+                Ok(Some(value))
+            }
+            None => Ok(Some(Value::Null)),
+        }
     }
 
     /// sqlite-rs `decode_leading_columns`: the entry's first `probe.len()`
     /// columns compared to `probe` under `collations`, or `None` when the
-    /// entry has no trailing rowid column beyond them.
+    /// entry has no trailing rowid column beyond them. Only those leading
+    /// columns are decoded.
     fn compare_leading(&self, probe: &[Value], collations: &[Collation]) -> Option<Ordering> {
-        let (_, values) = self.current.as_ref()?;
-        if values.len() <= probe.len() {
+        self.current.as_ref()?;
+        if self.entries.len() <= probe.len() {
             return None;
         }
-        Some(
-            values
-                .iter()
-                .zip(probe.iter())
-                .zip(
-                    collations
-                        .iter()
-                        .chain(std::iter::repeat(&Collation::Binary)),
-                )
-                .map(|((k, p), &c)| compare(k, p, c))
-                .find(|o| !o.is_eq())
-                .unwrap_or(Ordering::Equal),
-        )
+        for (col, (p, &c)) in probe
+            .iter()
+            .zip(
+                collations
+                    .iter()
+                    .chain(std::iter::repeat(&Collation::Binary)),
+            )
+            .enumerate()
+        {
+            // The header was checked when the cursor was positioned, so a
+            // body that still fails to decode (invalid text) has no
+            // ordering: report "no entry" rather than a wrong one.
+            let key = self.decode_column(col).ok()??;
+            let mut ordering = compare(&key, p, c);
+            if self.desc.get(col).copied().unwrap_or(false) {
+                ordering = ordering.reverse();
+            }
+            if !ordering.is_eq() {
+                return Some(ordering);
+            }
+        }
+        Some(Ordering::Equal)
     }
 }
 
@@ -356,10 +404,7 @@ impl Cursor for IndexCursorAdapter {
     }
 
     fn column(&self, col: usize) -> CursorResult<Option<Value>> {
-        Ok(self
-            .current
-            .as_ref()
-            .map(|(_, values)| values.get(col).cloned().unwrap_or(Value::Null)))
+        self.decode_column(col)
     }
 
     fn rowid(&self) -> Option<i64> {
@@ -367,9 +412,9 @@ impl Cursor for IndexCursorAdapter {
     }
 
     fn idx_rowid(&self) -> Option<i64> {
-        let (_, values) = self.current.as_ref()?;
-        match values.last()? {
-            Value::Integer(rowid) => Some(*rowid),
+        // The trailing rowid is the last column; nothing else is decoded.
+        match self.decode_column(self.entries.len().checked_sub(1)?) {
+            Ok(Some(Value::Integer(rowid))) => Some(rowid),
             _ => None,
         }
     }
@@ -405,12 +450,13 @@ impl Cursor for IndexCursorAdapter {
         let Some(writer) = self.writer.as_ref() else {
             return Ok(false);
         };
-        btree::insert_entry(
+        btree::insert_entry_ordered(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             &key,
             self.header.text_encoding,
+            &self.desc,
         )
         .map_err(cursor_err)?;
         Ok(true)
@@ -420,12 +466,13 @@ impl Cursor for IndexCursorAdapter {
         let Some(writer) = self.writer.as_ref() else {
             return Ok(false);
         };
-        btree::delete_entry(
+        btree::delete_entry_ordered(
             &mut writer.borrow_mut(),
             &self.header,
             self.root_page,
             key,
             self.header.text_encoding,
+            &self.desc,
         )
         .map_err(cursor_err)?;
         Ok(true)
@@ -558,6 +605,7 @@ impl CursorFactory for StorageFactory {
                 self.writer.clone(),
                 self.header,
                 root,
+                Vec::new(),
             );
             return Ok(Box::new(WithoutRowidCursorAdapter::new(
                 inner,
@@ -585,13 +633,14 @@ impl CursorFactory for StorageFactory {
     fn open_index(
         &mut self,
         root: u32,
-        _key: &[SortKeyColumn],
+        key: &[SortKeyColumn],
     ) -> Result<Box<dyn Cursor>, CursorFactoryError> {
         Ok(Box::new(IndexCursorAdapter::new(
             Rc::clone(&self.source),
             self.writer.clone(),
             self.header,
             root,
+            key.iter().map(|k| k.descending).collect(),
         )))
     }
 }
@@ -686,18 +735,23 @@ impl Cursor for WithoutRowidCursorAdapter {
         if !self.inner.set_current(seeked)? {
             return Ok(false);
         }
-        let matched = self.inner.current.as_ref().is_some_and(|(_, values)| {
-            values.len() >= key.len()
-                && values
+        // Only the key's leading columns are decoded.
+        let mut matched = self.inner.entries.len() >= key.len();
+        for (col, (probe, &c)) in key
+            .iter()
+            .zip(
+                collations
                     .iter()
-                    .zip(key.iter())
-                    .zip(
-                        collations
-                            .iter()
-                            .chain(std::iter::repeat(&Collation::Binary)),
-                    )
-                    .all(|((stored, probe), &c)| compare(stored, probe, c).is_eq())
-        });
+                    .chain(std::iter::repeat(&Collation::Binary)),
+            )
+            .enumerate()
+        {
+            if !matched {
+                break;
+            }
+            let stored = self.inner.decode_column(col)?.unwrap_or(Value::Null);
+            matched = compare(&stored, probe, c).is_eq();
+        }
         if !matched {
             self.inner.current = None;
         }
@@ -706,11 +760,12 @@ impl Cursor for WithoutRowidCursorAdapter {
 
     /// Removes the row the cursor is on; it is positioned nowhere after.
     fn delete(&mut self) -> CursorResult<bool> {
-        let (Some(writer), Some((_, stored))) =
-            (self.inner.writer.as_ref(), self.inner.current.take())
+        let (Some(writer), Some(row)) = (self.inner.writer.as_ref(), self.inner.current.take())
         else {
             return Ok(false);
         };
+        let stored =
+            decode_record(&row.payload, self.inner.header.text_encoding).map_err(cursor_err)?;
         btree::delete_entry(
             &mut writer.borrow_mut(),
             &self.inner.header,
@@ -872,6 +927,14 @@ impl Transaction for PagerTransaction {
             .map_err(|e| TransactionError(storage_err(e)))
     }
 
+    fn journal_mode(&self) -> Option<i32> {
+        let writer = self.writer.as_ref()?;
+        Some(match writer.borrow().journal_mode() {
+            JournalMode::Wal => JOURNAL_MODE_WAL,
+            JournalMode::Legacy => JOURNAL_MODE_DELETE,
+        })
+    }
+
     fn synchronous(&self) -> Option<i32> {
         let writer = self.writer.as_ref()?;
         Some(writer.borrow().synchronous() as i32)
@@ -1008,6 +1071,24 @@ impl SchemaStorage for BtreeSchemaStorage {
             table_root,
             index_root,
             column_indices,
+        )
+        .map_err(schema_err)
+    }
+
+    fn populate_index_ordered(
+        &mut self,
+        index_root: u32,
+        table_root: u32,
+        column_indices: &[usize],
+        desc: &[bool],
+    ) -> Result<(), SchemaStorageError> {
+        btree::populate_index_from_table_ordered(
+            &mut self.pager.borrow_mut(),
+            &self.header,
+            table_root,
+            index_root,
+            column_indices,
+            desc,
         )
         .map_err(schema_err)
     }
@@ -1200,6 +1281,126 @@ mod tests {
     /// reverse table scan, a reverse index scan, and a delete through a
     /// secondary index, none of which the forward-scan-only tests
     /// elsewhere exercise.
+    /// An index cursor over `CREATE INDEX ix ON ixt(a, b)` (#949): rows
+    /// `(1,'x')`, `(1,'y')`, `(2,NULL)`, whose entries are `(a, b, rowid)`.
+    fn index_cursor_over_a_b(label: &str) -> (TempDb, IndexCursorAdapter) {
+        use crate::engine::{row::RowEngine, Engine};
+        use crate::storage::row::vfs::{UnixVfs, VfsPageSource};
+
+        let db = TempDb::new(label);
+        let (root, header) = {
+            let mut e = RowEngine::open(db.path()).unwrap();
+            e.run_query(
+                "CREATE TABLE ixt(a, b, c); CREATE INDEX ix ON ixt(a, b); \
+                 INSERT INTO ixt VALUES (1, 'x', 10), (1, 'y', 20), (2, NULL, 30)",
+            )
+            .unwrap();
+            let root = e.table_schema("ixt").unwrap().indexes[0].root_page;
+            (root, e.with_storage(|_pager, header| *header))
+        };
+        let source: Rc<dyn PageSource> =
+            Rc::new(VfsPageSource::open(&UnixVfs, db.path(), header.page_size).unwrap());
+        (
+            db,
+            IndexCursorAdapter::new(source, None, header, root, Vec::new()),
+        )
+    }
+
+    /// Positioning keeps the record encoded; every reader decodes only
+    /// what it asks for, and agrees with the old whole-record decode.
+    #[test]
+    fn an_index_entry_is_decoded_column_by_column() {
+        let (_db, mut c) = index_cursor_over_a_b("adapter-index-lazy");
+        assert!(c.column(0).unwrap().is_none(), "nothing positioned yet");
+        assert_eq!(c.idx_rowid(), None);
+        assert!(c.idx_compare(&[Value::Integer(1)], &[]).is_none());
+
+        assert!(c.rewind().unwrap());
+        assert_eq!(c.column(0).unwrap(), Some(Value::Integer(1)));
+        assert_eq!(c.column(1).unwrap(), Some(Value::Text("x".into())));
+        assert_eq!(c.column(2).unwrap(), Some(Value::Integer(1)), "the rowid");
+        assert_eq!(c.column(3).unwrap(), Some(Value::Null), "past the end");
+        assert_eq!(c.idx_rowid(), Some(1));
+        assert_eq!(c.rowid(), Some(1));
+
+        // Only the probe's leading columns are compared.
+        let probe = |key: &[Value]| c.idx_compare(key, &[]);
+        assert_eq!(probe(&[Value::Integer(1)]), Some(Ordering::Equal));
+        assert_eq!(probe(&[Value::Integer(2)]), Some(Ordering::Less));
+        assert_eq!(probe(&[Value::Integer(0)]), Some(Ordering::Greater));
+        assert_eq!(
+            probe(&[Value::Integer(1), Value::Text("y".into())]),
+            Some(Ordering::Less)
+        );
+        // A probe as long as the entry leaves no trailing rowid: "not greater".
+        let full = [
+            Value::Integer(1),
+            Value::Text("x".into()),
+            Value::Integer(1),
+        ];
+        assert_eq!(probe(&full), Some(Ordering::Equal));
+        assert_eq!(c.compare_leading(&full, &[]), None);
+
+        assert!(c.next().unwrap() && c.next().unwrap());
+        assert_eq!(c.column(1).unwrap(), Some(Value::Null));
+        assert_eq!(c.idx_rowid(), Some(3));
+        assert!(!c.next().unwrap());
+        assert!(c.column(0).unwrap().is_none());
+        assert_eq!(c.idx_rowid(), None);
+
+        assert!(c.last().unwrap());
+        assert_eq!(c.idx_rowid(), Some(3));
+        assert!(c.prev().unwrap());
+        assert_eq!(c.idx_rowid(), Some(2));
+    }
+
+    #[test]
+    fn seeking_an_index_entry_compares_the_key_under_its_collations() {
+        let (_db, mut c) = index_cursor_over_a_b("adapter-index-seek");
+        let key = [Value::Integer(1), Value::Text("X".into())];
+        assert!(!c.seek_index_eq(&key, &[]).unwrap(), "binary: 'X' != 'x'");
+        assert!(c.column(0).unwrap().is_none(), "a miss leaves no entry");
+        let nocase = [Collation::Binary, Collation::NoCase];
+        assert!(c.seek_index_eq(&key, &nocase).unwrap());
+        assert_eq!(c.idx_rowid(), Some(1));
+        assert!(c
+            .seek_index_ge(&[Value::Integer(1), Value::Text("z".into())], &[])
+            .unwrap());
+        assert_eq!(c.idx_rowid(), Some(3));
+        assert!(!c.seek_index_ge(&[Value::Integer(3)], &[]).unwrap());
+    }
+
+    /// A record whose header or body length is wrong is refused when the
+    /// cursor is positioned on it, as when the whole record was decoded.
+    #[test]
+    fn a_malformed_index_record_is_refused_when_positioned() {
+        let (_db, mut c) = index_cursor_over_a_b("adapter-index-malformed");
+        let row = |bytes: Vec<u8>| IndexRow {
+            payload: Payload::Owned(bytes),
+        };
+        // Header says one 1-byte integer; the body is missing.
+        assert!(c.set_current(Ok(Some(row(vec![2, 1])))).is_err());
+        assert!(
+            c.column(0).unwrap().is_none(),
+            "a refused entry is not current"
+        );
+        // The same record with a byte too many.
+        assert!(c.set_current(Ok(Some(row(vec![2, 1, 7, 7])))).is_err());
+        // Well formed: one integer.
+        assert!(c.set_current(Ok(Some(row(vec![2, 1, 7])))).unwrap());
+        assert_eq!(c.column(0).unwrap(), Some(Value::Integer(7)));
+        // A text body that is not UTF-8 is a read error, not a wrong value.
+        assert!(c.set_current(Ok(Some(row(vec![2, 15, 0xff])))).unwrap());
+        assert!(c.column(0).is_err());
+        // A btree error passes through.
+        assert!(c
+            .set_current(Err(btree::BtreeError::CursorNotPositioned {
+                operation: "prev",
+                required: "last",
+            }))
+            .is_err());
+    }
+
     #[test]
     fn reverse_scans_and_indexed_delete_exercise_last_and_prev() {
         use crate::engine::{row::RowEngine, Engine};
@@ -1349,6 +1550,28 @@ mod tests {
 
         let rows = e.run_query("PRAGMA integrity_check").unwrap().rows;
         assert_eq!(rows[0][0].to_string(), "ok");
+    }
+
+    /// #945: inside a transaction `PRAGMA journal_mode = <current>` is a
+    /// no-op that answers with the mode (sqlite3); a real change errors.
+    #[test]
+    fn journal_mode_in_a_transaction_only_refuses_a_change() {
+        use crate::engine::{row::RowEngine, Engine};
+
+        let db = TempDb::new("adapter-jm-txn");
+        let mut e = RowEngine::open(db.path()).unwrap();
+        e.run_query("CREATE TABLE jm(a INTEGER)").unwrap();
+        e.run_query("BEGIN; INSERT INTO jm VALUES (1)").unwrap();
+        let rows = e.run_query("PRAGMA journal_mode = DELETE").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "delete");
+        assert!(e.run_query("PRAGMA journal_mode = WAL").is_err());
+        e.run_query("COMMIT").unwrap();
+        e.run_query("PRAGMA journal_mode = WAL").unwrap();
+        e.run_query("BEGIN").unwrap();
+        let rows = e.run_query("PRAGMA journal_mode = WAL").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "wal");
+        assert!(e.run_query("PRAGMA journal_mode = DELETE").is_err());
+        e.run_query("ROLLBACK").unwrap();
     }
 
     /// `BtreeSchemaStorage::create_index_root`/`populate_index`/

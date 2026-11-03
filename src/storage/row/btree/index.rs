@@ -38,8 +38,8 @@ mod delete;
 #[path = "index/index_insert.rs"]
 mod insert;
 
-pub use delete::delete_entry;
-pub use insert::insert_entry;
+pub use delete::{delete_entry, delete_entry_ordered};
+pub use insert::{insert_entry, insert_entry_ordered};
 
 pub(super) const LEAF_INDEX: u8 = 0x0a;
 pub(super) const INTERIOR_INDEX: u8 = 0x02;
@@ -85,6 +85,8 @@ pub struct IndexCursor<P: PageSource> {
     root_page: u32,
     stack: Vec<IndexFrame>,
     pages_visited: usize,
+    /// Which key columns are `DESC` (empty: all ascending), for [`Self::seek`].
+    desc: Vec<bool>,
 }
 
 impl<P: PageSource> IndexCursor<P> {
@@ -97,7 +99,16 @@ impl<P: PageSource> IndexCursor<P> {
             root_page,
             stack: Vec::new(),
             pages_visited: 0,
+            desc: Vec::new(),
         }
+    }
+
+    /// Declares which key columns of this index are `DESC` (#945), so
+    /// [`Self::seek`] binary-searches in the order the tree is stored in.
+    #[must_use]
+    pub fn with_desc(mut self, desc: Vec<bool>) -> Self {
+        self.desc = desc;
+        self
     }
 
     /// Positions the cursor at the first entry and returns it, or `None`
@@ -214,7 +225,7 @@ impl<P: PageSource> IndexCursor<P> {
                 self.decode_leaf_entry(top, mid)?
             };
             let key = decode_record(&row.payload, encoding)?;
-            if compare_keys(&key, target) != Ordering::Less {
+            if compare_keys_by(&key, target, &self.desc) != Ordering::Less {
                 hi = mid;
             } else {
                 lo = mid.saturating_add(1);
@@ -517,11 +528,24 @@ pub(super) fn compare_values(a: &Value, b: &Value) -> Ordering {
 
 /// Lexicographic key comparison over a (possibly composite) index key.
 /// Shared by the index insert/delete write paths.
+#[cfg(test)]
 pub(super) fn compare_keys(a: &[Value], b: &[Value]) -> Ordering {
-    for (x, y) in a.iter().zip(b.iter()) {
+    compare_keys_by(a, b, &[])
+}
+
+/// [`compare_keys`] for an index with `DESC` key columns (#945): column
+/// `i` compares reversed when `desc[i]` is true (a missing flag is `ASC`).
+/// Only the declared key columns carry a direction; the trailing rowid
+/// (past `desc.len()`) always sorts ascending, as in sqlite3.
+pub(super) fn compare_keys_by(a: &[Value], b: &[Value], desc: &[bool]) -> Ordering {
+    for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
         let c = compare_values(x, y);
         if c != Ordering::Equal {
-            return c;
+            return if desc.get(i).copied().unwrap_or(false) {
+                c.reverse()
+            } else {
+                c
+            };
         }
     }
     a.len().cmp(&b.len())
@@ -674,6 +698,7 @@ pub(super) enum LeafSearch {
 /// [`collect_index_leaf_cells`], which decodes every cell on the page.
 /// Used by the index insert/delete write paths to locate a position
 /// without paying for a full-page decode on every write (#648).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn search_index_leaf(
     source: &Pager,
     buf: &[u8],
@@ -682,6 +707,7 @@ pub(super) fn search_index_leaf(
     usable_size: u32,
     encoding: TextEncoding,
     key: &[Value],
+    desc: &[bool],
 ) -> Result<LeafSearch, BtreeError> {
     let num_cells = read_num_cells(buf, header_start, page_num)?;
     let ptr_base = header_start.saturating_add(8);
@@ -701,7 +727,7 @@ pub(super) fn search_index_leaf(
             usable_size,
             encoding,
         )?;
-        match compare_keys(key, &decoded.0) {
+        match compare_keys_by(key, &decoded.0, desc) {
             Ordering::Equal => return Ok(LeafSearch::Found(mid, decoded)),
             Ordering::Less => hi = mid,
             Ordering::Greater => lo = mid.saturating_add(1),
@@ -757,6 +783,7 @@ pub(super) fn descend_index_tree(
     usable_size: u32,
     key: &[Value],
     encoding: TextEncoding,
+    desc: &[bool],
 ) -> Result<IndexDescent, BtreeError> {
     let mut ancestors = Vec::new();
     let mut visited = 0usize;
@@ -786,10 +813,9 @@ pub(super) fn descend_index_tree(
                 usable_size,
                 encoding,
             )?;
-            if let Some(entry_index) = entries
-                .iter()
-                .position(|(_, entry_key, _)| compare_keys(key, entry_key) == Ordering::Equal)
-            {
+            if let Some(entry_index) = entries.iter().position(|(_, entry_key, _)| {
+                compare_keys_by(key, entry_key, desc) == Ordering::Equal
+            }) {
                 return Ok(IndexDescent::InteriorMatch {
                     ancestors,
                     interior_page: page_num,
@@ -806,7 +832,7 @@ pub(super) fn descend_index_tree(
             ancestors.push(page_num);
             let mut next = rightmost;
             for (child, entry_key, _) in &entries {
-                if compare_keys(key, entry_key) == Ordering::Less {
+                if compare_keys_by(key, entry_key, desc) == Ordering::Less {
                     next = *child;
                     break;
                 }

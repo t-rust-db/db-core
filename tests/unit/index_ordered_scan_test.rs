@@ -84,8 +84,7 @@ impl Drop for TempDb {
 
 /// `ot.k` is indexed ascending, `ot.mirror` duplicates it unindexed.
 /// `m` has a covering `(a, b)` index for multi-column ordering.
-/// (A `CREATE INDEX ... (col DESC)` case is not covered here --
-/// db-core's DDL doesn't yet support a descending index key.)
+/// (A `CREATE INDEX ... (col DESC)` case lives in `index_desc_test.rs`.)
 fn seeded(label: &str) -> (TempDb, RowEngine) {
     let db = TempDb::new(label);
     let mut e = RowEngine::open(db.path()).expect("open");

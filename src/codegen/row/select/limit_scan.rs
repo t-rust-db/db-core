@@ -506,6 +506,9 @@ pub(super) fn find_covering_index(
         .iter()
         .enumerate()
         .find_map(|(index_position, idx)| {
+            if idx.has_desc() {
+                return None;
+            }
             let leading = idx.columns.first()?;
             let operand = constants.get(&leading.name.to_ascii_lowercase())?;
             Some((index_position, vec![operand.clone()]))
@@ -520,6 +523,9 @@ pub(super) fn find_covering_index(
             .iter()
             .enumerate()
             .find_map(|(index_position, idx)| {
+                if idx.has_desc() {
+                    return None;
+                }
                 let leading = idx.columns.first()?;
                 let matches =
                     |e: &Expr| where_col(e).is_some_and(|n| n.eq_ignore_ascii_case(&leading.name));
@@ -761,6 +767,9 @@ pub(super) fn find_skip_scan_index(
         .iter()
         .enumerate()
         .find_map(|(index_position, index)| {
+            if index.has_desc() {
+                return None;
+            }
             let column_position = index
                 .columns
                 .iter()

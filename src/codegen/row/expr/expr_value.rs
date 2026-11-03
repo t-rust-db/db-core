@@ -400,24 +400,27 @@ pub(crate) fn compile_value(
             // the reverse of SQL's `text LIKE pattern` syntax. Compile
             // operands in that order so the bump allocator hands out a
             // contiguous run matching `Function`'s expected layout.
-            let pat_r = compile_value(em, reg, scope, pattern)?;
-            let txt_r = compile_value(em, reg, scope, inner)?;
-            if txt_r != pat_r.saturating_add(1) {
-                return Err(CodegenError::Unsupported {
-                    reason: "LIKE/GLOB text operand did not land in the register contiguous \
-                             with its pattern operand"
-                        .to_string(),
-                });
-            }
+            // The operands come back wherever their own lowering put
+            // them (`1 - 2 LIKE 'x'` allocates the text past the pattern),
+            // so when they are not already adjacent, copy them into a
+            // freshly reserved contiguous run (#945; same fallback as the
+            // plain `Function` arm).
+            let mut regs = vec![compile_value(em, reg, scope, pattern)?];
+            regs.push(compile_value(em, reg, scope, inner)?);
             if let Some(e) = escape {
-                let esc_r = compile_value(em, reg, scope, e)?;
-                if esc_r != pat_r.saturating_add(2) {
-                    return Err(CodegenError::Unsupported {
-                        reason: "LIKE ESCAPE operand did not land in the register contiguous \
-                                 with its pattern/text operands"
-                            .to_string(),
-                    });
+                regs.push(compile_value(em, reg, scope, e)?);
+            }
+            let mut pat_r = regs.first().copied().unwrap_or_default();
+            let adjacent = regs
+                .iter()
+                .enumerate()
+                .all(|(i, &r)| r == pat_r.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)));
+            if !adjacent {
+                let dests: Vec<i32> = regs.iter().map(|_| reg.alloc()).collect();
+                for (&r, &d) in regs.iter().zip(&dests) {
+                    em.emit(Instruction::new(Opcode::Copy, r, d, 0));
                 }
+                pat_r = dests.first().copied().unwrap_or(pat_r);
             }
             let dest = reg.alloc();
             let p4 = P4::Str(format!("{name}({arity})"));

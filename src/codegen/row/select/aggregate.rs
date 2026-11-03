@@ -74,9 +74,11 @@ pub(super) fn find_index_only_count(
     // siblings, walked via `IdxNext` + a leading-column
     // recheck instead of assuming a single hit means count 1.
     let index_position = schema.indexes.iter().position(|idx| {
-        idx.columns
-            .first()
-            .is_some_and(|c| c.name.eq_ignore_ascii_case(where_col_name))
+        !idx.has_desc()
+            && idx
+                .columns
+                .first()
+                .is_some_and(|c| c.name.eq_ignore_ascii_case(where_col_name))
     })?;
     Some(IndexOnlyCount::IndexProbe { index_position })
 }
@@ -262,9 +264,11 @@ pub(super) fn find_index_only_sum(select: &Select, schema: &TableSchema) -> Opti
         return None;
     }
     schema.indexes.iter().position(|idx| {
-        idx.columns
-            .first()
-            .is_some_and(|c| c.name.eq_ignore_ascii_case(col_name))
+        !idx.has_desc()
+            && idx
+                .columns
+                .first()
+                .is_some_and(|c| c.name.eq_ignore_ascii_case(col_name))
     })
 }
 

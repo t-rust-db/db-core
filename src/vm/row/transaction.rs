@@ -31,6 +31,14 @@ pub trait Transaction {
         Ok(())
     }
 
+    /// The pager's current journal mode (`JOURNAL_MODE_DELETE`/`_WAL`), so
+    /// `PRAGMA journal_mode = <current>` inside a transaction can be a
+    /// no-op like sqlite3's; `None` (no pager) refuses any assignment
+    /// there (#945).
+    fn journal_mode(&self) -> Option<i32> {
+        None
+    }
+
     /// `PRAGMA synchronous` query form: the pager's current level
     /// (`SYNCHRONOUS_OFF`/`NORMAL`/`FULL`); `None` reports `FULL` (#134).
     fn synchronous(&self) -> Option<i32> {

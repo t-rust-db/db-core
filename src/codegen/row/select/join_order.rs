@@ -102,7 +102,8 @@ fn is_seekable_equality(schema: &TableSchema, expr: &Expr) -> bool {
             return true;
         }
         schema.indexes.iter().any(|idx| {
-            idx.unique
+            !idx.has_desc()
+                && idx.unique
                 && idx.columns.len() == 1
                 && idx
                     .columns

@@ -32,6 +32,25 @@ pub trait SchemaStorage {
         column_indices: &[usize],
     ) -> Result<(), SchemaStorageError>;
 
+    /// [`Self::populate_index`] for an index with `DESC` key columns
+    /// (`desc[i]` marks key column `i`, #945). The default refuses a
+    /// `DESC` index, so a storage written before #945 never builds one
+    /// out of order; with no `DESC` column it is `populate_index`.
+    fn populate_index_ordered(
+        &mut self,
+        index_root: u32,
+        table_root: u32,
+        column_indices: &[usize],
+        desc: &[bool],
+    ) -> Result<(), SchemaStorageError> {
+        if desc.iter().any(|d| *d) {
+            return Err(SchemaStorageError(
+                "this storage cannot build an index with DESC key columns".to_string(),
+            ));
+        }
+        self.populate_index(index_root, table_root, column_indices)
+    }
+
     /// Frees every page of the b-tree rooted at `root` (`DROP TABLE`/
     /// `DROP INDEX`'s storage reclamation).
     fn free_root(&mut self, root: u32) -> Result<(), SchemaStorageError>;

@@ -81,11 +81,11 @@ fn ordered_column(expr: &Expr, select: &Select, schema: &TableSchema) -> Option<
         Some(ResultColumn::Expr { expr, .. }) => bare_column(expr, schema),
         _ => None,
     };
+    if let Some(n) = order_by::term_ordinal(expr) {
+        let position = usize::try_from(n).ok()?.checked_sub(1)?;
+        return result_expr(select.columns.get(position));
+    }
     match &expr.kind {
-        ExprKind::Literal(Literal::Integer(n)) => {
-            let position = usize::try_from(*n).ok()?.checked_sub(1)?;
-            result_expr(select.columns.get(position))
-        }
         ExprKind::Column {
             table: None, name, ..
         } => {
@@ -109,19 +109,20 @@ fn named_output(
     visible: usize,
     star: usize,
 ) -> Result<Option<usize>, CodegenError> {
-    match &order_by::strip_collate(expr).kind {
-        ExprKind::Literal(Literal::Integer(n)) => {
-            let index = usize::try_from(*n)
-                .ok()
-                .and_then(|k| k.checked_sub(1))
-                .filter(|k| *k < visible)
-                .ok_or_else(|| CodegenError::Unsupported {
-                    reason: format!(
-                        "ORDER BY position {n} is out of range for a {visible}-column result set"
-                    ),
-                })?;
-            Ok(Some(index))
-        }
+    let stripped = order_by::strip_collate(expr);
+    if let Some(n) = order_by::term_ordinal(stripped) {
+        let index = usize::try_from(n)
+            .ok()
+            .and_then(|k| k.checked_sub(1))
+            .filter(|k| *k < visible)
+            .ok_or_else(|| CodegenError::Unsupported {
+                reason: format!(
+                    "ORDER BY position {n} is out of range for a {visible}-column result set"
+                ),
+            })?;
+        return Ok(Some(index));
+    }
+    match &stripped.kind {
         ExprKind::Column {
             table: None, name, ..
         } => {
