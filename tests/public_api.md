@@ -871,6 +871,7 @@ impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapte
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::engine::row::adapter::PagerTransaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -6467,6 +6468,7 @@ pub fn db_core::storage::row::pager::Pager::checkpoint_wal(&mut self, db_core::s
 pub fn db_core::storage::row::pager::Pager::deallocate_page(&mut self, u32) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::flush(&mut self) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::get_page_mut(&mut self, u32) -> core::result::Result<&mut alloc::vec::Vec<u8>, db_core::storage::row::pager::PagerError>
+pub fn db_core::storage::row::pager::Pager::journal_mode(&self) -> db_core::storage::row::header::JournalMode
 pub fn db_core::storage::row::pager::Pager::open<V: db_core::storage::row::vfs::Vfs + core::clone::Clone + 'static>(&V, &std::path::Path, u32) -> core::result::Result<Self, db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::rollback(&mut self) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
 pub fn db_core::storage::row::pager::Pager::set_journal_mode(&mut self, db_core::storage::row::header::JournalMode) -> core::result::Result<(), db_core::storage::row::pager::PagerError>
@@ -10417,6 +10419,7 @@ pub trait db_core::vm::row::transaction::Transaction
 pub fn db_core::vm::row::transaction::Transaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::vm::row::transaction::Transaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::vm::row::transaction::Transaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::transaction::Transaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -10427,6 +10430,7 @@ impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapte
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::engine::row::adapter::PagerTransaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -11834,6 +11838,7 @@ pub trait db_core::vm::row::Transaction
 pub fn db_core::vm::row::Transaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::vm::row::Transaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::vm::row::Transaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::vm::row::Transaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
@@ -11844,6 +11849,7 @@ impl db_core::vm::row::transaction::Transaction for db_core::engine::row::adapte
 pub fn db_core::engine::row::adapter::PagerTransaction::begin(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::commit(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::integrity_check(&mut self, bool) -> core::option::Option<core::result::Result<alloc::vec::Vec<alloc::string::String>, db_core::vm::row::transaction::TransactionError>>
+pub fn db_core::engine::row::adapter::PagerTransaction::journal_mode(&self) -> core::option::Option<i32>
 pub fn db_core::engine::row::adapter::PagerTransaction::rollback(&mut self) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_journal_mode(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>
 pub fn db_core::engine::row::adapter::PagerTransaction::set_synchronous(&mut self, i32) -> core::result::Result<(), db_core::vm::row::transaction::TransactionError>

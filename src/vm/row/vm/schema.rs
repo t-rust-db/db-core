@@ -38,8 +38,24 @@ pub(super) fn step_schema(vm: &mut Vm, instr: &Instruction) -> Result<Step, Exec
             Ok(Step::Next)
         }
         Opcode::SetJournalMode => {
+            // sqlite3 only refuses a mode *change* inside a transaction;
+            // re-asserting the current mode is a no-op that still answers
+            // with it (`BEGIN; PRAGMA journal_mode = DELETE;` -> `delete`,
+            // #945). The pager reports its current mode; without one we
+            // cannot tell, so the refusal stays.
             if !vm.autocommit {
-                return Err(ExecError::JournalModeChangeDuringTransaction);
+                let same =
+                    vm.transaction_hook.as_ref().and_then(|h| h.journal_mode()) == Some(instr.p1);
+                if !same {
+                    return Err(ExecError::JournalModeChangeDuringTransaction);
+                }
+                let mode = if instr.p1 == JOURNAL_MODE_WAL {
+                    "wal"
+                } else {
+                    "delete"
+                };
+                vm.emit_row(vec![Value::Text(mode.into())]);
+                return Ok(Step::Next);
             }
             // The attached pager (via the transaction hook) switches its
             // on-disk journal mode; with no hook this is the no-op

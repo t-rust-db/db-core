@@ -22,7 +22,8 @@ use crate::vm::row::schema_storage::{SchemaStorage, SchemaStorageError};
 use crate::vm::row::transaction::{Transaction, TransactionError};
 use crate::vm::row::{
     compare, AnalyzeTarget, Cursor, SortKeyColumn, CHECKPOINT_FULL, CHECKPOINT_RESTART,
-    CHECKPOINT_TRUNCATE, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL, SYNCHRONOUS_OFF,
+    CHECKPOINT_TRUNCATE, JOURNAL_MODE_DELETE, JOURNAL_MODE_WAL, SYNCHRONOUS_NORMAL,
+    SYNCHRONOUS_OFF,
 };
 
 use crate::storage::row::btree::{self, IndexCursor, IndexRow, Payload, TableCursor};
@@ -914,6 +915,14 @@ impl Transaction for PagerTransaction {
             .map_err(|e| TransactionError(storage_err(e)))
     }
 
+    fn journal_mode(&self) -> Option<i32> {
+        let writer = self.writer.as_ref()?;
+        Some(match writer.borrow().journal_mode() {
+            JournalMode::Wal => JOURNAL_MODE_WAL,
+            JournalMode::Legacy => JOURNAL_MODE_DELETE,
+        })
+    }
+
     fn synchronous(&self) -> Option<i32> {
         let writer = self.writer.as_ref()?;
         Some(writer.borrow().synchronous() as i32)
@@ -1508,6 +1517,28 @@ mod tests {
 
         let rows = e.run_query("PRAGMA integrity_check").unwrap().rows;
         assert_eq!(rows[0][0].to_string(), "ok");
+    }
+
+    /// #945: inside a transaction `PRAGMA journal_mode = <current>` is a
+    /// no-op that answers with the mode (sqlite3); a real change errors.
+    #[test]
+    fn journal_mode_in_a_transaction_only_refuses_a_change() {
+        use crate::engine::{row::RowEngine, Engine};
+
+        let db = TempDb::new("adapter-jm-txn");
+        let mut e = RowEngine::open(db.path()).unwrap();
+        e.run_query("CREATE TABLE jm(a INTEGER)").unwrap();
+        e.run_query("BEGIN; INSERT INTO jm VALUES (1)").unwrap();
+        let rows = e.run_query("PRAGMA journal_mode = DELETE").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "delete");
+        assert!(e.run_query("PRAGMA journal_mode = WAL").is_err());
+        e.run_query("COMMIT").unwrap();
+        e.run_query("PRAGMA journal_mode = WAL").unwrap();
+        e.run_query("BEGIN").unwrap();
+        let rows = e.run_query("PRAGMA journal_mode = WAL").unwrap().rows;
+        assert_eq!(rows[0][0].to_string(), "wal");
+        assert!(e.run_query("PRAGMA journal_mode = DELETE").is_err());
+        e.run_query("ROLLBACK").unwrap();
     }
 
     /// `BtreeSchemaStorage::create_index_root`/`populate_index`/
