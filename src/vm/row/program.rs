@@ -79,7 +79,7 @@ impl Opcode {
     /// verbatim (#134). Excludes sqlite-rs's own additions (`AutoCommit`,
     /// `SetJournalMode`, `Synchronous`, `WalAutocheckpoint`, `IntegrityCheck`, the index-scan
     /// and DDL families), which the harvested set does not name.
-    pub const ALL: [Opcode; 69] = [
+    pub const ALL: [Opcode; 71] = [
         Opcode::Init,
         Opcode::Goto,
         Opcode::Once,
@@ -92,6 +92,8 @@ impl Opcode {
         Opcode::IfNotZero,
         Opcode::IfPos,
         Opcode::DecrJumpZero,
+        Opcode::Compare,
+        Opcode::Jump,
         Opcode::IsNull,
         Opcode::NotNull,
         Opcode::MustBeInt,
@@ -201,6 +203,14 @@ pub enum Opcode {
     IfPos,
     /// Decrements register `p1`; jumps to `p2` if the result is zero.
     DecrJumpZero,
+    /// Compares the key ranges `r[p1..p1+p3]` and `r[p2..p2+p3]` column
+    /// by column under the collations in `P4::SeekKey` (NULL equals
+    /// NULL), storing the ordering for the next [`Opcode::Jump`].
+    Compare,
+    /// Jumps to `p1`, `p2` or `p3` as the preceding [`Opcode::Compare`]
+    /// found its first range less than, equal to, or greater than the
+    /// second.
+    Jump,
     /// Jumps to `p2` if register `p1` is NULL.
     IsNull,
     /// Jumps to `p2` if register `p1` is not NULL.
@@ -845,7 +855,8 @@ impl Opcode {
             | Opcode::Synchronous
             | Opcode::Checkpoint
             | Opcode::WalAutocheckpoint
-            | Opcode::AggReset => NONE,
+            | Opcode::AggReset
+            | Opcode::Jump => NONE,
             Opcode::Gosub
             | Opcode::Return
             | Opcode::IfNot
@@ -934,7 +945,7 @@ impl Opcode {
             | Opcode::ShiftLeft
             | Opcode::ShiftRight
             | Opcode::Concat => P1_P2_P3,
-            Opcode::Not | Opcode::BitNot | Opcode::Copy => P1_P2,
+            Opcode::Not | Opcode::BitNot | Opcode::Copy | Opcode::Compare => P1_P2,
 
             // Functions/aggregates: `p2` is the first argument register;
             // `AggStep`'s `p1` is an aggregate slot, `HashAggStep`'s `p3` a

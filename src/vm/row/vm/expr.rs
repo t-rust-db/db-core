@@ -9,6 +9,25 @@ use super::*;
 #[inline(always)]
 pub(super) fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
     match instr.opcode {
+        Opcode::Compare => {
+            let collations = seek_key_collations("Compare", &instr.p4)?;
+            let n = Vm::bounded_count("Compare", instr.p3)?;
+            let mut ord = Ordering::Equal;
+            for i in 0..n.min(collations.len()) {
+                let off = i32::try_from(i).unwrap_or(i32::MAX);
+                let (Some(a), Some(b)) = (instr.p1.checked_add(off), instr.p2.checked_add(off))
+                else {
+                    break;
+                };
+                let collation = collations.get(i).copied().unwrap_or(Collation::Binary);
+                ord = compare(vm.register(a)?, vm.register(b)?, collation);
+                if ord != Ordering::Equal {
+                    break;
+                }
+            }
+            vm.last_compare = ord;
+            Ok(Step::Next)
+        }
         Opcode::Eq => compare_jump(vm, instr, |o| o == Ordering::Equal),
         Opcode::Ge => compare_jump(vm, instr, |o| o != Ordering::Less),
         Opcode::Gt => compare_jump(vm, instr, |o| o == Ordering::Greater),

@@ -54,6 +54,11 @@ pub(super) fn step_control(vm: &mut Vm, pc: usize, instr: &Instruction) -> Resul
                 message,
             })
         }
+        Opcode::Jump => Ok(Step::Jump(to_pc(match vm.last_compare {
+            Ordering::Less => instr.p1,
+            Ordering::Equal => instr.p2,
+            Ordering::Greater => instr.p3,
+        }))),
         Opcode::IsNull => {
             let jump = matches!(vm.register(instr.p1)?, Value::Null);
             Ok(if jump {

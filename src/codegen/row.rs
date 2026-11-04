@@ -56,6 +56,7 @@ pub use transaction::{compile_begin, compile_commit, compile_rollback};
 
 use std::collections::HashMap;
 
+use crate::value::Collation;
 use crate::vm::row::{Instruction, Opcode, Program, P4};
 
 /// A not-yet-resolved jump target, placed later via [`Emitter::place`].
@@ -205,12 +206,49 @@ pub(crate) struct Emitter {
     /// `new_label`); `None` until `place`d.
     labels: Vec<Option<usize>>,
     patches: Vec<(usize, Label)>,
+    /// `Jump`'s `P1`/`P3` targets (its `P2` goes through `patches`).
+    patches_p1: Vec<(usize, Label)>,
+    patches_p3: Vec<(usize, Label)>,
     next_label: usize,
+    /// #950: when on, literal operands are loaded once in a prologue
+    /// block placed after the body (`Init` → loads → `Goto body`).
+    hoist: bool,
+    consts: Vec<Instruction>,
+    const_regs: std::collections::HashMap<String, i32>,
 }
 
 impl Emitter {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Turns on constant hoisting (see [`Emitter::hoisted_const`]).
+    pub(crate) fn enable_const_hoisting(&mut self) {
+        self.hoist = true;
+    }
+
+    /// Sets hoisting on/off, returning the previous setting.
+    pub(crate) fn set_const_hoisting(&mut self, on: bool) -> bool {
+        std::mem::replace(&mut self.hoist, on)
+    }
+
+    pub(crate) fn hoisting(&self) -> bool {
+        self.hoist
+    }
+
+    /// Returns a register holding the constant `load` (its `p2` is
+    /// overwritten), queueing the load for the prologue. Identical
+    /// constants share one register; the caller must only read it.
+    pub(crate) fn hoisted_const(&mut self, reg: &mut RegAlloc, mut load: Instruction) -> i32 {
+        let key = format!("{:?}/{}/{:?}", load.opcode, load.p1, load.p4);
+        if let Some(r) = self.const_regs.get(&key) {
+            return *r;
+        }
+        let r = reg.alloc();
+        load.p2 = r;
+        self.consts.push(load);
+        self.const_regs.insert(key, r);
+        r
     }
 
     pub(crate) fn emit(&mut self, instr: Instruction) -> usize {
@@ -239,6 +277,14 @@ impl Emitter {
         }
     }
 
+    pub(crate) fn patch_p1(&mut self, addr: usize, label: Label) {
+        self.patches_p1.push((addr, label));
+    }
+
+    pub(crate) fn patch_p3(&mut self, addr: usize, label: Label) {
+        self.patches_p3.push((addr, label));
+    }
+
     pub(crate) fn patch_p2(&mut self, addr: usize, label: Label) {
         self.patches.push((addr, label));
     }
@@ -257,6 +303,7 @@ impl Emitter {
     /// Resolves every pending patch against its placed label's address,
     /// consuming the emitter into a finished [`Program`].
     pub(crate) fn finish(mut self) -> Program {
+        self.append_const_prologue();
         for (addr, label) in &self.patches {
             let Some(resolved) = self.labels.get(label.0).copied().flatten() else {
                 continue; // Every patched label is always placed by construction; skip defensively rather than panic.
@@ -268,7 +315,50 @@ impl Emitter {
                 instr.p2 = target;
             }
         }
+        let slots = [(&self.patches_p1, 1), (&self.patches_p3, 3)];
+        for (patches, slot) in slots {
+            for (addr, label) in patches {
+                let resolved = self.labels.get(label.0).copied().flatten();
+                let (Some(resolved), Some(instr)) = (resolved, self.instructions.get_mut(*addr))
+                else {
+                    continue;
+                };
+                if let Ok(target) = i32::try_from(resolved) {
+                    if slot == 1 {
+                        instr.p1 = target;
+                    } else {
+                        instr.p3 = target;
+                    }
+                }
+            }
+        }
         Program::new(self.instructions)
+    }
+
+    /// Appends the queued constant loads after the body, then a `Goto`
+    /// back to where `Init` originally jumped, and redirects `Init`.
+    fn append_const_prologue(&mut self) {
+        if self.consts.is_empty() {
+            return;
+        }
+        let Some(init) = self.instructions.first() else {
+            return;
+        };
+        if init.opcode != Opcode::Init {
+            return;
+        }
+        let Some(label) = self.patches.iter().find(|(a, _)| *a == 0).map(|(_, l)| *l) else {
+            return;
+        };
+        let start = self.instructions.len();
+        let loads = std::mem::take(&mut self.consts);
+        self.instructions.extend(loads);
+        self.goto(label);
+        // Init now targets the prologue; the Goto carries the old label.
+        self.patches.retain(|(a, _)| *a != 0);
+        if let (Some(init), Ok(t)) = (self.instructions.first_mut(), i32::try_from(start)) {
+            init.p2 = t;
+        }
     }
 
     /// Emits an unconditional jump to `label`, patched once placed.
@@ -751,6 +841,72 @@ impl Scope {
 }
 
 pub use crate::schema::{IndexSchema, IndexedColumn, TableSchema, ViewSchema};
+
+/// GROUP BY group-change detection in sqlite3's shape (#950): one
+/// `Compare` of the current key range against the previous one, then a
+/// `Jump` to `boundary` when they differ and `same` when they match
+/// (NULLs group together). `cur` is copied into a contiguous block first
+/// when it is not one already; `prev` is allocated contiguously by every
+/// caller.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_group_boundary_check(
+    em: &mut Emitter,
+    reg: &mut RegAlloc,
+    cur: &[i32],
+    prev: &[i32],
+    p4s: &[P4],
+    boundary: Label,
+    same: Label,
+) -> Result<(), CodegenError> {
+    let contiguous = |regs: &[i32]| {
+        regs.windows(2)
+            .all(|w| matches!(w, [a, b] if *b == a.wrapping_add(1)))
+    };
+    let (Some(&cur_first), Some(&prev_first)) = (cur.first(), prev.first()) else {
+        em.goto(same);
+        return Ok(());
+    };
+    if !contiguous(prev) {
+        return Err(CodegenError::Internal {
+            reason: "GROUP BY previous-key registers are not contiguous".to_string(),
+        });
+    }
+    let n = i32::try_from(cur.len()).map_err(|_| CodegenError::Internal {
+        reason: "GROUP BY key count does not fit in P3".to_string(),
+    })?;
+    let cur_first = if contiguous(cur) {
+        cur_first
+    } else {
+        let block = reg.alloc();
+        for _ in 1..cur.len() {
+            reg.alloc();
+        }
+        for (i, &src) in cur.iter().enumerate() {
+            let dst = block.saturating_add(i32::try_from(i).unwrap_or(0));
+            em.emit(Instruction::new(Opcode::Copy, src, dst, 0));
+        }
+        block
+    };
+    let collations: Vec<Collation> = p4s
+        .iter()
+        .map(|p4| match p4 {
+            P4::CollSeq { collation, .. } => *collation,
+            _ => Collation::Binary,
+        })
+        .collect();
+    em.emit(Instruction::with_p4(
+        Opcode::Compare,
+        cur_first,
+        prev_first,
+        n,
+        P4::SeekKey(collations),
+    ));
+    let jump = em.emit(Instruction::new(Opcode::Jump, 0, 0, 0));
+    em.patch_p1(jump, boundary);
+    em.patch_p2(jump, same);
+    em.patch_p3(jump, boundary);
+    Ok(())
+}
 
 #[cfg(test)]
 mod invariant_tests {
