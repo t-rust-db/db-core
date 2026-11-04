@@ -192,6 +192,12 @@ pub fn decode_column_full(
         PhysicalType::Boolean => rg
             .read_boolean_column(index)
             .map(|col| Decoded::Column(bool_column(col))),
+        // A legacy INT96 timestamp is epoch microseconds, like a
+        // TIMESTAMP_MICROS column; it used to fall through to the string
+        // reader and fail with "unexpected end of page data".
+        PhysicalType::Int96 => rg
+            .read_timestamp_column(index)
+            .map(|col| Decoded::Column(int_column(col))),
         // #457: a `PLAIN_DICTIONARY`-encoded string column materializes
         // as `Column::Dict` (one dict entry per distinct value, one
         // `u32` code per row) instead of decoding every row to its own
@@ -297,6 +303,20 @@ pub fn decode_column_at(
         PhysicalType::Boolean => rg
             .read_boolean_column_at(index, positions)
             .map(|col| Decoded::Column(bool_column(col))),
+        // INT96 has no positional reader: decode the chunk, keep `positions`.
+        PhysicalType::Int96 => {
+            let all = rg.read_timestamp_column(index)?;
+            positions
+                .iter()
+                .map(|&p| {
+                    usize::try_from(p)
+                        .ok()
+                        .and_then(|i| all.get(i).copied())
+                        .ok_or(FileError::RowPositionOutOfRange(p))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(|col| Decoded::Column(int_column(col)))
+        }
         _ => match rg.read_string_column_dictionary_at(index, positions)? {
             Some((dict, codes)) => Ok(Decoded::Column(dict_column(dict, codes))),
             None => rg

@@ -124,4 +124,29 @@ duckdb -c "COPY (SELECT
   FROM range(0, 5000) t(i) ORDER BY id)
   TO '$DIR/blobs.parquet' (FORMAT PARQUET, COMPRESSION 'snappy', ROW_GROUP_SIZE 2048);"
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet, $DIR/big_ints.parquet, $DIR/blobs.parquet"
+# Legacy INT96 timestamps, as Spark/Impala and pyarrow's
+# use_deprecated_int96_timestamps write them (DuckDB cannot write INT96):
+# an id to filter on (two-phase load), a repeated value (pyarrow's default
+# writer dictionary-encodes the column), a NULL and a pre-1970 instant.
+uv run --quiet --with pyarrow python - "$DIR/int96_events.parquet" <<'PY'
+import sys
+from datetime import datetime
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+ts = [
+    datetime(2026, 1, 5, 10, 30, 0),
+    datetime(2026, 1, 5, 23, 59, 59, 999999),
+    None,
+    datetime(1969, 12, 31, 12, 0, 0),
+    datetime(2026, 1, 5, 10, 30, 0),
+    datetime(2026, 2, 1, 0, 0, 0, 1),
+]
+table = pa.table({
+    "id": pa.array(range(len(ts)), pa.int64()),
+    "ts": pa.array(ts, pa.timestamp("us")),
+})
+pq.write_table(table, sys.argv[1], use_deprecated_int96_timestamps=True, compression="snappy")
+PY
+
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet, $DIR/big_ints.parquet, $DIR/blobs.parquet, $DIR/int96_events.parquet"

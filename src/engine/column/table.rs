@@ -584,6 +584,15 @@ pub fn read_snapshot_where(
     super::merge_segments(&segments, columns)
 }
 
+/// A table directory's TIMESTAMP columns and their units per second, for
+/// [`resolve_timestamps`](super::resolve_timestamps).
+pub fn snapshot_timestamp_columns(snapshot: &Snapshot) -> Result<Vec<(String, i64)>, EngineError> {
+    snapshot
+        .schema()
+        .map(|schema| schema_timestamps(&schema))
+        .map_err(open_error)
+}
+
 /// The schema's TIMESTAMP columns and their units per second, for
 /// [`timestamp_literals`] (#679).
 fn schema_timestamps(schema: &[ColumnSpec]) -> Vec<(String, i64)> {

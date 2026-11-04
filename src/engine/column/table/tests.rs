@@ -300,6 +300,30 @@ fn a_timestamp_column_compares_with_a_quoted_timestamp() {
     assert!(answer(&w, "SELECT id FROM logs WHERE ts < 'soon'").is_err());
 }
 
+/// `snapshot_timestamp_columns`, the table-directory side of the public
+/// `resolve_timestamps` hook: the schema's TIMESTAMP columns with their
+/// units per second, and nothing for any other type.
+#[test]
+fn snapshot_timestamp_columns_lists_the_schema_s_timestamp_columns() {
+    let t = TempTable::new();
+    let w = t.writer_with(TableOptions {
+        schema: Some(vec![
+            ColumnSpec::new("id", ColumnType::Int64, false),
+            ColumnSpec::new("us", ColumnType::TimestampMicros, true),
+            ColumnSpec::new("ns", ColumnType::TimestampNanos, true),
+            ColumnSpec::new("msg", ColumnType::Utf8, true),
+        ]),
+        ..TableOptions::default()
+    });
+    assert_eq!(
+        snapshot_timestamp_columns(&w.snapshot().unwrap()).unwrap(),
+        [
+            ("us".to_string(), 1_000_000),
+            ("ns".to_string(), 1_000_000_000)
+        ]
+    );
+}
+
 /// #868: a `Binary` column reads as blobs: `x'..'` literals match by
 /// bytes, a blob never equals text, `hex`/`unhex` convert, and the answers
 /// are the same from pages and after a flush.

@@ -12,6 +12,9 @@
 //!   timestamp column (`tools/gen_parquet_fixtures.sh`).
 //! - `tests/fixtures/parquet/production.parquet` (table `production`):
 //!   ids 1..=5000, four regions, amounts.
+//! - `tests/fixtures/parquet/int96_events.parquet` (table `int96_events`):
+//!   a legacy INT96 timestamp column, dictionary-encoded by pyarrow, with a
+//!   NULL and a pre-1970 instant (`tools/gen_parquet_fixtures.sh`).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -22,6 +25,7 @@ use db_core::engine::{Cell, Engine, ErrorKind};
 
 const NULL_TYPES: &str = "tests/fixtures/parquet/null_types.parquet";
 const PRODUCTION: &str = "tests/fixtures/parquet/production.parquet";
+const INT96_EVENTS: &str = "tests/fixtures/parquet/int96_events.parquet";
 
 fn query(file: &str, sql: &str) -> Result<Vec<Vec<Cell>>, db_core::engine::EngineError> {
     let mut engine = BatchEngine::open(Path::new(file)).expect("open fixture");
@@ -232,6 +236,102 @@ fn a_timestamp_column_compares_with_a_quoted_timestamp() {
         "SELECT count(*) FROM null_types WHERE ts > 'not a time'",
         None,
     );
+}
+
+/// A legacy INT96 timestamp column reads as epoch microseconds, like a
+/// TIMESTAMP_MICROS column: whole (eager load) and at the rows a filter
+/// keeps (the two-phase load's positional decode), compared with a quoted
+/// timestamp, under `date_trunc` and in aggregates. It used to fail with
+/// "unexpected end of page data" (the string reader). Expectations are
+/// DuckDB's `epoch_us` of the same values.
+#[test]
+fn a_legacy_int96_timestamp_column_reads_as_a_timestamp() {
+    let ts = |us: i64| Cell::Int(us);
+    assert_eq!(
+        rows(INT96_EVENTS, "SELECT ts FROM int96_events ORDER BY id"),
+        [
+            vec![ts(1_767_609_000_000_000)],
+            vec![ts(1_767_657_599_999_999)],
+            vec![Cell::Null],
+            vec![ts(-43_200_000_000)],
+            vec![ts(1_767_609_000_000_000)],
+            vec![ts(1_769_904_000_000_001)],
+        ]
+    );
+    assert_eq!(
+        rows(INT96_EVENTS, "SELECT ts FROM int96_events WHERE id >= 3"),
+        [
+            vec![ts(-43_200_000_000)],
+            vec![ts(1_767_609_000_000_000)],
+            vec![ts(1_769_904_000_000_001)],
+        ]
+    );
+    assert_eq!(
+        ids(
+            INT96_EVENTS,
+            "SELECT id FROM int96_events WHERE ts >= '2026-01-05' ORDER BY id"
+        ),
+        [0, 1, 4, 5]
+    );
+    assert_eq!(
+        rows(
+            INT96_EVENTS,
+            "SELECT date_trunc('day', ts) AS d, count(*) FROM int96_events GROUP BY 1 ORDER BY 1"
+        ),
+        [
+            vec![ts(-86_400_000_000), Cell::Int(1)],
+            vec![ts(1_767_571_200_000_000), Cell::Int(3)],
+            vec![ts(1_769_904_000_000_000), Cell::Int(1)],
+            vec![Cell::Null, Cell::Int(1)],
+        ]
+    );
+    assert_eq!(
+        rows(
+            INT96_EVENTS,
+            "SELECT min(ts), max(ts), count(ts) FROM int96_events"
+        ),
+        [vec![
+            ts(-43_200_000_000),
+            ts(1_769_904_000_000_001),
+            Cell::Int(5)
+        ]]
+    );
+}
+
+/// The public hook for a caller that parses and plans a query itself
+/// (column-rs): `resolve_timestamps` with a file's
+/// `parquet_timestamp_columns` turns a quoted timestamp into the column's
+/// integer units and `date_trunc` into the dialect's `__date_trunc`, as
+/// this engine does to its own parsed queries.
+#[test]
+fn resolve_timestamps_rewrites_a_query_parsed_outside_the_engine() {
+    use db_core::engine::column::{parquet_timestamp_columns, resolve_timestamps};
+    use db_core::storage::parquet::ParquetFile;
+
+    let bytes = std::fs::read(INT96_EVENTS).unwrap();
+    let file = ParquetFile::open(&bytes).unwrap();
+    let timestamps = parquet_timestamp_columns(&file);
+    assert_eq!(timestamps, [("ts".to_string(), 1_000_000)]);
+
+    let mut select = db_core::parser::parse(
+        "SELECT date_trunc('day', ts) FROM int96_events WHERE ts >= '2026-01-05'",
+    )
+    .unwrap();
+    resolve_timestamps(&mut select, &timestamps).unwrap();
+    let sql = select.to_string();
+    assert!(sql.contains("__date_trunc('day', ts, 1000000)"), "{sql}");
+    assert!(sql.contains("ts >= 1767571200000000"), "{sql}");
+
+    // A query without TIMESTAMP columns is left alone; a bad literal or
+    // `date_trunc` over a column that is no TIMESTAMP is an error.
+    let mut plain = db_core::parser::parse("SELECT id FROM t WHERE id > 1").unwrap();
+    let before = plain.to_string();
+    resolve_timestamps(&mut plain, &timestamps).unwrap();
+    assert_eq!(plain.to_string(), before);
+    let mut bad = db_core::parser::parse("SELECT id FROM t WHERE ts > 'soon'").unwrap();
+    assert!(resolve_timestamps(&mut bad, &timestamps).is_err());
+    let mut not_ts = db_core::parser::parse("SELECT date_trunc('day', id) FROM t").unwrap();
+    assert!(resolve_timestamps(&mut not_ts, &timestamps).is_err());
 }
 
 /// Step 6: LIKE is case-sensitive, as in DuckDB; ILIKE is the
