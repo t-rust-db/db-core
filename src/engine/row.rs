@@ -32,7 +32,7 @@ use crate::storage::row::btree::TableCursor;
 use crate::storage::row::header::{DatabaseHeader, HEADER_LEN};
 use crate::storage::row::pager::Pager;
 use crate::storage::row::schema::read_schema_and_views;
-use crate::storage::row::vfs::{PageSource, UnixVfs, Vfs};
+use crate::storage::row::vfs::{AnyVfsFile, PageSource, UnixVfs, Vfs};
 use crate::value::Value;
 use crate::vm::row::{execute, explain, ConnectionState, Opcode, Program, Vm, OPFLAG_NCHANGE};
 
@@ -734,17 +734,24 @@ impl RowEngine {
     }
 }
 
+/// Reads and parses the 100-byte database header, looping over short
+/// reads (#1003): a `pread` that stops early must not leave the tail of
+/// the header zeroed.
+fn read_db_header(file: &AnyVfsFile) -> Result<DatabaseHeader, EngineError> {
+    let mut header_buf = [0u8; HEADER_LEN];
+    file.read_full(&mut header_buf, 0)
+        .map_err(|e| EngineError::new(ErrorKind::Open, e))?;
+    DatabaseHeader::parse(&header_buf).map_err(|e| EngineError::new(ErrorKind::Open, e))
+}
+
 impl Engine for RowEngine {
     fn open(path: &Path) -> Result<Self, EngineError> {
         let vfs = UnixVfs;
-        let file = vfs
+        let file: AnyVfsFile = vfs
             .open_read(path)
-            .map_err(|e| EngineError::new(ErrorKind::Open, e))?;
-        let mut header_buf = [0u8; HEADER_LEN];
-        file.read_at(&mut header_buf, 0)
-            .map_err(|e| EngineError::new(ErrorKind::Open, e))?;
-        let header =
-            DatabaseHeader::parse(&header_buf).map_err(|e| EngineError::new(ErrorKind::Open, e))?;
+            .map_err(|e| EngineError::new(ErrorKind::Open, e))?
+            .into();
+        let header = read_db_header(&file)?;
         let pager = Pager::open(&vfs, path, header.page_size)
             .map_err(|e| EngineError::new(ErrorKind::Open, e))?;
         Ok(RowEngine {
@@ -853,6 +860,25 @@ impl Engine for RowEngine {
                     .collect(),
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::read_db_header;
+    use crate::storage::row::btree::test_minimal_db;
+    use crate::storage::row::vfs::{AnyVfsFile, Vfs};
+    use std::path::Path;
+
+    /// #1003: the header is read whole even when every `pread` returns
+    /// only a few bytes.
+    #[test]
+    fn the_header_read_loops_over_short_reads() {
+        let (vfs, expected) = test_minimal_db(4096);
+        vfs.set_max_read(7);
+        let file: AnyVfsFile = vfs.open_read(Path::new("/test.db")).unwrap().into();
+        let header = read_db_header(&file).unwrap();
+        assert_eq!(header.page_size, expected.page_size);
     }
 }
 

@@ -14,15 +14,14 @@ slow-timeout = { period = "300s", terminate-after = 4 }
 #   1. ingest fsyncs directories (7 production sites); Miri only fsyncs regular files
 #   2. column tables are ingest-backed, same directory fsync
 #   3. POSIX byte-range locks: Miri has no fcntl(F_SETLK)
-#   4. POSIX byte-range locks (fcntl F_SETLK) / the lock_probe helper process
+#   4. POSIX byte-range locks (fcntl F_SETLK) / the lock_probe helper process; RowEngine::create takes them too
 #   5. std::fs::copy -> copy_file_range syscall, unsupported by Miri
 #   6. spawns the zstd CLI as an oracle; Miri can't spawn processes
 #   7. file-backed mmap, unsupported by Miri
 #   8. over 20 min under Miri (proptest / fuzz / deep-nesting / large inputs)
 #   9. the test Box::leak()s a fixture line on purpose
 #   10. test asserts one pread fills the buffer; Miri returns short reads (fine, the parquet reader loops)
-#   11. #1003: Miri returns short preads; page/header/journal reads don't loop
-#   12. log(100) == 2.0 relies on the platform libm's log10, as sqlite3's does (#1002)
+#   11. log(100) == 2.0 relies on the platform libm's log10, as sqlite3's does (#1002)
 default-filter = """
 not (
 
@@ -36,6 +35,7 @@ not (
 
   | test(/^storage::row::vfs::shm::/)
 
+  | test(=engine::row::mcdc_vectors::mcdc__engine_row_create_4b191083__v1_a_power_of_two_in_range_is_a_valid_page_size)
   | test(=storage::row::pager::tests::flush_fails_when_another_connection_holds_reserved)
   | test(=storage::row::pager::tests::open_acquires_shared_lock_released_on_drop)
   | test(=storage::row::pager::tests::open_claims_wal_read_lock_when_shm_present_released_on_drop)
@@ -133,35 +133,6 @@ not (
   | test(=storage::column::posix::tests::read_at_is_reusable_across_calls_without_advancing_state)
   | test(=storage::column::posix::tests::read_at_offset_reads_expected_bytes)
   | test(=storage::row::vfs::tests::unix_vfs_contract)
-
-  | test(=engine::row::mcdc_vectors::mcdc__engine_row_create_4b191083__v1_a_power_of_two_in_range_is_a_valid_page_size)
-  | test(=storage::row::btree::index::tests::secondary_index_last_prev_matches_reversed_forward_walk)
-  | test(=storage::row::btree::index::tests::secondary_index_seek_before_every_key_returns_first_row)
-  | test(=storage::row::btree::index::tests::secondary_index_seek_between_keys_matches_full_scan_and_next_continues)
-  | test(=storage::row::btree::index::tests::secondary_index_seek_matches_oracle)
-  | test(=storage::row::btree::index::tests::secondary_index_seek_past_every_key_returns_none)
-  | test(=storage::row::btree::index::tests::secondary_index_walk_matches_oracle_binary_order)
-  | test(=storage::row::btree::index::tests::without_rowid_table_is_readable_as_index_btree)
-  | test(=storage::row::btree::tests::overflow_multi_page_payload_is_byte_identical_to_oracle)
-  | test(=storage::row::btree::tests::overflow_single_page_payload_is_byte_identical_to_oracle)
-  | test(=storage::row::btree::tests::page_one_trap_sqlite_master_root_is_page_one)
-  | test(=storage::row::btree::tests::prev_without_last_errors_rather_than_looking_exhausted)
-  | test(=storage::row::btree::tests::seek_does_not_accumulate_pages_visited_across_calls)
-  | test(=storage::row::btree::tests::table_multipage_full_scan_matches_oracle)
-  | test(=storage::row::btree::tests::table_multipage_last_and_prev_walk_descending_rowid_order)
-  | test(=storage::row::btree::tests::table_multipage_last_matches_full_scans_final_row)
-  | test(=storage::row::btree::tests::table_multipage_seek_binary_search_matches_every_rowid_and_gaps)
-  | test(=storage::row::btree::tests::table_multipage_seek_matches_oracle)
-  | test(=storage::row::btree::tests::table_single_page_full_scan)
-  | test(=storage::row::btree::tests::table_single_page_last_returns_the_only_row)
-  | test(=storage::row::btree::tests::table_single_page_seek_binary_search_on_small_leaf)
-  | test(=storage::row::schema::ddl_reader::tests::fts5_virtual_table_is_graceful_unknown_shadow_tables_are_readable)
-  | test(=storage::row::schema::ddl_reader::tests::non_table_entries_are_excluded)
-  | test(=storage::row::schema::ddl_reader::tests::plain_table_columns_and_rootpage)
-  | test(=storage::row::schema::ddl_reader::tests::read_table_and_view_names_lists_the_one_table_and_no_view)
-  | test(=storage::row::schema::ddl_reader::tests::read_views_over_a_view_free_fixture_is_empty)
-  | test(=storage::row::schema::ddl_reader::tests::rtree_virtual_table_is_graceful_unknown_shadow_tables_are_readable)
-  | test(=storage::row::schema::ddl_reader::tests::strict_marker_detected_and_generated_column_named_correctly)
 
   | test(=functions::math::tests::math_functions_match_sqlite3)
 )

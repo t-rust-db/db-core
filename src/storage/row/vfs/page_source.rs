@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::rc::Rc;
 
-use super::{AnyVfsFile, FileLock, Vfs, VfsError, VfsFile};
+use super::{read_full, AnyVfsFile, FileLock, Vfs, VfsError, VfsFile};
 
 /// Failure reading or writing a whole page through a [`PageSource`].
 #[derive(Debug)]
@@ -110,7 +110,7 @@ fn read_page_at_into(
     let offset = (page_num as u64)
         .saturating_sub(1)
         .saturating_mul(page_size as u64);
-    let n = file.read_at(buf, offset)?;
+    let n = read_full(file, buf, offset)?;
     if n != buf.len() {
         return Err(PageError::ShortRead {
             page_num,
@@ -280,6 +280,22 @@ mod tests {
     use super::*;
     use crate::storage::row::vfs::MemoryVfs;
     use std::path::Path;
+
+    /// #1003: a `pread` that keeps returning short still yields the whole
+    /// page; only end of file is a short read.
+    #[test]
+    fn a_page_read_loops_over_short_reads() {
+        let mut vfs = MemoryVfs::new();
+        let pages: Vec<u8> = (0..32u8).collect();
+        vfs.insert("/db", pages.clone());
+        vfs.set_max_read(5);
+        let source = VfsPageSource::open(&vfs, Path::new("/db"), 16).unwrap();
+        assert_eq!(&*source.read_page(2).unwrap(), &pages[16..]);
+        assert!(matches!(
+            source.read_page(3),
+            Err(PageError::ShortRead { got: 0, .. })
+        ));
+    }
 
     #[test]
     fn page_zero_is_rejected() {
