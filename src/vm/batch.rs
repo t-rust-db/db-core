@@ -326,7 +326,7 @@ pub(crate) fn decimal_to_f64(unscaled: i128, scale: u8) -> f64 {
         reason = "a decimal leaves exactness only where a float result is asked for"
     )]
     let x = unscaled as f64;
-    x / 10_f64.powi(i32::from(scale))
+    x / crate::coerce::pow10(u32::from(scale))
 }
 
 /// `a` against `b`, two decimals, exactly: the one with fewer digits after

@@ -21,7 +21,7 @@ slow-timeout = { period = "300s", terminate-after = 4 }
 #   8. over 20 min under Miri (proptest / fuzz / deep-nesting / large inputs)
 #   9. the test Box::leak()s a fixture line on purpose
 #   10. test asserts one pread fills the buffer; Miri returns short reads (fine, the parquet reader loops)
-#   11. #1002: decimal->f64 / log depend on powi/libm exactness
+#   11. log(100) == 2.0 relies on the platform libm's log10, as sqlite3's does (#1002)
 default-filter = """
 not (
 
@@ -134,15 +134,7 @@ not (
   | test(=storage::column::posix::tests::read_at_offset_reads_expected_bytes)
   | test(=storage::row::vfs::tests::unix_vfs_contract)
 
-  | test(=codegen::batch::tests::decimal_sum_projection_keeps_its_scale)
   | test(=functions::math::tests::math_functions_match_sqlite3)
-  | test(=storage::parquet::decimal::tests::to_f64_matches_unscaled_divided_by_scale)
-  | test(=vm::batch::tests::a_string_compared_with_a_number_is_converted)
-  | test(=vm::batch::tests::decimal_arithmetic_follows_duckdb)
-  | test(=vm::batch::tests::decimals_are_equal_hashed_and_ordered_by_value_across_scales)
-  | test(=vm::batch::tests::running_agg_typed_extremes_match_a_sequential_fold)
-  | test(=vm::batch::tests::select_promotes_the_branches_to_their_common_type)
-  | test(=vm::batch::tests::unify_numeric_column_gives_a_column_one_type_across_chunks)
 )
 """
 

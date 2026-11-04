@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.228.2] - 2026-11-04
+
+### Fixed
+
+- Decimal-to-float conversion and `round()` use exact powers of ten instead of `f64::powi`, whose precision varies by platform (#1002).
+
 ## [0.228.1] - 2026-11-04
 
 ### Fixed

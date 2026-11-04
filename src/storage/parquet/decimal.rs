@@ -18,7 +18,14 @@ impl Decimal {
     /// A lossy `f64` approximation, for arithmetic/comparisons where exact
     /// precision doesn't matter.
     pub fn to_f64(&self) -> f64 {
-        self.unscaled as f64 / 10f64.powi(self.scale)
+        // An exact power of ten (#1002): a negative scale multiplies by
+        // it rather than dividing by an inexact reciprocal.
+        let p = crate::coerce::pow10(self.scale.unsigned_abs());
+        if self.scale >= 0 {
+            self.unscaled as f64 / p
+        } else {
+            self.unscaled as f64 * p
+        }
     }
 }
 

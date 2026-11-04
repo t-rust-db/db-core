@@ -328,9 +328,38 @@ fn push_text(out: &mut String, v: &Value) {
     }
 }
 
+/// `10^exp` as an `f64`, exact wherever the result is representable
+/// (`exp <= 22`) -- `f64::powi`'s precision is unspecified and may vary by
+/// platform (#1002), and a decimal divided by an inexact power of ten
+/// lands one ulp off (`123 / 10^2` as `1.2299999999999998`). Past 22 no
+/// power of ten is an exact `f64`, so `powi` is as good as anything.
+pub(crate) fn pow10(exp: u32) -> f64 {
+    const EXACT: [f64; 23] = [
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+        1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+    ];
+    match usize::try_from(exp).ok().and_then(|i| EXACT.get(i)) {
+        Some(p) => *p,
+        None => 10f64.powi(i32::try_from(exp).unwrap_or(i32::MAX)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pow10_is_exact_through_ten_to_the_22nd() {
+        let mut p = 1u128;
+        for exp in 0..=22u32 {
+            assert_eq!(pow10(exp), p as f64, "10^{exp}");
+            p *= 10;
+        }
+        // Past 22 it's powi: close, not exact (Miri checks that it's
+        // not relied on).
+        assert!((pow10(23) / 1e23 - 1.0).abs() < 1e-12);
+        assert!(pow10(400).is_infinite());
+    }
 
     #[test]
     fn coercion_parses_longest_valid_numeric_prefix() {
