@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.228.3] - 2026-11-04
+
+### Fixed
+
+- Column engine: string `ORDER BY` sorts are back to v0.228.1 speed; v0.228.2 had made them about 8% slower (#1002 follow-up).
+
 ## [0.228.2] - 2026-11-04
 
 ### Fixed
