@@ -17660,10 +17660,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "coerce_pow10_f74c0b68",
+    "id": "coerce_pow10_1e00a742",
     "file": "src/coerce.rs",
     "line": 341,
-    "decision": "match usize::try_from(exp).ok().and_then(|i| EXACT.get(i)) {\n        Some(p) => *p,\n        None => 10f64.powi(i32::try_from(exp).unwrap_or(i32::MAX)),\n    }",
+    "decision": "match usize::try_from(exp).ok().and_then(|i| EXACT.get(i)) {\n        Some(p) => *p,\n        None => pow10_inexact(exp),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -17672,7 +17672,7 @@
   {
     "id": "coerce_integer_overflow_promotes_to_real_never_wraps_b7e25189",
     "file": "src/coerce.rs",
-    "line": 402,
+    "line": 411,
     "decision": "match checked_add(&max, &Value::Integer(1)) {\n            Value::Real(r) => assert!((r - 9_223_372_036_854_775_808.0).abs() < 1.0),\n            other => panic!(\"expected REAL promotion, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17682,7 +17682,7 @@
   {
     "id": "coerce_integer_overflow_promotes_to_real_never_wraps_f2068fff",
     "file": "src/coerce.rs",
-    "line": 406,
+    "line": 415,
     "decision": "match checked_mul(&max, &Value::Integer(2)) {\n            Value::Real(r) => assert!(r > i64::MAX as f64),\n            other => panic!(\"expected REAL promotion, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
