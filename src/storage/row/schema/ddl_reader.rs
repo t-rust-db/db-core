@@ -758,7 +758,7 @@ mod tests {
             .open_read(&path)
             .unwrap_or_else(|e| panic!("open {path:?}: {e}"));
         let mut header_buf = [0u8; 100];
-        file.read_at(&mut header_buf, 0).unwrap();
+        crate::storage::row::vfs::read_full(&*file, &mut header_buf, 0).unwrap();
         let header = DatabaseHeader::parse(&header_buf).unwrap();
         let source = VfsPageSource::open(&vfs, &path, header.page_size).unwrap();
         (TableCursor::new(source, &header, 1), header.text_encoding)

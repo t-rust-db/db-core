@@ -32,6 +32,10 @@ pub struct MemoryVfs {
     /// the same reason as `sync_calls`: #487's tests assert that a WAL
     /// commit after the first opens *no* file at all.
     open_calls: Arc<AtomicUsize>,
+    /// Most bytes one `read_at` returns (0 = no cap), `Arc`-shared like
+    /// the counters. POSIX lets `pread` return fewer bytes than asked;
+    /// this makes every read do so, for short-read tests (#1003).
+    max_read: Arc<AtomicUsize>,
 }
 
 impl MemoryVfs {
@@ -64,6 +68,21 @@ impl MemoryVfs {
         self.open_calls.load(Ordering::SeqCst)
     }
 
+    /// Caps every later `read_at` on any file of this `Vfs` (or a clone)
+    /// at `n` bytes, like a `pread` that keeps returning short (#1003).
+    #[cfg(test)]
+    pub(crate) fn set_max_read(&self, n: usize) {
+        self.max_read.store(n, Ordering::SeqCst);
+    }
+
+    fn file(&self, data: Arc<Mutex<Vec<u8>>>) -> Box<dyn VfsFile> {
+        Box::new(MemoryVfsFile(
+            data,
+            self.sync_calls.clone(),
+            self.max_read.clone(),
+        ))
+    }
+
     fn handle(&self, path: &Path) -> Result<Arc<Mutex<Vec<u8>>>> {
         let files = self.files.lock().map_err(|_| poisoned(path))?;
         files.get(path).cloned().ok_or_else(|| VfsError::NotFound {
@@ -75,18 +94,12 @@ impl MemoryVfs {
 impl Vfs for MemoryVfs {
     fn open_read(&self, path: &Path) -> Result<Box<dyn VfsFile>> {
         self.open_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(Box::new(MemoryVfsFile(
-            self.handle(path)?,
-            self.sync_calls.clone(),
-        )))
+        Ok(self.file(self.handle(path)?))
     }
 
     fn open_write(&self, path: &Path) -> Result<Box<dyn VfsFile>> {
         self.open_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(Box::new(MemoryVfsFile(
-            self.handle(path)?,
-            self.sync_calls.clone(),
-        )))
+        Ok(self.file(self.handle(path)?))
     }
 
     fn exists(&self, path: &Path) -> Result<bool> {
@@ -116,7 +129,7 @@ impl Vfs for MemoryVfs {
                 .or_insert_with(|| Arc::new(Mutex::new(Vec::new())))
                 .clone()
         };
-        Ok(Box::new(MemoryVfsFile(handle, self.sync_calls.clone())))
+        Ok(self.file(handle))
     }
 
     fn delete(&self, path: &Path) -> Result<()> {
@@ -126,7 +139,7 @@ impl Vfs for MemoryVfs {
     }
 }
 
-struct MemoryVfsFile(Arc<Mutex<Vec<u8>>>, Arc<AtomicUsize>);
+struct MemoryVfsFile(Arc<Mutex<Vec<u8>>>, Arc<AtomicUsize>, Arc<AtomicUsize>);
 
 /// The in-memory backend's `Mutex`es are only ever contended within a
 /// single test process and never cross a panic boundary while held, so a
@@ -154,7 +167,11 @@ impl VfsFile for MemoryVfsFile {
             return Ok(0);
         }
         let available = &data[offset..];
-        let n = buf.len().min(available.len());
+        let n = match self.2.load(Ordering::SeqCst) {
+            0 => buf.len(),
+            cap => buf.len().min(cap),
+        }
+        .min(available.len());
         buf[..n].copy_from_slice(&available[..n]);
         Ok(n)
     }

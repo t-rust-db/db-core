@@ -257,6 +257,22 @@ pub trait VfsFile {
 /// and writes to it across several method calls.
 pub struct AnyVfsFile(Box<dyn VfsFile>);
 
+/// Fills `buf` from `offset`, looping over short reads (#875, #1003):
+/// POSIX lets `pread` return fewer bytes than asked anywhere in a file.
+/// Returns how many bytes it got, fewer than `buf.len()` only at end of
+/// file.
+pub(crate) fn read_full(file: &dyn VfsFile, buf: &mut [u8], offset: u64) -> Result<usize> {
+    let mut filled = 0usize;
+    while let Some(rest) = buf.get_mut(filled..).filter(|rest| !rest.is_empty()) {
+        let got = file.read_at(rest, offset.saturating_add(filled as u64))?;
+        if got == 0 {
+            break;
+        }
+        filled = filled.saturating_add(got);
+    }
+    Ok(filled)
+}
+
 impl From<Box<dyn VfsFile>> for AnyVfsFile {
     fn from(file: Box<dyn VfsFile>) -> Self {
         AnyVfsFile(file)
@@ -277,15 +293,7 @@ impl AnyVfsFile {
     /// Fills `buf` from `offset`, looping over short reads (#875); returns
     /// how many bytes it got, fewer than `buf.len()` only at end of file.
     pub(crate) fn read_full(&self, buf: &mut [u8], offset: u64) -> Result<usize> {
-        let mut filled = 0usize;
-        while let Some(rest) = buf.get_mut(filled..).filter(|rest| !rest.is_empty()) {
-            let got = self.read_at(rest, offset.saturating_add(filled as u64))?;
-            if got == 0 {
-                break;
-            }
-            filled = filled.saturating_add(got);
-        }
-        Ok(filled)
+        read_full(&*self.0, buf, offset)
     }
 
     /// Writes `buf` at `offset` — see [`VfsFile::write_at`].

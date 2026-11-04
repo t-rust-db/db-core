@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.228.1] - 2026-11-04
+
+### Fixed
+
+- Row engine: page reads, the database-header read and the hot-journal check loop over short `pread`s; before, a short read could make a hot journal look cold and skip crash rollback (#1003).
+
 ## [0.228.0] - 2026-11-04
 
 ### Changed

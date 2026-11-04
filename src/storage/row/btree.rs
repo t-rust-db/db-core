@@ -2018,7 +2018,7 @@ mod tests {
         let vfs = UnixVfs;
         let file = vfs.open_read(&path).unwrap();
         let mut header_buf = [0u8; 100];
-        file.read_at(&mut header_buf, 0).unwrap();
+        crate::storage::row::vfs::read_full(&*file, &mut header_buf, 0).unwrap();
         let header = DatabaseHeader::parse(&header_buf).unwrap();
         let source = VfsPageSource::open(&vfs, &path, header.page_size).unwrap();
         TableCursor::new(source, &header, 2)
@@ -2175,7 +2175,7 @@ mod tests {
         let vfs = UnixVfs;
         let file = vfs.open_read(path).unwrap();
         let mut header_buf = [0u8; 100];
-        file.read_at(&mut header_buf, 0).unwrap();
+        crate::storage::row::vfs::read_full(&*file, &mut header_buf, 0).unwrap();
         let header = DatabaseHeader::parse(&header_buf).unwrap();
         let source = VfsPageSource::open(&vfs, path, header.page_size).unwrap();
         let mut cursor = TableCursor::new(source, &header, 1);
