@@ -1,0 +1,181 @@
+# Only the `miri` profile is used today (weekly Miri job, assurance.yml):
+# nextest runs every test in its own Miri process, so one test hitting
+# undefined behaviour reports a failure instead of aborting the whole run.
+[profile.miri]
+fail-fast = false
+slow-timeout = { period = "300s", terminate-after = 4 }
+# Tests Miri cannot run, or already-ticketed findings, generated from the
+# first run's report (db-core run 41783798849) and kept by hand since.
+# Each group says why. A new failure outside this list is a finding:
+# tools/miri_tickets.py files it. When a ticket's fix lands, drop its
+# lines so the run checks those tests again.
+# Excluded, in the order the groups appear below (nextest filtersets
+# have no comments):
+#   1. ingest fsyncs directories (7 production sites); Miri only fsyncs regular files
+#   2. column tables are ingest-backed, same directory fsync
+#   3. POSIX byte-range locks: Miri has no fcntl(F_SETLK)
+#   4. POSIX byte-range locks (fcntl F_SETLK) / the lock_probe helper process
+#   5. std::fs::copy -> copy_file_range syscall, unsupported by Miri
+#   6. spawns the zstd CLI as an oracle; Miri can't spawn processes
+#   7. file-backed mmap, unsupported by Miri
+#   8. over 20 min under Miri (proptest / fuzz / deep-nesting / large inputs)
+#   9. the test Box::leak()s a fixture line on purpose
+#   10. test asserts one pread fills the buffer; Miri returns short reads (fine, the parquet reader loops)
+#   11. #1003: Miri returns short preads; page/header/journal reads don't loop
+#   12. #1002: decimal->f64 / log depend on powi/libm exactness
+default-filter = """
+not (
+
+    test(/^storage::ingest::/)
+
+  | test(/^engine::column::table::tests::/)
+
+  | test(/^storage::row::vfs::fcntl::/)
+
+  | test(/^storage::row::vfs::lock::/)
+
+  | test(/^storage::row::vfs::shm::/)
+
+  | test(=storage::row::pager::tests::flush_fails_when_another_connection_holds_reserved)
+  | test(=storage::row::pager::tests::open_acquires_shared_lock_released_on_drop)
+  | test(=storage::row::pager::tests::open_claims_wal_read_lock_when_shm_present_released_on_drop)
+  | test(=storage::row::vfs::unix::tests::lock_shared_guard_checks_reserved_and_escalates)
+  | test(=storage::row::pager::checkpoint::tests::reader_mark_bounds_the_checkpoint)
+  | test(=storage::row::pager::tests::hot_journal_open_fails_when_another_connection_holds_reserved)
+
+  | test(=engine::cross_mode::tests::hash_join_against_a_sqlite_lookup_table)
+  | test(=engine::cross_mode::tests::row_table_segment_and_source_yield_the_same_batch)
+  | test(=engine::cross_mode::tests::scan_table_as_batch_materializes_whole_table_with_rowid_alias)
+  | test(=engine::cross_mode::tests::scan_table_as_batch_rejects_unknown_column)
+  | test(=engine::resolve::prune::tests::a_filter_on_a_chained_lookup_prunes_through_the_table_it_joins)
+  | test(=engine::resolve::prune::tests::a_lookup_filter_matching_nothing_empties_the_join)
+  | test(=engine::resolve::prune::tests::a_lookup_filter_prunes_the_row_groups_without_its_keys)
+  | test(=engine::resolve::prune::tests::filters_that_say_nothing_about_the_probe_keys_prune_nothing)
+  | test(=engine::resolve::prune::tests::using_and_either_on_operand_order_prune_the_same_row_groups)
+  | test(=engine::row::adapter::tests::a_malformed_index_record_is_refused_when_positioned)
+  | test(=engine::row::adapter::tests::an_index_entry_is_decoded_column_by_column)
+  | test(=engine::row::adapter::tests::create_index_analyze_and_drop_index_exercise_schema_storage)
+  | test(=engine::row::adapter::tests::journal_mode_in_a_transaction_only_refuses_a_change)
+  | test(=engine::row::adapter::tests::pragma_and_explicit_transaction_modes_reach_the_real_pager_adapter)
+  | test(=engine::row::adapter::tests::reading_more_columns_of_a_row_does_not_multiply_page_reads)
+  | test(=engine::row::adapter::tests::reverse_scans_and_indexed_delete_exercise_last_and_prev)
+  | test(=engine::row::adapter::tests::seeking_an_index_entry_compares_the_key_under_its_collations)
+
+  | test(=storage::parquet::compression::decoder_fuzz::mutated_libzstd_frames_never_panic)
+  | test(=storage::parquet::compression::tests::zstd_codec_dispatches_to_the_zstd_decoder)
+  | test(=storage::parquet::compression::zstd::decoder_tests::a_corrupted_checksum_is_refused)
+  | test(=storage::parquet::compression::zstd::decoder_tests::every_cli_frame_decodes_to_its_input)
+  | test(=storage::parquet::compression::zstd::decoder_tests::every_truncation_is_an_error_never_a_panic)
+  | test(=storage::parquet::compression::zstd::encoder::tests::empty_tiny_and_repeated_inputs_round_trip)
+  | test(=storage::parquet::compression::zstd::encoder::tests::random_pages_round_trip)
+  | test(=storage::parquet::compression::zstd::tests::a_truncated_frame_is_a_read_error)
+  | test(=storage::parquet::compression::zstd::tests::a_wrong_declared_size_is_a_size_mismatch)
+  | test(=storage::parquet::compression::zstd::tests::an_oversized_frame_stops_one_byte_past_the_declared_size)
+  | test(=storage::parquet::compression::zstd::tests::decompresses_a_real_zstd_frame)
+
+  | test(=storage::column::posix::tests::mmap_exposes_full_file_contents)
+  | test(=storage::tests::concurrent_reads_from_same_file)
+  | test(=storage::tests::maps_and_reads_small_file)
+  | test(=storage::tests::maps_empty_file)
+
+  | test(=codegen::batch::tests::a_long_segment_runs_in_slices_with_the_same_answer)
+  | test(=codegen::batch::tests::an_expression_at_the_height_limit_runs_in_the_column_engine)
+  | test(=codegen::row::subquery::cte::tests::a_very_long_chain_is_refused_on_a_small_stack)
+  | test(=codegen::row::subquery::cte::tests::views_that_reference_each_view_twice_are_refused)
+  | test(=engine::column::tests::file_segments_run_a_filtered_query_like_the_engine)
+  | test(=engine::column::tests::top_n_with_a_huge_limit_or_offset_returns_rows_instead_of_reserving_them)
+  | test(=functions::tests::like_and_glob_reject_what_sqlite3_rejects)
+  | test(=json_path::tests::nesting_is_capped_at_max_depth_without_overflowing)
+  | test(=parser::row::grammar::tests::operator_chains_are_capped_at_sqlite3s_expression_height)
+  | test(=storage::parquet::compression::decoder_fuzz::mutated_compressed_pages_never_panic)
+  | test(=storage::parquet::compression::decoder_fuzz::mutated_dictionary_indices_never_panic)
+  | test(=storage::parquet::compression::decoder_fuzz::mutated_level_sections_never_panic)
+  | test(=storage::parquet::compression::zstd::decoder_tests::flipped_bits_never_panic)
+  | test(=storage::parquet::compression::zstd::encoder::tests::any_small_page_round_trips)
+  | test(=storage::parquet::compression::zstd::encoder::tests::repetitive_text_shrinks)
+  | test(=storage::parquet::compression::zstd::encoder::tests::seeded_fuzz_always_yields_a_frame_that_decodes_to_the_input)
+  | test(=storage::parquet::encoding::hybrid_rle_reader::matches_the_batch_decoder_at_every_width_and_length)
+  | test(=storage::parquet::footer::corruption_tests::deeply_nested_schema_is_an_error)
+  | test(=storage::parquet::footer::corruption_tests::hostile_byte_overwrites_never_panic)
+  | test(=storage::parquet::footer::corruption_tests::single_byte_flips_never_panic)
+  | test(=storage::parquet::schema_tree::tests::deep_chain_is_rejected_and_built_without_overflow)
+  | test(=storage::parquet::schema_tree::tests::leaf_paths_past_the_byte_budget_are_refused)
+  | test(=storage::parquet::writer::encode::tests::random_values_round_trip_at_every_width)
+  | test(=storage::parquet::writer::snappy::tests::random_inputs_round_trip)
+  | test(=storage::row::btree::index::delete::tests::an_emptied_tree_takes_entries_again)
+  | test(=storage::row::btree::index::delete::tests::deleting_every_entry_in_ascending_order_leaves_a_valid_tree_throughout)
+  | test(=storage::row::btree::index::delete::tests::deleting_every_entry_in_descending_order_leaves_a_valid_tree_throughout)
+  | test(=storage::row::btree::index::delete::tests::random_inserts_and_deletes_match_a_model_and_keep_the_tree_valid)
+  | test(=storage::row::btree::table::insert::tests::many_inserts_cascade_through_every_split_kind)
+  | test(=storage::stream::file::mcdc_vectors::a_line_longer_than_a_block_is_read_whole_from_both_ends)
+  | test(=storage::stream::file::mcdc_vectors::a_line_longer_than_the_maximum_is_an_error)
+  | test(=storage::stream::file::mcdc_vectors::refresh_reads_a_bounded_batch_and_continues)
+  | test(=storage::stream::segment::tests::splits_at_max_rows)
+  | test(=vm::batch::tests::a_filtered_dict_keyed_group_reduce_folds_like_the_unsliced_one)
+  | test(=vm::batch::tests::in_list_of_numbers_over_a_numeric_column_answers_as_the_comparison_chain)
+  | test(=vm::combine::tests::int_key_path_matches_finalize_including_null_keys_and_growth)
+  | test(=vm::engine::preaggregation_tests::int_key_fold_matches_the_unfolded_path)
+  | test(=vm::engine::preaggregation_tests::mcdc__vm_engine_run_parallel_preaggregate_b7b1b7ef__v2_many_groups_spill_to_the_shared_combiner)
+  | test(=vm::engine::preaggregation_tests::mid_run_spilled_preaggregation_matches_the_direct_merge)
+  | test(=vm::engine::preaggregation_tests::preaggregated_run_matches_the_direct_merge_and_is_deterministic)
+  | test(=vm::engine::preaggregation_tests::spilled_preaggregation_matches_the_direct_merge)
+  | test(=vm::int_key_table::tests::hash_group_table_distinguishes_colliding_hashes_by_the_callers_key_compare)
+  | test(=vm::like::tests::compiled_patterns_agree_with_the_general_matchers)
+  | test(=vm::like::tests::finder_handles_overlap_edges_and_adversarial_input)
+  | test(=vm::row::cursor::tests::mcdc__vm_row_cursor_ephemeral_idx_insert_1d6450e4__v1_new_key_at_capacity_is_rejected)
+  | test(=vm::row::cursor::tests::mcdc__vm_row_cursor_ephemeral_idx_insert_1d6450e4__v3_existing_key_at_capacity_is_still_accepted)
+  | test(=vm::row::cursor::tests::mcdc__vm_row_cursor_ephemeral_idx_insert_91321b7c__v1_new_key_at_capacity_is_rejected)
+  | test(=vm::row::cursor::tests::mcdc__vm_row_cursor_ephemeral_idx_insert_91321b7c__v3_existing_key_at_capacity_is_still_accepted)
+
+  | test(=storage::stream::clf::tests::timestamp_uses_the_gregorian_calendar)
+  | test(=storage::stream::jsonl::tests::a_too_deeply_nested_line_is_kept_as_its_message)
+
+  | test(=storage::column::posix::tests::read_at_is_reusable_across_calls_without_advancing_state)
+  | test(=storage::column::posix::tests::read_at_offset_reads_expected_bytes)
+  | test(=storage::row::vfs::tests::unix_vfs_contract)
+
+  | test(=engine::row::mcdc_vectors::mcdc__engine_row_create_4b191083__v1_a_power_of_two_in_range_is_a_valid_page_size)
+  | test(=storage::row::btree::index::tests::secondary_index_last_prev_matches_reversed_forward_walk)
+  | test(=storage::row::btree::index::tests::secondary_index_seek_before_every_key_returns_first_row)
+  | test(=storage::row::btree::index::tests::secondary_index_seek_between_keys_matches_full_scan_and_next_continues)
+  | test(=storage::row::btree::index::tests::secondary_index_seek_matches_oracle)
+  | test(=storage::row::btree::index::tests::secondary_index_seek_past_every_key_returns_none)
+  | test(=storage::row::btree::index::tests::secondary_index_walk_matches_oracle_binary_order)
+  | test(=storage::row::btree::index::tests::without_rowid_table_is_readable_as_index_btree)
+  | test(=storage::row::btree::tests::overflow_multi_page_payload_is_byte_identical_to_oracle)
+  | test(=storage::row::btree::tests::overflow_single_page_payload_is_byte_identical_to_oracle)
+  | test(=storage::row::btree::tests::page_one_trap_sqlite_master_root_is_page_one)
+  | test(=storage::row::btree::tests::prev_without_last_errors_rather_than_looking_exhausted)
+  | test(=storage::row::btree::tests::seek_does_not_accumulate_pages_visited_across_calls)
+  | test(=storage::row::btree::tests::table_multipage_full_scan_matches_oracle)
+  | test(=storage::row::btree::tests::table_multipage_last_and_prev_walk_descending_rowid_order)
+  | test(=storage::row::btree::tests::table_multipage_last_matches_full_scans_final_row)
+  | test(=storage::row::btree::tests::table_multipage_seek_binary_search_matches_every_rowid_and_gaps)
+  | test(=storage::row::btree::tests::table_multipage_seek_matches_oracle)
+  | test(=storage::row::btree::tests::table_single_page_full_scan)
+  | test(=storage::row::btree::tests::table_single_page_last_returns_the_only_row)
+  | test(=storage::row::btree::tests::table_single_page_seek_binary_search_on_small_leaf)
+  | test(=storage::row::schema::ddl_reader::tests::fts5_virtual_table_is_graceful_unknown_shadow_tables_are_readable)
+  | test(=storage::row::schema::ddl_reader::tests::non_table_entries_are_excluded)
+  | test(=storage::row::schema::ddl_reader::tests::plain_table_columns_and_rootpage)
+  | test(=storage::row::schema::ddl_reader::tests::read_table_and_view_names_lists_the_one_table_and_no_view)
+  | test(=storage::row::schema::ddl_reader::tests::read_views_over_a_view_free_fixture_is_empty)
+  | test(=storage::row::schema::ddl_reader::tests::rtree_virtual_table_is_graceful_unknown_shadow_tables_are_readable)
+  | test(=storage::row::schema::ddl_reader::tests::strict_marker_detected_and_generated_column_named_correctly)
+
+  | test(=codegen::batch::tests::decimal_sum_projection_keeps_its_scale)
+  | test(=functions::math::tests::math_functions_match_sqlite3)
+  | test(=storage::parquet::decimal::tests::to_f64_matches_unscaled_divided_by_scale)
+  | test(=vm::batch::tests::a_string_compared_with_a_number_is_converted)
+  | test(=vm::batch::tests::decimal_arithmetic_follows_duckdb)
+  | test(=vm::batch::tests::decimals_are_equal_hashed_and_ordered_by_value_across_scales)
+  | test(=vm::batch::tests::running_agg_typed_extremes_match_a_sequential_fold)
+  | test(=vm::batch::tests::select_promotes_the_branches_to_their_common_type)
+  | test(=vm::batch::tests::unify_numeric_column_gives_a_column_one_type_across_chunks)
+)
+"""
+
+[profile.miri.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
