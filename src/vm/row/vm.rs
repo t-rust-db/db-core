@@ -677,6 +677,21 @@ impl Vm {
         Ok(self.registers.get(idx).unwrap_or(&Value::Null))
     }
 
+    /// Registers `first..first + count` as one borrowed slice, or `None`
+    /// when any of them lies past the register file's current end (the
+    /// caller then falls back to per-register reads, which read NULL).
+    fn register_slice(
+        &self,
+        opcode: &'static str,
+        first: i32,
+        count: usize,
+    ) -> Result<Option<&[Value]>, ExecError> {
+        let start = Self::index(opcode, first)?;
+        Ok(start
+            .checked_add(count)
+            .and_then(|end| self.registers.get(start..end)))
+    }
+
     /// Writes register `reg`, growing the register file with NULL
     /// filler as needed.
     pub fn set_register(&mut self, reg: i32, value: Value) -> Result<(), ExecError> {
