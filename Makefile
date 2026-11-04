@@ -2,7 +2,7 @@
 
 .DEFAULT_GOAL := help
 
-.PHONY: help bench-events test-full check-row-functions-oracle check-row-keys-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci pre-push perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
+.PHONY: help bench-events miri test-full check-row-functions-oracle check-row-keys-oracle check-sqlite-profile check-stream-profile check-column-profile check-column-oracle check-grammar-sync check-parquet-write-oracle gen-parquet-fixtures refresh-column-sqllogictest test test-lib test-spike build lint check-panic-allows check-deny check-mvl-limit coverage check-coverage ci pre-push perf perf-profile version release fuzz-sql fuzz-diff fuzz-gen
 
 help: ## Show this help
 	@echo ""
@@ -43,6 +43,15 @@ test-full: ## Run db-core's test suite with the corruption test at full size (ab
 
 test-lib: ## Just db-core's library unit tests (fastest inner loop)
 	cargo test -p db-core --all-features --lib
+
+# Library unit tests under Miri (undefined behaviour, leaks), one Miri
+# process per test via nextest so a finding doesn't abort the run. Needs
+# nightly + miri + cargo-nextest. Isolation is off because tests use temp
+# files. CI runs it weekly (assurance.yml) and files findings as `miri`
+# issues (tools/miri_tickets.py). Report: target/nextest/miri/junit.xml.
+miri: ## Library unit tests under Miri (nightly, cargo-nextest; slow -- weekly in CI)
+	MIRIFLAGS="-Zmiri-disable-isolation" cargo +nightly miri nextest run \
+		-p db-core --all-features --lib --profile miri $(MIRI_ARGS)
 
 
 SPIKE_TESTS := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null \

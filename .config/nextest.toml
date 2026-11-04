@@ -1,0 +1,11 @@
+# Only the `miri` profile is used today (weekly Miri job, assurance.yml):
+# nextest runs every test in its own Miri process, so one test hitting
+# undefined behaviour reports a failure instead of aborting the whole run.
+[profile.miri]
+fail-fast = false
+slow-timeout = { period = "300s", terminate-after = 4 }
+
+[profile.miri.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true

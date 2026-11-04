@@ -7,7 +7,8 @@
 # coverage -- db-core#407 moved the crate-wide coverage floor here from a
 # weekly SQLite-profile-only job). This workflow adds what `make ci`
 # deliberately leaves out: the MC/DC discharge dashboard over the whole
-# crate.
+# crate, and Miri over the library unit tests (findings filed as `miri`
+# issues).
 name: Assurance
 
 on:
@@ -63,3 +64,58 @@ jobs:
             grep -E 'multi-leaf|overall discharged|SUMMARY' mcdc.log || tail -20 mcdc.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Miri over the library unit tests: undefined behaviour and leaks in the
+  # few unsafe blocks and everything they reach. Each test runs in its own
+  # Miri process (nextest), which costs ~8 s of startup per test, so the
+  # run is split in four hash partitions on parallel runners. Not a gate:
+  # every failure becomes a `miri` issue (miri-tickets below).
+  miri:
+    name: Miri (${{ matrix.partition }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: assurance-miri
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo miri setup
+      - name: Run
+        run: make miri MIRI_ARGS="--partition hash:${{ matrix.partition }}/4" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: miri-junit-${{ matrix.partition }}
+          path: target/nextest/miri/junit.xml
+          if-no-files-found: error
+
+  miri-tickets:
+    name: Miri findings -> issues
+    needs: miri
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: miri-junit-*
+          path: miri-junit
+      - name: File issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/miri_tickets.py miri-junit/*/junit.xml \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
