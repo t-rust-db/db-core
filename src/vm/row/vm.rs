@@ -24,6 +24,11 @@
 //! Everything else in [`super::program::Opcode`] returns
 //! `ExecError::Unimplemented`.
 
+#![allow(
+    clippy::unnecessary_lazy_evaluations,
+    reason = "#961: ExecError has drop glue, so building it eagerly in ok_or costs ~5% of expr_heavy on the success path"
+)]
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -634,7 +639,7 @@ impl Vm {
             .get(idx)
             .copied()
             .flatten()
-            .ok_or(ExecError::CursorNotOpen { slot })
+            .ok_or_else(|| ExecError::CursorNotOpen { slot })
     }
 
     /// Host parameter `index` (1-based, as in `?NNN`). `Ok(None)` is an
@@ -644,7 +649,7 @@ impl Vm {
         let idx = usize::try_from(index)
             .ok()
             .and_then(|i| i.checked_sub(1))
-            .ok_or_else(|| ExecError::MalformedInstruction {
+            .ok_or(ExecError::MalformedInstruction {
                 opcode: "Variable",
                 reason: format!("parameter index {index} is not >= 1"),
             })?;
@@ -793,7 +798,7 @@ impl Vm {
             .get(idx)
             .and_then(Option::as_ref)
             .map(std::convert::AsRef::as_ref)
-            .ok_or(ExecError::CursorNotOpen { slot })
+            .ok_or_else(|| ExecError::CursorNotOpen { slot })
     }
 
     fn cursor_mut(&mut self, slot: i32) -> Result<&mut Box<dyn Cursor>, ExecError> {
@@ -801,7 +806,7 @@ impl Vm {
         self.cursors
             .get_mut(idx)
             .and_then(Option::as_mut)
-            .ok_or(ExecError::CursorNotOpen { slot })
+            .ok_or_else(|| ExecError::CursorNotOpen { slot })
     }
 
     /// Reads aggregate-context slot `slot`. `None` if no `AggStep` has
@@ -1086,7 +1091,7 @@ fn register_range(
     for i in 0..count {
         let reg = first_reg
             .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-            .ok_or(ExecError::RegisterOutOfRange {
+            .ok_or_else(|| ExecError::RegisterOutOfRange {
                 opcode,
                 index: first_reg,
             })?;
@@ -1141,7 +1146,7 @@ fn key_from_registers<'p>(
     for i in 0..count {
         let reg = first_reg
             .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-            .ok_or(ExecError::RegisterOutOfRange {
+            .ok_or_else(|| ExecError::RegisterOutOfRange {
                 opcode,
                 index: first_reg,
             })?;
@@ -1351,7 +1356,7 @@ fn step_column(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
     } else {
         vm.cursor(instr.p1)?
             .column(col)?
-            .ok_or(ExecError::NoCurrentRow {
+            .ok_or_else(|| ExecError::NoCurrentRow {
                 opcode: "Column",
                 slot: instr.p1,
             })?

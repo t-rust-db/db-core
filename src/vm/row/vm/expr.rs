@@ -89,7 +89,7 @@ pub(super) fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecEr
                 let reg = instr
                     .p2
                     .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-                    .ok_or(ExecError::RegisterOutOfRange {
+                    .ok_or_else(|| ExecError::RegisterOutOfRange {
                         opcode: "Function",
                         index: instr.p2,
                     })?;
@@ -101,7 +101,7 @@ pub(super) fn step_expr(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecEr
                         .split(',')
                         .map(|p| p.parse::<usize>().ok().filter(|&p| p < arity))
                         .collect::<Option<Vec<usize>>>()
-                        .ok_or_else(|| ExecError::MalformedInstruction {
+                        .ok_or(ExecError::MalformedInstruction {
                             opcode: "Function",
                             reason: format!("malformed JSON argument positions {positions:?}"),
                         })?;

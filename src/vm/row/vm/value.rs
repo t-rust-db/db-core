@@ -113,7 +113,7 @@ pub(super) fn step_value(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
                 let reg = i32::try_from(i)
                     .ok()
                     .and_then(|i| instr.p1.checked_add(i))
-                    .ok_or(ExecError::RegisterOutOfRange {
+                    .ok_or_else(|| ExecError::RegisterOutOfRange {
                         opcode: "MakeRecord",
                         index: instr.p1,
                     })?;
@@ -134,7 +134,7 @@ pub(super) fn step_value(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
                 let reg = i32::try_from(i)
                     .ok()
                     .and_then(|i| instr.p1.checked_add(i))
-                    .ok_or(ExecError::RegisterOutOfRange {
+                    .ok_or_else(|| ExecError::RegisterOutOfRange {
                         opcode: "ResultRow",
                         index: instr.p1,
                     })?;

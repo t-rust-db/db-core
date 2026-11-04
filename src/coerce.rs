@@ -123,18 +123,35 @@ fn to_f64(v: &Value) -> f64 {
     }
 }
 
+#[allow(clippy::cast_precision_loss)]
+fn int_arith(
+    x: i64,
+    y: i64,
+    int_op: fn(i64, i64) -> Option<i64>,
+    float_op: fn(f64, f64) -> f64,
+) -> Value {
+    match int_op(x, y) {
+        Some(v) => Value::Integer(v),
+        None => Value::Real(float_op(x as f64, y as f64)),
+    }
+}
+
 fn arith(
     a: &Value,
     b: &Value,
     int_op: fn(i64, i64) -> Option<i64>,
     float_op: fn(f64, f64) -> f64,
 ) -> Value {
-    match (as_numeric(a), as_numeric(b)) {
-        (Value::Integer(x), Value::Integer(y)) => match int_op(x, y) {
-            Some(v) => Value::Integer(v),
-            None => Value::Real(float_op(x as f64, y as f64)),
+    // Already-numeric operands skip `as_numeric`'s clone (#961).
+    match (a, b) {
+        (Value::Integer(x), Value::Integer(y)) => int_arith(*x, *y, int_op, float_op),
+        (Value::Integer(_) | Value::Real(_), Value::Integer(_) | Value::Real(_)) => {
+            Value::Real(float_op(to_f64(a), to_f64(b)))
+        }
+        _ => match (as_numeric(a), as_numeric(b)) {
+            (Value::Integer(x), Value::Integer(y)) => int_arith(x, y, int_op, float_op),
+            (x, y) => Value::Real(float_op(to_f64(&x), to_f64(&y))),
         },
-        (x, y) => Value::Real(float_op(to_f64(&x), to_f64(&y))),
     }
 }
 
