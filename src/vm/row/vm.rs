@@ -672,7 +672,21 @@ impl Vm {
     }
 
     /// Reads register `reg`. An unwritten register reads as NULL.
+    #[inline]
     pub fn register(&self, reg: i32) -> Result<&Value, ExecError> {
+        // In-bounds fast path first (#961); range errors and registers
+        // past the end of the file take the cold path.
+        if let Some(v) = usize::try_from(reg)
+            .ok()
+            .and_then(|i| self.registers.get(i))
+        {
+            return Ok(v);
+        }
+        self.register_cold(reg)
+    }
+
+    #[cold]
+    fn register_cold(&self, reg: i32) -> Result<&Value, ExecError> {
         let idx = Self::index("register read", reg)?;
         Ok(self.registers.get(idx).unwrap_or(&Value::Null))
     }
@@ -694,7 +708,20 @@ impl Vm {
 
     /// Writes register `reg`, growing the register file with NULL
     /// filler as needed.
+    #[inline]
     pub fn set_register(&mut self, reg: i32, value: Value) -> Result<(), ExecError> {
+        if let Some(slot) = usize::try_from(reg)
+            .ok()
+            .and_then(|i| self.registers.get_mut(i))
+        {
+            *slot = value;
+            return Ok(());
+        }
+        self.set_register_cold(reg, value)
+    }
+
+    #[cold]
+    fn set_register_cold(&mut self, reg: i32, value: Value) -> Result<(), ExecError> {
         let idx = Self::index("register write", reg)?;
         if idx >= self.registers.len() {
             self.registers.resize(idx.saturating_add(1), Value::Null);
