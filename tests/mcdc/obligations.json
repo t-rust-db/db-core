@@ -17660,9 +17660,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "coerce_pow10_f74c0b68",
+    "file": "src/coerce.rs",
+    "line": 341,
+    "decision": "match usize::try_from(exp).ok().and_then(|i| EXACT.get(i)) {\n        Some(p) => *p,\n        None => 10f64.powi(i32::try_from(exp).unwrap_or(i32::MAX)),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "coerce_integer_overflow_promotes_to_real_never_wraps_b7e25189",
     "file": "src/coerce.rs",
-    "line": 373,
+    "line": 402,
     "decision": "match checked_add(&max, &Value::Integer(1)) {\n            Value::Real(r) => assert!((r - 9_223_372_036_854_775_808.0).abs() < 1.0),\n            other => panic!(\"expected REAL promotion, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -17672,7 +17682,7 @@
   {
     "id": "coerce_integer_overflow_promotes_to_real_never_wraps_f2068fff",
     "file": "src/coerce.rs",
-    "line": 377,
+    "line": 406,
     "decision": "match checked_mul(&max, &Value::Integer(2)) {\n            Value::Real(r) => assert!(r > i64::MAX as f64),\n            other => panic!(\"expected REAL promotion, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43580,9 +43590,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_parquet_decimal_to_f64_1b1de5c0",
+    "file": "src/storage/parquet/decimal.rs",
+    "line": 24,
+    "decision": "self.scale >= 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_parquet_decimal_fmt_8c5eefaf",
     "file": "src/storage/parquet/decimal.rs",
-    "line": 32,
+    "line": 39,
     "decision": "self.scale <= 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -43592,7 +43612,7 @@
   {
     "id": "storage_parquet_decimal_fmt_e223671e",
     "file": "src/storage/parquet/decimal.rs",
-    "line": 36,
+    "line": 43,
     "decision": "match scaled {\n                Some(v) => write!(f, \"{v}\"),\n                None => write!(f, \"{}e{scale}\", self.unscaled),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43602,7 +43622,7 @@
   {
     "id": "storage_parquet_decimal_fmt_681dad1b",
     "file": "src/storage/parquet/decimal.rs",
-    "line": 41,
+    "line": 48,
     "decision": "self.unscaled < 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -43612,7 +43632,7 @@
   {
     "id": "storage_parquet_decimal_fmt_7b75c49b",
     "file": "src/storage/parquet/decimal.rs",
-    "line": 43,
+    "line": 50,
     "decision": "match pow10.and_then(|d| Some((magnitude.checked_div(d)?, magnitude.checked_rem(d)?))) {\n            Some((whole, frac)) => {\n                write!(f, \"{sign}{whole}.{frac:0width$}\", width = scale as usize)\n            }\n            None => write!(f, \"{sign}{magnitude}e-{scale}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43622,7 +43642,7 @@
   {
     "id": "storage_parquet_decimal_from_be_bytes_9eb817f7",
     "file": "src/storage/parquet/decimal.rs",
-    "line": 56,
+    "line": 63,
     "decision": "negative",
     "conditions": 1,
     "vectors_required": 2,

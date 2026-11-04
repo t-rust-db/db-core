@@ -308,8 +308,8 @@ fn round_fn(args: &[Value]) -> Result<Value, FunctionError> {
         .get(1)
         .map_or(0, crate::coerce::cast_to_integer)
         .clamp(0, 30);
-    #[allow(clippy::cast_precision_loss)]
-    let scale = 10f64.powi(digits as i32);
+    // `digits` is clamped to 0..=30 above; an exact power of ten (#1002).
+    let scale = crate::coerce::pow10(u32::try_from(digits).unwrap_or(0));
     let scaled = x * scale;
     let rounded = if scaled >= 0.0 {
         (scaled + 0.5).floor()
