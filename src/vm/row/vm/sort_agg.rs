@@ -131,7 +131,7 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
             let end = start
                 .checked_add(arity)
                 .filter(|&end| end <= MAX_REGISTERS)
-                .ok_or(ExecError::RegisterOutOfRange {
+                .ok_or_else(|| ExecError::RegisterOutOfRange {
                     opcode: "HashAggStep",
                     index: instr.p2,
                 })?;
@@ -148,7 +148,7 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
                 .cursors
                 .get_mut(cursor_idx)
                 .and_then(Option::as_mut)
-                .ok_or(ExecError::CursorNotOpen { slot: instr.p3 })?;
+                .ok_or_else(|| ExecError::CursorNotOpen { slot: instr.p3 })?;
             let args = vm.registers.get(start..end).unwrap_or(&[]);
             let handled = cursor.hash_agg_step(slot, name, args, collation)?;
             if !handled {
@@ -173,7 +173,7 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
                 .cursor(instr.p1)?
                 .hash_agg_group_accumulators()
                 .map(<[_]>::to_vec)
-                .ok_or_else(|| ExecError::MalformedInstruction {
+                .ok_or(ExecError::MalformedInstruction {
                     opcode: "HashAggData",
                     reason: "cursor slot is not a hash-aggregation cursor".to_string(),
                 })?;
@@ -204,23 +204,30 @@ pub(super) fn step_sort_agg(vm: &mut Vm, instr: &Instruction) -> Result<Step, Ex
                     })
                 }
             };
-            let mut args = Vec::with_capacity(arity);
-            for i in 0..arity {
-                let reg = instr
-                    .p2
-                    .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-                    .ok_or(ExecError::RegisterOutOfRange {
-                        opcode: "AggStep",
-                        index: instr.p2,
-                    })?;
-                args.push(vm.register(reg)?.clone());
-            }
             let current = if instr.p5 == 0 {
                 vm.take_agg_context(instr.p1)?
             } else {
                 None
             };
-            let updated = aggregate::step(name, current, &args, collation)?;
+            // The arguments are borrowed in place when they all lie inside
+            // the register file; the cloning path keeps the out-of-range
+            // semantics (#961: no per-row Vec + clones).
+            let updated = if let Some(args) = vm.register_slice("AggStep", instr.p2, arity)? {
+                aggregate::step(name, current, args, collation)?
+            } else {
+                let mut args = Vec::with_capacity(arity);
+                for i in 0..arity {
+                    let reg = instr
+                        .p2
+                        .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
+                        .ok_or_else(|| ExecError::RegisterOutOfRange {
+                            opcode: "AggStep",
+                            index: instr.p2,
+                        })?;
+                    args.push(vm.register(reg)?.clone());
+                }
+                aggregate::step(name, current, &args, collation)?
+            };
             vm.set_agg_context(instr.p1, updated)?;
             Ok(Step::Next)
         }

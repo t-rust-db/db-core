@@ -24,6 +24,11 @@
 //! Everything else in [`super::program::Opcode`] returns
 //! `ExecError::Unimplemented`.
 
+#![allow(
+    clippy::unnecessary_lazy_evaluations,
+    reason = "#961: ExecError has drop glue, so building it eagerly in ok_or costs ~5% of expr_heavy on the success path"
+)]
+
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -634,7 +639,7 @@ impl Vm {
             .get(idx)
             .copied()
             .flatten()
-            .ok_or(ExecError::CursorNotOpen { slot })
+            .ok_or_else(|| ExecError::CursorNotOpen { slot })
     }
 
     /// Host parameter `index` (1-based, as in `?NNN`). `Ok(None)` is an
@@ -644,7 +649,7 @@ impl Vm {
         let idx = usize::try_from(index)
             .ok()
             .and_then(|i| i.checked_sub(1))
-            .ok_or_else(|| ExecError::MalformedInstruction {
+            .ok_or(ExecError::MalformedInstruction {
                 opcode: "Variable",
                 reason: format!("parameter index {index} is not >= 1"),
             })?;
@@ -667,14 +672,56 @@ impl Vm {
     }
 
     /// Reads register `reg`. An unwritten register reads as NULL.
+    #[inline]
     pub fn register(&self, reg: i32) -> Result<&Value, ExecError> {
+        // In-bounds fast path first (#961); range errors and registers
+        // past the end of the file take the cold path.
+        if let Some(v) = usize::try_from(reg)
+            .ok()
+            .and_then(|i| self.registers.get(i))
+        {
+            return Ok(v);
+        }
+        self.register_cold(reg)
+    }
+
+    #[cold]
+    fn register_cold(&self, reg: i32) -> Result<&Value, ExecError> {
         let idx = Self::index("register read", reg)?;
         Ok(self.registers.get(idx).unwrap_or(&Value::Null))
     }
 
+    /// Registers `first..first + count` as one borrowed slice, or `None`
+    /// when any of them lies past the register file's current end (the
+    /// caller then falls back to per-register reads, which read NULL).
+    fn register_slice(
+        &self,
+        opcode: &'static str,
+        first: i32,
+        count: usize,
+    ) -> Result<Option<&[Value]>, ExecError> {
+        let start = Self::index(opcode, first)?;
+        Ok(start
+            .checked_add(count)
+            .and_then(|end| self.registers.get(start..end)))
+    }
+
     /// Writes register `reg`, growing the register file with NULL
     /// filler as needed.
+    #[inline]
     pub fn set_register(&mut self, reg: i32, value: Value) -> Result<(), ExecError> {
+        if let Some(slot) = usize::try_from(reg)
+            .ok()
+            .and_then(|i| self.registers.get_mut(i))
+        {
+            *slot = value;
+            return Ok(());
+        }
+        self.set_register_cold(reg, value)
+    }
+
+    #[cold]
+    fn set_register_cold(&mut self, reg: i32, value: Value) -> Result<(), ExecError> {
         let idx = Self::index("register write", reg)?;
         if idx >= self.registers.len() {
             self.registers.resize(idx.saturating_add(1), Value::Null);
@@ -793,7 +840,7 @@ impl Vm {
             .get(idx)
             .and_then(Option::as_ref)
             .map(std::convert::AsRef::as_ref)
-            .ok_or(ExecError::CursorNotOpen { slot })
+            .ok_or_else(|| ExecError::CursorNotOpen { slot })
     }
 
     fn cursor_mut(&mut self, slot: i32) -> Result<&mut Box<dyn Cursor>, ExecError> {
@@ -801,7 +848,7 @@ impl Vm {
         self.cursors
             .get_mut(idx)
             .and_then(Option::as_mut)
-            .ok_or(ExecError::CursorNotOpen { slot })
+            .ok_or_else(|| ExecError::CursorNotOpen { slot })
     }
 
     /// Reads aggregate-context slot `slot`. `None` if no `AggStep` has
@@ -1086,7 +1133,7 @@ fn register_range(
     for i in 0..count {
         let reg = first_reg
             .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-            .ok_or(ExecError::RegisterOutOfRange {
+            .ok_or_else(|| ExecError::RegisterOutOfRange {
                 opcode,
                 index: first_reg,
             })?;
@@ -1141,7 +1188,7 @@ fn key_from_registers<'p>(
     for i in 0..count {
         let reg = first_reg
             .checked_add(i32::try_from(i).unwrap_or(i32::MAX))
-            .ok_or(ExecError::RegisterOutOfRange {
+            .ok_or_else(|| ExecError::RegisterOutOfRange {
                 opcode,
                 index: first_reg,
             })?;
@@ -1351,7 +1398,7 @@ fn step_column(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecError> {
     } else {
         vm.cursor(instr.p1)?
             .column(col)?
-            .ok_or(ExecError::NoCurrentRow {
+            .ok_or_else(|| ExecError::NoCurrentRow {
                 opcode: "Column",
                 slot: instr.p1,
             })?

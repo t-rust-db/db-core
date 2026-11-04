@@ -33,14 +33,12 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             let value = if vm.is_null_row(instr.p1)? {
                 Value::Null
             } else {
-                Value::Integer(
-                    vm.cursor(instr.p1)?
-                        .rowid()
-                        .ok_or(ExecError::NoCurrentRow {
-                            opcode: "Rowid",
-                            slot: instr.p1,
-                        })?,
-                )
+                Value::Integer(vm.cursor(instr.p1)?.rowid().ok_or_else(|| {
+                    ExecError::NoCurrentRow {
+                        opcode: "Rowid",
+                        slot: instr.p1,
+                    }
+                })?)
             };
             vm.set_register(instr.p2, value)?;
             Ok(Step::Next)
@@ -122,7 +120,7 @@ pub(super) fn step_cursor_ops(vm: &mut Vm, instr: &Instruction) -> Result<Step, 
             let rowid = vm
                 .cursor(instr.p1)?
                 .rowid()
-                .ok_or(ExecError::NoCurrentRow {
+                .ok_or_else(|| ExecError::NoCurrentRow {
                     opcode: "AutoIndexRowid",
                     slot: instr.p1,
                 })?;
