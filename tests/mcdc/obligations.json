@@ -20742,7 +20742,7 @@
   {
     "id": "engine_row_run_query_21761479",
     "file": "src/engine/row.rs",
-    "line": 768,
+    "line": 775,
     "decision": "let Some(result) = self.run_attach_detach(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20752,7 +20752,7 @@
   {
     "id": "engine_row_run_query_bb8ec835",
     "file": "src/engine/row.rs",
-    "line": 773,
+    "line": 780,
     "decision": "Self::is_select(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20762,7 +20762,7 @@
   {
     "id": "engine_row_run_query_eb834927",
     "file": "src/engine/row.rs",
-    "line": 780,
+    "line": 787,
     "decision": "Self::is_schema_changing(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -20772,7 +20772,7 @@
   {
     "id": "engine_row_run_query_73f69e09",
     "file": "src/engine/row.rs",
-    "line": 783,
+    "line": 790,
     "decision": "!result.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20782,7 +20782,7 @@
   {
     "id": "engine_row_explain_plan_88ef8800",
     "file": "src/engine/row.rs",
-    "line": 792,
+    "line": 799,
     "decision": "!Self::is_select(&stmt)",
     "conditions": 1,
     "vectors_required": 2,
@@ -50932,7 +50932,7 @@
   {
     "id": "storage_row_pager_open_ffb49bc4",
     "file": "src/storage/row/pager.rs",
-    "line": 453,
+    "line": 454,
     "decision": "journal_is_hot",
     "conditions": 1,
     "vectors_required": 2,
@@ -50942,7 +50942,7 @@
   {
     "id": "storage_row_pager_open_0573153b",
     "file": "src/storage/row/pager.rs",
-    "line": 454,
+    "line": 455,
     "decision": "lock.check_reserved()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -50952,7 +50952,7 @@
   {
     "id": "storage_row_pager_get_page_mut_640053fb",
     "file": "src/storage/row/pager.rs",
-    "line": 517,
+    "line": 518,
     "decision": "match self.dirty.entry(page_num) {\n            std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),\n            std::collections::hash_map::Entry::Vacant(entry) => {\n                let page = read_page(&self.wal_pages, &self.source, page_num)?;\n                Ok(entry.insert(page))\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50962,7 +50962,7 @@
   {
     "id": "storage_row_pager_flush_f0987f36",
     "file": "src/storage/row/pager.rs",
-    "line": 537,
+    "line": 538,
     "decision": "self.dirty.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -50972,7 +50972,7 @@
   {
     "id": "storage_row_pager_flush_e3fdc69e",
     "file": "src/storage/row/pager.rs",
-    "line": 556,
+    "line": 557,
     "decision": "self.journal_mode == JournalMode::Wal",
     "conditions": 1,
     "vectors_required": 2,
@@ -50982,7 +50982,7 @@
   {
     "id": "storage_row_pager_release_tx_lock_cfec7bfb",
     "file": "src/storage/row/pager.rs",
-    "line": 626,
+    "line": 627,
     "decision": "self.tx_lock_level > crate::storage::row::vfs::LockLevel::Shared",
     "conditions": 1,
     "vectors_required": 2,
@@ -50992,7 +50992,7 @@
   {
     "id": "storage_row_pager_flush_locked_be79614b",
     "file": "src/storage/row/pager.rs",
-    "line": 645,
+    "line": 646,
     "decision": "!to_journal.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51002,7 +51002,7 @@
   {
     "id": "storage_row_pager_flush_locked_98a3bf74",
     "file": "src/storage/row/pager.rs",
-    "line": 671,
+    "line": 672,
     "decision": "self.synchronous != SynchronousMode::Off",
     "conditions": 1,
     "vectors_required": 2,
@@ -51012,7 +51012,7 @@
   {
     "id": "storage_row_pager_flush_locked_ab92dec6",
     "file": "src/storage/row/pager.rs",
-    "line": 677,
+    "line": 678,
     "decision": "let Some(bytes) = self.dirty.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51022,7 +51022,7 @@
   {
     "id": "storage_row_pager_flush_locked_dbde2f78",
     "file": "src/storage/row/pager.rs",
-    "line": 684,
+    "line": 685,
     "decision": "self.synchronous == SynchronousMode::Full",
     "conditions": 1,
     "vectors_required": 2,
@@ -51032,7 +51032,7 @@
   {
     "id": "storage_row_pager_flush_locked_be79614b_2",
     "file": "src/storage/row/pager.rs",
-    "line": 688,
+    "line": 689,
     "decision": "!to_journal.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51042,7 +51042,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_42a6fa02",
     "file": "src/storage/row/pager.rs",
-    "line": 735,
+    "line": 736,
     "decision": "self.wal_shm.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51052,7 +51052,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_42a6fa02_2",
     "file": "src/storage/row/pager.rs",
-    "line": 738,
+    "line": 739,
     "decision": "self.wal_shm.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51062,7 +51062,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_6ff3d20c",
     "file": "src/storage/row/pager.rs",
-    "line": 743,
+    "line": 744,
     "decision": "let Some(shm) = &self.wal_shm",
     "conditions": 1,
     "vectors_required": 2,
@@ -51072,7 +51072,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_773ce129",
     "file": "src/storage/row/pager.rs",
-    "line": 768,
+    "line": 769,
     "decision": "match cached {\n                Some(writer) => writer,\n                None => match wal::WalWriter::open_existing(\n                    &self.vfs,\n                    &wal_path,\n                    self.page_size,\n                    self.wal_resume.as_ref(),\n                ) {\n                    Ok(writer) => writer,\n                    // The `-wal` this `Pager` believed was live has vanished —\n                    // e.g. a concurrent `sqlite3` connection auto-checkpointed\n                    // and deleted `-wal`/`-shm` on close (#422). `journal_mode`\n                    // still says `Wal` (this closure only ever runs from that\n                    // branch), so recover exactly as `switch_journal_to_wal`\n                    // creates one from scratch, rather than failing the commit.\n                    Err(wal::WalError::Vfs(VfsError::NotFound { .. })) => {\n                        self.recreate_wal_locked()?\n                    }\n                    // An unusable header (0-byte, zeroed, bad checksum) means\n                    // SQLite would recover no frames; its next write restarts\n                    // the WAL with a fresh header, so do the same.\n                    Err(source) if source.is_unusable_header() => self.recreate_wal_locked()?,\n                    Err(source) => return Err(to_pager_error(source)),\n                },\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51082,7 +51082,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_3655a7f9",
     "file": "src/storage/row/pager.rs",
-    "line": 770,
+    "line": 771,
     "decision": "match wal::WalWriter::open_existing(\n                    &self.vfs,\n                    &wal_path,\n                    self.page_size,\n                    self.wal_resume.as_ref(),\n                ) {\n                    Ok(writer) => writer,\n                    // The `-wal` this `Pager` believed was live has vanished —\n                    // e.g. a concurrent `sqlite3` connection auto-checkpointed\n                    // and deleted `-wal`/`-shm` on close (#422). `journal_mode`\n                    // still says `Wal` (this closure only ever runs from that\n                    // branch), so recover exactly as `switch_journal_to_wal`\n                    // creates one from scratch, rather than failing the commit.\n                    Err(wal::WalError::Vfs(VfsError::NotFound { .. })) => {\n                        self.recreate_wal_locked()?\n                    }\n                    // An unusable header (0-byte, zeroed, bad checksum) means\n                    // SQLite would recover no frames; its next write restarts\n                    // the WAL with a fresh header, so do the same.\n                    Err(source) if source.is_unusable_header() => self.recreate_wal_locked()?,\n                    Err(source) => return Err(to_pager_error(source)),\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51092,7 +51092,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_aef700eb",
     "file": "src/storage/row/pager.rs",
-    "line": 789,
+    "line": 790,
     "decision": "source.is_unusable_header()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51102,7 +51102,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_9030a3d4",
     "file": "src/storage/row/pager.rs",
-    "line": 794,
+    "line": 795,
     "decision": "let Some(backfilled) = self.wal_backfilled_frames.take()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51112,7 +51112,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_977981b9",
     "file": "src/storage/row/pager.rs",
-    "line": 795,
+    "line": 796,
     "decision": "backfilled == writer.frame_count()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51122,7 +51122,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_ab92dec6",
     "file": "src/storage/row/pager.rs",
-    "line": 802,
+    "line": 803,
     "decision": "let Some(bytes) = self.dirty.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51132,7 +51132,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_827ff16e",
     "file": "src/storage/row/pager.rs",
-    "line": 803,
+    "line": 804,
     "decision": "index == last_index",
     "conditions": 1,
     "vectors_required": 2,
@@ -51142,7 +51142,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_dbde2f78",
     "file": "src/storage/row/pager.rs",
-    "line": 821,
+    "line": 822,
     "decision": "self.synchronous == SynchronousMode::Full",
     "conditions": 1,
     "vectors_required": 2,
@@ -51152,7 +51152,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_99d42410",
     "file": "src/storage/row/pager.rs",
-    "line": 827,
+    "line": 828,
     "decision": "match &self.wal_shm {\n                Some(shm) => shm.publish_mx_frame(new_mx_frame)?,\n                None => self.vfs.publish_wal_mx_frame(&self.db_path, new_mx_frame)?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51162,7 +51162,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_6ff3d20c_2",
     "file": "src/storage/row/pager.rs",
-    "line": 838,
+    "line": 839,
     "decision": "let Some(shm) = &self.wal_shm",
     "conditions": 1,
     "vectors_required": 2,
@@ -51172,7 +51172,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_926da7b7",
     "file": "src/storage/row/pager.rs",
-    "line": 847,
+    "line": 848,
     "decision": "self.wal_lock.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51182,7 +51182,7 @@
   {
     "id": "storage_row_pager_flush_wal_locked_304d2645",
     "file": "src/storage/row/pager.rs",
-    "line": 852,
+    "line": 853,
     "decision": "let Some(bytes) = self.dirty.remove(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51192,7 +51192,7 @@
   {
     "id": "storage_row_pager_restart_wal_if_idle_fc3ebfde",
     "file": "src/storage/row/pager.rs",
-    "line": 873,
+    "line": 874,
     "decision": "!self.vfs.active_wal_reader_marks(&self.db_path)?.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51202,7 +51202,7 @@
   {
     "id": "storage_row_pager_autocheckpoint_bb982bdd",
     "file": "src/storage/row/pager.rs",
-    "line": 900,
+    "line": 901,
     "decision": "!due",
     "conditions": 1,
     "vectors_required": 2,
@@ -51212,7 +51212,7 @@
   {
     "id": "storage_row_pager_autocheckpoint_645fd4d0",
     "file": "src/storage/row/pager.rs",
-    "line": 903,
+    "line": 904,
     "decision": "match self.checkpoint_wal_unchecked(checkpoint::CheckpointMode::Passive) {\n            Ok(_) | Err(PagerError::Vfs(VfsError::Locked { .. })) => Ok(()),\n            Err(other) => Err(other),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51222,7 +51222,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_6ff014ec",
     "file": "src/storage/row/pager.rs",
-    "line": 934,
+    "line": 935,
     "decision": "self.journal_mode != JournalMode::Wal",
     "conditions": 1,
     "vectors_required": 2,
@@ -51232,7 +51232,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_dce82034",
     "file": "src/storage/row/pager.rs",
-    "line": 941,
+    "line": 942,
     "decision": "!self.dirty.is_empty()\n            || self.tx_lock_level > crate::storage::row::vfs::LockLevel::Shared",
     "conditions": 2,
     "vectors_required": 3,
@@ -51242,7 +51242,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_e00e9d2c",
     "file": "src/storage/row/pager.rs",
-    "line": 973,
+    "line": 974,
     "decision": "exclusive",
     "conditions": 1,
     "vectors_required": 2,
@@ -51252,7 +51252,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_42a6fa02",
     "file": "src/storage/row/pager.rs",
-    "line": 974,
+    "line": 975,
     "decision": "self.wal_shm.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51262,7 +51262,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_f16c386e",
     "file": "src/storage/row/pager.rs",
-    "line": 977,
+    "line": 978,
     "decision": "match &self.wal_shm {\n                Some(shm) => shm.claim_write_lock().map(|()| {\n                    write_locked = true;\n                }),\n                None => self\n                    .vfs\n                    .claim_wal_write_lock(&self.db_path)\n                    .map(|guard| fallback_guard = guard),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51272,7 +51272,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_2d58ab84",
     "file": "src/storage/row/pager.rs",
-    "line": 986,
+    "line": 987,
     "decision": "match claimed {\n                Ok(()) => {}\n                // A writer is mid-commit: report busy, as SQLite does.\n                Err(VfsError::Locked { .. }) => {\n                    let passive =\n                        checkpoint::checkpoint_passive(&self.vfs, &self.db_path, self.page_size)?;\n                    return Ok(checkpoint::WalCheckpoint {\n                        busy: true,\n                        log: i64::from(passive.total_frames),\n                        checkpointed: i64::from(passive.backfilled_frames),\n                    });\n                }\n                Err(other) => return Err(other.into()),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51282,7 +51282,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_eeef87ff",
     "file": "src/storage/row/pager.rs",
-    "line": 1004,
+    "line": 1005,
     "decision": "write_locked",
     "conditions": 1,
     "vectors_required": 2,
@@ -51292,7 +51292,7 @@
   {
     "id": "storage_row_pager_checkpoint_wal_released_6ff3d20c",
     "file": "src/storage/row/pager.rs",
-    "line": 1005,
+    "line": 1006,
     "decision": "let Some(shm) = &self.wal_shm",
     "conditions": 1,
     "vectors_required": 2,
@@ -51302,7 +51302,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_b68958ae",
     "file": "src/storage/row/pager.rs",
-    "line": 1020,
+    "line": 1021,
     "decision": "match mode {\n            CheckpointMode::Passive => false,\n            _ => !pass.checkpoint_complete,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51312,7 +51312,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_1a495fb7",
     "file": "src/storage/row/pager.rs",
-    "line": 1029,
+    "line": 1030,
     "decision": "let (true, 1..) = (pass.checkpoint_complete, pass.total_frames)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51322,7 +51322,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_0245b48d",
     "file": "src/storage/row/pager.rs",
-    "line": 1031,
+    "line": 1032,
     "decision": "match mode {\n                CheckpointMode::Restart | CheckpointMode::Truncate => {\n                    !self.vfs.active_wal_reader_marks(&self.db_path)?.is_empty()\n                }\n                _ => false,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51332,7 +51332,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_582f2578",
     "file": "src/storage/row/pager.rs",
-    "line": 1037,
+    "line": 1038,
     "decision": "pinned",
     "conditions": 1,
     "vectors_required": 2,
@@ -51342,7 +51342,7 @@
   {
     "id": "storage_row_pager_finish_checkpoint_b22e3eb6",
     "file": "src/storage/row/pager.rs",
-    "line": 1039,
+    "line": 1040,
     "decision": "mode == CheckpointMode::Truncate",
     "conditions": 1,
     "vectors_required": 2,
@@ -51352,7 +51352,7 @@
   {
     "id": "storage_row_pager_set_journal_mode_dce82034",
     "file": "src/storage/row/pager.rs",
-    "line": 1101,
+    "line": 1102,
     "decision": "!self.dirty.is_empty()\n            || self.tx_lock_level > crate::storage::row::vfs::LockLevel::Shared",
     "conditions": 2,
     "vectors_required": 3,
@@ -51362,7 +51362,7 @@
   {
     "id": "storage_row_pager_set_journal_mode_e478a4b8",
     "file": "src/storage/row/pager.rs",
-    "line": 1107,
+    "line": 1108,
     "decision": "self.journal_mode == mode",
     "conditions": 1,
     "vectors_required": 2,
@@ -51372,7 +51372,7 @@
   {
     "id": "storage_row_pager_set_journal_mode_eba44c06",
     "file": "src/storage/row/pager.rs",
-    "line": 1111,
+    "line": 1112,
     "decision": "match mode {\n            JournalMode::Wal => self.switch_journal_to_wal()?,\n            JournalMode::Legacy => self.switch_wal_to_journal()?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51382,7 +51382,7 @@
   {
     "id": "storage_row_pager_set_journal_mode_da64b366",
     "file": "src/storage/row/pager.rs",
-    "line": 1125,
+    "line": 1126,
     "decision": "mode == JournalMode::Wal",
     "conditions": 1,
     "vectors_required": 2,
@@ -51392,7 +51392,7 @@
   {
     "id": "storage_row_pager_switch_wal_to_journal_30e44e13",
     "file": "src/storage/row/pager.rs",
-    "line": 1269,
+    "line": 1270,
     "decision": "result.checkpoint_complete",
     "conditions": 1,
     "vectors_required": 2,
@@ -51402,7 +51402,7 @@
   {
     "id": "storage_row_pager_switch_wal_to_journal_fd7f30ab",
     "file": "src/storage/row/pager.rs",
-    "line": 1274,
+    "line": 1275,
     "decision": "!complete",
     "conditions": 1,
     "vectors_required": 2,
@@ -51412,7 +51412,7 @@
   {
     "id": "storage_row_pager_allocate_page_83dc3b77",
     "file": "src/storage/row/pager.rs",
-    "line": 1308,
+    "line": 1309,
     "decision": "freelist_trunk_page == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51422,7 +51422,7 @@
   {
     "id": "storage_row_pager_allocate_page_73febef4",
     "file": "src/storage/row/pager.rs",
-    "line": 1323,
+    "line": 1324,
     "decision": "let Some(leaf) = trunk.leaves.pop()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51432,7 +51432,7 @@
   {
     "id": "storage_row_pager_allocate_page_3edc073d",
     "file": "src/storage/row/pager.rs",
-    "line": 1329,
+    "line": 1330,
     "decision": "trunk.next_trunk != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51442,7 +51442,7 @@
   {
     "id": "storage_row_pager_deallocate_page_710edeb7",
     "file": "src/storage/row/pager.rs",
-    "line": 1359,
+    "line": 1360,
     "decision": "freelist_trunk_page != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -51452,7 +51452,7 @@
   {
     "id": "storage_row_pager_deallocate_page_385c8b82",
     "file": "src/storage/row/pager.rs",
-    "line": 1363,
+    "line": 1364,
     "decision": "trunk.leaves.len() < max_leaves",
     "conditions": 1,
     "vectors_required": 2,
@@ -51462,7 +51462,7 @@
   {
     "id": "storage_row_pager_journal_mode_from_page1_a519b359",
     "file": "src/storage/row/pager.rs",
-    "line": 1406,
+    "line": 1407,
     "decision": "page1.get(18..20) == Some(&[2u8, 2u8][..])",
     "conditions": 1,
     "vectors_required": 2,
@@ -51472,7 +51472,7 @@
   {
     "id": "storage_row_pager_journal_to_pager_error_c62c1a86",
     "file": "src/storage/row/pager.rs",
-    "line": 1434,
+    "line": 1435,
     "decision": "match err {\n        JournalError::Vfs(source) => PagerError::Vfs(source),\n        other => PagerError::Journal(other),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51482,7 +51482,7 @@
   {
     "id": "storage_row_pager_read_page_56a766cb",
     "file": "src/storage/row/pager.rs",
-    "line": 1489,
+    "line": 1490,
     "decision": "let Some(page) = wal_pages.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51492,7 +51492,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_9109a25d",
     "file": "src/storage/row/pager.rs",
-    "line": 1506,
+    "line": 1507,
     "decision": "!vfs.exists(&wal_path)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -51502,7 +51502,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_1aec0f46",
     "file": "src/storage/row/pager.rs",
-    "line": 1512,
+    "line": 1513,
     "decision": "size < wal::HEADER_LEN as u64",
     "conditions": 1,
     "vectors_required": 2,
@@ -51512,7 +51512,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_15fe8fed",
     "file": "src/storage/row/pager.rs",
-    "line": 1526,
+    "line": 1527,
     "decision": "match wal::read_header(&wal_file, size) {\n        Ok(header) => header,\n        Err(source) if source.is_unusable_header() => return Ok(HashMap::new()),\n        Err(source) => return Err(to_pager_error(source)),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51522,7 +51522,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_aef700eb",
     "file": "src/storage/row/pager.rs",
-    "line": 1528,
+    "line": 1529,
     "decision": "source.is_unusable_header()",
     "conditions": 1,
     "vectors_required": 2,
@@ -51532,7 +51532,7 @@
   {
     "id": "storage_row_pager_read_wal_pages_ac0a9810",
     "file": "src/storage/row/pager.rs",
-    "line": 1531,
+    "line": 1532,
     "decision": "header.page_size != page_size",
     "conditions": 1,
     "vectors_required": 2,
@@ -51542,7 +51542,7 @@
   {
     "id": "storage_row_pager_read_page_b203daed",
     "file": "src/storage/row/pager.rs",
-    "line": 1550,
+    "line": 1551,
     "decision": "let Some(page) = self.dirty.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51552,7 +51552,7 @@
   {
     "id": "storage_row_pager_read_page_d1cd7f35",
     "file": "src/storage/row/pager.rs",
-    "line": 1553,
+    "line": 1554,
     "decision": "let Some(page) = self.wal_pages.get(&page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51562,7 +51562,7 @@
   {
     "id": "storage_row_pager_read_page_dfb3161d",
     "file": "src/storage/row/pager.rs",
-    "line": 1556,
+    "line": 1557,
     "decision": "let Some(cached) = self.page_cache.borrow_mut().get(page_num)",
     "conditions": 1,
     "vectors_required": 2,
@@ -51572,7 +51572,7 @@
   {
     "id": "storage_row_pager_read_page_b3860812",
     "file": "src/storage/row/pager.rs",
-    "line": 1567,
+    "line": 1568,
     "decision": "match victim {\n            Some(mut recycled) => match Rc::get_mut(&mut recycled) {\n                Some(buf) => {\n                    self.source.read_page_into(page_num, buf)?;\n                    recycled\n                }\n                None => self.source.read_page(page_num)?,\n            },\n            None => self.source.read_page(page_num)?,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51582,7 +51582,7 @@
   {
     "id": "storage_row_pager_read_page_6c6dd3f8",
     "file": "src/storage/row/pager.rs",
-    "line": 1568,
+    "line": 1569,
     "decision": "match Rc::get_mut(&mut recycled) {\n                Some(buf) => {\n                    self.source.read_page_into(page_num, buf)?;\n                    recycled\n                }\n                None => self.source.read_page(page_num)?,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51592,7 +51592,7 @@
   {
     "id": "storage_row_pager_db_with_journal_22a86bc9",
     "file": "src/storage/row/pager.rs",
-    "line": 1611,
+    "line": 1612,
     "decision": "let Some(bytes) = journal_bytes",
     "conditions": 1,
     "vectors_required": 2,
@@ -51602,7 +51602,7 @@
   {
     "id": "storage_row_pager_hot_journal_open_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1742,
+    "line": 1785,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51612,7 +51612,7 @@
   {
     "id": "storage_row_pager_flush_fails_when_another_connection_holds_reserved_f7701c0e",
     "file": "src/storage/row/pager.rs",
-    "line": 1789,
+    "line": 1832,
     "decision": "match result {\n            Err(PagerError::Vfs(crate::storage::row::vfs::VfsError::Locked { .. })) => {}\n            Err(other) => panic!(\"expected Locked, got {other:?}\"),\n            Ok(_) => panic!(\"expected Locked, got Ok\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -51622,7 +51622,7 @@
   {
     "id": "storage_row_pager_pager_with_freelist_2fbc1de0",
     "file": "src/storage/row/pager.rs",
-    "line": 2848,
+    "line": 2891,
     "decision": "(2..=4).contains(&trunk)",
     "conditions": 1,
     "vectors_required": 2,
@@ -53172,7 +53172,7 @@
   {
     "id": "storage_row_vfs_read_full_059fabf9",
     "file": "src/storage/row/vfs.rs",
-    "line": 281,
+    "line": 266,
     "decision": "let Some(rest) = buf.get_mut(filled..).filter(|rest| !rest.is_empty())",
     "conditions": 1,
     "vectors_required": 2,
@@ -53182,7 +53182,7 @@
   {
     "id": "storage_row_vfs_read_full_59df551d",
     "file": "src/storage/row/vfs.rs",
-    "line": 283,
+    "line": 268,
     "decision": "got == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -53272,7 +53272,7 @@
   {
     "id": "storage_row_vfs_memory_insert_4e29ca13",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 45,
+    "line": 49,
     "decision": "match self.files.lock() {\n            Ok(files) => files,\n            Err(_) => return,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -53282,7 +53282,7 @@
   {
     "id": "storage_row_vfs_memory_read_at_67b0cea5",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 153,
+    "line": 166,
     "decision": "offset >= data.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -53290,9 +53290,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_vfs_memory_read_at_d9d93893",
+    "file": "src/storage/row/vfs/memory.rs",
+    "line": 170,
+    "decision": "match self.2.load(Ordering::SeqCst) {\n            0 => buf.len(),\n            cap => buf.len().min(cap),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_vfs_memory_write_at_403a2e40",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 185,
+    "line": 202,
     "decision": "data.len() < end",
     "conditions": 1,
     "vectors_required": 2,
@@ -53302,7 +53312,7 @@
   {
     "id": "storage_row_vfs_memory_handle_surfaces_io_error_when_lock_poisoned_ffa76cbf",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 246,
+    "line": 263,
     "decision": "match vfs.open_read(Path::new(\"/x\")) {\n            Ok(_) => panic!(\"expected an error\"),\n            Err(e) => e,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -53312,7 +53322,7 @@
   {
     "id": "storage_row_vfs_memory_handle_surfaces_io_error_when_lock_poisoned_5db40bab",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 250,
+    "line": 267,
     "decision": "match err {\n            VfsError::Io { path, .. } => assert_eq!(path, \"/x\"),\n            other => panic!(\"expected Io error, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -53322,7 +53332,7 @@
   {
     "id": "storage_row_vfs_memory_exists_surfaces_io_error_when_lock_poisoned_d21650d8",
     "file": "src/storage/row/vfs/memory.rs",
-    "line": 262,
+    "line": 279,
     "decision": "match err {\n            VfsError::Io { path, .. } => assert_eq!(path, \"/y\"),\n            other => panic!(\"expected Io error, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -53392,7 +53402,7 @@
   {
     "id": "storage_row_vfs_page_source_short_file_reports_short_read_3f526844",
     "file": "src/storage/row/vfs/page_source.rs",
-    "line": 300,
+    "line": 316,
     "decision": "match source.read_page(1) {\n            Err(PageError::ShortRead {\n                page_num,\n                expected,\n                got,\n            }) => {\n                assert_eq!(page_num, 1);\n                assert_eq!(expected, 16);\n                assert_eq!(got, 8);\n            }\n            other => panic!(\"expected ShortRead, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -53402,7 +53412,7 @@
   {
     "id": "storage_row_vfs_page_source_display_and_source_for_each_variant_28c3053b",
     "file": "src/storage/row/vfs/page_source.rs",
-    "line": 345,
+    "line": 361,
     "decision": "match vfs.open_read(Path::new(\"/missing\")) {\n            Err(e) => e,\n            Ok(_) => panic!(\"expected open_read to fail for a missing file\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -53412,7 +53422,7 @@
   {
     "id": "storage_row_vfs_page_source_writable_page_source_rejects_wrong_length_3e1667ec",
     "file": "src/storage/row/vfs/page_source.rs",
-    "line": 383,
+    "line": 399,
     "decision": "match source.write_page(1, &[0u8; 8]) {\n            Err(PageError::WrongLength {\n                page_num,\n                expected,\n                got,\n            }) => {\n                assert_eq!(page_num, 1);\n                assert_eq!(expected, 16);\n                assert_eq!(got, 8);\n            }\n            other => panic!(\"expected WrongLength, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,

@@ -441,9 +441,10 @@ impl Pager {
         let journal_path = companion_path(path, "-journal");
         let mut journal_is_hot = false;
         if vfs.exists(&journal_path)? {
-            let journal = vfs.open_read(&journal_path)?;
+            let journal: AnyVfsFile = vfs.open_read(&journal_path)?.into();
             let mut magic = [0u8; JOURNAL_MAGIC.len()];
-            let n = journal.read_at(&mut magic, 0)?;
+            // A short read must not make a hot journal look cold (#1003).
+            let n = journal.read_full(&mut magic, 0)?;
             journal_is_hot = n == JOURNAL_MAGIC.len() && magic == JOURNAL_MAGIC;
         }
 
@@ -1683,6 +1684,48 @@ mod tests {
         journal_bytes
             .extend_from_slice(&journal::page_checksum(nonce, &original_page_2).to_be_bytes());
         vfs.insert("/test.db-journal", journal_bytes);
+
+        let pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        assert_eq!(pager.read_page(2).unwrap(), (original_page_2).into());
+        assert!(!vfs.exists(Path::new("/test.db-journal")).unwrap());
+    }
+
+    /// A second connection already holding RESERVED on the main file is
+    /// either mid-transaction or already rolling this same journal back
+    /// itself — replaying it here too would race it (oracle:
+    /// `sqlite3OsCheckReservedLock` in `pager.c`'s `hasHotJournal`, #359).
+    /// `open` must refuse rather than recover, leaving the journal and the
+    /// (still-corrupted) main file untouched.
+    /// #1003: the same crash, with every `pread` returning at most 3
+    /// bytes. The journal must still be found hot and rolled back.
+    #[test]
+    fn hot_journal_is_recovered_when_reads_come_back_short() {
+        let mut vfs = MemoryVfs::new();
+        let page_size = 512u32;
+        let mut db = vec![7u8; page_size as usize];
+        db.extend(vec![0xFFu8; page_size as usize]); // corrupted page 2
+        vfs.insert("/test.db", db);
+
+        let original_page_2 = vec![0xAAu8; page_size as usize];
+        let nonce = 42;
+        let header = journal::JournalHeader {
+            n_rec: 1,
+            nonce,
+            initial_page_count: 2,
+            sector_size: page_size,
+            page_size,
+        }
+        .serialize(JOURNAL_MAGIC);
+        let mut journal_bytes = vec![0u8; page_size as usize];
+        journal_bytes[..journal::JOURNAL_HEADER_LEN].copy_from_slice(&header);
+        journal_bytes.extend_from_slice(&2u32.to_be_bytes());
+        journal_bytes.extend_from_slice(&original_page_2);
+        journal_bytes
+            .extend_from_slice(&journal::page_checksum(nonce, &original_page_2).to_be_bytes());
+        vfs.insert("/test.db-journal", journal_bytes);
+        // Shorter than the 8-byte journal magic: a single read would
+        // see a cold journal and skip the rollback.
+        vfs.set_max_read(3);
 
         let pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
         assert_eq!(pager.read_page(2).unwrap(), (original_page_2).into());
