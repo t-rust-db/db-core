@@ -174,7 +174,7 @@ pub(super) fn step_write(vm: &mut Vm, instr: &Instruction) -> Result<Step, ExecE
                 let cursor = vm.cursor_mut(instr.p1)?;
                 match cursor.ephemeral_idx_insert(&key, &collations, stored) {
                     Some(ok) => ok,
-                    None => cursor.idx_insert(key)?,
+                    None => cursor.idx_insert(key.into_vec())?,
                 }
             } else {
                 vm.cursor_mut(instr.p1)?.idx_delete(&key)?

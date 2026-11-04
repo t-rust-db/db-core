@@ -297,24 +297,34 @@ fn decode_single_column(
 /// value it holds — lets [`decode_column`] skip past columns before the
 /// requested index using only the (cheap) header entries, never touching
 /// their bodies. Mirrors the lengths [`decode_serial_value`] returns.
+#[inline]
 fn serial_type_len(serial_type: u64) -> usize {
-    match serial_type {
-        0 | 8 | 9 | 10 | 11 => 0,
-        1 => 1,
-        2 => 2,
-        3 => 3,
-        4 => 4,
-        5 => 6,
-        6 | 7 => 8,
-        n if n % 2 == 0 => (n.wrapping_sub(12) / 2) as usize,
-        n => (n.wrapping_sub(13) / 2) as usize,
+    /// Body bytes of serial types 0..=11.
+    const FIXED: [u8; 12] = [0, 1, 2, 3, 4, 6, 8, 8, 0, 0, 0, 0];
+    match usize::try_from(serial_type).ok().and_then(|n| FIXED.get(n)) {
+        Some(&len) => usize::from(len),
+        // Text and BLOB: (n - 12) / 2 for even n, (n - 13) / 2 for odd n,
+        // which is `(n - 12) >> 1` either way.
+        None => (serial_type.wrapping_sub(12) >> 1) as usize,
     }
 }
 
 /// `decode_varint`, but against `buf` starting at absolute offset `pos`,
 /// with errors reporting the absolute offset rather than one relative to
 /// a sub-slice.
+#[inline]
 fn decode_varint_at(buf: &[u8], pos: usize) -> Result<(u64, usize), RecordError> {
+    // A one-byte varint (every serial type under 128) is nearly every
+    // header entry; skip the general loop for it (#525).
+    if let Some(&byte) = buf.get(pos) {
+        if byte < 0x80 {
+            return Ok((u64::from(byte), 1));
+        }
+    }
+    decode_varint_slow(buf, pos)
+}
+
+fn decode_varint_slow(buf: &[u8], pos: usize) -> Result<(u64, usize), RecordError> {
     let slice = buf
         .get(pos..)
         .ok_or(RecordError::UnexpectedEof { offset: pos })?;
@@ -456,6 +466,42 @@ fn decode_utf16(bytes: &[u8], unit_from_bytes: fn([u8; 2]) -> u16) -> Result<Str
 #[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
+
+    /// The table-driven `serial_type_len` (#525) agrees with the match it
+    /// replaced, for every small serial type and at the u64 extremes.
+    #[test]
+    fn serial_type_len_matches_the_reference_for_every_serial_type() {
+        fn reference(serial_type: u64) -> usize {
+            match serial_type {
+                0 | 8 | 9 | 10 | 11 => 0,
+                1 => 1,
+                2 => 2,
+                3 => 3,
+                4 => 4,
+                5 => 6,
+                6 | 7 => 8,
+                n if n % 2 == 0 => (n.wrapping_sub(12) / 2) as usize,
+                n => (n.wrapping_sub(13) / 2) as usize,
+            }
+        }
+        for n in (0..100_000u64).chain([u64::MAX - 1, u64::MAX, 1 << 40, (1 << 63) + 1]) {
+            assert_eq!(serial_type_len(n), reference(n), "serial type {n}");
+        }
+    }
+
+    /// `decode_varint_at`'s one-byte fast path agrees with the general
+    /// decoder, including at and past the end of the buffer.
+    #[test]
+    fn decode_varint_at_fast_path_matches_the_general_decoder() {
+        let buf = [0x00, 0x7f, 0x80, 0x01, 0x81, 0x00, 0xff];
+        for pos in 0..=buf.len() + 1 {
+            assert_eq!(
+                decode_varint_at(&buf, pos),
+                decode_varint_slow(&buf, pos),
+                "pos {pos}"
+            );
+        }
+    }
 
     /// `parse_header_checked_into` (#949) accepts what `decode_record`
     /// accepts and refuses a body of the wrong length, without decoding it.

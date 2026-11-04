@@ -1046,6 +1046,9 @@ fn register_as_i64(vm: &Vm, reg: i32) -> Result<i64, ExecError> {
 /// The per-column collations an index-key opcode's `P4` names (sqlite-rs
 /// `cursor::seek_key_collations`, #134): `P4::SeekKey(c)` is `c`;
 /// `P4::Int(n)` is `n` BINARY columns.
+/// `count` binary collations without an allocation, for the usual short key.
+static BINARY_COLLATIONS: [Collation; 4] = [Collation::Binary; 4];
+
 fn seek_key_collations<'p>(
     opcode: &'static str,
     p4: &'p P4,
@@ -1060,7 +1063,10 @@ fn seek_key_collations<'p>(
                     reason: format!("key count {n} does not fit in p4"),
                 })?,
             )?;
-            Ok(Cow::Owned(vec![Collation::Binary; count]))
+            Ok(match BINARY_COLLATIONS.get(..count) {
+                Some(binary) => Cow::Borrowed(binary),
+                None => Cow::Owned(vec![Collation::Binary; count]),
+            })
         }
         other => Err(ExecError::MalformedInstruction {
             opcode,
@@ -1089,6 +1095,35 @@ fn register_range(
     Ok(values)
 }
 
+/// Key columns that `Filter`/`Found`/`IdxInsert` and friends read out of
+/// the registers. The one-column key of an `IN (subquery)` or `DISTINCT`
+/// probe lives inline, so probing allocates nothing (#525).
+enum KeyBuf {
+    One([Value; 1]),
+    Many(Vec<Value>),
+}
+
+impl KeyBuf {
+    /// The key as an owned `Vec`, for the opcodes that hand it to a cursor.
+    fn into_vec(self) -> Vec<Value> {
+        match self {
+            KeyBuf::One(one) => one.into(),
+            KeyBuf::Many(many) => many,
+        }
+    }
+}
+
+impl std::ops::Deref for KeyBuf {
+    type Target = [Value];
+
+    fn deref(&self) -> &[Value] {
+        match self {
+            KeyBuf::One(one) => one,
+            KeyBuf::Many(many) => many,
+        }
+    }
+}
+
 /// An index-key operand: the key values from `first_reg` plus the
 /// collations `p4` names (one per key column).
 fn key_from_registers<'p>(
@@ -1096,8 +1131,11 @@ fn key_from_registers<'p>(
     opcode: &'static str,
     first_reg: i32,
     p4: &'p P4,
-) -> Result<(Vec<Value>, Cow<'p, [Collation]>), ExecError> {
+) -> Result<(KeyBuf, Cow<'p, [Collation]>), ExecError> {
     let collations = seek_key_collations(opcode, p4)?;
+    if let [_] = collations.as_ref() {
+        return Ok((KeyBuf::One([vm.register(first_reg)?.clone()]), collations));
+    }
     let count = collations.len();
     let mut key = Vec::with_capacity(count);
     for i in 0..count {
@@ -1109,7 +1147,7 @@ fn key_from_registers<'p>(
             })?;
         key.push(vm.register(reg)?.clone());
     }
-    Ok((key, collations))
+    Ok((KeyBuf::Many(key), collations))
 }
 
 fn in_i64_range(r: f64) -> bool {
