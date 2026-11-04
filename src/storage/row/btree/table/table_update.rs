@@ -10,7 +10,8 @@
 use super::delete::free_overflow_chain;
 use super::insert::{encode_leaf_cell, insert_into_leaf};
 use crate::storage::row::btree::{
-    find_leaf_cell, find_leaf_page, page1_header_start, splice_delete_cell, BtreeError,
+    find_leaf_cell, find_leaf_page, page1_header_start, replace_leaf_cell_same_len,
+    splice_delete_cell, BtreeError,
 };
 use crate::storage::row::header::DatabaseHeader;
 use crate::storage::row::pager::Pager;
@@ -51,10 +52,22 @@ pub fn update_row(
         return super::insert::insert_row(pager, header, root_page, rowid, new_payload);
     }
 
-    splice_delete_cell(buf, header_start, leaf_page, usable_size, pos, true)?;
-    free_overflow_chain(pager, overflow_page)?;
-
-    let cell = encode_leaf_cell(pager, usable_size, rowid, new_payload)?;
+    // Same-size record (e.g. `SET n = n + 1`): overwrite the cell where it
+    // sits. Delete+insert would leave a hole the full leaf can't reuse and
+    // rebuild the whole page for every row.
+    let cell = if overflow_page == 0 {
+        let cell = encode_leaf_cell(pager, usable_size, rowid, new_payload)?;
+        let buf = pager.get_page_mut(leaf_page)?;
+        if replace_leaf_cell_same_len(buf, header_start, leaf_page, usable_size, pos, &cell)? {
+            return Ok(());
+        }
+        splice_delete_cell(buf, header_start, leaf_page, usable_size, pos, true)?;
+        cell
+    } else {
+        splice_delete_cell(buf, header_start, leaf_page, usable_size, pos, true)?;
+        free_overflow_chain(pager, overflow_page)?;
+        encode_leaf_cell(pager, usable_size, rowid, new_payload)?
+    };
     let page_len = usable_size as usize;
     insert_into_leaf(
         pager,
@@ -233,5 +246,46 @@ mod tests {
         .unwrap();
         let updated = cells.iter().find(|(r, _)| *r == 1).unwrap();
         assert!(updated.1.ends_with(big.as_bytes()));
+    }
+
+    /// #524: a same-length rewrite is overwritten in place on a full,
+    /// multi-page tree; a longer and a shorter one go through
+    /// delete+insert. Every row must read back with its latest payload.
+    #[test]
+    fn mixed_length_updates_across_a_multi_page_tree_read_back() {
+        let page_size = 512u32;
+        let (vfs, header) = minimal_db(page_size);
+        let mut pager = Pager::open(&vfs, Path::new("/test.db"), page_size).unwrap();
+        let payload = |i: i64, gen: char, pad: usize| format!("{gen}{i:04}{}", "x".repeat(pad));
+        let n = 80i64;
+        for i in 1..=n {
+            insert_row(&mut pager, &header, 1, i, payload(i, 'a', 60).as_bytes()).unwrap();
+        }
+        for i in 1..=n {
+            let pad = match i % 3 {
+                0 => 60, // same length: in place
+                1 => 90, // longer
+                _ => 20, // shorter
+            };
+            update_row(&mut pager, &header, 1, i, payload(i, 'b', pad).as_bytes()).unwrap();
+        }
+        for i in 1..=n {
+            let pad = match i % 3 {
+                0 => 60,
+                1 => 90,
+                _ => 20,
+            };
+            let (_, leaf) = find_leaf_page(&mut pager, 1, i).unwrap();
+            let buf = pager.get_page_mut(leaf).unwrap().clone();
+            let cells = crate::storage::row::btree::collect_leaf_cells(
+                &buf,
+                page1_header_start(leaf),
+                leaf,
+                header.usable_page_size(),
+            )
+            .unwrap();
+            let cell = cells.iter().find(|(r, _)| *r == i).unwrap();
+            assert!(cell.1.ends_with(payload(i, 'b', pad).as_bytes()), "row {i}");
+        }
     }
 }

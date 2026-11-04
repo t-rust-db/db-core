@@ -48090,10 +48090,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_btree_find_leaf_page_960c45d3",
+    "id": "storage_row_btree_interior_child_for_324cf0cc",
     "file": "src/storage/row/btree.rs",
-    "line": 996,
-    "decision": "rowid <= *key",
+    "line": 1023,
+    "decision": "rowid <= rowid_from_varint(key)",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -48102,7 +48102,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_77e19db4",
     "file": "src/storage/row/btree.rs",
-    "line": 1046,
+    "line": 1065,
     "decision": "*visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -48112,7 +48112,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_8003990a",
     "file": "src/storage/row/btree.rs",
-    "line": 1056,
+    "line": 1075,
     "decision": "match page_type {\n        LEAF_TABLE => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(8);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let (_, payload_len, tail_start) = decode_cell_head(&buf, cell_start, page_num)?;\n                if let Some(overflow_page) = first_overflow_page(\n                    &buf,\n                    tail_start,\n                    payload_len,\n                    usable_size,\n                    page_num,\n                    false,\n                )? {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) = collect_interior_entries(&buf, header_start, page_num)?;\n            for (child, _) in &entries {\n                free_btree_pages_inner(pager, *child, usable_size, encoding, visited, child_depth)?;\n            }\n            free_btree_pages_inner(\n                pager,\n                rightmost,\n                usable_size,\n                encoding,\n                visited,\n                child_depth,\n            )?;\n        }\n        t if t == index::LEAF_INDEX => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(8);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let (payload_len, tail_start) =\n                    index::decode_payload_len(&buf, cell_start, page_num)?;\n                if let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?\n                {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n        }\n        t if t == index::INTERIOR_INDEX => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            let ptr_base = header_start.saturating_add(12);\n            for i in 0..num_cells {\n                let ptr_off = cell_ptr_offset(ptr_base, i);\n                let cell_start = read_cell_pointer(&buf, ptr_off, page_num, i)?;\n                let value_start = cell_start.saturating_add(4);\n                let (payload_len, tail_start) =\n                    index::decode_payload_len(&buf, value_start, page_num)?;\n                if let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?\n                {\n                    free_overflow_chain(pager, page_num, overflow_page, visited)?;\n                }\n            }\n            let (entries, rightmost) = index::collect_index_interior_entries(\n                &*pager,\n                &buf,\n                header_start,\n                page_num,\n                usable_size,\n                encoding,\n            )?;\n            for (child, _, _) in &entries {\n                free_btree_pages_inner(pager, *child, usable_size, encoding, visited, child_depth)?;\n            }\n            free_btree_pages_inner(\n                pager,\n                rightmost,\n                usable_size,\n                encoding,\n                visited,\n                child_depth,\n            )?;\n        }\n        _ => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num,\n                page_type,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48122,7 +48122,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_ff42831d",
     "file": "src/storage/row/btree.rs",
-    "line": 1090,
+    "line": 1109,
     "decision": "t == index::LEAF_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -48132,7 +48132,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_a108a089",
     "file": "src/storage/row/btree.rs",
-    "line": 1105,
+    "line": 1124,
     "decision": "t == index::INTERIOR_INDEX",
     "conditions": 1,
     "vectors_required": 2,
@@ -48142,7 +48142,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_adcff356",
     "file": "src/storage/row/btree.rs",
-    "line": 1064,
+    "line": 1083,
     "decision": "let Some(overflow_page) = first_overflow_page(\n                    &buf,\n                    tail_start,\n                    payload_len,\n                    usable_size,\n                    page_num,\n                    false,\n                )?",
     "conditions": 1,
     "vectors_required": 2,
@@ -48152,7 +48152,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_86369887",
     "file": "src/storage/row/btree.rs",
-    "line": 1098,
+    "line": 1117,
     "decision": "let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -48162,7 +48162,7 @@
   {
     "id": "storage_row_btree_free_btree_pages_inner_86369887_2",
     "file": "src/storage/row/btree.rs",
-    "line": 1114,
+    "line": 1133,
     "decision": "let Some(overflow_page) =\n                    first_overflow_page(&buf, tail_start, payload_len, usable_size, page_num, true)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -48172,7 +48172,7 @@
   {
     "id": "storage_row_btree_count_table_rows_inner_77e19db4",
     "file": "src/storage/row/btree.rs",
-    "line": 1176,
+    "line": 1195,
     "decision": "*visited > MAX_PAGES_VISITED",
     "conditions": 1,
     "vectors_required": 2,
@@ -48182,7 +48182,7 @@
   {
     "id": "storage_row_btree_count_table_rows_inner_1faeb488",
     "file": "src/storage/row/btree.rs",
-    "line": 1186,
+    "line": 1205,
     "decision": "match page_type {\n        LEAF_TABLE => {\n            let num_cells = read_num_cells(&buf, header_start, page_num)?;\n            #[allow(\n                clippy::cast_possible_wrap,\n                reason = \"num_cells is a page's cell count, always <= u16::MAX by file-format construction\"\n            )]\n            let num_cells = num_cells as i64;\n            *total = total.saturating_add(num_cells);\n        }\n        INTERIOR_TABLE => {\n            let (entries, rightmost) = collect_interior_entries(&buf, header_start, page_num)?;\n            for (child, _) in &entries {\n                count_table_rows_inner(source, *child, visited, total, depth.saturating_add(1))?;\n            }\n            count_table_rows_inner(source, rightmost, visited, total, depth.saturating_add(1))?;\n        }\n        _ => {\n            return Err(BtreeError::UnexpectedPageType {\n                page_num,\n                page_type,\n            })\n        }\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48192,7 +48192,7 @@
   {
     "id": "storage_row_btree_collect_leaf_cells_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1235,
+    "line": 1254,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -48202,7 +48202,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_ae549b74",
     "file": "src/storage/row/btree.rs",
-    "line": 1266,
+    "line": 1285,
     "decision": "cell_rowid == rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -48212,7 +48212,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_56d3df42",
     "file": "src/storage/row/btree.rs",
-    "line": 1269,
+    "line": 1288,
     "decision": "cell_rowid > rowid && insert_pos == num_cells",
     "conditions": 2,
     "vectors_required": 3,
@@ -48222,7 +48222,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1276,
+    "line": 1295,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -48232,7 +48232,7 @@
   {
     "id": "storage_row_btree_scan_leaf_cells_c3fa768c",
     "file": "src/storage/row/btree.rs",
-    "line": 1277,
+    "line": 1296,
     "decision": "cell_end > buf.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -48242,7 +48242,7 @@
   {
     "id": "storage_row_btree_find_leaf_cell_f5b401b0",
     "file": "src/storage/row/btree.rs",
-    "line": 1303,
+    "line": 1322,
     "decision": "cell_rowid != rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -48252,7 +48252,7 @@
   {
     "id": "storage_row_btree_find_leaf_cell_19a1ec7a",
     "file": "src/storage/row/btree.rs",
-    "line": 1307,
+    "line": 1326,
     "decision": "(local_size as u64) < payload_len",
     "conditions": 1,
     "vectors_required": 2,
@@ -48262,7 +48262,7 @@
   {
     "id": "storage_row_btree_write_page_common_9f97d939",
     "file": "src/storage/row/btree.rs",
-    "line": 1452,
+    "line": 1471,
     "decision": "needed > usable",
     "conditions": 1,
     "vectors_required": 2,
@@ -48272,7 +48272,7 @@
   {
     "id": "storage_row_btree_write_page_common_3b40d643",
     "file": "src/storage/row/btree.rs",
-    "line": 1481,
+    "line": 1500,
     "decision": "*off >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -48282,7 +48282,7 @@
   {
     "id": "storage_row_btree_write_page_common_0794c5c8",
     "file": "src/storage/row/btree.rs",
-    "line": 1500,
+    "line": 1519,
     "decision": "content_end >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -48292,7 +48292,7 @@
   {
     "id": "storage_row_btree_read_content_start_a5b1bbc4",
     "file": "src/storage/row/btree.rs",
-    "line": 1557,
+    "line": 1576,
     "decision": "v == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48302,7 +48302,7 @@
   {
     "id": "storage_row_btree_write_content_start_4730eeed",
     "file": "src/storage/row/btree.rs",
-    "line": 1566,
+    "line": 1585,
     "decision": "value >= 65536",
     "conditions": 1,
     "vectors_required": 2,
@@ -48312,7 +48312,7 @@
   {
     "id": "storage_row_btree_walk_freeblocks_1108b805",
     "file": "src/storage/row/btree.rs",
-    "line": 1613,
+    "line": 1632,
     "decision": "off != 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48322,7 +48322,7 @@
   {
     "id": "storage_row_btree_walk_freeblocks_907647a7",
     "file": "src/storage/row/btree.rs",
-    "line": 1615,
+    "line": 1634,
     "decision": "n > MAX_FREEBLOCKS",
     "conditions": 1,
     "vectors_required": 2,
@@ -48332,7 +48332,7 @@
   {
     "id": "storage_row_btree_add_freeblock_d839bf34",
     "file": "src/storage/row/btree.rs",
-    "line": 1659,
+    "line": 1678,
     "decision": "insert_pos > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48342,7 +48342,7 @@
   {
     "id": "storage_row_btree_add_freeblock_7486b092",
     "file": "src/storage/row/btree.rs",
-    "line": 1660,
+    "line": 1679,
     "decision": "let Some(&(prev_off, prev_size)) = blocks.get(insert_pos.saturating_sub(1))",
     "conditions": 1,
     "vectors_required": 2,
@@ -48352,7 +48352,7 @@
   {
     "id": "storage_row_btree_add_freeblock_fb958b9e",
     "file": "src/storage/row/btree.rs",
-    "line": 1661,
+    "line": 1680,
     "decision": "prev_off.saturating_add(prev_size) == new_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -48362,7 +48362,7 @@
   {
     "id": "storage_row_btree_add_freeblock_dec9e257",
     "file": "src/storage/row/btree.rs",
-    "line": 1669,
+    "line": 1688,
     "decision": "let Some(&(next_off, next_size)) = blocks.get(insert_pos)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48372,7 +48372,7 @@
   {
     "id": "storage_row_btree_add_freeblock_fa929836",
     "file": "src/storage/row/btree.rs",
-    "line": 1670,
+    "line": 1689,
     "decision": "new_start.saturating_add(new_size) == next_off",
     "conditions": 1,
     "vectors_required": 2,
@@ -48382,7 +48382,7 @@
   {
     "id": "storage_row_btree_splice_insert_cell_76dceda3",
     "file": "src/storage/row/btree.rs",
-    "line": 1701,
+    "line": 1720,
     "decision": "content_start < ptr_end || content_start.saturating_sub(ptr_end) < needed",
     "conditions": 2,
     "vectors_required": 3,
@@ -48390,9 +48390,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_row_btree_replace_leaf_cell_same_len_cc800d69",
+    "file": "src/storage/row/btree.rs",
+    "line": 1773,
+    "decision": "cell_end.saturating_sub(cell_start) != new_cell.len()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_row_btree_splice_delete_cell_2567997a",
     "file": "src/storage/row/btree.rs",
-    "line": 1745,
+    "line": 1789,
     "decision": "index >= num_cells",
     "conditions": 1,
     "vectors_required": 2,
@@ -48402,7 +48412,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_93677d86",
     "file": "src/storage/row/btree.rs",
-    "line": 1753,
+    "line": 1797,
     "decision": "has_rowid",
     "conditions": 1,
     "vectors_required": 2,
@@ -48412,7 +48422,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_af513832",
     "file": "src/storage/row/btree.rs",
-    "line": 1763,
+    "line": 1807,
     "decision": "has_overflow",
     "conditions": 1,
     "vectors_required": 2,
@@ -48422,7 +48432,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_5498646f",
     "file": "src/storage/row/btree.rs",
-    "line": 1775,
+    "line": 1819,
     "decision": "let Some(slice) = buf.get_mut(cell_start..cell_end)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48432,7 +48442,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_b992bc34",
     "file": "src/storage/row/btree.rs",
-    "line": 1780,
+    "line": 1824,
     "decision": "cell_start == content_start",
     "conditions": 1,
     "vectors_required": 2,
@@ -48442,7 +48452,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_a3c31294",
     "file": "src/storage/row/btree.rs",
-    "line": 1783,
+    "line": 1827,
     "decision": "let Some(pos) = blocks.iter().position(|&(o, _)| o == new_content_start)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48452,7 +48462,7 @@
   {
     "id": "storage_row_btree_splice_delete_cell_7975dbd9",
     "file": "src/storage/row/btree.rs",
-    "line": 1789,
+    "line": 1833,
     "decision": "cell_len < MIN_FREEBLOCK_SIZE",
     "conditions": 1,
     "vectors_required": 2,
@@ -48462,7 +48472,7 @@
   {
     "id": "storage_row_btree_page1_header_start_dec9c314",
     "file": "src/storage/row/btree.rs",
-    "line": 1806,
+    "line": 1850,
     "decision": "page_num == 1",
     "conditions": 1,
     "vectors_required": 2,
@@ -48472,7 +48482,7 @@
   {
     "id": "storage_row_btree_require_interior_header_2fd27b70",
     "file": "src/storage/row/btree.rs",
-    "line": 1844,
+    "line": 1888,
     "decision": "page.len() < header_start.saturating_add(12)",
     "conditions": 1,
     "vectors_required": 2,
@@ -48482,7 +48492,7 @@
   {
     "id": "storage_row_btree_text_cf9777d8",
     "file": "src/storage/row/btree.rs",
-    "line": 1984,
+    "line": 2028,
     "decision": "match v {\n            Value::Text(s) => s,\n            other => panic!(\"expected text, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48492,7 +48502,7 @@
   {
     "id": "storage_row_btree_int_50ac411a",
     "file": "src/storage/row/btree.rs",
-    "line": 1991,
+    "line": 2035,
     "decision": "match v {\n            Value::Integer(i) => *i,\n            other => panic!(\"expected integer, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48502,7 +48512,7 @@
   {
     "id": "storage_row_btree_blob_0fd307c4",
     "file": "src/storage/row/btree.rs",
-    "line": 1998,
+    "line": 2042,
     "decision": "match v {\n            Value::Blob(b) => b,\n            other => panic!(\"expected blob, got {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -48512,7 +48522,7 @@
   {
     "id": "storage_row_btree_table_multipage_full_scan_matches_oracle_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2038,
+    "line": 2082,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -48522,7 +48532,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_and_prev_walk_descending_rowid_order_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2084,
+    "line": 2128,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -48532,7 +48542,7 @@
   {
     "id": "storage_row_btree_table_multipage_last_matches_full_scans_final_row_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2113,
+    "line": 2157,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -48542,7 +48552,7 @@
   {
     "id": "storage_row_btree_table_single_page_seek_binary_search_on_small_leaf_c6c2d2df",
     "file": "src/storage/row/btree.rs",
-    "line": 2197,
+    "line": 2241,
     "decision": "let Some(r) = row",
     "conditions": 1,
     "vectors_required": 2,
@@ -48552,7 +48562,7 @@
   {
     "id": "storage_row_btree_sha256_of_8adec907",
     "file": "src/storage/row/btree.rs",
-    "line": 2479,
+    "line": 2523,
     "decision": "msg.len() % 64 != 56",
     "conditions": 1,
     "vectors_required": 2,
@@ -48562,7 +48572,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_885fe06a",
     "file": "src/storage/row/btree.rs",
-    "line": 2686,
+    "line": 2730,
     "decision": "value < 0x80",
     "conditions": 1,
     "vectors_required": 2,
@@ -48572,7 +48582,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_c6634d1d",
     "file": "src/storage/row/btree.rs",
-    "line": 2694,
+    "line": 2738,
     "decision": "value == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -48582,7 +48592,7 @@
   {
     "id": "storage_row_btree_encode_varint_for_test_832a894a",
     "file": "src/storage/row/btree.rs",
-    "line": 2700,
+    "line": 2744,
     "decision": "i + 1 == chunks.len()",
     "conditions": 1,
     "vectors_required": 2,
@@ -48592,7 +48602,7 @@
   {
     "id": "storage_row_btree_local_payload_borrows_from_the_page_instead_of_copying_a3f083e9",
     "file": "src/storage/row/btree.rs",
-    "line": 2792,
+    "line": 2836,
     "decision": "match &row.payload {\n            Payload::Local { page, .. } => {\n                assert!(\n                    Rc::strong_count(page) >= 2,\n                    \"expected the row to share the page's Rc, not hold the only reference\"\n                );\n            }\n            Payload::Owned(_) => panic!(\"expected a borrowed Local payload, got an Owned copy\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -50142,12 +50152,52 @@
   {
     "id": "storage_row_btree_table_table_update_update_row_64d9ae82",
     "file": "src/storage/row/btree/table/table_update.rs",
-    "line": 46,
+    "line": 47,
     "decision": "num_cells <= 1 && !ancestors.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
     "compiler_void": false,
     "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_table_table_update_update_row_60fc8c45",
+    "file": "src/storage/row/btree/table/table_update.rs",
+    "line": 58,
+    "decision": "overflow_page == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_table_table_update_update_row_747af338",
+    "file": "src/storage/row/btree/table/table_update.rs",
+    "line": 61,
+    "decision": "replace_leaf_cell_same_len(buf, header_start, leaf_page, usable_size, pos, &cell)?",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_row_btree_table_table_update_mixed_length_updates_across_a_multi_page_tree_read_back_9b3bd46e",
+    "file": "src/storage/row/btree/table/table_update.rs",
+    "line": 265,
+    "decision": "match i % 3 {\n                0 => 60, // same length: in place\n                1 => 90, // longer\n                _ => 20, // shorter\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_row_btree_table_table_update_mixed_length_updates_across_a_multi_page_tree_read_back_ceebd247",
+    "file": "src/storage/row/btree/table/table_update.rs",
+    "line": 273,
+    "decision": "match i % 3 {\n                0 => 60,\n                1 => 90,\n                _ => 20,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
   },
   {
     "id": "storage_row_format_format_list_value_5810423e",

@@ -989,16 +989,8 @@ pub(super) fn find_leaf_page(
         if page_type == LEAF_TABLE {
             return Ok((ancestors, page_num));
         } else if page_type == INTERIOR_TABLE {
-            let (entries, rightmost) = collect_interior_entries(&page, header_start, page_num)?;
             ancestors.push(page_num);
-            let mut next = rightmost;
-            for (child, key) in &entries {
-                if rowid <= *key {
-                    next = *child;
-                    break;
-                }
-            }
-            page_num = next;
+            page_num = interior_child_for(&page, header_start, page_num, rowid)?;
         } else {
             return Err(BtreeError::UnexpectedPageType {
                 page_num,
@@ -1006,6 +998,33 @@ pub(super) fn find_leaf_page(
             });
         }
     }
+}
+
+/// The child of interior table page `page_num` that routes `rowid`: the
+/// first cell whose key is `>= rowid`, else the rightmost pointer. Reads
+/// cells in place and stops at the match, unlike
+/// [`collect_interior_entries`], which copies every entry (#524: it ran
+/// once per row of a multi-row UPDATE).
+fn interior_child_for(
+    buf: &[u8],
+    header_start: usize,
+    page_num: u32,
+    rowid: i64,
+) -> Result<u32, BtreeError> {
+    let num_cells = read_num_cells(buf, header_start, page_num)?;
+    let ptr_base = header_start.saturating_add(12);
+    for i in 0..num_cells {
+        let cell_start = read_cell_pointer(buf, cell_ptr_offset(ptr_base, i), page_num, i)?;
+        let rest = buf
+            .get(cell_start.saturating_add(4)..)
+            .ok_or(BtreeError::PayloadTooShort { page_num })?;
+        let (key, _) = decode_varint(rest)
+            .map_err(|source| BtreeError::InvalidCellVarint { page_num, source })?;
+        if rowid <= rowid_from_varint(key) {
+            return read_u32(buf, cell_start, page_num);
+        }
+    }
+    read_u32(buf, header_start.saturating_add(8), page_num)
 }
 
 /// Frees every page of the b-tree (table or index) rooted at `root_page`,
@@ -1733,6 +1752,31 @@ pub(super) fn splice_insert_cell(
 /// chain (coalescing with neighbors) if it's at least
 /// [`MIN_FREEBLOCK_SIZE`] bytes, or added to the fragmented-free-bytes
 /// counter otherwise.
+/// Overwrites the leaf table cell at `index` with `new_cell` when both
+/// are the same length (a same-rowid rewrite whose record kept its
+/// size, #524): no pointer shift, freeblock or rebuild. Returns
+/// `Ok(false)`, page untouched, when the lengths differ. The old cell
+/// must not own an overflow chain (the caller checks).
+pub(super) fn replace_leaf_cell_same_len(
+    buf: &mut [u8],
+    header_start: usize,
+    page_num: u32,
+    usable_size: u32,
+    index: usize,
+    new_cell: &[u8],
+) -> Result<bool, BtreeError> {
+    let ptr_off = cell_ptr_offset(header_start.saturating_add(8), index);
+    let cell_start = read_cell_pointer(buf, ptr_off, page_num, index)?;
+    let (_, payload_len, tail_start) = decode_cell_head(buf, cell_start, page_num)?;
+    let local_size = local_payload_size(usable_size, payload_len, false);
+    let cell_end = tail_start.saturating_add(local_size);
+    if cell_end.saturating_sub(cell_start) != new_cell.len() {
+        return Ok(false);
+    }
+    put(buf, cell_start, new_cell, page_num)?;
+    Ok(true)
+}
+
 pub(super) fn splice_delete_cell(
     buf: &mut [u8],
     header_start: usize,
