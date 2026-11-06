@@ -9,7 +9,7 @@
 //! every row exactly once at any moment.
 
 use std::collections::VecDeque;
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -20,17 +20,15 @@ use super::{
     entries, page_hour, publish, remove_empty_parents, IngestError, TableOptions, DATA_DIR,
     STAGING_ROW_GROUP_ROWS, TMP_DIR,
 };
-use crate::storage::column::posix::PosixFile;
-use crate::storage::column::Vfs;
 use crate::storage::ingest::flush;
 use crate::storage::ingest::layout::{
     archive_dir, day_of_hour, hour_of, live_dir, staging_dir, Area, Layout, TierOptions,
 };
 use crate::storage::ingest::manifest::{FileEntry, Manifest};
 use crate::storage::ingest::page::Page;
+use crate::storage::ingest::store::{Store, StoreFile, TableStore};
 use crate::storage::ingest::tier;
 use crate::storage::ingest::wal::Wal;
-use crate::storage::PosixVfs;
 
 /// What a [`Job`] does.
 #[derive(Debug, Clone, Copy)]
@@ -195,14 +193,17 @@ impl Drop for Runner {
 /// Writes files and commits them to the manifest.
 #[derive(Debug)]
 pub(super) struct Flusher {
+    /// The local directory: the WAL, the lock and the scratch `tmp/`.
     dir: PathBuf,
+    /// Where the manifest and the Parquet files live.
+    store: Store,
     wal: Arc<Wal>,
     options: TableOptions,
     /// The manifest as last committed: the flusher's own copy, the only one
     /// that moves.
     manifest: Manifest,
-    /// Files a compaction replaced, deleted at the time given (ns).
-    pending_deletes: Vec<(PathBuf, i64)>,
+    /// Keys of files a compaction replaced, deleted at the time given (ns).
+    pending_deletes: Vec<(String, i64)>,
     shared: Arc<Shared>,
     /// Whether commits are reported through [`View::done`] (background) or
     /// returned to the caller (inline).
@@ -245,6 +246,7 @@ fn staging_range(manifest: &Manifest) -> std::ops::Range<usize> {
 impl Flusher {
     pub fn new(
         dir: PathBuf,
+        store: Store,
         wal: Arc<Wal>,
         options: TableOptions,
         manifest: Manifest,
@@ -253,6 +255,7 @@ impl Flusher {
     ) -> Flusher {
         Flusher {
             dir,
+            store,
             wal,
             options,
             manifest,
@@ -293,7 +296,7 @@ impl Flusher {
         view.pending_deletes = self
             .pending_deletes
             .iter()
-            .map(|(p, _)| p.clone())
+            .map(|(key, _)| self.dir.join(key))
             .collect();
         let result = result.map(|added| {
             if self.background {
@@ -364,10 +367,7 @@ impl Flusher {
         self.crash_point(1)?;
 
         // 2. Publish into data/.
-        let data_dir = self.dir.join(DATA_DIR);
-        crate::storage::ingest::create_dir_all_synced(&data_dir)?;
-        fs::rename(&tmp, data_dir.join(&name))?;
-        File::open(&data_dir)?.sync_all()?;
+        self.store.publish(&tmp, &format!("{DATA_DIR}/{name}"))?;
         self.crash_point(2)?;
 
         // 3. Commit.
@@ -383,7 +383,7 @@ impl Flusher {
             keys: written.keys,
         };
         let next = self.manifest.with_file(entry.clone());
-        next.write(&self.dir)?;
+        next.write_to(&self.store)?;
         self.crash_point(3)?;
 
         // 4. Adopt; 5. release the WAL and the pages.
@@ -430,13 +430,7 @@ impl Flusher {
 
         // 2. Publish the run into the hour's staging directory.
         let target = staging_dir(hour);
-        let target_dir = self.dir.join(&target);
-        crate::storage::ingest::create_dir_all_synced(&target_dir)?;
-        for output in &outputs {
-            fs::rename(tmp.join(&output.name), target_dir.join(&output.name))?;
-        }
-        File::open(&target_dir)?.sync_all()?;
-        fs::remove_dir(&tmp)?;
+        publish(&self.store, &tmp, &target, &outputs)?;
         self.crash_point(22)?;
 
         // 3. Commit.
@@ -444,7 +438,7 @@ impl Flusher {
         for entry in entries(&target, Area::Staging, outputs) {
             next = next.with_file(entry);
         }
-        next.write(&self.dir)?;
+        next.write_to(&self.store)?;
         self.crash_point(23)?;
 
         // 4. Adopt; 5. release the WAL and the pages.
@@ -491,9 +485,9 @@ impl Flusher {
         // merge touched resident until it ends (#854).
         let files = runs
             .iter()
-            .map(|e| PosixVfs.open(&self.dir.join(&e.path)))
+            .map(|e| self.store.open(&e.path))
             .collect::<io::Result<Vec<_>>>()?;
-        let run_files: Vec<(&FileEntry, &PosixFile)> = runs.iter().zip(files.iter()).collect();
+        let run_files: Vec<(&FileEntry, &StoreFile)> = runs.iter().zip(files.iter()).collect();
 
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);
@@ -511,14 +505,14 @@ impl Flusher {
 
         // 2. Publish the hour's directory.
         let target = live_dir(hour);
-        publish(&self.dir, &tmp, &target)?;
+        publish(&self.store, &tmp, &target, &outputs)?;
         self.crash_point(2)?;
 
         // 3. Commit: the runs out, the hour in.
         let entries = entries(&target, Area::Live, outputs);
         let mut next = self.manifest.replacing(staged, entries.clone());
         next.flushed_lsn = lsn_hi;
-        next.write(&self.dir)?;
+        next.write_to(&self.store)?;
         self.crash_point(3)?;
 
         // 4. Adopt; 5. release the WAL and the pages.
@@ -529,7 +523,7 @@ impl Flusher {
         }
         let at = now.saturating_add(grace);
         self.pending_deletes
-            .extend(runs.iter().map(|e| (self.dir.join(&e.path), at)));
+            .extend(runs.iter().map(|e| (e.path.clone(), at)));
         self.crash_point(5)?;
         Ok(entries)
     }
@@ -589,7 +583,7 @@ impl Flusher {
             return Ok(());
         }
         let next = self.manifest.dropping(count);
-        next.write(&self.dir)?;
+        next.write_to(&self.store)?;
         self.crash_point(14)?;
         let dropped = self
             .manifest
@@ -600,7 +594,7 @@ impl Flusher {
         self.adopt(next, false);
         let at = now.saturating_add(tier_options.delete_grace_ns);
         self.pending_deletes
-            .extend(dropped.iter().map(|e| (self.dir.join(&e.path), at)));
+            .extend(dropped.iter().map(|e| (e.path.clone(), at)));
         Ok(())
     }
 
@@ -626,9 +620,9 @@ impl Flusher {
         // day resident until the merge ends (#854).
         let files = inputs
             .iter()
-            .map(|e| PosixVfs.open(&self.dir.join(&e.path)))
+            .map(|e| self.store.open(&e.path))
             .collect::<io::Result<Vec<_>>>()?;
-        let input_files: Vec<(&FileEntry, &PosixFile)> = inputs.iter().zip(files.iter()).collect();
+        let input_files: Vec<(&FileEntry, &StoreFile)> = inputs.iter().zip(files.iter()).collect();
 
         // 1. Write under tmp/.
         let tmp = self.dir.join(TMP_DIR).join(&id);
@@ -644,20 +638,20 @@ impl Flusher {
 
         // 2. Publish the day's directory.
         let target = archive_dir(day);
-        publish(&self.dir, &tmp, &target)?;
+        publish(&self.store, &tmp, &target, &outputs)?;
         self.crash_point(12)?;
 
         // 3. Commit: the inputs out, the outputs in, in one swap.
         let entries = entries(&target, Area::Archive, outputs);
         let next = self.manifest.replacing(range, entries.clone());
-        next.write(&self.dir)?;
+        next.write_to(&self.store)?;
         self.crash_point(13)?;
         self.adopt(next, false);
 
         // 4. Delete the inputs after the grace period.
         let at = now.saturating_add(tier_options.delete_grace_ns);
         self.pending_deletes
-            .extend(inputs.iter().map(|e| (self.dir.join(&e.path), at)));
+            .extend(inputs.iter().map(|e| (e.path.clone(), at)));
         Ok(entries)
     }
 
@@ -668,13 +662,14 @@ impl Flusher {
             .into_iter()
             .partition(|(_, at)| *at <= now);
         self.pending_deletes = later;
-        for (path, _) in due {
-            match fs::remove_file(&path) {
+        for (key, _) in due {
+            match self.store.delete(&key) {
                 Ok(()) => {}
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e.into()),
             }
-            remove_empty_parents(&self.dir, &path);
+            // A local store leaves the hour's or day's directory behind.
+            remove_empty_parents(&self.dir, &self.dir.join(&key));
         }
         Ok(())
     }

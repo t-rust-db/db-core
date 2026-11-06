@@ -3853,6 +3853,10 @@ impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix:
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
+impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
+pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 pub enum db_core::storage::column::Annotation
 pub db_core::storage::column::Annotation::Bytes
 pub db_core::storage::column::Annotation::Decimal
@@ -4011,6 +4015,10 @@ impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix:
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
+impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
+pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 pub fn db_core::storage::column::annotation(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize) -> db_core::storage::column::decode::Annotation
 pub fn db_core::storage::column::decode_column_at(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType, &[u32]) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
 pub fn db_core::storage::column::decode_column_full(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize, db_core::storage::parquet::footer::PhysicalType) -> core::result::Result<db_core::storage::column::decode::Decoded, db_core::storage::parquet::parquet_file::FileError>
@@ -4339,6 +4347,7 @@ pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::
 pub fn db_core::storage::ingest::snapshot::Snapshot::last_lsn(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::Snapshot::open_in(&impl db_core::storage::ingest::store::TableStore) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::snapshot::Snapshot::pages(&self) -> &[db_core::storage::ingest::page::Page]
 pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::ingest::error::IngestError>
@@ -4355,6 +4364,30 @@ pub fn db_core::storage::ingest::snapshot::TableReader::fmt(&self, &mut core::fm
 pub fn db_core::storage::ingest::snapshot::cast(db_core::vm::batch::Value, db_core::storage::parquet::schema::ColumnType) -> db_core::vm::batch::Value
 pub fn db_core::storage::ingest::snapshot::physical_type(db_core::storage::parquet::schema::ColumnType) -> db_core::storage::parquet::footer::PhysicalType
 pub mod db_core::storage::ingest::store
+pub enum db_core::storage::ingest::store::Store
+pub db_core::storage::ingest::store::Store::Local(db_core::storage::ingest::LocalFs)
+impl db_core::storage::ingest::store::Store
+pub fn db_core::storage::ingest::store::Store::local(impl core::convert::Into<std::path::PathBuf>) -> db_core::storage::ingest::store::Store
+impl core::clone::Clone for db_core::storage::ingest::store::Store
+pub fn db_core::storage::ingest::store::Store::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::store::Store
+pub fn db_core::storage::ingest::store::Store::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::store::Store
+pub type db_core::storage::ingest::store::Store::File = db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::Store::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::store::Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::Store::open(&self, &str) -> core::io::error::Result<db_core::storage::ingest::store::StoreFile>
+pub fn db_core::storage::ingest::store::Store::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
+pub enum db_core::storage::ingest::store::StoreFile
+pub db_core::storage::ingest::store::StoreFile::Local(db_core::storage::column::posix::PosixFile)
+impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
+pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 pub struct db_core::storage::ingest::store::LocalFs
 impl db_core::storage::ingest::LocalFs
 pub fn db_core::storage::ingest::LocalFs::new(impl core::convert::Into<std::path::PathBuf>) -> Self
@@ -4364,23 +4397,45 @@ pub fn db_core::storage::ingest::LocalFs::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::LocalFs
 pub fn db_core::storage::ingest::LocalFs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::LocalFs
+pub type db_core::storage::ingest::LocalFs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::LocalFs::open(&self, &str) -> core::io::error::Result<db_core::storage::column::posix::PosixFile>
+pub fn db_core::storage::ingest::LocalFs::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::LocalFs::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
 pub trait db_core::storage::ingest::store::TableStore: core::marker::Send + core::marker::Sync
+pub type db_core::storage::ingest::store::TableStore::File: db_core::storage::column::vfs::VfsFile
 pub fn db_core::storage::ingest::store::TableStore::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::TableStore::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::ingest::store::TableStore::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::TableStore::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::TableStore::open(&self, &str) -> core::io::error::Result<Self::File>
+pub fn db_core::storage::ingest::store::TableStore::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::TableStore::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::TableStore::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
 impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::LocalFs
+pub type db_core::storage::ingest::LocalFs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::LocalFs::open(&self, &str) -> core::io::error::Result<db_core::storage::column::posix::PosixFile>
+pub fn db_core::storage::ingest::LocalFs::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::LocalFs::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
+impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::store::Store
+pub type db_core::storage::ingest::store::Store::File = db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::Store::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::store::Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::Store::open(&self, &str) -> core::io::error::Result<db_core::storage::ingest::store::StoreFile>
+pub fn db_core::storage::ingest::store::Store::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
 pub mod db_core::storage::ingest::table
 pub enum db_core::storage::ingest::table::IngestError
 pub db_core::storage::ingest::table::IngestError::Corrupt(alloc::string::String)
@@ -4454,6 +4509,7 @@ pub fn db_core::storage::ingest::table::TableWriter::flush_status(&self) -> db_c
 pub fn db_core::storage::ingest::table::TableWriter::head_page(&self) -> core::option::Option<db_core::storage::ingest::page::Page>
 pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::open_in(&std::path::Path, db_core::storage::ingest::store::Store, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> impl core::iter::traits::iterator::Iterator<Item = std::path::PathBuf>
 pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
@@ -4691,6 +4747,30 @@ pub fn db_core::storage::ingest::record::RecordValue::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::ingest::record::RecordValue
 pub fn db_core::storage::ingest::record::RecordValue::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::record::RecordValue
+pub enum db_core::storage::ingest::Store
+pub db_core::storage::ingest::Store::Local(db_core::storage::ingest::LocalFs)
+impl db_core::storage::ingest::store::Store
+pub fn db_core::storage::ingest::store::Store::local(impl core::convert::Into<std::path::PathBuf>) -> db_core::storage::ingest::store::Store
+impl core::clone::Clone for db_core::storage::ingest::store::Store
+pub fn db_core::storage::ingest::store::Store::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::store::Store
+pub fn db_core::storage::ingest::store::Store::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::store::Store
+pub type db_core::storage::ingest::store::Store::File = db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::Store::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::store::Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::Store::open(&self, &str) -> core::io::error::Result<db_core::storage::ingest::store::StoreFile>
+pub fn db_core::storage::ingest::store::Store::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
+pub enum db_core::storage::ingest::StoreFile
+pub db_core::storage::ingest::StoreFile::Local(db_core::storage::column::posix::PosixFile)
+impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
+pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 pub enum db_core::storage::ingest::WalError
 pub db_core::storage::ingest::WalError::Closed
 pub db_core::storage::ingest::WalError::Corrupt
@@ -4767,11 +4847,15 @@ pub fn db_core::storage::ingest::LocalFs::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::LocalFs
 pub fn db_core::storage::ingest::LocalFs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::LocalFs
+pub type db_core::storage::ingest::LocalFs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::LocalFs::open(&self, &str) -> core::io::error::Result<db_core::storage::column::posix::PosixFile>
+pub fn db_core::storage::ingest::LocalFs::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::LocalFs::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
 pub struct db_core::storage::ingest::Manifest
 pub db_core::storage::ingest::Manifest::dropped_lsn: u64
 pub db_core::storage::ingest::Manifest::evolved: bool
@@ -4860,6 +4944,7 @@ pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::
 pub fn db_core::storage::ingest::snapshot::Snapshot::last_lsn(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::Snapshot::open_in(&impl db_core::storage::ingest::store::TableStore) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::snapshot::Snapshot::pages(&self) -> &[db_core::storage::ingest::page::Page]
 pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::ingest::error::IngestError>
@@ -4927,6 +5012,7 @@ pub fn db_core::storage::ingest::table::TableWriter::flush_status(&self) -> db_c
 pub fn db_core::storage::ingest::table::TableWriter::head_page(&self) -> core::option::Option<db_core::storage::ingest::page::Page>
 pub fn db_core::storage::ingest::table::TableWriter::manifest(&self) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::table::TableWriter::open(&std::path::Path, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::table::TableWriter::open_in(&std::path::Path, db_core::storage::ingest::store::Store, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::table::TableWriter, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::pending_deletes(&self) -> impl core::iter::traits::iterator::Iterator<Item = std::path::PathBuf>
 pub fn db_core::storage::ingest::table::TableWriter::seal_head(&mut self) -> core::result::Result<(), db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::table::TableWriter::sealed_pages(&self) -> &[db_core::storage::ingest::page::Page]
@@ -5005,17 +5091,35 @@ pub const db_core::storage::ingest::MANIFEST_FILE: &str
 pub const db_core::storage::ingest::TMP_DIR: &str
 pub const db_core::storage::ingest::WAL_DIR: &str
 pub trait db_core::storage::ingest::TableStore: core::marker::Send + core::marker::Sync
+pub type db_core::storage::ingest::TableStore::File: db_core::storage::column::vfs::VfsFile
 pub fn db_core::storage::ingest::TableStore::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::TableStore::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::ingest::TableStore::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::TableStore::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::TableStore::open(&self, &str) -> core::io::error::Result<Self::File>
+pub fn db_core::storage::ingest::TableStore::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::TableStore::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::TableStore::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
 impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::LocalFs
+pub type db_core::storage::ingest::LocalFs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
 pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::LocalFs::open(&self, &str) -> core::io::error::Result<db_core::storage::column::posix::PosixFile>
+pub fn db_core::storage::ingest::LocalFs::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::LocalFs::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
+impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::store::Store
+pub type db_core::storage::ingest::store::Store::File = db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::Store::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::store::Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::Store::open(&self, &str) -> core::io::error::Result<db_core::storage::ingest::store::StoreFile>
+pub fn db_core::storage::ingest::store::Store::publish(&self, &std::path::Path, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::Store::remove_empty_dirs(&self, &str) -> core::io::error::Result<()>
 pub type db_core::storage::ingest::Record = (u64, alloc::vec::Vec<u8>)
 pub mod db_core::storage::parquet
 pub mod db_core::storage::parquet::compression
@@ -8415,6 +8519,10 @@ impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix:
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
+impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
+pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
+pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 pub type db_core::storage::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
 pub mod db_core::types
 pub enum db_core::types::Literal

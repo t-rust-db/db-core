@@ -7,10 +7,11 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 use super::{check_key, TableStore};
-use crate::storage::column::MmapRegion;
+use crate::storage::column::memory::MemoryFile;
+use crate::storage::column::{MmapRegion, Vfs};
 
-#[derive(Default)]
-pub(super) struct MemoryStore {
+#[derive(Default, Debug)]
+pub struct MemoryStore {
     objects: Mutex<BTreeMap<String, Vec<u8>>>,
     /// Writes still allowed; `None` lets every write through.
     writes_left: Mutex<Option<usize>>,
@@ -19,8 +20,13 @@ pub(super) struct MemoryStore {
 impl MemoryStore {
     /// Lets the next `writes` puts or deletes through, then fails all later
     /// ones with nothing applied: a crash after that many writes.
-    pub(super) fn crash_after(&self, writes: usize) {
+    pub fn crash_after(&self, writes: usize) {
         *self.writes_left.lock().unwrap() = Some(writes);
+    }
+
+    /// Ends the injected crash: writes go through again, as after a restart.
+    pub fn lift_crash(&self) {
+        *self.writes_left.lock().unwrap() = None;
     }
 
     fn write_allowed(&self) -> io::Result<()> {
@@ -37,6 +43,28 @@ impl MemoryStore {
 }
 
 impl TableStore for MemoryStore {
+    type File = MemoryFile;
+
+    fn open(&self, key: &str) -> io::Result<MemoryFile> {
+        let bytes = self
+            .get(key)?
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        let vfs = crate::storage::column::MemoryVfs::new();
+        vfs.insert("object", bytes);
+        vfs.open(std::path::Path::new("object"))
+    }
+
+    fn publish(&self, local: &std::path::Path, key: &str) -> io::Result<()> {
+        check_key(key)?;
+        let bytes = std::fs::read(local)?;
+        self.put(key, &bytes)?;
+        std::fs::remove_file(local)
+    }
+
+    fn remove_empty_dirs(&self, _prefix: &str) -> io::Result<()> {
+        Ok(())
+    }
+
     fn get(&self, key: &str) -> io::Result<Option<Vec<u8>>> {
         check_key(key)?;
         Ok(self.objects.lock().unwrap().get(key).cloned())

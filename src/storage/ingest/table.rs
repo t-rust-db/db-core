@@ -37,7 +37,7 @@
 //! This is the single-threaded core; [`super::Table`] (#574) is the
 //! public, cloneable handle over it, with the line sources.
 
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
@@ -52,6 +52,7 @@ use super::record::{
     RecordValue,
 };
 use super::snapshot::Snapshot;
+use super::store::{LocalFs, Store, TableStore};
 use super::tier::Output;
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
@@ -124,7 +125,10 @@ pub struct TableWriter {
     // WAL, before the writer's own handle drops.
     runner: Runner,
     shared: Arc<Shared>,
+    /// The local directory: the WAL, the lock and the scratch `tmp/`.
     dir: PathBuf,
+    /// Where the manifest and the Parquet files live.
+    store: Store,
     wal: Arc<Wal>,
     options: TableOptions,
     parser: DetectedParser,
@@ -144,6 +148,19 @@ impl TableWriter {
     /// writes the manifest, cleans up after an interrupted flush, and
     /// rebuilds pages from the WAL above `flushed_lsn`.
     pub fn open(table: &Path, options: TableOptions) -> Result<TableWriter, IngestError> {
+        TableWriter::open_in(table, Store::Local(LocalFs::new(table)), options)
+    }
+
+    /// [`TableWriter::open`] with the manifest and the Parquet files kept in
+    /// `store` and the rest (the WAL, the writer lock, the scratch `tmp/`)
+    /// in the local directory `local`, which stays on the writer's disk.
+    /// `open` is this with `store` the directory `local` itself.
+    pub fn open_in(
+        local: &Path,
+        store: Store,
+        options: TableOptions,
+    ) -> Result<TableWriter, IngestError> {
+        let table = local;
         let lock = TableLock::acquire(table).map_err(|e| match e {
             LockError::Held => IngestError::Wal(WalError::Locked),
             LockError::Io(e) => IngestError::Io(e),
@@ -178,12 +195,12 @@ impl TableWriter {
                 }
             }
         }
-        let mut manifest = match Manifest::read(table)? {
+        let mut manifest = match Manifest::read_from(&store)? {
             Some(m) => m,
             None => {
                 let mut m = Manifest::new(options.format, options.layout.kind());
                 m.schema.clone_from(&options.schema);
-                m.write(table)?;
+                m.write_to(&store)?;
                 m
             }
         };
@@ -199,7 +216,7 @@ impl TableWriter {
             }
             manifest.schema.clone_from(&options.schema);
             manifest.evolved = true;
-            manifest.write(table)?;
+            manifest.write_to(&store)?;
         }
         // Like the other tier options the session key may change between
         // opens; readers see it through the manifest, so it is committed
@@ -210,7 +227,7 @@ impl TableWriter {
         };
         if manifest.session_key != session_key {
             manifest.session_key = session_key;
-            manifest.write(table)?;
+            manifest.write_to(&store)?;
         }
         if manifest.schema.is_none() && manifest.format != options.format {
             return Err(IngestError::FormatMismatch {
@@ -224,7 +241,7 @@ impl TableWriter {
                 requested: options.layout.kind(),
             });
         }
-        clean_up(table, &manifest)?;
+        clean_up(table, &store, &manifest)?;
         let (wal, records) =
             Wal::open_locked(lock, table, manifest.flushed_lsn, options.wal.clone())?;
         let wal = Arc::new(wal);
@@ -232,6 +249,7 @@ impl TableWriter {
         let spilled_hour = staging_hour(&manifest);
         let flusher = Flusher::new(
             table.to_path_buf(),
+            store.clone(),
             Arc::clone(&wal),
             options.clone(),
             manifest.clone(),
@@ -251,6 +269,7 @@ impl TableWriter {
             runner,
             shared,
             dir: table.to_path_buf(),
+            store,
             wal,
             parser: DetectedParser::for_format(manifest.format),
             source: Source::new(SourceKind::Stdin, &table.to_string_lossy()),
@@ -712,7 +731,7 @@ impl TableWriter {
             .chain(self.sealed.iter().cloned())
             .chain(self.head_page())
             .collect();
-        Snapshot::new(&self.dir, manifest, pages)
+        Snapshot::new(&self.store, manifest, pages)
     }
 
     /// The table directory.
@@ -773,16 +792,17 @@ fn page_hour(page: &Page) -> Option<i64> {
     page.first_observed().map(hour_of)
 }
 
-/// Renames `tmp` (a finished output directory) to `target` under `table`,
-/// creating `target`'s parent and fsyncing it.
-fn publish(table: &Path, tmp: &Path, target: &str) -> Result<(), IngestError> {
-    let target = table.join(target);
-    let parent = target
-        .parent()
-        .ok_or_else(|| IngestError::Corrupt(format!("{} has no parent", target.display())))?;
-    super::create_dir_all_synced(parent)?;
-    fs::rename(tmp, &target)?;
-    File::open(parent)?.sync_all()?;
+/// Publishes the finished `outputs` in the scratch directory `tmp` into the
+/// store under `target`, then removes `tmp`. A crash part-way leaves some
+/// outputs published and uncommitted; recovery deletes them.
+fn publish(store: &Store, tmp: &Path, target: &str, outputs: &[Output]) -> Result<(), IngestError> {
+    for output in outputs {
+        store.publish(
+            &tmp.join(&output.name),
+            &format!("{target}/{}", output.name),
+        )?;
+    }
+    fs::remove_dir(tmp)?;
     Ok(())
 }
 
@@ -816,51 +836,33 @@ fn remove_empty_parents(table: &Path, path: &Path) {
     }
 }
 
-/// Recovery steps 1-2: empty `tmp/`, delete the Parquet files in `data/`,
-/// `live/`, `archive/` and `staging/` the manifest does not list (a flush,
-/// spill or compaction published but not committed, or inputs a
+/// Recovery steps 1-2: empty the scratch `tmp/`, delete the Parquet files in
+/// `data/`, `live/`, `archive/` and `staging/` the manifest does not list (a
+/// flush, spill or compaction published but not committed, or inputs a
 /// compaction or an hour's close replaced and had not deleted yet), and
 /// the directories left empty.
-fn clean_up(table: &Path, manifest: &Manifest) -> Result<(), IngestError> {
-    let tmp = table.join(TMP_DIR);
+fn clean_up(local: &Path, store: &Store, manifest: &Manifest) -> Result<(), IngestError> {
+    let tmp = local.join(TMP_DIR);
     if tmp.exists() {
         fs::remove_dir_all(&tmp)?;
     }
     for area in [Area::Data, Area::Live, Area::Archive, Area::Staging] {
-        clean_dir(&table.join(area.as_str()), area.as_str(), manifest)?;
+        let prefix = format!("{}/", area.as_str());
+        for key in store.list(&prefix)? {
+            if !manifest.files.iter().any(|f| f.path == key) {
+                store.delete(&key)?;
+            }
+        }
+        store.remove_empty_dirs(&prefix)?;
     }
     Ok(())
-}
-
-/// [`clean_up`] for one directory, `relative` to the table; returns whether
-/// it is left empty.
-fn clean_dir(dir: &Path, relative: &str, manifest: &Manifest) -> Result<bool, IngestError> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Ok(false);
-    };
-    let mut empty = true;
-    for entry in entries {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = format!("{relative}/{name}");
-        if entry.file_type()?.is_dir() {
-            if clean_dir(&entry.path(), &path, manifest)? {
-                fs::remove_dir(entry.path())?;
-            } else {
-                empty = false;
-            }
-        } else if manifest.files.iter().any(|f| f.path == path) {
-            empty = false;
-        } else {
-            fs::remove_file(entry.path())?;
-        }
-    }
-    Ok(empty)
 }
 
 mod flusher;
 #[cfg(test)]
 mod record_tests;
+#[cfg(test)]
+mod store_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

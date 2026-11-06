@@ -80,7 +80,7 @@ impl Snapshot {
             };
             let pages =
                 pages_from_records(table, manifest.format, manifest.schema.as_deref(), records)?;
-            match Snapshot::new(table, manifest, pages) {
+            match Snapshot::new(&LocalFs::new(table), manifest, pages) {
                 // A compaction replaced the file and its grace period is
                 // over: a newer manifest no longer lists it.
                 Err(IngestError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
@@ -94,14 +94,38 @@ impl Snapshot {
         )))
     }
 
+    /// A snapshot of the table kept in `store`: its committed files. A
+    /// reader of a store has no WAL tail, so it sees what the writer has
+    /// flushed, not the records still in the writer's WAL.
+    pub fn open_in(store: &impl TableStore) -> Result<Snapshot, IngestError> {
+        for _ in 0..ATTEMPTS {
+            let manifest = Manifest::read_from(store)?.ok_or_else(|| {
+                IngestError::Io(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no manifest.json, not a table",
+                ))
+            })?;
+            match Snapshot::new(store, manifest, Vec::new()) {
+                // A compaction replaced the file and its grace period is
+                // over: a newer manifest no longer lists it.
+                Err(IngestError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                other => return other,
+            }
+        }
+        Err(IngestError::Corrupt(format!(
+            "a listed file does not match the manifest after {ATTEMPTS} reads"
+        )))
+    }
+
     /// A snapshot of `manifest`'s files and `pages`, which hold the records
     /// above its `flushed_lsn`.
     pub(crate) fn new(
-        table: &Path,
+        store: &impl TableStore,
         manifest: Manifest,
         pages: Vec<Page>,
     ) -> Result<Snapshot, IngestError> {
-        let store = LocalFs::new(table);
         let files = manifest
             .files
             .iter()

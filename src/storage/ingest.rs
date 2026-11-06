@@ -50,7 +50,7 @@ pub use manifest::{FileEntry, KeyBound, KeyRange, Manifest, ManifestError, MANIF
 pub use page::{Page, PageBody};
 pub use record::{RecordValue, RowPage};
 pub use snapshot::{ReaderStats, Snapshot, TableReader};
-pub use store::{LocalFs, TableStore};
+pub use store::{LocalFs, Store, StoreFile, TableStore};
 #[cfg(feature = "ingest")]
 pub use table::{FlushStatus, TableOptions, TableWriter, DATA_DIR, TMP_DIR};
 #[cfg(feature = "ingest")]
@@ -61,7 +61,6 @@ pub use wal::{Ack, Record, WalError, WalOptions, Watermarks, WAL_DIR};
 /// directory it creates (#648): `fs::create_dir_all` leaves a new entry in
 /// the parent's page cache, so a power loss could drop a directory whose
 /// files a durable manifest (or a durable WAL ack) already counts on.
-#[cfg(feature = "ingest")]
 pub(crate) fn create_dir_all_synced(dir: &std::path::Path) -> std::io::Result<()> {
     let mut missing = Vec::new();
     let mut at = Some(dir);

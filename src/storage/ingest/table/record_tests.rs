@@ -573,10 +573,11 @@ mod mcdc_vectors {
         TableWriter::open(&t.0, options)
     }
 
-    // storage_ingest_table_open_e26f89e4:
+    // storage_ingest_table_open_in_e26f89e4:
     // `manifest.schema.is_none() && manifest.format != options.format`
     #[test]
-    fn mcdc__storage_ingest_table_open_e26f89e4__v1_a_lines_table_in_another_format_is_refused() {
+    fn mcdc__storage_ingest_table_open_in_e26f89e4__v1_a_lines_table_in_another_format_is_refused()
+    {
         let t = TempTable::new();
         TableWriter::open(&t.0, TableOptions::default())
             .unwrap()
@@ -593,7 +594,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__storage_ingest_table_open_e26f89e4__v2_a_record_table_ignores_the_format() {
+    fn mcdc__storage_ingest_table_open_in_e26f89e4__v2_a_record_table_ignores_the_format() {
         let t = TempTable::new();
         TableWriter::open(&t.0, flat()).unwrap().close().unwrap();
         let logfmt = TableOptions {
@@ -604,7 +605,7 @@ mod mcdc_vectors {
     }
 
     #[test]
-    fn mcdc__storage_ingest_table_open_e26f89e4__v3_a_lines_table_in_its_format_opens() {
+    fn mcdc__storage_ingest_table_open_in_e26f89e4__v3_a_lines_table_in_its_format_opens() {
         let t = TempTable::new();
         TableWriter::open(&t.0, TableOptions::default())
             .unwrap()

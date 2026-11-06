@@ -2,8 +2,21 @@
 //! [`run`], so a backend that drifts from `LocalFs` fails here.
 
 use std::io::ErrorKind;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::TableStore;
+use crate::storage::column::VfsFile;
+
+static SCRATCH: AtomicU32 = AtomicU32::new(0);
+
+/// A fresh local directory for files to publish.
+fn scratch() -> std::path::PathBuf {
+    let n = SCRATCH.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("db-core-conformance-{}-{n}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
 
 pub(super) fn run(store: &impl TableStore) {
     // Empty: missing objects are None / NotFound, and listing is empty.
@@ -25,6 +38,55 @@ pub(super) fn run(store: &impl TableStore) {
     store.put("data2/z", b"").unwrap();
     assert_eq!(store.list("data/").unwrap(), ["data/sub/y", "data/x"]);
     assert_eq!(store.list("data").unwrap(), store.list("data/").unwrap());
+
+    // Open reads at an offset; a missing object is NotFound.
+    store.put("o", b"0123456789").unwrap();
+    let f = store.open("o").unwrap();
+    assert_eq!(f.size().unwrap(), 10);
+    let mut buf = [0u8; 4];
+    assert_eq!(f.read_at(3, &mut buf).unwrap(), 4);
+    assert_eq!(&buf, b"3456");
+    assert_eq!(f.read_at(8, &mut buf).unwrap(), 2);
+    assert_eq!(f.read_at(10, &mut buf).unwrap(), 0);
+    assert_eq!(
+        store.open("missing").err().unwrap().kind(),
+        ErrorKind::NotFound
+    );
+    store.delete("o").unwrap();
+
+    // Publish moves a local file in (creating its "directory"), replaces an
+    // object already there, and leaves nothing behind locally.
+    let dir = scratch();
+    let file = dir.join("f");
+    std::fs::write(&file, b"first").unwrap();
+    store.publish(&file, "pub/deep/f").unwrap();
+    assert!(!file.exists());
+    assert_eq!(
+        store.get("pub/deep/f").unwrap().as_deref(),
+        Some(&b"first"[..])
+    );
+    std::fs::write(&file, b"second").unwrap();
+    store.publish(&file, "pub/deep/f").unwrap();
+    assert_eq!(
+        store.get("pub/deep/f").unwrap().as_deref(),
+        Some(&b"second"[..])
+    );
+    assert_eq!(
+        store
+            .publish(&dir.join("absent"), "pub/x")
+            .err()
+            .unwrap()
+            .kind(),
+        ErrorKind::NotFound
+    );
+    assert_eq!(store.get("pub/x").unwrap(), None);
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Removing empty directories never removes an object.
+    store.remove_empty_dirs("").unwrap();
+    store.remove_empty_dirs("pub/").unwrap();
+    assert_eq!(store.list("pub/").unwrap(), ["pub/deep/f"]);
+    store.delete("pub/deep/f").unwrap();
 
     // Delete removes the object only.
     store.delete("a").unwrap();
