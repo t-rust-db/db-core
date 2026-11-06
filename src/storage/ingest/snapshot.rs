@@ -33,14 +33,14 @@ use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, HeadPage, Page, PageBody};
 use super::record::{check_row, decode_row, pad_row};
 use super::recover::{read_from, read_tail, WalPos};
+use super::store::{LocalFs, TableStore};
 use super::wal::{Record, WAL_DIR};
-use crate::storage::column::{MmapRegion, Vfs, VfsFile};
+use crate::storage::column::MmapRegion;
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::schema::{ColumnSpec, ColumnType, DecimalStorage};
 use crate::storage::parquet::ParquetFile;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
-use crate::storage::PosixVfs;
 use crate::vm::batch::Value;
 
 /// How often [`Snapshot::open`] re-reads after a flush moved on.
@@ -101,10 +101,11 @@ impl Snapshot {
         manifest: Manifest,
         pages: Vec<Page>,
     ) -> Result<Snapshot, IngestError> {
+        let store = LocalFs::new(table);
         let files = manifest
             .files
             .iter()
-            .map(|f| Ok(Arc::new(PosixVfs.open(&table.join(&f.path))?.mmap()?)))
+            .map(|f| Ok(Arc::new(store.map(&f.path)?)))
             .collect::<io::Result<Vec<_>>>()?;
         Ok(Snapshot {
             manifest,
@@ -542,11 +543,12 @@ impl TableReader {
     /// Takes the snapshot of the held manifest and pages, mapping only
     /// the files not mapped yet.
     fn assemble(&mut self) -> Result<(), IngestError> {
+        let store = LocalFs::new(&self.dir);
         let mut mapped = Vec::with_capacity(self.manifest.files.len());
         for entry in &self.manifest.files {
             let region = match self.mapped.iter().find(|(path, _)| *path == entry.path) {
                 Some((_, region)) => Arc::clone(region),
-                None => Arc::new(PosixVfs.open(&self.dir.join(&entry.path))?.mmap()?),
+                None => Arc::new(store.map(&entry.path)?),
             };
             mapped.push((entry.path.clone(), region));
         }

@@ -4242,11 +4242,13 @@ pub fn db_core::storage::ingest::manifest::Manifest::dropping(&self, usize) -> d
 pub fn db_core::storage::ingest::manifest::Manifest::new(db_core::storage::stream::detect::Format, db_core::storage::ingest::layout::LayoutKind) -> Self
 pub fn db_core::storage::ingest::manifest::Manifest::parse(&str) -> core::result::Result<db_core::storage::ingest::manifest::Manifest, db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::read(&std::path::Path) -> core::result::Result<core::option::Option<db_core::storage::ingest::manifest::Manifest>, db_core::storage::ingest::manifest::ManifestError>
+pub fn db_core::storage::ingest::manifest::Manifest::read_from(&impl db_core::storage::ingest::store::TableStore) -> core::result::Result<core::option::Option<db_core::storage::ingest::manifest::Manifest>, db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::replacing(&self, core::ops::range::Range<usize>, alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::to_json(&self) -> alloc::string::String
 pub fn db_core::storage::ingest::manifest::Manifest::version(&self) -> i64
 pub fn db_core::storage::ingest::manifest::Manifest::with_file(&self, db_core::storage::ingest::manifest::FileEntry) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::write(&self, &std::path::Path) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
+pub fn db_core::storage::ingest::manifest::Manifest::write_to(&self, &impl db_core::storage::ingest::store::TableStore) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 impl core::clone::Clone for db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::ingest::manifest::Manifest
@@ -4349,6 +4351,33 @@ impl core::fmt::Debug for db_core::storage::ingest::snapshot::TableReader
 pub fn db_core::storage::ingest::snapshot::TableReader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub fn db_core::storage::ingest::snapshot::cast(db_core::vm::batch::Value, db_core::storage::parquet::schema::ColumnType) -> db_core::vm::batch::Value
 pub fn db_core::storage::ingest::snapshot::physical_type(db_core::storage::parquet::schema::ColumnType) -> db_core::storage::parquet::footer::PhysicalType
+pub mod db_core::storage::ingest::store
+pub struct db_core::storage::ingest::store::LocalFs
+impl db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::new(impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn db_core::storage::ingest::LocalFs::root(&self) -> &std::path::Path
+impl core::clone::Clone for db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::LocalFs::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+pub trait db_core::storage::ingest::store::TableStore: core::marker::Send + core::marker::Sync
+pub fn db_core::storage::ingest::store::TableStore::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::store::TableStore::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::TableStore::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::store::TableStore::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::TableStore::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::LocalFs::put(&self, &str, &[u8]) -> core::io::error::Result<()>
 pub mod db_core::storage::ingest::table
 pub enum db_core::storage::ingest::table::IngestError
 pub db_core::storage::ingest::table::IngestError::Corrupt(alloc::string::String)
@@ -4726,6 +4755,20 @@ pub fn db_core::storage::ingest::manifest::KeyRange::eq(&self, &Self) -> bool
 impl core::fmt::Debug for db_core::storage::ingest::manifest::KeyRange
 pub fn db_core::storage::ingest::manifest::KeyRange::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::manifest::KeyRange
+pub struct db_core::storage::ingest::LocalFs
+impl db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::new(impl core::convert::Into<std::path::PathBuf>) -> Self
+pub fn db_core::storage::ingest::LocalFs::root(&self) -> &std::path::Path
+impl core::clone::Clone for db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::clone(&self) -> Self
+impl core::fmt::Debug for db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::LocalFs::put(&self, &str, &[u8]) -> core::io::error::Result<()>
 pub struct db_core::storage::ingest::Manifest
 pub db_core::storage::ingest::Manifest::dropped_lsn: u64
 pub db_core::storage::ingest::Manifest::evolved: bool
@@ -4741,11 +4784,13 @@ pub fn db_core::storage::ingest::manifest::Manifest::dropping(&self, usize) -> d
 pub fn db_core::storage::ingest::manifest::Manifest::new(db_core::storage::stream::detect::Format, db_core::storage::ingest::layout::LayoutKind) -> Self
 pub fn db_core::storage::ingest::manifest::Manifest::parse(&str) -> core::result::Result<db_core::storage::ingest::manifest::Manifest, db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::read(&std::path::Path) -> core::result::Result<core::option::Option<db_core::storage::ingest::manifest::Manifest>, db_core::storage::ingest::manifest::ManifestError>
+pub fn db_core::storage::ingest::manifest::Manifest::read_from(&impl db_core::storage::ingest::store::TableStore) -> core::result::Result<core::option::Option<db_core::storage::ingest::manifest::Manifest>, db_core::storage::ingest::manifest::ManifestError>
 pub fn db_core::storage::ingest::manifest::Manifest::replacing(&self, core::ops::range::Range<usize>, alloc::vec::Vec<db_core::storage::ingest::manifest::FileEntry>) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::to_json(&self) -> alloc::string::String
 pub fn db_core::storage::ingest::manifest::Manifest::version(&self) -> i64
 pub fn db_core::storage::ingest::manifest::Manifest::with_file(&self, db_core::storage::ingest::manifest::FileEntry) -> db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::write(&self, &std::path::Path) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
+pub fn db_core::storage::ingest::manifest::Manifest::write_to(&self, &impl db_core::storage::ingest::store::TableStore) -> core::result::Result<(), db_core::storage::ingest::manifest::ManifestError>
 impl core::clone::Clone for db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::manifest::Manifest::clone(&self) -> Self
 impl core::cmp::Eq for db_core::storage::ingest::manifest::Manifest
@@ -4956,6 +5001,18 @@ pub const db_core::storage::ingest::LOCK_FILE: &str
 pub const db_core::storage::ingest::MANIFEST_FILE: &str
 pub const db_core::storage::ingest::TMP_DIR: &str
 pub const db_core::storage::ingest::WAL_DIR: &str
+pub trait db_core::storage::ingest::TableStore: core::marker::Send + core::marker::Sync
+pub fn db_core::storage::ingest::TableStore::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::TableStore::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::TableStore::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::TableStore::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::TableStore::put(&self, &str, &[u8]) -> core::io::error::Result<()>
+impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::LocalFs
+pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
+pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
+pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::LocalFs::put(&self, &str, &[u8]) -> core::io::error::Result<()>
 pub type db_core::storage::ingest::Record = (u64, alloc::vec::Vec<u8>)
 pub mod db_core::storage::parquet
 pub mod db_core::storage::parquet::compression
