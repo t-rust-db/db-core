@@ -1,0 +1,115 @@
+# #1014: the boundary of the column SQL subset, pinned. Each `statement
+# error` is a shape DuckDB answers and the column engine refuses on
+# purpose; if one starts to be accepted, that change has to bring
+# DuckDB-written `query` records for it (make refresh-column-sqllogictest)
+# and delete the pin, rather than silently start answering.
+# The wider list of rejected functions and forms is #1021.
+
+# CAST
+statement error
+SELECT CAST(n AS VARCHAR) FROM typed_nulls
+
+statement error
+SELECT CAST(f AS INTEGER) FROM typed_nulls
+
+statement error
+SELECT n::DOUBLE FROM typed_nulls
+
+# CTE
+statement error
+WITH t AS (SELECT * FROM typed_nulls) SELECT count(*) FROM t
+
+# UNION / EXCEPT / INTERSECT
+statement error
+SELECT n FROM typed_nulls UNION SELECT n FROM typed_nulls
+
+statement error
+SELECT n FROM typed_nulls UNION ALL SELECT n FROM typed_nulls
+
+statement error
+SELECT n FROM typed_nulls EXCEPT SELECT n FROM typed_nulls
+
+statement error
+SELECT n FROM typed_nulls INTERSECT SELECT n FROM typed_nulls
+
+# scalar, IN and EXISTS subqueries
+statement error
+SELECT (SELECT max(n) FROM typed_nulls)
+
+statement error
+SELECT id FROM typed_nulls WHERE n = (SELECT max(n) FROM typed_nulls)
+
+statement error
+SELECT id FROM typed_nulls WHERE id IN (SELECT id FROM typed_nulls WHERE n > 100)
+
+statement error
+SELECT id FROM typed_nulls WHERE EXISTS (SELECT 1 FROM typed_nulls)
+
+# statistical aggregates
+statement error
+SELECT stddev(f) FROM typed_nulls
+
+statement error
+SELECT median(f) FROM typed_nulls
+
+statement error
+SELECT variance(f) FROM typed_nulls
+
+# JOIN and window functions: the single-file engine points at the
+# multi-table session
+statement error
+SELECT a.id FROM typed_nulls a JOIN production b ON a.id = b.id
+
+statement error
+SELECT id, row_number() OVER (ORDER BY id) FROM typed_nulls
+
+# scalar function families (#1021): math, string, date
+statement error
+SELECT floor(f) FROM typed_nulls
+
+statement error
+SELECT sqrt(f) FROM typed_nulls
+
+statement error
+SELECT power(n, 2) FROM typed_nulls
+
+statement error
+SELECT lower(s) FROM typed_nulls
+
+statement error
+SELECT upper(s) FROM typed_nulls
+
+statement error
+SELECT substr(s, 1, 2) FROM typed_nulls
+
+statement error
+SELECT year(ts) FROM typed_nulls
+
+statement error
+SELECT date_part('year', ts) FROM typed_nulls
+
+# forms (#1021)
+statement error
+SELECT id FROM typed_nulls ORDER BY n NULLS FIRST
+
+statement error
+SELECT id FROM typed_nulls ORDER BY id OFFSET 5
+
+statement error
+SELECT count(*) FROM typed_nulls WHERE n IS DISTINCT FROM 0
+
+statement error
+SELECT sum(DISTINCT n) FROM typed_nulls
+
+statement error
+SELECT id FROM typed_nulls ORDER BY lower(s), id
+
+statement error
+SELECT id FROM typed_nulls WHERE ts > TIMESTAMP '2026-01-01 00:00:00'
+
+# a table that is not a fixture, and a column that is not in it
+statement error
+SELECT count(*) FROM no_such_table
+
+statement error
+SELECT no_such_column FROM typed_nulls

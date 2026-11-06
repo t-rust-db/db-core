@@ -340,8 +340,17 @@ pub(crate) fn pow10(exp: u32) -> f64 {
     ];
     match usize::try_from(exp).ok().and_then(|i| EXACT.get(i)) {
         Some(p) => *p,
-        None => 10f64.powi(i32::try_from(exp).unwrap_or(i32::MAX)),
+        None => pow10_inexact(exp),
     }
+}
+
+/// `pow10` past the exact range, kept out of line: `pow10` is inlined
+/// into `Value::as_f64`, which every batch `ORDER BY` comparison calls,
+/// and a `powi` call there cost Str/Str sorts about 8% (v0.228.2).
+#[cold]
+#[inline(never)]
+fn pow10_inexact(exp: u32) -> f64 {
+    10f64.powi(i32::try_from(exp).unwrap_or(i32::MAX))
 }
 
 #[cfg(test)]
