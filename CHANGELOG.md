@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.230.0] - 2026-11-06
+
+### Added
+
+- Ingest: `TableStore` / `LocalFs` storage surface for table objects; manifest and snapshot file access go through it, no behaviour change (#1015 phase 1).
+
 ## [0.229.0] - 2026-11-06
 
 ### Added
