@@ -1391,15 +1391,23 @@ fn a_float_anywhere_makes_sum_a_float_and_avg_stays_a_float() {
 }
 
 #[test]
-fn integer_sum_overflow_is_an_error_and_avg_is_not() {
-    // #631: as in SQLite, an integer SUM past 64 bits is an error, never a
-    // wrapped or rounded total. AVG sums as a float and never fails.
+fn integer_sum_widens_past_i64_and_avg_does_not_fail() {
+    // #1018: as in DuckDB, an integer SUM past 64 bits widens to an exact
+    // scale-0 decimal, never a wrapped or rounded total, however the rows
+    // split into segments. AVG sums as a float and never fails.
     let grp: Vec<Value> = (0..12).map(|_| Value::Str("a".into())).collect();
     let huge: Vec<Value> = (0..12).map(|_| Value::Int(i64::MAX / 4)).collect();
     for sizes in segmentations(12) {
-        let err = try_run_batch("SELECT sum(n) FROM t", &sizes, ("grp", &grp), ("n", &huge))
-            .expect_err("SUM past i64 overflows");
-        assert!(err.contains("integer overflow"), "{sizes:?}: {err}");
+        let rows =
+            try_run_batch("SELECT sum(n) FROM t", &sizes, ("grp", &grp), ("n", &huge)).unwrap();
+        assert_eq!(
+            rows,
+            vec![vec![Value::Decimal {
+                unscaled: i128::from(i64::MAX / 4) * 12,
+                scale: 0
+            }]],
+            "{sizes:?}"
+        );
         let rows =
             try_run_batch("SELECT avg(n) FROM t", &sizes, ("grp", &grp), ("n", &huge)).unwrap();
         let Value::Float(avg) = rows[0][0] else {

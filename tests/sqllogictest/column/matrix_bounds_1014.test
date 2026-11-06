@@ -1329,15 +1329,11 @@ SELECT sum(i64) FROM int_bounds
 ----
 4611686018427387902
 
-# #1018: sum(BIGINT) overflows instead of widening
-skipif db-core
 query I rowsort
 SELECT sum(i64) FROM int_bounds WHERE id <= 6
 ----
 -9223372036854775809
 
-# #1018: sum(BIGINT) overflows instead of widening
-skipif db-core
 query I rowsort
 SELECT sum(i64) FROM int_bounds WHERE id >= 7
 ----
@@ -3221,8 +3217,6 @@ SELECT sum(i64), sum(i32), sum(i16), sum(i8) FROM int_bounds
 16382
 62
 
-# #1018: sum(BIGINT) overflows instead of widening
-skipif db-core
 query I rowsort
 SELECT sum(i64) FROM int_bounds WHERE id IN (6, 7)
 ----
