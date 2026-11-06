@@ -1398,8 +1398,8 @@ fn integer_sum_widens_past_i64_and_avg_does_not_fail() {
     let grp: Vec<Value> = (0..12).map(|_| Value::Str("a".into())).collect();
     let huge: Vec<Value> = (0..12).map(|_| Value::Int(i64::MAX / 4)).collect();
     for sizes in segmentations(12) {
-        let rows = try_run_batch("SELECT sum(n) FROM t", &sizes, ("grp", &grp), ("n", &huge))
-            .unwrap();
+        let rows =
+            try_run_batch("SELECT sum(n) FROM t", &sizes, ("grp", &grp), ("n", &huge)).unwrap();
         assert_eq!(
             rows,
             vec![vec![Value::Decimal {
