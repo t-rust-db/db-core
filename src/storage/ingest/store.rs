@@ -12,9 +12,30 @@ use std::io;
 
 use crate::storage::column::MmapRegion;
 
+#[cfg(test)]
+mod conformance;
 mod local;
+#[cfg(test)]
+mod memory;
 
 pub use local::LocalFs;
+
+/// Rejects a key that is absolute or has a `..`, `.` or empty component:
+/// an object must stay under the table root whatever the backend.
+fn check_key(key: &str) -> io::Result<()> {
+    let ok = !key.is_empty()
+        && key
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..");
+    if ok {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid object key {key:?}"),
+        ))
+    }
+}
 
 /// Keeps a table's objects. Keys are `/`-separated and relative to the
 /// table root; an absolute key or one with a `..` component is

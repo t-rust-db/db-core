@@ -2,9 +2,9 @@
 
 use std::fs::{self, File};
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
-use super::TableStore;
+use super::{check_key, TableStore};
 use crate::storage::column::{MmapRegion, PosixVfs, Vfs, VfsFile};
 
 /// A table stored as files under one directory.
@@ -25,14 +25,8 @@ impl LocalFs {
     }
 
     fn path(&self, key: &str) -> io::Result<PathBuf> {
-        let rel = Path::new(key);
-        if rel.components().any(|c| !matches!(c, Component::Normal(_))) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("invalid object key {key:?}"),
-            ));
-        }
-        Ok(self.root.join(rel))
+        check_key(key)?;
+        Ok(self.root.join(key))
     }
 }
 
@@ -72,9 +66,14 @@ impl TableStore for LocalFs {
     }
 
     fn list(&self, prefix: &str) -> io::Result<Vec<String>> {
+        let base = prefix.trim_end_matches('/');
+        let dir = if base.is_empty() {
+            self.root.clone()
+        } else {
+            self.path(base)?
+        };
         let mut keys = Vec::new();
-        let dir = self.path(prefix.trim_end_matches('/'))?;
-        collect(&dir, prefix.trim_end_matches('/'), &mut keys)?;
+        collect(&dir, base, &mut keys)?;
         keys.sort();
         Ok(keys)
     }

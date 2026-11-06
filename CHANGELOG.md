@@ -4,11 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
-## [0.230.1] - 2026-11-06
+## [0.231.1] - 2026-11-06
 
 ### Fixed
 
 - `sum(BIGINT)` widens past 64 bits to an exact DECIMAL(38, 0) instead of erroring with "integer overflow", matching DuckDB (#1018)
+
+## [0.231.0] - 2026-11-06
+
+### Added
+
+- Ingest: test-only in-memory `TableStore` with crash injection, and a conformance suite that `LocalFs` and the in-memory store both run (#1015 phase 2).
 
 ## [0.230.0] - 2026-11-06
 
