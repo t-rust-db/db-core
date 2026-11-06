@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.229.0] - 2026-11-06
+
+### Added
+
+- `engine::column::resolve_timestamps`, `parquet_timestamp_columns` and `table::snapshot_timestamp_columns`: the TIMESTAMP rewrite (quoted timestamps, `date_trunc`) for a caller that parses and plans its queries itself, such as column-rs.
+
+### Fixed
+
+- A legacy INT96 timestamp column reads as epoch microseconds and counts as a TIMESTAMP, instead of failing with "unexpected end of page data".
+
 ## [0.228.3] - 2026-11-04
 
 ### Fixed

@@ -443,20 +443,43 @@ pub(crate) fn str_columns(file: &ParquetFile<'_>) -> Vec<String> {
         .collect()
 }
 
-/// The file's TIMESTAMP columns (`TIMESTAMP_MILLIS` / `TIMESTAMP_MICROS`)
-/// and how many of their units make a second. They decode as plain
-/// integers, so a quoted timestamp compared with one must become that
-/// integer before planning ([`timestamp_literals`], #679).
+/// The file's TIMESTAMP columns (`TIMESTAMP_MILLIS` / `TIMESTAMP_MICROS`,
+/// and legacy INT96, which decodes as microseconds) and how many of their
+/// units make a second. They decode as plain integers, so a quoted
+/// timestamp compared with one must become that integer before planning
+/// ([`timestamp_literals`], #679).
 fn timestamp_columns(file: &ParquetFile<'_>) -> Vec<(String, i64)> {
-    use crate::storage::parquet::footer::ConvertedType;
+    use crate::storage::parquet::footer::{ConvertedType, PhysicalType};
     file.fields()
         .into_iter()
         .filter_map(|f| match f.element.converted_type {
             Some(ConvertedType::TimestampMillis) => Some((f.name, 1_000)),
             Some(ConvertedType::TimestampMicros) => Some((f.name, 1_000_000)),
+            _ if f.element.physical_type == Some(PhysicalType::Int96) => Some((f.name, 1_000_000)),
             _ => f.element.timestamp_units.map(|units| (f.name, units)),
         })
         .collect()
+}
+
+/// A Parquet file's TIMESTAMP columns and their units per second, for
+/// [`resolve_timestamps`]: a caller that parses and plans a query itself
+/// (column-rs) instead of going through this engine's `parse_for_table`.
+pub fn parquet_timestamp_columns(file: &ParquetFile<'_>) -> Vec<(String, i64)> {
+    timestamp_columns(file)
+}
+
+/// The rewrite this engine applies to every parsed `SELECT` before
+/// planning, for a caller that parses and plans itself: a quoted
+/// timestamp compared with a TIMESTAMP column becomes the column's integer
+/// units (#679), and `date_trunc(part, ts)` becomes the column dialect's
+/// `__date_trunc(part, ts, per_second)` (#647). `timestamps` comes from
+/// [`parquet_timestamp_columns`] or
+/// [`snapshot_timestamp_columns`](table::snapshot_timestamp_columns).
+pub fn resolve_timestamps(
+    select: &mut Select,
+    timestamps: &[(String, i64)],
+) -> Result<(), EngineError> {
+    timestamp_literals(select, timestamps)
 }
 
 /// Rewrites every comparison of a TIMESTAMP column with a quoted value
@@ -2439,6 +2462,29 @@ mod tests {
             ExprKind::FunctionCall { name, .. } => name,
             _ => "",
         }
+    }
+
+    // engine_column_timestamp_columns_57e483a1:
+    // `f.element.physical_type == Some(PhysicalType::Int96)`, reached for a
+    // column with no timestamp converted type.
+    fn int96_events_timestamp_columns() -> Vec<(String, i64)> {
+        let bytes = std::fs::read("tests/fixtures/parquet/int96_events.parquet").unwrap();
+        super::timestamp_columns(&ParquetFile::open(&bytes).unwrap())
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_timestamp_columns_57e483a1__v1_an_int96_column_is_a_microsecond_timestamp(
+    ) {
+        assert!(int96_events_timestamp_columns().contains(&("ts".to_string(), 1_000_000)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_timestamp_columns_57e483a1__v2_another_physical_type_is_not() {
+        assert!(!int96_events_timestamp_columns()
+            .iter()
+            .any(|(name, _)| name == "id"));
     }
 
     #[test]
