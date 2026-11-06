@@ -9382,6 +9382,124 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 mod tests {
     use super::*;
 
+    /// #1016/#1017: `exact_abs_round` answers `abs`/`round` of a decimal or
+    /// an integer exactly, and `None` for anything else.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_5dcc7d74__v1_other_function_is_not_exact() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("upper", &[&col], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_5dcc7d74__v2_abs_takes_the_exact_path() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), Some(dec(125, 2)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_a8154dca__v1_abs_keeps_the_scale() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), Some(dec(125, 2)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_a8154dca__v2_round_is_not_abs() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("round", &[&col], 0), Some(dec(-1, 0)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v1_round_of_an_integer_is_that_integer() {
+        let col = [Value::Int(7)];
+        assert_eq!(exact_abs_round("round", &[&col], 0), Some(Value::Int(7)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v2_abs_of_an_integer_is_not_exact() {
+        let col = [Value::Int(-7)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v3_negative_digits_is_not_exact() {
+        let col = [Value::Int(7)];
+        let digits = [Value::Int(-1)];
+        assert_eq!(exact_abs_round("round", &[&col, &digits], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_19976354__v1_no_digits_dropped_keeps_the_value() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(2)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(125, 2))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_19976354__v2_digits_dropped_rounds() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_98876afc__v1_half_rounds_away_from_zero() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_98876afc__v2_below_half_rounds_down() {
+        let col = [dec(124, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(12, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_398c2161__v1_negative_digits_round_to_tens() {
+        let col = [dec(1250, 0)];
+        let digits = [Value::Int(-2)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(1300, 0))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_398c2161__v2_positive_digits_keep_the_scale() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
+
     /// #891: the join index, IN-list sets and dictionaries hash through
     /// [`SlotState`]; keys built to collide in its unseeded form spread.
     #[test]

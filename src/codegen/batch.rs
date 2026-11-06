@@ -1246,22 +1246,23 @@ fn literal_value(lit: &AstLiteral) -> Value {
 }
 
 /// A decimal literal as DuckDB types it (#1016): `1.25` is `DECIMAL(3,2)`,
-/// not a double. The AST keeps only the `f64`, so the digits are recovered
-/// from its shortest round-trip text; an exponent form (`1e3`, a DOUBLE in
-/// DuckDB) or more than 18 digits stays a float.
-fn decimal_literal(v: f64) -> Option<Value> {
-    let text = v.abs().to_string();
+/// not a double. The AST keeps only the `f64` magnitude, and its shortest
+/// round-trip text (`Display` never uses an exponent) gives the digits and
+/// the scale. A literal with no point (`2`, `1e3`) and one past 18 digits
+/// stay floats.
+fn decimal_literal(magnitude: f64, negative: bool) -> Option<Value> {
+    let text = magnitude.to_string();
     let (int, frac) = text.split_once('.')?;
-    if text.contains(['e', 'E']) || int.len().saturating_add(frac.len()) > 18 {
+    if int.len().saturating_add(frac.len()) > 18 {
         return None;
     }
     let scale = u8::try_from(frac.len()).ok()?;
-    let unscaled: i128 = format!("{int}{frac}").parse().ok()?;
+    let digits: i128 = format!("{int}{frac}").parse().ok()?;
     Some(Value::Decimal {
-        unscaled: if v < 0.0 {
-            unscaled.checked_neg()?
+        unscaled: if negative {
+            digits.checked_neg()?
         } else {
-            unscaled
+            digits
         },
         scale,
     })
@@ -1272,12 +1273,12 @@ fn decimal_literal(v: f64) -> Option<Value> {
 /// is [`compile_expr`]'s.
 fn compile_arith_operand(expr: &AstExpr, exact: bool, ctx: &mut Ctx) -> usize {
     let lit = match &expr.kind {
-        ExprKind::Literal(AstLiteral::Float(v)) if exact => decimal_literal(*v),
+        ExprKind::Literal(AstLiteral::Float(v)) if exact => decimal_literal(*v, false),
         ExprKind::Unary {
             op: crate::parser::ast::UnaryOp::Minus,
             expr: inner,
         } if exact => match &inner.kind {
-            ExprKind::Literal(AstLiteral::Float(v)) => decimal_literal(-*v),
+            ExprKind::Literal(AstLiteral::Float(v)) => decimal_literal(*v, true),
             _ => None,
         },
         _ => None,
@@ -6589,6 +6590,109 @@ mod tests {
         crate::vm::batch::Batch::new(values.len())
             .with_column("region", vec![Value::Str("a".into()); values.len()])
             .with_column("amount", values)
+    }
+
+    fn decimal(unscaled: i128, scale: u8) -> Value {
+        Value::Decimal { unscaled, scale }
+    }
+
+    /// #1016: a decimal literal is exact only up to 18 digits; a longer one
+    /// stays a float.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_decimal_literal_563bb2e8__v1_long_literal_stays_float() {
+        assert_eq!(decimal_literal(0.000_012_345_678_901_234, false), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_decimal_literal_563bb2e8__v2_short_literal_is_exact() {
+        assert_eq!(
+            decimal_literal(0.000_012_345_678_901_23, false),
+            Some(decimal(1_234_567_890_123, 17))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_decimal_literal_9eb817f7__v1_negative_literal_is_negated() {
+        assert_eq!(decimal_literal(1.25, true), Some(decimal(-125, 2)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_decimal_literal_9eb817f7__v2_positive_literal_is_not() {
+        assert_eq!(decimal_literal(1.25, false), Some(decimal(125, 2)));
+    }
+
+    /// #1016: `d * 1.25` is a DECIMAL, `d / 1.25` a float (`/` is always one).
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_arith_operand_17bf5b36__v1_exact_literal_is_decimal() {
+        let rows = run_batches(
+            "SELECT amount * 1.25 FROM t",
+            vec![amounts(vec![decimal(125, 2)])],
+        )
+        .unwrap();
+        assert_eq!(rows, vec![vec![decimal(15_625, 4)]]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_arith_operand_17bf5b36__v2_division_literal_stays_float() {
+        let rows = run_batches(
+            "SELECT amount / 1.25 FROM t",
+            vec![amounts(vec![decimal(100, 2)])],
+        )
+        .unwrap();
+        assert!(matches!(rows[0][0], Value::Float(_)), "{rows:?}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_arith_operand_17bf5b36_2__v1_negative_exact_literal_is_decimal()
+    {
+        let rows = run_batches(
+            "SELECT amount * -1.25 FROM t",
+            vec![amounts(vec![decimal(125, 2)])],
+        )
+        .unwrap();
+        assert_eq!(rows, vec![vec![decimal(-15_625, 4)]]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__codegen_batch_compile_arith_operand_17bf5b36_2__v2_negative_division_stays_float() {
+        let rows = run_batches(
+            "SELECT amount / -1.25 FROM t",
+            vec![amounts(vec![decimal(100, 2)])],
+        )
+        .unwrap();
+        assert!(matches!(rows[0][0], Value::Float(_)), "{rows:?}");
+    }
+
+    /// #1016/#1017: a call whose argument is a decimal gets the exact
+    /// answer; any other argument falls through to the row function.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_step_3af71959__v1_decimal_round_is_exact() {
+        let rows = run_batches(
+            "SELECT round(amount) FROM t",
+            vec![amounts(vec![decimal(125, 2)])],
+        )
+        .unwrap();
+        assert_eq!(rows, vec![vec![decimal(1, 0)]]);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_step_3af71959__v2_text_round_takes_the_row_function() {
+        let rows = run_batches(
+            "SELECT round(region) FROM t",
+            vec![amounts(vec![decimal(125, 2)])],
+        )
+        .unwrap();
+        assert_eq!(rows, vec![vec![Value::Float(0.0)]]);
     }
 
     /// #643: a segment longer than `SLICE_ROWS` runs in slices; the answer
