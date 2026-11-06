@@ -1300,6 +1300,61 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
     }
 }
 
+/// `abs(decimal)`, `round(decimal[, n])` and `round(integer[, n])` for one
+/// row, in the argument's own type as DuckDB gives them (#1016, #1017):
+/// `abs` keeps the scale, `round` of a decimal drops to scale
+/// `max(n, 0)` (half away from zero) and `round` of an integer is that
+/// integer. `None` for any other call, which the row functions answer.
+fn exact_abs_round(name: &str, args: &[&[Value]], row: usize) -> Option<Value> {
+    let is_abs = name.eq_ignore_ascii_case("abs");
+    let is_round = name.eq_ignore_ascii_case("round");
+    if !(is_abs && args.len() == 1 || is_round && matches!(args.len(), 1 | 2)) {
+        return None;
+    }
+    let x = args.first()?.get(row)?;
+    let digits = match args.get(1) {
+        None => 0,
+        Some(col) => match col.get(row)? {
+            Value::Int(n) => *n,
+            _ => return None,
+        },
+    };
+    match x {
+        Value::Decimal { unscaled, scale } if is_abs => Some(Value::Decimal {
+            unscaled: unscaled.checked_abs()?,
+            scale: *scale,
+        }),
+        Value::Decimal { unscaled, scale } => {
+            let scale_i = i64::from(*scale);
+            if digits >= scale_i {
+                return Some(x.clone());
+            }
+            // Digits dropped, and the kept scale (`max(n, 0)`).
+            let drop = u32::try_from(scale_i.checked_sub(digits)?).ok()?;
+            let kept = u8::try_from(digits.max(0)).ok()?;
+            let p = pow10(drop)?;
+            let (q, r) = (unscaled.checked_div(p)?, unscaled.checked_rem(p)?);
+            let q = if r.checked_abs()?.checked_mul(2)? >= p {
+                q.checked_add(unscaled.signum())?
+            } else {
+                q
+            };
+            // A negative `n` rounds to tens, hundreds, ...: scale 0 still.
+            let back = if digits < 0 {
+                pow10(u32::try_from(digits.checked_neg()?).ok()?)?
+            } else {
+                1
+            };
+            Some(Value::Decimal {
+                unscaled: q.checked_mul(back)?,
+                scale: kept,
+            })
+        }
+        Value::Int(_) if is_round && digits >= 0 => Some(x.clone()),
+        _ => None,
+    }
+}
+
 /// [`crate::value::Value`] -> [`Value`], the reverse of
 /// [`to_scalar_value`].
 fn from_scalar_value(v: crate::value::Value) -> Value {
@@ -6663,6 +6718,13 @@ impl Vm {
                     let date_trunc =
                         name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN);
                     for row in 0..num_rows {
+                        // #1016/#1017: `abs`/`round` keep a decimal or
+                        // integer argument's type; the row functions
+                        // would answer in `f64`.
+                        if let Some(exact) = exact_abs_round(name, &arg_regs, row) {
+                            result.push(exact);
+                            continue;
+                        }
                         for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
                             *slot = to_scalar_value(&reg[row]);
                         }
@@ -9326,6 +9388,124 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1016/#1017: `exact_abs_round` answers `abs`/`round` of a decimal or
+    /// an integer exactly, and `None` for anything else.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_5dcc7d74__v1_other_function_is_not_exact() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("upper", &[&col], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_5dcc7d74__v2_abs_takes_the_exact_path() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), Some(dec(125, 2)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_a8154dca__v1_abs_keeps_the_scale() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), Some(dec(125, 2)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_a8154dca__v2_round_is_not_abs() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("round", &[&col], 0), Some(dec(-1, 0)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v1_round_of_an_integer_is_that_integer() {
+        let col = [Value::Int(7)];
+        assert_eq!(exact_abs_round("round", &[&col], 0), Some(Value::Int(7)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v2_abs_of_an_integer_is_not_exact() {
+        let col = [Value::Int(-7)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v3_negative_digits_is_not_exact() {
+        let col = [Value::Int(7)];
+        let digits = [Value::Int(-1)];
+        assert_eq!(exact_abs_round("round", &[&col, &digits], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_19976354__v1_no_digits_dropped_keeps_the_value() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(2)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(125, 2))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_19976354__v2_digits_dropped_rounds() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_98876afc__v1_half_rounds_away_from_zero() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_98876afc__v2_below_half_rounds_down() {
+        let col = [dec(124, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(12, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_398c2161__v1_negative_digits_round_to_tens() {
+        let col = [dec(1250, 0)];
+        let digits = [Value::Int(-2)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(1300, 0))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_398c2161__v2_positive_digits_keep_the_scale() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
 
     /// #891: the join index, IN-list sets and dictionaries hash through
     /// [`SlotState`]; keys built to collide in its unseeded form spread.

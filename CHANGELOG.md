@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.231.2] - 2026-11-06
+
+### Fixed
+
+- column: DECIMAL expressions with decimal literals, `abs` and `round` keep exact DECIMAL type and scale; `round` of an integer returns an integer (#1016, #1017).
+
 ## [0.231.1] - 2026-11-06
 
 ### Fixed
