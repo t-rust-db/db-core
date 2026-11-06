@@ -40380,10 +40380,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_store_local_path_a83fdff5",
-    "file": "src/storage/ingest/store/local.rs",
-    "line": 29,
-    "decision": "rel.components().any(|c| !matches!(c, Component::Normal(_)))",
+    "id": "storage_ingest_store_check_key_bde636e8",
+    "file": "src/storage/ingest/store.rs",
+    "line": 30,
+    "decision": "ok",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -40392,7 +40392,7 @@
   {
     "id": "storage_ingest_store_local_get_b1d98e6f",
     "file": "src/storage/ingest/store/local.rs",
-    "line": 41,
+    "line": 35,
     "decision": "match fs::read(self.path(key)?) {\n            Ok(bytes) => Ok(Some(bytes)),\n            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),\n            Err(e) => Err(e),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40402,7 +40402,7 @@
   {
     "id": "storage_ingest_store_local_get_20fc5e15",
     "file": "src/storage/ingest/store/local.rs",
-    "line": 43,
+    "line": 37,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -40412,7 +40412,7 @@
   {
     "id": "storage_ingest_store_local_put_cabefb11",
     "file": "src/storage/ingest/store/local.rs",
-    "line": 63,
+    "line": 57,
     "decision": "match path.parent() {\n            Some(p) if !p.as_os_str().is_empty() => p,\n            _ => Path::new(\".\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40422,8 +40422,18 @@
   {
     "id": "storage_ingest_store_local_put_f879969f",
     "file": "src/storage/ingest/store/local.rs",
-    "line": 64,
+    "line": 58,
     "decision": "!p.as_os_str().is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_local_list_f8df51de",
+    "file": "src/storage/ingest/store/local.rs",
+    "line": 70,
+    "decision": "base.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -40432,7 +40442,7 @@
   {
     "id": "storage_ingest_store_local_collect_73d5cd34",
     "file": "src/storage/ingest/store/local.rs",
-    "line": 85,
+    "line": 84,
     "decision": "match fs::read_dir(dir) {\n        Ok(entries) => entries,\n        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),\n        Err(e) => return Err(e),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -40442,7 +40452,7 @@
   {
     "id": "storage_ingest_store_local_collect_20fc5e15",
     "file": "src/storage/ingest/store/local.rs",
-    "line": 87,
+    "line": 86,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -40452,7 +40462,7 @@
   {
     "id": "storage_ingest_store_local_collect_f8df51de",
     "file": "src/storage/ingest/store/local.rs",
-    "line": 93,
+    "line": 92,
     "decision": "base.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -40462,8 +40472,48 @@
   {
     "id": "storage_ingest_store_local_collect_6f777079",
     "file": "src/storage/ingest/store/local.rs",
-    "line": 98,
+    "line": 97,
     "decision": "entry.file_type()?.is_dir()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_memory_write_allowed_fd6ceffb",
+    "file": "src/storage/ingest/store/memory.rs",
+    "line": 28,
+    "decision": "match left.as_mut() {\n            Some(0) => Err(io::Error::other(\"injected crash\")),\n            Some(n) => {\n                *n = n.saturating_sub(1);\n                Ok(())\n            }\n            None => Ok(()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_memory_map_16990705",
+    "file": "src/storage/ingest/store/memory.rs",
+    "line": 46,
+    "decision": "match self.get(key)? {\n            Some(bytes) => Ok(MmapRegion::Owned(Arc::from(bytes))),\n            None => Err(io::Error::from(io::ErrorKind::NotFound)),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_memory_delete_80dc3377",
+    "file": "src/storage/ingest/store/memory.rs",
+    "line": 65,
+    "decision": "match self.objects.lock().unwrap().remove(key) {\n            Some(_) => Ok(()),\n            None => Err(io::Error::from(io::ErrorKind::NotFound)),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_memory_list_47c3d388",
+    "file": "src/storage/ingest/store/memory.rs",
+    "line": 73,
+    "decision": "!base.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,

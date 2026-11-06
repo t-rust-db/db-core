@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.231.0] - 2026-11-06
+
+### Added
+
+- Ingest: test-only in-memory `TableStore` with crash injection, and a conformance suite that `LocalFs` and the in-memory store both run (#1015 phase 2).
+
 ## [0.230.0] - 2026-11-06
 
 ### Added
