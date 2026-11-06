@@ -46,12 +46,14 @@
 //! honour.
 
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, Write};
+#[cfg(test)]
+use std::fs;
+use std::io;
 use std::path::Path;
 
 use super::layout::{Area, LayoutKind, SessionKey};
 use super::record::{type_from_name, type_name};
+use super::store::{LocalFs, TableStore};
 use crate::json_path::{parse_object, JsonValue};
 use crate::storage::parquet::schema::ColumnSpec;
 #[cfg(any(
@@ -63,6 +65,8 @@ use crate::storage::stream::detect::Format;
 
 /// The manifest's file name inside the table directory.
 pub const MANIFEST_FILE: &str = "manifest.json";
+/// The temp name `LocalFs::put` stages `manifest.json` under.
+#[cfg(test)]
 const MANIFEST_TMP: &str = "manifest.json.tmp";
 const VERSION: i64 = 2;
 /// The version of a record table's manifest.
@@ -499,24 +503,31 @@ impl Manifest {
 
     /// Reads `<table>/manifest.json`; `None` if there is none yet.
     pub fn read(table: &Path) -> Result<Option<Manifest>, ManifestError> {
-        match fs::read_to_string(table.join(MANIFEST_FILE)) {
-            Ok(text) => Manifest::parse(&text).map(Some),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(ManifestError::Io(e)),
-        }
+        Manifest::read_from(&LocalFs::new(table))
     }
 
     /// Atomically replaces `<table>/manifest.json`: the commit point.
     pub fn write(&self, table: &Path) -> Result<(), ManifestError> {
-        self.check()?;
-        let tmp = table.join(MANIFEST_TMP);
-        {
-            let mut file = File::create(&tmp)?;
-            file.write_all(self.to_json().as_bytes())?;
-            file.sync_all()?;
+        self.write_to(&LocalFs::new(table))
+    }
+
+    /// [`Manifest::read`] over any [`TableStore`].
+    pub fn read_from(store: &impl TableStore) -> Result<Option<Manifest>, ManifestError> {
+        match store.get(MANIFEST_FILE).map_err(ManifestError::Io)? {
+            Some(bytes) => {
+                let text = String::from_utf8(bytes).map_err(|e| {
+                    ManifestError::Io(io::Error::new(io::ErrorKind::InvalidData, e))
+                })?;
+                Manifest::parse(&text).map(Some)
+            }
+            None => Ok(None),
         }
-        fs::rename(&tmp, table.join(MANIFEST_FILE))?;
-        File::open(table)?.sync_all()?;
+    }
+
+    /// [`Manifest::write`] over any [`TableStore`]: one atomic, durable put.
+    pub fn write_to(&self, store: &impl TableStore) -> Result<(), ManifestError> {
+        self.check()?;
+        store.put(MANIFEST_FILE, self.to_json().as_bytes())?;
         Ok(())
     }
 }

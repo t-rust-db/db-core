@@ -25,6 +25,7 @@ pub mod page;
 pub mod record;
 mod recover;
 pub mod snapshot;
+pub mod store;
 pub mod wal;
 
 // Write side (`ingest`): the Parquet flush, tiers, the lock and the writer.
@@ -49,6 +50,7 @@ pub use manifest::{FileEntry, KeyBound, KeyRange, Manifest, ManifestError, MANIF
 pub use page::{Page, PageBody};
 pub use record::{RecordValue, RowPage};
 pub use snapshot::{ReaderStats, Snapshot, TableReader};
+pub use store::{LocalFs, TableStore};
 #[cfg(feature = "ingest")]
 pub use table::{FlushStatus, TableOptions, TableWriter, DATA_DIR, TMP_DIR};
 #[cfg(feature = "ingest")]
