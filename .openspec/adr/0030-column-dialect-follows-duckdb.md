@@ -170,3 +170,12 @@ fails with a malformed-program error if the passes ever disagree. A single
 `count(DISTINCT x)` takes the code it always did. Cost: the per-segment
 grouping is one row per distinct combination of the arguments within a key,
 and the final merge adds one regrouping per extra distinct.
+
+## Addendum: `sum(BIGINT)` widens (#1018)
+
+DuckDB's `sum(BIGINT)` is HUGEINT. The column engine has no 128-bit `Value`,
+so an integer `SUM` that leaves i64 returns the exact total as a scale-0
+`Value::Decimal`, in one segment (`Reduce`) and across segments
+(`merge_sum_partials`) alike; it errors only past DECIMAL(38). Totals that
+fit i64 stay `Value::Int`. The row engine keeps sqlite3's `integer overflow`
+error (`unit_sqlite_parity`).
