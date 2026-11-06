@@ -5234,9 +5234,16 @@ impl RunningAgg {
                 }
                 Value::Decimal { unscaled, scale }
             }
-            AggFunc::Sum => Value::Int(
-                i64::try_from(self.int_sum).map_err(|_| VmError::IntegerOverflow { opcode })?,
-            ),
+            // Integers widen like DuckDB's HUGEINT: past i64 the exact total
+            // is a scale-0 decimal, an error only past DECIMAL(38) (#1018).
+            AggFunc::Sum => match i64::try_from(self.int_sum) {
+                Ok(n) => Value::Int(n),
+                Err(_) if self.int_sum.unsigned_abs() < 10_u128.pow(38) => Value::Decimal {
+                    unscaled: self.int_sum,
+                    scale: 0,
+                },
+                Err(_) => return Err(VmError::IntegerOverflow { opcode }),
+            },
             AggFunc::Avg if self.numeric_count == 0 => Value::Null,
             AggFunc::Avg => {
                 #[allow(
