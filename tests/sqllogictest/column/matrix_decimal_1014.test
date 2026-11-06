@@ -681,8 +681,6 @@ NULL
 14
 0.14
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + 0.5 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -717,8 +715,6 @@ NULL
 14
 1.48
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - 0.5 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -753,8 +749,6 @@ NULL
 14
 0.48
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * 0.5 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -823,8 +817,6 @@ NULL
 14
 1.96
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + 1.25 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -859,8 +851,6 @@ NULL
 14
 2.23
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - 1.25 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -895,8 +885,6 @@ NULL
 14
 -0.27
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * 1.25 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -1101,8 +1089,6 @@ NULL
 14
 -0.98
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + -0.01 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -1137,8 +1123,6 @@ NULL
 14
 0.97
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - -0.01 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -1173,8 +1157,6 @@ NULL
 14
 0.99
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * -0.01 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -1659,8 +1641,6 @@ SELECT sum(coalesce(d, 0)) FROM null_groups WHERE id < 20
 ----
 10.78
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 0) FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -1729,8 +1709,6 @@ NULL
 14
 1.0
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 2) FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -1765,8 +1743,6 @@ NULL
 14
 0.98
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 3) FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -1801,8 +1777,6 @@ NULL
 14
 0.98
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d) FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -1837,8 +1811,6 @@ NULL
 14
 1
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query ITTT nosort
 SELECT id, -d, abs(d), d * -1 FROM null_groups ORDER BY id LIMIT 15
 ----
@@ -2583,8 +2555,6 @@ SELECT id, d / 7 FROM typed_nulls ORDER BY id LIMIT 15
 15
 -44.5928571428571
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + 0.5 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -2619,8 +2589,6 @@ SELECT id, d + 0.5 FROM typed_nulls ORDER BY id LIMIT 15
 15
 -311.65
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - 0.5 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -2655,8 +2623,6 @@ SELECT id, d - 0.5 FROM typed_nulls ORDER BY id LIMIT 15
 15
 -312.65
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * 0.5 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -2725,8 +2691,6 @@ SELECT id, d / 0.5 FROM typed_nulls ORDER BY id LIMIT 15
 15
 -624.3
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + 1.25 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -2761,8 +2725,6 @@ SELECT id, d + 1.25 FROM typed_nulls ORDER BY id LIMIT 15
 15
 -310.90
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - 1.25 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -2797,8 +2759,6 @@ SELECT id, d - 1.25 FROM typed_nulls ORDER BY id LIMIT 15
 15
 -313.40
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * 1.25 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -3003,8 +2963,6 @@ SELECT id, d / -1 FROM typed_nulls ORDER BY id LIMIT 15
 15
 312.15
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + -0.01 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -3039,8 +2997,6 @@ SELECT id, d + -0.01 FROM typed_nulls ORDER BY id LIMIT 15
 15
 -312.16
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - -0.01 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -3075,8 +3031,6 @@ SELECT id, d - -0.01 FROM typed_nulls ORDER BY id LIMIT 15
 15
 -312.14
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * -0.01 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -3541,15 +3495,11 @@ SELECT max(d) - min(d) FROM typed_nulls WHERE id < 20
 ----
 920.81
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query T rowsort
 SELECT sum(abs(d)) FROM typed_nulls
 ----
 2353023.26
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query T rowsort
 SELECT sum(abs(d)) FROM typed_nulls WHERE id < 20
 ----
@@ -3565,8 +3515,6 @@ SELECT sum(coalesce(d, 0)) FROM typed_nulls WHERE id < 20
 ----
 -1300.13
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 0) FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -3635,8 +3583,6 @@ SELECT id, round(d, 1) FROM typed_nulls ORDER BY id LIMIT 15
 15
 -312.2
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 2) FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -3671,8 +3617,6 @@ SELECT id, round(d, 2) FROM typed_nulls ORDER BY id LIMIT 15
 15
 -312.15
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 3) FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -3707,8 +3651,6 @@ SELECT id, round(d, 3) FROM typed_nulls ORDER BY id LIMIT 15
 15
 -312.15
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d) FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -3743,8 +3685,6 @@ SELECT id, round(d) FROM typed_nulls ORDER BY id LIMIT 15
 15
 -312
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query ITTT nosort
 SELECT id, -d, abs(d), d * -1 FROM typed_nulls ORDER BY id LIMIT 15
 ----
@@ -4489,8 +4429,6 @@ NULL
 14
 0.58
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + 0.5 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -4525,8 +4463,6 @@ NULL
 14
 4.56
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - 0.5 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -4561,8 +4497,6 @@ NULL
 14
 3.56
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * 0.5 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -4631,8 +4565,6 @@ NULL
 14
 8.12
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + 1.25 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -4667,8 +4599,6 @@ NULL
 14
 5.31
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - 1.25 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -4703,8 +4633,6 @@ NULL
 14
 2.81
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * 1.25 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -4909,8 +4837,6 @@ NULL
 14
 -4.06
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d + -0.01 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -4945,8 +4871,6 @@ NULL
 14
 4.05
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d - -0.01 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -4981,8 +4905,6 @@ NULL
 14
 4.07
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, d * -0.01 FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -5447,8 +5369,6 @@ SELECT max(d) - min(d) FROM multi_rg WHERE id < 20
 ----
 5.22
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query T rowsort
 SELECT sum(abs(d)) FROM multi_rg
 ----
@@ -5469,8 +5389,6 @@ SELECT sum(coalesce(d, 0)) FROM multi_rg WHERE id < 20
 ----
 51.91
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 0) FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -5539,8 +5457,6 @@ NULL
 14
 4.1
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 2) FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -5575,8 +5491,6 @@ NULL
 14
 4.06
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d, 3) FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -5611,8 +5525,6 @@ NULL
 14
 4.06
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, round(d) FROM multi_rg ORDER BY id LIMIT 15
 ----
@@ -5647,8 +5559,6 @@ NULL
 14
 4
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query ITTT nosort
 SELECT id, -d, abs(d), d * -1 FROM multi_rg ORDER BY id LIMIT 15
 ----

@@ -1577,7 +1577,8 @@ fn batch_round_and_abs_follow_the_half_away_from_zero_rule() {
                 vec![Value::Float(1.0)],
                 vec![Value::Float(1.0)],
                 vec![Value::Null],
-                vec![Value::Float(-7.0)],
+                // #1017: round of an integer is that integer.
+                vec![Value::Int(-7)],
             ],
         ),
         (

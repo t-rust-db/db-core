@@ -1245,6 +1245,53 @@ fn literal_value(lit: &AstLiteral) -> Value {
     }
 }
 
+/// A decimal literal as DuckDB types it (#1016): `1.25` is `DECIMAL(3,2)`,
+/// not a double. The AST keeps only the `f64`, so the digits are recovered
+/// from its shortest round-trip text; an exponent form (`1e3`, a DOUBLE in
+/// DuckDB) or more than 18 digits stays a float.
+fn decimal_literal(v: f64) -> Option<Value> {
+    let text = v.abs().to_string();
+    let (int, frac) = text.split_once('.')?;
+    if text.contains(['e', 'E']) || int.len().saturating_add(frac.len()) > 18 {
+        return None;
+    }
+    let scale = u8::try_from(frac.len()).ok()?;
+    let unscaled: i128 = format!("{int}{frac}").parse().ok()?;
+    Some(Value::Decimal {
+        unscaled: if v < 0.0 {
+            unscaled.checked_neg()?
+        } else {
+            unscaled
+        },
+        scale,
+    })
+}
+
+/// An operand of `+`, `-` or `*` (`exact`): a float literal is an exact
+/// decimal there (#1016), so `d * 1.25` stays DECIMAL. Any other operand
+/// is [`compile_expr`]'s.
+fn compile_arith_operand(expr: &AstExpr, exact: bool, ctx: &mut Ctx) -> usize {
+    let lit = match &expr.kind {
+        ExprKind::Literal(AstLiteral::Float(v)) if exact => decimal_literal(*v),
+        ExprKind::Unary {
+            op: crate::parser::ast::UnaryOp::Minus,
+            expr: inner,
+        } if exact => match &inner.kind {
+            ExprKind::Literal(AstLiteral::Float(v)) => decimal_literal(-*v),
+            _ => None,
+        },
+        _ => None,
+    };
+    match lit {
+        Some(value) => {
+            let reg = ctx.alloc();
+            ctx.push(Opcode::LoadConst { reg, value });
+            reg
+        }
+        None => compile_expr(expr, ctx),
+    }
+}
+
 /// `OFFSET m` (a non-negative integer literal, as the column validator
 /// requires); 0 without one (#679).
 fn select_offset(select: &Select) -> usize {
@@ -1860,8 +1907,9 @@ fn compile_expr(expr: &AstExpr, ctx: &mut Ctx) -> usize {
             reg
         }
         ExprKind::Binary { op, lhs, rhs } => {
-            let a = compile_expr(lhs, ctx);
-            let b = compile_expr(rhs, ctx);
+            let exact = matches!(op, AstBinOp::Add | AstBinOp::Sub | AstBinOp::Mul);
+            let a = compile_arith_operand(lhs, exact, ctx);
+            let b = compile_arith_operand(rhs, exact, ctx);
             let dst = ctx.alloc();
             ctx.push(Opcode::Map {
                 dst,

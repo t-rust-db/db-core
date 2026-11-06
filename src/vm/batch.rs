@@ -1300,6 +1300,61 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
     }
 }
 
+/// `abs(decimal)`, `round(decimal[, n])` and `round(integer[, n])` for one
+/// row, in the argument's own type as DuckDB gives them (#1016, #1017):
+/// `abs` keeps the scale, `round` of a decimal drops to scale
+/// `max(n, 0)` (half away from zero) and `round` of an integer is that
+/// integer. `None` for any other call, which the row functions answer.
+fn exact_abs_round(name: &str, args: &[&[Value]], row: usize) -> Option<Value> {
+    let is_abs = name.eq_ignore_ascii_case("abs");
+    let is_round = name.eq_ignore_ascii_case("round");
+    if !(is_abs && args.len() == 1 || is_round && matches!(args.len(), 1 | 2)) {
+        return None;
+    }
+    let x = args.first()?.get(row)?;
+    let digits = match args.get(1) {
+        None => 0,
+        Some(col) => match col.get(row)? {
+            Value::Int(n) => *n,
+            _ => return None,
+        },
+    };
+    match x {
+        Value::Decimal { unscaled, scale } if is_abs => Some(Value::Decimal {
+            unscaled: unscaled.checked_abs()?,
+            scale: *scale,
+        }),
+        Value::Decimal { unscaled, scale } => {
+            let scale_i = i64::from(*scale);
+            if digits >= scale_i {
+                return Some(x.clone());
+            }
+            // Digits dropped, and the kept scale (`max(n, 0)`).
+            let drop = u32::try_from(scale_i.checked_sub(digits)?).ok()?;
+            let kept = u8::try_from(digits.max(0)).ok()?;
+            let p = pow10(drop)?;
+            let (q, r) = (unscaled.checked_div(p)?, unscaled.checked_rem(p)?);
+            let q = if r.checked_abs()?.checked_mul(2)? >= p {
+                q.checked_add(unscaled.signum())?
+            } else {
+                q
+            };
+            // A negative `n` rounds to tens, hundreds, ...: scale 0 still.
+            let back = if digits < 0 {
+                pow10(u32::try_from(digits.checked_neg()?).ok()?)?
+            } else {
+                1
+            };
+            Some(Value::Decimal {
+                unscaled: q.checked_mul(back)?,
+                scale: kept,
+            })
+        }
+        Value::Int(_) if is_round && digits >= 0 => Some(x.clone()),
+        _ => None,
+    }
+}
+
 /// [`crate::value::Value`] -> [`Value`], the reverse of
 /// [`to_scalar_value`].
 fn from_scalar_value(v: crate::value::Value) -> Value {
@@ -6656,6 +6711,13 @@ impl Vm {
                     let date_trunc =
                         name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN);
                     for row in 0..num_rows {
+                        // #1016/#1017: `abs`/`round` keep a decimal or
+                        // integer argument's type; the row functions
+                        // would answer in `f64`.
+                        if let Some(exact) = exact_abs_round(name, &arg_regs, row) {
+                            result.push(exact);
+                            continue;
+                        }
                         for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
                             *slot = to_scalar_value(&reg[row]);
                         }
