@@ -2066,6 +2066,17 @@ pub trait Segment: Send + Sync {
 /// `run_parallel`/`run_parallel_top_n`'s doc comments require, without a
 /// work-stealing dependency.
 pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+    run_morsels_with(host_threads(), items, f)
+}
+
+/// [`run_morsels`] on at most `threads` workers (#800): a pool that runs
+/// inside a worker of another pool takes only its share of the cores, so
+/// the two never exceed the host's parallelism between them.
+pub(crate) fn run_morsels_with<I: Sync, T: Send>(
+    threads: usize,
+    items: &[I],
+    f: impl Fn(&I) -> T + Sync,
+) -> Vec<T> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -2074,7 +2085,7 @@ pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + S
         return Vec::new();
     }
 
-    let num_threads = pool_size(len);
+    let num_threads = threads.clamp(1, len);
     if num_threads == 1 {
         return items.iter().map(f).collect();
     }
@@ -2107,15 +2118,18 @@ pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + S
     results.into_iter().map(|(_, result)| result).collect()
 }
 
-/// Workers for `len` items: the host's parallelism, at most `len`. One
-/// means the pools run on the calling thread without spawning, which is
-/// also what a host that cannot spawn threads gets (`wasm32-unknown-unknown`
-/// reports no parallelism).
-fn pool_size(len: usize) -> usize {
+/// The host's parallelism. One means the pools run on the calling thread
+/// without spawning, which is also what a host that cannot spawn threads
+/// gets (`wasm32-unknown-unknown` reports no parallelism).
+pub(crate) fn host_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
-        .min(len)
+}
+
+/// Workers for `len` items: the host's parallelism, at most `len`.
+fn pool_size(len: usize) -> usize {
+    host_threads().min(len)
 }
 
 /// [`run_morsels`] where each worker carries state across every item it
