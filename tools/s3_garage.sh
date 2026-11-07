@@ -17,7 +17,8 @@ set -euo pipefail
 
 NAME=${GARAGE_NAME:-db-core-garage}
 IMAGE=${GARAGE_IMAGE:-docker.io/dxflrs/garage:v2.1.0}
-PORT=${GARAGE_PORT:-3900}
+# Not Garage's stock 3900: a developer's own Garage usually owns that.
+PORT=${GARAGE_PORT:-39000}
 RT=${CONTAINER_RUNTIME:-$(command -v podman >/dev/null 2>&1 && echo podman || echo docker)}
 BUCKET=${GARAGE_BUCKET:-db-core-test}
 
@@ -40,6 +41,10 @@ s3_region = "garage"
 api_bind_addr = "[::]:3900"
 TOML
   "$RT" rm -f "$NAME" >/dev/null 2>&1 || true
+  if curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$PORT/"; then
+    echo "port $PORT is already in use; set GARAGE_PORT" >&2
+    exit 1
+  fi
   "$RT" run -d --name "$NAME" -p "127.0.0.1:$PORT:3900" \
     -v "$dir/garage.toml:/etc/garage.toml" -v "$dir/meta:/meta" -v "$dir/data:/data" \
     "$IMAGE" >/dev/null
