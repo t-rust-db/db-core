@@ -16,7 +16,7 @@
     {"file": "list_literal_827.test", "pass": 9, "skip": 0, "fail": 0},
     {"file": "list_transforms_828.test", "pass": 17, "skip": 0, "fail": 0},
     {"file": "list_types_892.test", "pass": 10, "skip": 0, "fail": 0},
-    {"file": "matrix_agg_1014.test", "pass": 500, "skip": 2, "fail": 0},
+    {"file": "matrix_agg_1014.test", "pass": 502, "skip": 0, "fail": 0},
     {"file": "matrix_arith_1014.test", "pass": 495, "skip": 0, "fail": 0},
     {"file": "matrix_bounds_1014.test", "pass": 344, "skip": 0, "fail": 0},
     {"file": "matrix_decimal_1014.test", "pass": 390, "skip": 0, "fail": 0},
@@ -39,5 +39,5 @@
     {"file": "unnest_filters_812.test", "pass": 7, "skip": 2, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 4692, "skip": 9, "fail": 0}
+  "total": {"pass": 4694, "skip": 7, "fail": 0}
 }
