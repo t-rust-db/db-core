@@ -1805,11 +1805,12 @@ fn open_column_table(path: &Path) -> Result<ColumnTable, EngineError> {
 /// location's name is its last segment, so `s3://a/events` and a local
 /// `events/` directory would otherwise collide silently.
 #[cfg(all(feature = "engine-column", feature = "ingest-read"))]
-fn check_distinct_table_names<'a>(
-    tables: impl Iterator<Item = &'a ColumnTable>,
+fn check_distinct_table_names(
+    driving: &ColumnTable,
+    others: &[ColumnTable],
 ) -> Result<(), EngineError> {
     let mut seen: Vec<String> = Vec::new();
-    for table in tables {
+    for table in std::iter::once(driving).chain(others.iter()) {
         let name = table.source().table_name().to_string();
         if seen.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
             return Err(EngineError::new(
@@ -1902,7 +1903,7 @@ impl CrossModeEngine {
                 .iter()
                 .map(|p| open_column_table(p))
                 .collect::<Result<Vec<_>, _>>()?;
-            check_distinct_table_names(std::iter::once(&driving).chain(others.iter()))?;
+            check_distinct_table_names(&driving, &others)?;
             return Ok(CrossModeEngine::ColumnTablesSqlite {
                 driving,
                 others,
