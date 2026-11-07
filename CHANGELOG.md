@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.235.0] - 2026-11-07
+
+### Added
+
+- engine: `open_column_tables_sqlite` accepts a mix of Parquet files, table directories and `s3://` locations; two tables sharing a name are refused (#1037)
+
 ## [0.234.2] - 2026-11-07
 
 ### Fixed
