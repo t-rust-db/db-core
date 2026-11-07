@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.231.4] - 2026-11-07
+
+### Fixed
+
+- `SUM(BOOLEAN)` returned `NULL`; it now counts true values, as DuckDB does (#1020)
+
 ## [0.231.3] - 2026-11-06
 
 ### Fixed
