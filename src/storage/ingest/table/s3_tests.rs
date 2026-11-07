@@ -252,3 +252,122 @@ fn s3_garage_the_column_engine_queries_a_table_by_uri() {
     w.flush_all().unwrap();
     assert_eq!(count(&mut engine), vec![vec![Cell::Int(9)]]);
 }
+
+/// A store-backed `events` table of ids 1..=`n`, with the typed schema the
+/// join tests below read, and the `s3://` URI it was written to.
+#[cfg(feature = "engine-column")]
+fn typed_events_by_uri(g: &Garage, n: i64) -> (String, TableWriter) {
+    use crate::storage::parquet::schema::{ColumnSpec, ColumnType};
+    let uri = format!(
+        "s3://{}/{}/events?endpoint={}&region={}",
+        env("DB_CORE_S3_BUCKET"),
+        g.prefix,
+        env("DB_CORE_S3_ENDPOINT"),
+        env("DB_CORE_S3_REGION"),
+    );
+    let options = TableOptions {
+        schema: Some(vec![ColumnSpec::new("event_id", ColumnType::Int64, false)]),
+        ..TableOptions::default()
+    };
+    let mut w = TableWriter::open_in(&g.local, Store::at(&uri).unwrap(), options).unwrap();
+    for id in 1..=n {
+        w.append_row(vec![RecordValue::Int(id)], Ack::Durable)
+            .unwrap();
+    }
+    w.flush_all().unwrap();
+    (uri, w)
+}
+
+/// A SQLite file at `path` with `machine(event_id, host)` for ids 2, 5, 9.
+#[cfg(feature = "engine-column")]
+fn machine_lookup(path: &std::path::Path) {
+    use crate::engine::row::RowEngine;
+    use crate::engine::Engine;
+    fs::copy("tests/fixtures/btrees/table_single_page.db", path).unwrap();
+    RowEngine::open(path)
+        .unwrap()
+        .run_query(
+            "CREATE TABLE machine(event_id INTEGER PRIMARY KEY, host TEXT);\
+             INSERT INTO machine VALUES (2, 'h2');\
+             INSERT INTO machine VALUES (5, 'h5');\
+             INSERT INTO machine VALUES (9, 'h9');",
+        )
+        .unwrap();
+}
+
+#[cfg(feature = "engine-column")]
+#[test]
+#[ignore = "needs an S3 endpoint: tools/s3_garage.sh up"]
+fn s3_garage_a_store_backed_table_joins_a_sqlite_file() {
+    use crate::engine::resolve::CrossModeEngine;
+    use crate::engine::{Cell, Engine};
+    let g = Garage::new("join");
+    let (uri, mut w) = typed_events_by_uri(&g, 7);
+    let db = g.local.with_extension("lookup.db");
+    machine_lookup(&db);
+
+    let mut e = CrossModeEngine::open_column_tables_sqlite(
+        &[std::path::Path::new(&uri)],
+        &[("lookup", &db)],
+    )
+    .unwrap();
+    let sql = "SELECT machine.host FROM events \
+               JOIN machine ON events.event_id = machine.event_id \
+               ORDER BY machine.host";
+    let hosts = |e: &mut CrossModeEngine| e.run_query(sql).unwrap().rows;
+    let host = |h: &str| vec![Cell::Text(h.into())];
+    assert_eq!(hosts(&mut e), vec![host("h2"), host("h5")]);
+
+    // Each query reads a fresh snapshot: ids flushed later join too.
+    for id in 8..=10 {
+        w.append_row(vec![RecordValue::Int(id)], Ack::Durable)
+            .unwrap();
+    }
+    w.flush_all().unwrap();
+    assert_eq!(hosts(&mut e), vec![host("h2"), host("h5"), host("h9")]);
+    fs::remove_file(&db).ok();
+}
+
+#[cfg(feature = "engine-column")]
+#[test]
+#[ignore = "needs an S3 endpoint: tools/s3_garage.sh up"]
+fn s3_garage_a_store_table_and_a_local_table_join_in_one_session() {
+    use crate::engine::resolve::CrossModeEngine;
+    use crate::engine::{Cell, Engine};
+    use crate::storage::parquet::schema::{ColumnSpec, ColumnType};
+    let g = Garage::new("mixed");
+    let (uri, _w) = typed_events_by_uri(&g, 10);
+    let db = g.local.with_extension("lookup.db");
+    machine_lookup(&db);
+
+    // `plain` is a local table directory holding ids 4..=6.
+    // The table is named after its directory.
+    let holder = g.local.with_extension("holder");
+    let plain = holder.join("plain");
+    fs::remove_dir_all(&holder).ok();
+    fs::create_dir_all(&holder).unwrap();
+    let options = TableOptions {
+        schema: Some(vec![ColumnSpec::new("event_id", ColumnType::Int64, false)]),
+        ..TableOptions::default()
+    };
+    let mut p = TableWriter::open(&plain, options).unwrap();
+    for id in 4..=6 {
+        p.append_row(vec![RecordValue::Int(id)], Ack::Durable)
+            .unwrap();
+    }
+    p.flush_all().unwrap();
+
+    let mut e = CrossModeEngine::open_column_tables_sqlite(
+        &[std::path::Path::new(&uri), plain.as_path()],
+        &[("lookup", &db)],
+    )
+    .unwrap();
+    assert_eq!(
+        e.run_query("SELECT count(*) FROM events JOIN plain ON events.event_id = plain.event_id")
+            .unwrap()
+            .rows,
+        vec![vec![Cell::Int(3)]]
+    );
+    fs::remove_file(&db).ok();
+    fs::remove_dir_all(&holder).ok();
+}
