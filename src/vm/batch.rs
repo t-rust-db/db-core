@@ -5131,6 +5131,15 @@ impl RunningAgg {
             Some(Value::Int(i)) => self.push_i64(*i),
             Some(Value::Float(x)) => self.push_f64(*x),
             Some(Value::Decimal { unscaled, scale }) => self.push_decimal(*unscaled, *scale),
+            // `SUM(BOOLEAN)` is the count of true values, as in DuckDB (#1020);
+            // `MIN`/`MAX` still order the booleans themselves.
+            Some(Value::Bool(b)) => {
+                self.row_count = self.row_count.saturating_add(1);
+                self.non_null_count = self.non_null_count.saturating_add(1);
+                self.numeric_count = self.numeric_count.saturating_add(1);
+                self.int_sum = self.int_sum.saturating_add(i128::from(*b));
+                self.push_extreme(&Value::Bool(*b));
+            }
             // Not summed, but counted and ordered: `MIN`/`MAX` of text.
             Some(other) => {
                 self.row_count = self.row_count.saturating_add(1);
@@ -12563,6 +12572,30 @@ mod tests {
         ];
         assert_eq!(sets(1 << 20), expected);
         assert_eq!(sets(0), expected);
+    }
+
+    /// `SUM(BOOLEAN)` is the count of true values, `NULL` only when no
+    /// row is non-null (#1020); `MIN`/`MAX` keep ordering the booleans.
+    #[test]
+    fn sum_of_booleans_counts_true_values() {
+        let fold = |values: &[Value], func| {
+            let mut acc = RunningAgg::default();
+            for v in values {
+                acc.push(Some(v));
+            }
+            acc.finalize(func, false, "test").unwrap()
+        };
+        let mixed = [
+            Value::Bool(true),
+            Value::Null,
+            Value::Bool(false),
+            Value::Bool(true),
+        ];
+        assert_eq!(fold(&mixed, AggFunc::Sum), Value::Int(2));
+        assert_eq!(fold(&[Value::Bool(false)], AggFunc::Sum), Value::Int(0));
+        assert_eq!(fold(&[Value::Null], AggFunc::Sum), Value::Null);
+        assert_eq!(fold(&mixed, AggFunc::Max), Value::Bool(true));
+        assert_eq!(fold(&mixed, AggFunc::Min), Value::Bool(false));
     }
 
     /// #823: a string distinct accumulator that holds nothing, one string
