@@ -4359,8 +4359,59 @@ fn expr_to_string(expr: &AstExpr) -> String {
                 if *negated { "NOT " } else { "" }
             )
         }
-        _ => String::new(),
+        ExprKind::FunctionCall {
+            name,
+            distinct,
+            args: FunctionArgs::List(list),
+            tail: None,
+        } => call_to_string(name, *distinct, list),
+        // Anything else (LIKE, BETWEEN, ...): the parser's own printer, so
+        // an unaliased expression still gets a column label.
+        _ => expr.to_string(),
     }
+}
+
+/// A scalar call as SQL text, with the column parser's internal rewrites
+/// turned back into what the user wrote: `__select` is `CASE`,
+/// `__date_trunc` is `date_trunc` (its third argument is the unit scale).
+fn call_to_string(name: &str, distinct: bool, args: &[AstExpr]) -> String {
+    match args {
+        [_, _, _] if name.eq_ignore_ascii_case(crate::functions::SELECT_FN) => {
+            format!("CASE{} END", case_arms(args))
+        }
+        [part, ts, _] if name == "__date_trunc" => format!(
+            "date_trunc({}, {})",
+            expr_to_string(part),
+            expr_to_string(ts)
+        ),
+        _ => {
+            let args: Vec<String> = args.iter().map(expr_to_string).collect();
+            let distinct = if distinct { "DISTINCT " } else { "" };
+            format!("{name}({distinct}{})", args.join(", "))
+        }
+    }
+}
+
+/// `__select(cond, then, otherwise)` as ` WHEN cond THEN then ELSE
+/// otherwise`, a nested `__select` in `otherwise` continuing the chain.
+fn case_arms(args: &[AstExpr]) -> String {
+    let [cond, then, otherwise] = args else {
+        return String::new();
+    };
+    let rest = match &otherwise.kind {
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(next),
+            tail: None,
+            ..
+        } if name.eq_ignore_ascii_case(crate::functions::SELECT_FN) => case_arms(next),
+        _ => format!(" ELSE {}", expr_to_string(otherwise)),
+    };
+    format!(
+        " WHEN {} THEN {}{rest}",
+        expr_to_string(cond),
+        expr_to_string(then)
+    )
 }
 
 fn push_unique(out: &mut Vec<String>, name: String) {

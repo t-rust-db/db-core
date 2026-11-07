@@ -142,6 +142,24 @@ fn output_column_names_labels_every_select_item() {
 }
 
 #[test]
+fn output_column_names_labels_an_unaliased_scalar_call_and_case() {
+    let names = output_column_names(&select(
+        "SELECT round(d), abs(d - 1), CASE WHEN a > 1 THEN 1 WHEN a > 0 THEN 2 ELSE 0 END, date_trunc('day', ts), __date_trunc('day', ts, 1000000), CASE a WHEN 1 THEN 2 END FROM t",
+    ));
+    assert_eq!(
+        names,
+        vec![
+            "round(d)",
+            "abs(d - 1)",
+            "CASE WHEN a > 1 THEN 1 WHEN a > 0 THEN 2 ELSE 0 END",
+            "date_trunc('day', ts)",
+            "date_trunc('day', ts)",
+            "CASE WHEN a = 1 THEN 2 ELSE NULL END",
+        ]
+    );
+}
+
+#[test]
 fn split_qualified_separates_a_table_prefix_from_a_column_name() {
     assert_eq!(split_qualified("t.a"), (Some("t"), "a"));
     assert_eq!(split_qualified("a"), (None, "a"));

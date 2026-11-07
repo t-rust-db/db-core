@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.234.2] - 2026-11-07
+
+### Fixed
+
+- column: an unaliased scalar call, `CASE` or `date_trunc` in the select list gets a column label (`round(d)`, `CASE WHEN ... END`, `date_trunc('day', ts)`) instead of an empty one (#1036)
+
 ## [0.234.1] - 2026-11-07
 
 ### Fixed
