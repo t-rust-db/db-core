@@ -2510,10 +2510,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "codegen_batch_expr_to_string_b58daf04",
+    "id": "codegen_batch_expr_to_string_a42af268",
     "file": "src/codegen/batch.rs",
     "line": 4300,
-    "decision": "match &expr.kind {\n        // A `Column` always carries a name; `expr_column_name` is `None`\n        // only for non-column kinds, which this arm excludes. Plan text.\n        ExprKind::Column { .. } => expr_column_name(expr).unwrap_or_default(),\n        ExprKind::Literal(lit) => literal_to_string(lit),\n        ExprKind::Paren(inner) => expr_to_string(inner),\n        ExprKind::Binary { op, lhs, rhs } => {\n            format!(\n                \"{} {} {}\",\n                expr_to_string(lhs),\n                bin_op_str(*op),\n                expr_to_string(rhs)\n            )\n        }\n        ExprKind::InSubquery { expr, subquery, .. } => {\n            // Plan text only: the real compile reports a missing alias as\n            // `PlanError::Internal`; here it just renders as \"\".\n            let from = subquery\n                .from\n                .as_ref()\n                .and_then(|f| table_name(f).ok())\n                .unwrap_or_default();\n            format!(\"{} IN (SELECT ... FROM {from})\", expr_to_string(expr))\n        }\n        ExprKind::Exists { subquery, negated } => {\n            // Plan text only: the real compile reports a missing alias as\n            // `PlanError::Internal`; here it just renders as \"\".\n            let from = subquery\n                .from\n                .as_ref()\n                .and_then(|f| table_name(f).ok())\n                .unwrap_or_default();\n            format!(\n                \"{}EXISTS (SELECT ... FROM {from})\",\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Not,\n            expr: inner,\n        } => format!(\"NOT {}\", expr_to_string(inner)),\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Minus,\n            expr: inner,\n        } => format!(\"-{}\", expr_to_string(inner)),\n        ExprKind::Unary { expr: inner, .. } => expr_to_string(inner),\n        ExprKind::IsNull { expr, negated } => {\n            format!(\n                \"{} IS {}NULL\",\n                expr_to_string(expr),\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::Is { lhs, rhs, negated }\n            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>\n        {\n            format!(\n                \"{} IS {}NULL\",\n                expr_to_string(lhs),\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        _ => String::new(),\n    }",
+    "decision": "match &expr.kind {\n        // A `Column` always carries a name; `expr_column_name` is `None`\n        // only for non-column kinds, which this arm excludes. Plan text.\n        ExprKind::Column { .. } => expr_column_name(expr).unwrap_or_default(),\n        ExprKind::Literal(lit) => literal_to_string(lit),\n        ExprKind::Paren(inner) => expr_to_string(inner),\n        ExprKind::Binary { op, lhs, rhs } => {\n            format!(\n                \"{} {} {}\",\n                expr_to_string(lhs),\n                bin_op_str(*op),\n                expr_to_string(rhs)\n            )\n        }\n        ExprKind::InSubquery { expr, subquery, .. } => {\n            // Plan text only: the real compile reports a missing alias as\n            // `PlanError::Internal`; here it just renders as \"\".\n            let from = subquery\n                .from\n                .as_ref()\n                .and_then(|f| table_name(f).ok())\n                .unwrap_or_default();\n            format!(\"{} IN (SELECT ... FROM {from})\", expr_to_string(expr))\n        }\n        ExprKind::Exists { subquery, negated } => {\n            // Plan text only: the real compile reports a missing alias as\n            // `PlanError::Internal`; here it just renders as \"\".\n            let from = subquery\n                .from\n                .as_ref()\n                .and_then(|f| table_name(f).ok())\n                .unwrap_or_default();\n            format!(\n                \"{}EXISTS (SELECT ... FROM {from})\",\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Not,\n            expr: inner,\n        } => format!(\"NOT {}\", expr_to_string(inner)),\n        ExprKind::Unary {\n            op: crate::parser::ast::UnaryOp::Minus,\n            expr: inner,\n        } => format!(\"-{}\", expr_to_string(inner)),\n        ExprKind::Unary { expr: inner, .. } => expr_to_string(inner),\n        ExprKind::IsNull { expr, negated } => {\n            format!(\n                \"{} IS {}NULL\",\n                expr_to_string(expr),\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::Is { lhs, rhs, negated }\n            if matches!(rhs.kind, ExprKind::Literal(AstLiteral::Null)) =>\n        {\n            format!(\n                \"{} IS {}NULL\",\n                expr_to_string(lhs),\n                if *negated { \"NOT \" } else { \"\" }\n            )\n        }\n        ExprKind::FunctionCall {\n            name,\n            distinct,\n            args: FunctionArgs::List(list),\n            tail: None,\n        } => call_to_string(name, *distinct, list),\n        // Anything else (LIKE, BETWEEN, ...): the parser's own printer, so\n        // an unaliased expression still gets a column label.\n        _ => expr.to_string(),\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -2530,9 +2530,69 @@
     "wildcard_risk": false
   },
   {
+    "id": "codegen_batch_call_to_string_088c46e4",
+    "file": "src/codegen/batch.rs",
+    "line": 4378,
+    "decision": "match args {\n        [_, _, _] if name.eq_ignore_ascii_case(crate::functions::SELECT_FN) => {\n            format!(\"CASE{} END\", case_arms(args))\n        }\n        [part, ts, _] if name == \"__date_trunc\" => format!(\n            \"date_trunc({}, {})\",\n            expr_to_string(part),\n            expr_to_string(ts)\n        ),\n        _ => {\n            let args: Vec<String> = args.iter().map(expr_to_string).collect();\n            let distinct = if distinct { \"DISTINCT \" } else { \"\" };\n            format!(\"{name}({distinct}{})\", args.join(\", \"))\n        }\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_batch_call_to_string_c39fef3b",
+    "file": "src/codegen/batch.rs",
+    "line": 4379,
+    "decision": "name.eq_ignore_ascii_case(crate::functions::SELECT_FN)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_batch_call_to_string_40fb6a29",
+    "file": "src/codegen/batch.rs",
+    "line": 4382,
+    "decision": "name == \"__date_trunc\"",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_batch_call_to_string_56b6a17b",
+    "file": "src/codegen/batch.rs",
+    "line": 4389,
+    "decision": "distinct",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "codegen_batch_case_arms_d003f06e",
+    "file": "src/codegen/batch.rs",
+    "line": 4401,
+    "decision": "match &otherwise.kind {\n        ExprKind::FunctionCall {\n            name,\n            args: FunctionArgs::List(next),\n            tail: None,\n            ..\n        } if name.eq_ignore_ascii_case(crate::functions::SELECT_FN) => case_arms(next),\n        _ => format!(\" ELSE {}\", expr_to_string(otherwise)),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "codegen_batch_case_arms_c39fef3b",
+    "file": "src/codegen/batch.rs",
+    "line": 4407,
+    "decision": "name.eq_ignore_ascii_case(crate::functions::SELECT_FN)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "codegen_batch_push_unique_c03a600a",
     "file": "src/codegen/batch.rs",
-    "line": 4367,
+    "line": 4418,
     "decision": "!out.contains(&name)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2542,7 +2602,7 @@
   {
     "id": "codegen_batch_collect_expr_columns_0ab5c21d",
     "file": "src/codegen/batch.rs",
-    "line": 4373,
+    "line": 4424,
     "decision": "match &expr.kind {\n        ExprKind::Column { .. } => {\n            if let Some(name) = expr_column_name(expr) {\n                push_unique(out, name);\n            }\n        }\n        ExprKind::Literal(_) => {}\n        ExprKind::Paren(inner) => collect_expr_columns(inner, out),\n        ExprKind::Binary { lhs, rhs, .. } => {\n            collect_expr_columns(lhs, out);\n            collect_expr_columns(rhs, out);\n        }\n        ExprKind::InSubquery { expr, .. } => collect_expr_columns(expr, out),\n        ExprKind::Exists { .. } => {}\n        ExprKind::Unary { expr: inner, .. } => collect_expr_columns(inner, out),\n        ExprKind::IsNull { expr, .. } => collect_expr_columns(expr, out),\n        ExprKind::Is { lhs, .. } => collect_expr_columns(lhs, out),\n        ExprKind::Like { expr, pattern, .. } => {\n            collect_expr_columns(expr, out);\n            collect_expr_columns(pattern, out);\n        }\n        // A scalar call's (#307) column references are its arguments' --\n        // needed so a bare (non-`GROUP BY`) `SELECT json_extract(msg, ...)`\n        // pre-loads `msg` before `Filter`, same as any other expression.\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        } => {\n            for arg in list {\n                collect_expr_columns(arg, out);\n            }\n        }\n        _ => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2552,7 +2612,7 @@
   {
     "id": "codegen_batch_collect_expr_columns_657beef1",
     "file": "src/codegen/batch.rs",
-    "line": 4375,
+    "line": 4426,
     "decision": "let Some(name) = expr_column_name(expr)",
     "conditions": 1,
     "vectors_required": 2,
@@ -2562,7 +2622,7 @@
   {
     "id": "codegen_batch_referenced_columns_dd48752f",
     "file": "src/codegen/batch.rs",
-    "line": 4419,
+    "line": 4470,
     "decision": "match item {\n            Item::Column(name) => push_unique(&mut out, name.clone()),\n            Item::Star => {}\n            Item::Agg(_, arg, filter, _) => {\n                match arg {\n                    Some(AggArg::Column(name)) => push_unique(&mut out, name.clone()),\n                    Some(AggArg::Expr(expr)) => collect_expr_columns(expr, &mut out),\n                    None => {}\n                }\n                if let Some(f) = filter {\n                    let mut cols = Vec::new();\n                    collect_expr_columns(f, &mut cols);\n                    for name in cols {\n                        push_unique(&mut out, name);\n                    }\n                }\n            }\n            Item::Window(spec) => {\n                if let Some(arg) = &spec.arg {\n                    push_unique(&mut out, arg.clone());\n                }\n                for name in &spec.partition_by {\n                    push_unique(&mut out, name.clone());\n                }\n                for (name, _) in &spec.order_by {\n                    push_unique(&mut out, name.clone());\n                }\n                if let Some(f) = &spec.filter {\n                    collect_expr_columns(f, &mut out);\n                }\n            }\n            Item::Expr(expr) | Item::AggExpr(expr) => collect_expr_columns(expr, &mut out),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2572,7 +2632,7 @@
   {
     "id": "codegen_batch_referenced_columns_6a00b92a",
     "file": "src/codegen/batch.rs",
-    "line": 4423,
+    "line": 4474,
     "decision": "match arg {\n                    Some(AggArg::Column(name)) => push_unique(&mut out, name.clone()),\n                    Some(AggArg::Expr(expr)) => collect_expr_columns(expr, &mut out),\n                    None => {}\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2582,7 +2642,7 @@
   {
     "id": "codegen_batch_referenced_columns_64cb657e",
     "file": "src/codegen/batch.rs",
-    "line": 4428,
+    "line": 4479,
     "decision": "let Some(f) = filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -2592,7 +2652,7 @@
   {
     "id": "codegen_batch_referenced_columns_191cd68b",
     "file": "src/codegen/batch.rs",
-    "line": 4437,
+    "line": 4488,
     "decision": "let Some(arg) = &spec.arg",
     "conditions": 1,
     "vectors_required": 2,
@@ -2602,7 +2662,7 @@
   {
     "id": "codegen_batch_referenced_columns_782e8a25",
     "file": "src/codegen/batch.rs",
-    "line": 4446,
+    "line": 4497,
     "decision": "let Some(f) = &spec.filter",
     "conditions": 1,
     "vectors_required": 2,
@@ -2612,7 +2672,7 @@
   {
     "id": "codegen_batch_referenced_columns_fee390fc",
     "file": "src/codegen/batch.rs",
-    "line": 4453,
+    "line": 4504,
     "decision": "let Some(where_clause) = &select.where_clause",
     "conditions": 1,
     "vectors_required": 2,
@@ -2622,7 +2682,7 @@
   {
     "id": "codegen_batch_referenced_columns_c16d1873",
     "file": "src/codegen/batch.rs",
-    "line": 4456,
+    "line": 4507,
     "decision": "let Some(from) = &select.from",
     "conditions": 1,
     "vectors_required": 2,
@@ -2632,7 +2692,7 @@
   {
     "id": "codegen_batch_referenced_columns_576de093",
     "file": "src/codegen/batch.rs",
-    "line": 4464,
+    "line": 4515,
     "decision": "matches!(term.expr.kind, ExprKind::Literal(_))",
     "conditions": 1,
     "vectors_required": 2,
@@ -2642,7 +2702,7 @@
   {
     "id": "codegen_batch_referenced_columns_64caf832",
     "file": "src/codegen/batch.rs",
-    "line": 4477,
+    "line": 4528,
     "decision": "!is_select_item_label",
     "conditions": 1,
     "vectors_required": 2,
@@ -2652,7 +2712,7 @@
   {
     "id": "codegen_batch_in_lists_9b234f67",
     "file": "src/codegen/batch.rs",
-    "line": 4609,
+    "line": 4660,
     "decision": "match op {\n                Opcode::InList { list, negated, .. } => Some((list.to_vec(), *negated)),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2662,7 +2722,7 @@
   {
     "id": "codegen_batch_case_compiles_to_nested_selects_with_the_loads_outside_the_arms_d03f1046",
     "file": "src/codegen/batch.rs",
-    "line": 4684,
+    "line": 4735,
     "decision": "match op {\n                Opcode::LoadColumn { column, .. } => Some(column.to_string()),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2672,7 +2732,7 @@
   {
     "id": "codegen_batch_agg_parts_of_8f0cfd37",
     "file": "src/codegen/batch.rs",
-    "line": 5084,
+    "line": 5135,
     "decision": "match op {\n                Opcode::Combine { agg_parts, .. } => Some(agg_parts.to_vec()),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -2682,7 +2742,7 @@
   {
     "id": "codegen_batch_projection_shows_in_explain_and_disables_streaming_85f62131",
     "file": "src/codegen/batch.rs",
-    "line": 6552,
+    "line": 6603,
     "decision": "let Opcode::Combine { project, .. } = &mut instruction.opcode",
     "conditions": 1,
     "vectors_required": 2,
@@ -2692,7 +2752,7 @@
   {
     "id": "codegen_batch_a_long_segment_runs_in_slices_with_the_same_answer_9e415b21",
     "file": "src/codegen/batch.rs",
-    "line": 6729,
+    "line": 6780,
     "decision": "i % 97 == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -2702,7 +2762,7 @@
   {
     "id": "codegen_batch_first_item_df63c3b2",
     "file": "src/codegen/batch.rs",
-    "line": 6939,
+    "line": 6990,
     "decision": "let ResultColumn::Expr { expr, .. } = &mut select.columns[0]",
     "conditions": 1,
     "vectors_required": 2,
@@ -2712,7 +2772,7 @@
   {
     "id": "codegen_batch_first_item_85e883fd",
     "file": "src/codegen/batch.rs",
-    "line": 6940,
+    "line": 6991,
     "decision": "let ExprKind::FunctionCall { distinct: d, .. } = &mut expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -2722,7 +2782,7 @@
   {
     "id": "codegen_batch_call_names_a5e14629",
     "file": "src/codegen/batch.rs",
-    "line": 7067,
+    "line": 7118,
     "decision": "match &i.opcode {\n                Opcode::Call { name, .. } => Some(name.to_string()),\n                _ => None,\n            }",
     "conditions": 0,
     "vectors_required": 0,
