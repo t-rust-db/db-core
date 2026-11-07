@@ -21,7 +21,7 @@
     {"file": "matrix_bounds_1014.test", "pass": 344, "skip": 0, "fail": 0},
     {"file": "matrix_decimal_1014.test", "pass": 390, "skip": 0, "fail": 0},
     {"file": "matrix_filter_1014.test", "pass": 504, "skip": 0, "fail": 0},
-    {"file": "matrix_group_by_1014.test", "pass": 388, "skip": 4, "fail": 0},
+    {"file": "matrix_group_by_1014.test", "pass": 392, "skip": 0, "fail": 0},
     {"file": "matrix_null_1014.test", "pass": 405, "skip": 0, "fail": 0},
     {"file": "matrix_order_1014.test", "pass": 380, "skip": 0, "fail": 0},
     {"file": "matrix_string_1014.test", "pass": 496, "skip": 0, "fail": 0},
@@ -39,5 +39,5 @@
     {"file": "unnest_filters_812.test", "pass": 7, "skip": 2, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 4688, "skip": 13, "fail": 0}
+  "total": {"pass": 4692, "skip": 9, "fail": 0}
 }

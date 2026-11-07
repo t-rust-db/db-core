@@ -4646,8 +4646,6 @@ small
 tiny
 -2747
 
-# #1019: HAVING count(n) resolves n to the select alias
-skipif db-core
 query TI rowsort
 SELECT grp, count(*) AS n FROM typed_nulls GROUP BY grp HAVING count(n) > 3
 ----
@@ -5014,8 +5012,6 @@ SELECT b, sum(n) FROM typed_nulls WHERE n IS NOT NULL GROUP BY b
 NULL
 -4225
 
-# #1019: HAVING count(n) resolves n to the select alias
-skipif db-core
 query II rowsort
 SELECT b, count(*) AS n FROM typed_nulls GROUP BY b HAVING count(n) > 3
 ----
@@ -5449,8 +5445,6 @@ tiny
 1
 564
 
-# #1019: HAVING count(n) resolves n to the select alias
-skipif db-core
 query TII rowsort
 SELECT grp, b, count(*) AS n FROM typed_nulls GROUP BY grp, b HAVING count(n) > 3
 ----
@@ -6327,8 +6321,6 @@ SELECT n % 5, sum(n) FROM typed_nulls WHERE n IS NOT NULL GROUP BY n % 5
 4
 215892
 
-# #1019: HAVING count(n) resolves n to the select alias
-skipif db-core
 query II rowsort
 SELECT n % 5, count(*) AS n FROM typed_nulls GROUP BY n % 5 HAVING count(n) > 3
 ----

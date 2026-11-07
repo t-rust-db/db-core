@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.231.3] - 2026-11-06
+
+### Fixed
+
+- `HAVING count(n)` no longer resolves `n` to a select-list alias of the same name; the aggregate's argument binds to the table column, as DuckDB does (#1019)
+
 ## [0.231.2] - 2026-11-06
 
 ### Fixed

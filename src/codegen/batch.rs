@@ -490,6 +490,9 @@ fn substitute_aliases(expr: &mut AstExpr, select: &Select) {
         ExprKind::Unary { expr: inner, .. }
         | ExprKind::IsNull { expr: inner, .. }
         | ExprKind::Paren(inner) => substitute_aliases(inner, select),
+        // An aggregate's argument binds to the table column, never the
+        // select alias (`HAVING count(n)` for `count(*) AS n`; DuckDB, #1019).
+        ExprKind::FunctionCall { name, .. } if AggFunc::from_name(name).is_some() => {}
         ExprKind::FunctionCall {
             args: FunctionArgs::List(list),
             ..
