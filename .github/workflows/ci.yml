@@ -154,6 +154,29 @@ jobs:
           shared-key: wasm
       - run: make check-wasm
 
+  # The `storage-s3` backend (#1015), off by default so the jobs above never
+  # build it. Its unit tests run against an in-process fake S3 (conditional
+  # puts, lease, fencing); the `s3_garage` tests then run the whole table
+  # lifecycle against a real Garage container. Garage ignores If-Match /
+  # If-None-Match, so those exercise the SingleWriter commit mode.
+  s3:
+    name: S3 backend (Garage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: s3
+      - name: Unit tests (fake S3)
+        run: cargo test --lib --features storage-s3 store::s3
+      - name: Start Garage
+        run: tools/s3_garage.sh up | sed 's/^export //' >> "$GITHUB_ENV"
+        env:
+          CONTAINER_RUNTIME: docker
+      - name: Table lifecycle against Garage
+        run: cargo test --lib --features storage-s3 s3_garage -- --include-ignored
+
   # Charter gate (ADR 0000, #324): the SQLite profile -- the exact feature
   # set sqlite-rs builds -- resolves to first-party crates only, carries
   # exactly the named `unsafe` carve-outs, and compiles no batch/column/

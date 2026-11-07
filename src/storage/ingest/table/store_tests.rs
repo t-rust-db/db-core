@@ -8,12 +8,12 @@ use crate::storage::ingest::store::memory::MemoryStore;
 use crate::storage::parquet::ParquetFile;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-fn clock() -> i64 {
+pub(super) fn clock() -> i64 {
     crate::test_clock::now(0)
 }
 
 /// Sets the clock to `day` days and `hour` hours past 2026-10-11, plus `ns`.
-fn set_clock(day: i64, hour: i64, ns: i64) {
+pub(super) fn set_clock(day: i64, hour: i64, ns: i64) {
     crate::test_clock::set((20_737 + day) * DAY_NS + hour * HOUR_NS + ns);
 }
 
@@ -25,6 +25,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Fixture::with(MemoryStore::default())
+    }
+
+    fn with(mem: MemoryStore) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let local =
@@ -32,12 +36,31 @@ impl Fixture {
         fs::remove_dir_all(&local).ok();
         Fixture {
             local,
-            mem: Arc::new(MemoryStore::default()),
+            mem: Arc::new(mem),
         }
+    }
+
+    /// A fixture whose store honours conditional puts, like AWS S3.
+    fn conditional() -> Self {
+        Fixture::with(MemoryStore::conditional())
     }
 
     fn store(&self) -> Store {
         Store::Memory(Arc::clone(&self.mem))
+    }
+
+    /// Another process's view of the same bucket: its own manifest fence.
+    fn client(&self) -> Store {
+        Store::Memory(Arc::new(self.mem.client()))
+    }
+
+    /// A second local directory, as on another machine.
+    fn other_local(&self) -> PathBuf {
+        let mut dir = self.local.clone().into_os_string();
+        dir.push("-other");
+        let dir = PathBuf::from(dir);
+        fs::remove_dir_all(&dir).ok();
+        dir
     }
 
     fn open(&self, options: TableOptions) -> Result<TableWriter, IngestError> {
@@ -51,12 +74,12 @@ impl Drop for Fixture {
     }
 }
 
-fn line(i: usize) -> String {
+pub(super) fn line(i: usize) -> String {
     let kind = ["c", "a", "b"][i % 3];
     format!(r#"{{"i":{i},"kind":"{kind}"}}"#)
 }
 
-fn append(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<String> {
+pub(super) fn append(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<String> {
     range
         .map(|i| {
             let l = line(i);
@@ -68,7 +91,7 @@ fn append(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<String> {
 
 /// Every record's `raw` the writer holds (files in the store, then pages),
 /// sorted.
-fn rows(w: &TableWriter) -> Vec<String> {
+pub(super) fn rows(w: &TableWriter) -> Vec<String> {
     let s = w.snapshot().unwrap();
     let mut rows = Vec::new();
     for (_, bytes) in s.files() {
@@ -90,7 +113,7 @@ fn rows(w: &TableWriter) -> Vec<String> {
     rows
 }
 
-fn sorted(mut v: Vec<String>) -> Vec<String> {
+pub(super) fn sorted(mut v: Vec<String>) -> Vec<String> {
     v.sort();
     v
 }
@@ -110,7 +133,7 @@ fn assert_store_matches_manifest(f: &Fixture, w: &TableWriter) {
     assert_eq!(stored, listed);
 }
 
-fn tiered() -> TableOptions {
+pub(super) fn tiered() -> TableOptions {
     TableOptions {
         layout: Layout::Tiered(TierOptions {
             row_group_max_bytes: None,
@@ -242,4 +265,72 @@ fn hours_days_and_retention_run_on_the_store() {
     assert_store_matches_manifest(&f, &w);
     assert!(f.mem.list("live/").unwrap().is_empty());
     assert_eq!(rows(&w), sorted(lines));
+}
+
+const EXPIRED_LEASE: &[u8] = b"owner=gone\nexpires_ms=1\n";
+
+#[test]
+fn a_second_machine_on_the_same_prefix_is_refused_until_the_first_lets_go() {
+    let f = Fixture::conditional();
+    let other = f.other_local();
+    let first = TableWriter::open_in(&f.local, f.client(), TableOptions::default()).unwrap();
+    assert!(matches!(
+        TableWriter::open_in(&other, f.client(), TableOptions::default()),
+        Err(IngestError::Wal(WalError::Locked))
+    ));
+    drop(first);
+    // A clean shutdown frees the lease at once.
+    let second = TableWriter::open_in(&other, f.client(), TableOptions::default());
+    assert!(second.is_ok());
+    drop(second);
+    fs::remove_dir_all(&other).ok();
+}
+
+#[test]
+fn a_dead_writers_expired_lease_is_taken_over() {
+    let f = Fixture::conditional();
+    f.mem.put("LOCK", EXPIRED_LEASE).unwrap();
+    assert!(TableWriter::open_in(&f.local, f.client(), TableOptions::default()).is_ok());
+}
+
+#[test]
+fn a_stale_writer_cannot_overwrite_the_commit_of_the_one_that_took_over() {
+    let f = Fixture::conditional();
+    let other = f.other_local();
+    let mut a = TableWriter::open_in(&f.local, f.client(), TableOptions::default()).unwrap();
+    append(&mut a, 0..3);
+    a.flush_all().unwrap();
+    // A's lease runs out (it stalled), and B takes the table over.
+    f.mem.put("LOCK", EXPIRED_LEASE).unwrap();
+    let mut b = TableWriter::open_in(&other, f.client(), TableOptions::default()).unwrap();
+    let mut lines = append(&mut b, 3..6);
+    b.flush_all().unwrap();
+    let committed = b.manifest();
+
+    // A wakes up and flushes. Its file has the name B's flush used (both
+    // count LSNs on from the same manifest), so publishing it must not
+    // replace B's file; the manifest commit would be fenced as well. With
+    // the inline flusher the refusal comes from `seal_head`.
+    append(&mut a, 6..9);
+    let err = a
+        .seal_head()
+        .and_then(|()| a.flush().map(|_| ()))
+        .unwrap_err();
+    assert!(err.to_string().contains("another writer"), "{err}");
+    assert_eq!(Manifest::read_from(&f.store()).unwrap().unwrap(), committed);
+    // B's data is intact: its rows (and what a had flushed) are all there.
+    lines.extend((0..3).map(line));
+    assert_eq!(rows(&b), sorted(lines));
+    drop((a, b));
+    fs::remove_dir_all(&other).ok();
+}
+
+#[test]
+fn a_store_without_conditional_puts_has_no_lease_and_no_fence() {
+    // Garage: the writer's local lock is the only single-writer protection.
+    let f = Fixture::new();
+    let other = f.other_local();
+    let _a = TableWriter::open_in(&f.local, f.store(), TableOptions::default()).unwrap();
+    assert!(TableWriter::open_in(&other, f.store(), TableOptions::default()).is_ok());
+    fs::remove_dir_all(&other).ok();
 }
