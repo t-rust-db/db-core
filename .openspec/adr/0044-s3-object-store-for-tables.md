@@ -77,8 +77,11 @@ by listing the area prefixes and removing what the manifest does not list.
 ## Consequences
 
 - The `RowEngine` and SQLite files stay on the local filesystem, as decided.
-- `TableEngine` (the column engine's table reader) still opens a local path;
-  querying a remote table needs it to take a `Store`.
+- `TableEngine` (the column engine's table reader) opens a table in a store
+  too: `TableEngine::open_in(name, store)` and `open_at("s3://...")`. Its
+  reader is a `StoreReader`, so queries see the flushed files and keep no
+  WAL-tail statistics. `TableReader` itself, the incremental reader of a
+  local directory's WAL tail, stays local.
 - Reading a remote table fetches whole objects for `mmap` and ranged GETs for
   `read_at`; a reader of many small files pays one request per read.
 - A reader's retry when a file vanished is a 1 ms sleep, tuned for a local

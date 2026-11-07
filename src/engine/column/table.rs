@@ -32,8 +32,8 @@ use crate::parser::ast::{Expr, Literal};
 use crate::storage::ingest::manifest::column_bounds;
 use crate::storage::ingest::snapshot::{cast, physical_type};
 use crate::storage::ingest::{
-    FileEntry, KeyBound, KeyRange, PageBody, ReaderStats, RowPage, SessionKey, Snapshot,
-    TableReader,
+    FileEntry, IngestError, KeyBound, KeyRange, PageBody, ReaderStats, RowPage, SessionKey,
+    Snapshot, Store, StoreReader, TableReader,
 };
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::schema::{ColumnSpec, ColumnType};
@@ -620,15 +620,49 @@ fn column_names(schema: &[ColumnSpec]) -> Vec<String> {
     schema.iter().map(|s| s.name.clone()).collect()
 }
 
-/// A table directory written by
-/// [`TableWriter`](crate::storage::ingest::TableWriter), read from any
-/// process. Each query reads a fresh [`Snapshot`], so it sees every record
-/// written before it started.
+/// A table written by [`TableWriter`](crate::storage::ingest::TableWriter),
+/// read from any process: a local directory ([`TableEngine::open`]), or a
+/// table kept in a [`Store`] such as an S3 bucket ([`TableEngine::open_in`],
+/// [`TableEngine::open_at`]). Each query reads a fresh [`Snapshot`], so it
+/// sees every record written before it started. A table in a store has no
+/// WAL tail to read: it shows what the writer has flushed.
 pub struct TableEngine {
     dir: PathBuf,
     table: String,
-    reader: TableReader,
+    reader: Reader,
     schema: Vec<ColumnSpec>,
+}
+
+/// What reads the table.
+#[derive(Debug)]
+enum Reader {
+    /// A local directory, with the writer's WAL tail.
+    Local(Box<TableReader>),
+    /// A store: the committed files only.
+    Store(Box<StoreReader>),
+}
+
+impl Reader {
+    fn snapshot(&self) -> &Snapshot {
+        match self {
+            Reader::Local(r) => r.snapshot(),
+            Reader::Store(r) => r.snapshot(),
+        }
+    }
+
+    fn stats(&self) -> ReaderStats {
+        match self {
+            Reader::Local(r) => r.stats(),
+            Reader::Store(_) => ReaderStats::default(),
+        }
+    }
+
+    fn refresh(&mut self) -> Result<&Snapshot, IngestError> {
+        match self {
+            Reader::Local(r) => r.refresh(),
+            Reader::Store(r) => r.refresh(),
+        }
+    }
 }
 
 impl std::fmt::Debug for TableEngine {
@@ -642,7 +676,34 @@ impl std::fmt::Debug for TableEngine {
 }
 
 impl TableEngine {
-    /// The table directory.
+    /// Opens the table kept in `store`, named `name` in SQL. The table has no
+    /// directory: [`TableEngine::path`] is empty.
+    pub fn open_in(name: &str, store: Store) -> Result<TableEngine, EngineError> {
+        let reader = StoreReader::open(store).map_err(open_error)?;
+        let schema = reader.snapshot().schema().map_err(open_error)?;
+        Ok(TableEngine {
+            dir: PathBuf::new(),
+            table: name.to_string(),
+            reader: Reader::Store(Box::new(reader)),
+            schema,
+        })
+    }
+
+    /// Opens the table at `location`: an `s3://bucket/prefix[?options]` URI
+    /// (the `storage-s3` feature; see `S3Config::from_uri`), named after its
+    /// last path segment, or else a local directory, as [`Engine::open`].
+    pub fn open_at(location: &str) -> Result<TableEngine, EngineError> {
+        if !location.starts_with("s3://") {
+            return <TableEngine as Engine>::open(Path::new(location));
+        }
+        let store = Store::at(location).map_err(open_error)?;
+        let mut engine = TableEngine::open_in(&location_name(location), store)?;
+        engine.dir = PathBuf::from(location);
+        Ok(engine)
+    }
+
+    /// The table directory (the URI for a table opened by `open_at` from an
+    /// `s3://` location, empty for one opened by `open_in`).
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.dir
@@ -831,6 +892,18 @@ fn table_name(dir: &Path) -> String {
         .to_string()
 }
 
+/// The table name of an `s3://bucket/prefix?options` location: its last
+/// path segment (the bucket's name if it has no prefix).
+fn location_name(location: &str) -> String {
+    let path = location.split('?').next().unwrap_or(location);
+    path.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty() && !s.ends_with(':'))
+        .unwrap_or("data")
+        .to_string()
+}
+
 #[cfg(feature = "ingest")]
 impl crate::storage::ingest::Table {
     /// Runs one `SELECT` over a snapshot of everything appended so far,
@@ -849,7 +922,7 @@ impl Engine for TableEngine {
         Ok(TableEngine {
             dir: path.to_path_buf(),
             table: table_name(path),
-            reader,
+            reader: Reader::Local(Box::new(reader)),
             schema,
         })
     }

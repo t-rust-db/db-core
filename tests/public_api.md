@@ -668,6 +668,8 @@ impl db_core::engine::column::table::SnapshotFilter
 pub fn db_core::engine::column::table::SnapshotFilter::parse(&db_core::storage::ingest::snapshot::Snapshot, &str, &str) -> core::result::Result<Self, db_core::engine::EngineError>
 pub struct db_core::engine::column::table::TableEngine
 impl db_core::engine::column::table::TableEngine
+pub fn db_core::engine::column::table::TableEngine::open_at(&str) -> core::result::Result<db_core::engine::column::table::TableEngine, db_core::engine::EngineError>
+pub fn db_core::engine::column::table::TableEngine::open_in(&str, db_core::storage::ingest::store::Store) -> core::result::Result<db_core::engine::column::table::TableEngine, db_core::engine::EngineError>
 pub fn db_core::engine::column::table::TableEngine::path(&self) -> &std::path::Path
 pub fn db_core::engine::column::table::TableEngine::reader_stats(&self) -> db_core::storage::ingest::snapshot::ReaderStats
 pub fn db_core::engine::column::table::TableEngine::refresh(&mut self) -> core::result::Result<(), db_core::engine::EngineError>

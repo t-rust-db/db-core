@@ -19100,6 +19100,46 @@
     "wildcard_risk": true
   },
   {
+    "id": "engine_column_table_snapshot_881b9c51",
+    "file": "src/engine/column/table.rs",
+    "line": 647,
+    "decision": "match self {\n            Reader::Local(r) => r.snapshot(),\n            Reader::Store(r) => r.snapshot(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_column_table_stats_f861d0cd",
+    "file": "src/engine/column/table.rs",
+    "line": 654,
+    "decision": "match self {\n            Reader::Local(r) => r.stats(),\n            Reader::Store(_) => ReaderStats::default(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_column_table_refresh_dcc73530",
+    "file": "src/engine/column/table.rs",
+    "line": 661,
+    "decision": "match self {\n            Reader::Local(r) => r.refresh(),\n            Reader::Store(r) => r.refresh(),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_column_table_open_at_194c23c6",
+    "file": "src/engine/column/table.rs",
+    "line": 696,
+    "decision": "!location.starts_with(\"s3://\")",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_column_table_tests_random_line_3d4dc5a3",
     "file": "src/engine/column/table/tests.rs",
     "line": 202,

@@ -223,3 +223,32 @@ fn s3_garage_retention_drops_the_oldest_days() {
     let g = Garage::new("retention");
     retention_drops_the_oldest_days(|| g.open(retaining(2)).unwrap(), &g.store);
 }
+
+#[cfg(feature = "engine-column")]
+#[test]
+#[ignore = "needs an S3 endpoint: tools/s3_garage.sh up"]
+fn s3_garage_the_column_engine_queries_a_table_by_uri() {
+    use crate::engine::column::table::TableEngine;
+    use crate::engine::{Cell, Engine};
+    let g = Garage::new("engine");
+    let uri = format!(
+        "s3://{}/{}/events?endpoint={}&region={}",
+        env("DB_CORE_S3_BUCKET"),
+        g.prefix,
+        env("DB_CORE_S3_ENDPOINT"),
+        env("DB_CORE_S3_REGION"),
+    );
+    let mut w =
+        TableWriter::open_in(&g.local, Store::at(&uri).unwrap(), TableOptions::default()).unwrap();
+    append(&mut w, 0..5);
+    w.flush_all().unwrap();
+
+    let mut engine = TableEngine::open_at(&uri).unwrap();
+    assert_eq!(engine.table_name(), "events");
+    assert_eq!(engine.path(), std::path::Path::new(&uri));
+    let count = |e: &mut TableEngine| e.run_query("SELECT count(*) FROM events").unwrap().rows;
+    assert_eq!(count(&mut engine), vec![vec![Cell::Int(5)]]);
+    append(&mut w, 5..9);
+    w.flush_all().unwrap();
+    assert_eq!(count(&mut engine), vec![vec![Cell::Int(9)]]);
+}
