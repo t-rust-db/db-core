@@ -426,15 +426,16 @@ pub(crate) fn partial_f64(v: &Value) -> Result<f64> {
 /// `Null` (#452: `Reduce` always emits one row), and `Null` must be the
 /// identity here -- `Null` with `Null` stays `Null`, so a `SUM` over zero
 /// rows across every segment is `NULL` as SQL requires, not `0`; `Null`
-/// with a number is that number. Two integers add exactly, an error past
-/// 64 bits as in one segment (#631); a float on either side makes a float.
+/// with a number is that number. Two integers add exactly, widening past
+/// 64 bits to a scale-0 decimal as in one segment (#1018); a float on either side makes a float.
 pub(crate) fn merge_sum_partials(into: &Value, from: &Value) -> Result<Value> {
     match (into, from) {
         (Value::Null, Value::Null) => Ok(Value::Null),
+        // Past 64 bits the total widens to a scale-0 decimal, as one
+        // segment does (#1018).
         (Value::Int(a), Value::Int(b)) => a
             .checked_add(*b)
-            .map(Value::Int)
-            .ok_or(VmError::IntegerOverflow { opcode: "Combine" }),
+            .map_or_else(|| add_decimals(into, from), |n| Ok(Value::Int(n))),
         (Value::Null, Value::Int(n)) | (Value::Int(n), Value::Null) => Ok(Value::Int(*n)),
         // Decimals (and an integer at scale 0) add exactly (#632).
         (Value::Null, d @ Value::Decimal { .. }) | (d @ Value::Decimal { .. }, Value::Null) => {
@@ -2539,12 +2540,19 @@ mod tests {
     }
 
     #[test]
-    fn integer_sum_partials_add_exactly_or_overflow() {
+    fn integer_sum_partials_add_exactly_or_widen() {
         let mut sum = Value::Int(i64::MAX - 1);
         merge_slot(SlotOp::Sum, &mut sum, &Value::Int(1)).unwrap();
         assert_eq!(sum, Value::Int(i64::MAX));
-        let err = merge_slot(SlotOp::Sum, &mut sum, &Value::Int(1)).unwrap_err();
-        assert_eq!(err, VmError::IntegerOverflow { opcode: "Combine" });
+        merge_slot(SlotOp::Sum, &mut sum, &Value::Int(1)).unwrap();
+        assert_eq!(
+            sum,
+            Value::Decimal {
+                unscaled: i128::from(i64::MAX) + 1,
+                scale: 0
+            },
+            "past i64 the total widens (#1018)"
+        );
         let mut avg_sum = Value::Float(f64::from(i32::MAX));
         merge_slot(SlotOp::AvgSum, &mut avg_sum, &Value::Float(1.0)).unwrap();
         assert!(matches!(avg_sum, Value::Float(_)), "AVG's sum is a float");

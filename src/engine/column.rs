@@ -33,7 +33,9 @@ use crate::storage::column::{
 use crate::storage::parquet::footer::PhysicalType;
 use crate::storage::parquet::{Field, FileError};
 use crate::storage::{MmapRegion, ParquetFile, PosixVfs, RowGroupReader, Vfs};
-use crate::vm::batch::{Batch, Program, Segment, Value, Vm, VmError};
+use crate::vm::batch::{
+    host_threads, run_morsels_with, Batch, Program, Segment, Value, Vm, VmError,
+};
 use crate::vm::column::{Bitmap, Column};
 use crate::vm::engine;
 
@@ -825,6 +827,11 @@ struct RowGroupSegment<'a, 'm> {
     /// SQLite row key stored the same way. Elsewhere such a value stays an
     /// error (#595).
     bit_pattern: Vec<String>,
+    /// Threads [`Self::decode_leaves`] may spend on this row group's
+    /// column chunks (#800): the host's cores divided by the row groups
+    /// scanned, so a few-row-group scan uses the cores the per-row-group
+    /// pool leaves idle and a many-row-group one stays serial per group.
+    decode_threads: usize,
 }
 
 /// #464: resolves a single bare-column `ORDER BY` term to its leaf so each
@@ -879,11 +886,37 @@ impl RowGroupSegment<'_, '_> {
         leaves: &[Leaf],
     ) -> Result<Batch, VmError> {
         let list_reads = ListReads::of(self.program);
+        // #800: the typed leaves decode on the spare threads; a `Value`
+        // column holds `Rc`s and is not `Send`, so it decodes in order
+        // on this one (`load_typed` answers `None` for it, undecoded).
+        let typed = |(name, index, physical_type): &Leaf| {
+            load_typed(
+                rg,
+                *index,
+                *physical_type,
+                self.bits(name),
+                list_reads.get(name),
+            )
+        };
+        let mut parallel = if self.decode_threads > 1 && leaves.len() > 1 {
+            run_morsels_with(self.decode_threads, leaves, typed).into_iter()
+        } else {
+            Vec::new().into_iter()
+        };
         let mut batch = Batch::new(num_rows);
-        for (name, index, physical_type) in leaves {
-            let levels_only = list_reads.get(name);
-            let decoded = load_leaf(rg, *index, *physical_type, self.bits(name), levels_only)
-                .map_err(|e| segment_error(self.row_group_index, name, &e))?;
+        for leaf in leaves {
+            let (name, index, physical_type) = leaf;
+            let decoded = match parallel.next().unwrap_or_else(|| typed(leaf)) {
+                Some(result) => result.map(Loaded::Typed),
+                None => load_leaf(
+                    rg,
+                    *index,
+                    *physical_type,
+                    self.bits(name),
+                    list_reads.get(name),
+                ),
+            }
+            .map_err(|e| segment_error(self.row_group_index, name, &e))?;
             batch = apply_loaded(batch, name, decoded);
         }
         Ok(batch)
@@ -1188,24 +1221,46 @@ fn load_leaf(
     bit_pattern: bool,
     list: ListRead,
 ) -> Result<Loaded, FileError> {
+    if let Some(typed) = load_typed(rg, index, physical_type, bit_pattern, list) {
+        return typed.map(Loaded::Typed);
+    }
     match rg.nested_field_at(index) {
-        Some(field) if is_list(&field) && list == ListRead::Flat => rg
-            .read_list_utf8_flat(&field)
-            .map(|column| Loaded::Typed(Decoded::Column(column))),
-        // #846: only NULL-ness is read, so the lists are a flat column of
-        // empty ones -- offsets and a validity bitmap, about 5 bytes a row
-        // rather than a `Value` (32) each.
-        Some(field) if is_list(&field) && list == ListRead::LevelsOnly => rg
-            .read_list_utf8_presence(&field)
-            .map(|there| Loaded::Typed(Decoded::Column(presence_column(&there)))),
         Some(field) => nested_values(rg, &field, list == ListRead::LevelsOnly).map(Loaded::Values),
         None if annotation(rg, index) == Annotation::Decimal => {
             decimal_values(rg, index).map(Loaded::Values)
         }
-        None if bit_pattern && annotation(rg, index) == Annotation::UInt64 => {
-            uint64_bit_pattern(rg, index).map(Loaded::Values)
+        None => uint64_bit_pattern(rg, index).map(Loaded::Values),
+    }
+}
+
+/// [`load_leaf`] for a leaf that decodes to a typed column, and `None`
+/// -- before anything is decoded -- for one that loads as [`Value`]s
+/// (#800): only the former can cross to a worker thread.
+fn load_typed(
+    rg: &RowGroupReader<'_, '_>,
+    index: usize,
+    physical_type: PhysicalType,
+    bit_pattern: bool,
+    list: ListRead,
+) -> Option<Result<Decoded, FileError>> {
+    match rg.nested_field_at(index) {
+        Some(field) if is_list(&field) && list == ListRead::Flat => {
+            Some(rg.read_list_utf8_flat(&field).map(Decoded::Column))
         }
-        None => decode_column_full(rg, index, physical_type).map(Loaded::Typed),
+        Some(field) if is_list(&field) && list == ListRead::LevelsOnly => Some(
+            rg.read_list_utf8_presence(&field)
+                .map(|there| Decoded::Column(presence_column(&there))),
+        ),
+        Some(_) => None,
+        None => {
+            let annotation = annotation(rg, index);
+            if annotation == Annotation::Decimal
+                || (bit_pattern && annotation == Annotation::UInt64)
+            {
+                return None;
+            }
+            Some(decode_column_full(rg, index, physical_type))
+        }
     }
 }
 
@@ -1306,7 +1361,7 @@ fn row_group_segments<'f>(
         .iter()
         .map(|(n, i, t)| (n.as_str(), (*i, *t)))
         .collect();
-    (0..file.num_row_groups())
+    let segments = (0..file.num_row_groups())
         .filter(|&i| match (where_clause, file.row_group(i)) {
             (Some(expr), Some(rg)) => !prune::definitely_empty(expr, &rg, &leaves_by_name),
             _ => true,
@@ -1318,8 +1373,24 @@ fn row_group_segments<'f>(
             program,
             order_leaf: None,
             bit_pattern: bit_pattern.to_vec(),
+            decode_threads: 1,
+        })
+        .collect::<Vec<_>>();
+    let decode_threads = decode_budget(segments.len());
+    segments
+        .into_iter()
+        .map(|s| RowGroupSegment {
+            decode_threads,
+            ..s
         })
         .collect()
+}
+
+/// Threads each of `row_groups` concurrently decoded row groups may use
+/// for its column chunks: only the cores the row-group pool leaves spare,
+/// so the two never nest past the host's parallelism (#800).
+fn decode_budget(row_groups: usize) -> usize {
+    host_threads().checked_div(row_groups).unwrap_or(1).max(1)
 }
 
 /// A row group of a Parquet file, for callers that run the batch engine
@@ -2356,14 +2427,15 @@ pub(crate) fn file_sources<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::{decode_budget, file_segments, planner_parse, query_result};
     use super::{
         engine, order_leaf, plan_err, planner, resolve_columns, row_group_segments, type_name,
         BatchEngine, Engine as _, ErrorKind, Leaf, ParquetFile, Path, PhysicalType, PlanError,
         Program, RowGroupSegment, Value,
     };
-    use super::{file_segments, planner_parse, query_result};
     use super::{timestamp_literals, timestamp_units};
     use crate::parser::ast::Select;
+    use crate::vm::batch::host_threads;
 
     /// #679: a quoted date or timestamp in a column's units -- micro- and
     /// milliseconds, a fraction kept to the unit's precision -- and `None`
@@ -2742,6 +2814,113 @@ mod tests {
         crate::parser::parse(sql).expect("valid SQL")
     }
 
+    /// #800: a row group's columns decoded on several threads come back
+    /// in the serial decode's column order with the same values.
+    #[test]
+    fn parallel_leaf_decode_matches_serial() {
+        use crate::storage::parquet::writer::{
+            ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+        };
+        let specs = vec![
+            ColumnSpec::new("a", ColumnType::Int64, true),
+            ColumnSpec::new("b", ColumnType::Double, true),
+            ColumnSpec::new("c", ColumnType::Int64, true),
+            ColumnSpec::new("d", ColumnType::Int64, true),
+        ];
+        let mut w = ParquetWriter::new(Vec::new(), specs, WriterOptions::default()).unwrap();
+        w.write_columns(vec![
+            ColumnValues::Int64((0..100).map(Some).collect()),
+            ColumnValues::Double((0..100).map(|i| Some(f64::from(i) / 2.0)).collect()),
+            ColumnValues::Int64((0..100).map(|i| (i % 3 != 0).then_some(i * 7)).collect()),
+            ColumnValues::Int64((0..100).map(|i| Some(-i)).collect()),
+        ])
+        .unwrap();
+        let (bytes, _) = w.finish().unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let leaves: Vec<Leaf> = vec![
+            ("a".to_string(), 0, PhysicalType::Int64),
+            ("b".to_string(), 1, PhysicalType::Double),
+            ("c".to_string(), 2, PhysicalType::Int64),
+            ("d".to_string(), 3, PhysicalType::Int64),
+        ];
+        let select = crate::parser::parse("SELECT a, b, c, d FROM t").unwrap();
+        let program: Program = planner::compile(&select).unwrap();
+        let run = |threads: usize| {
+            let mut segments = row_group_segments(&file, &leaves, &leaves, None, &program, &[]);
+            for s in &mut segments {
+                s.decode_threads = threads;
+            }
+            engine::run(&segments, &program).unwrap()
+        };
+        assert_eq!(run(4), run(1));
+    }
+
+    /// `self.decode_threads > 1 && leaves.len() > 1`: both true (parallel),
+    /// one thread, one leaf -- the same rows each way.
+    fn decode_leaves_rows(threads: usize, columns: &str) -> crate::vm::batch::QueryOutput {
+        use crate::storage::parquet::writer::{
+            ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+        };
+        let specs = vec![
+            ColumnSpec::new("a", ColumnType::Int64, true),
+            ColumnSpec::new("b", ColumnType::Int64, true),
+        ];
+        let mut w = ParquetWriter::new(Vec::new(), specs, WriterOptions::default()).unwrap();
+        w.write_columns(vec![
+            ColumnValues::Int64(vec![Some(1), Some(2)]),
+            ColumnValues::Int64(vec![Some(3), None]),
+        ])
+        .unwrap();
+        let (bytes, _) = w.finish().unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let leaves: Vec<Leaf> = vec![
+            ("a".to_string(), 0, PhysicalType::Int64),
+            ("b".to_string(), 1, PhysicalType::Int64),
+        ];
+        let select = crate::parser::parse(&format!("SELECT {columns} FROM t")).unwrap();
+        let program: Program = planner::compile(&select).unwrap();
+        let columns = resolve_columns(&leaves, &program.columns_to_load()).unwrap();
+        let mut segments = row_group_segments(&file, &columns, &leaves, None, &program, &[]);
+        for s in &mut segments {
+            s.decode_threads = threads;
+        }
+        engine::run(&segments, &program).unwrap()
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_decode_leaves_88775257__v1_threads_and_leaves_decode_in_parallel() {
+        assert_eq!(decode_leaves_rows(2, "a, b"), decode_leaves_rows(1, "a, b"));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_decode_leaves_88775257__v2_one_thread_decodes_serially() {
+        assert_eq!(decode_leaves_rows(1, "a, b").num_rows(), 2);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_decode_leaves_88775257__v3_one_leaf_decodes_serially() {
+        assert_eq!(decode_leaves_rows(2, "a").num_rows(), 2);
+    }
+
+    /// #800: the decode threads of the row groups scanned together never
+    /// add up to more than the host's parallelism, and never to zero.
+    #[test]
+    fn decode_budget_stays_within_the_host() {
+        let host = host_threads();
+        for row_groups in 0..=3 * host {
+            let budget = decode_budget(row_groups);
+            assert!(budget >= 1, "{row_groups} row groups");
+            assert!(
+                budget * row_groups.max(1) <= host.max(row_groups.max(1)),
+                "{row_groups} row groups x {budget} threads exceed {host} cores"
+            );
+        }
+        assert_eq!(decode_budget(1), host);
+    }
+
     #[test]
     fn order_leaf_resolves_only_a_single_bare_column_term() {
         let leaves = amount_leaf();
@@ -2927,6 +3106,7 @@ mod tests {
                 program: &program,
                 order_leaf: None,
                 bit_pattern: Vec::new(),
+                decode_threads: 1,
             };
             segment.load().map(|batch| batch.num_rows)
         };
@@ -3481,6 +3661,7 @@ mod tests {
             program: &program,
             order_leaf: None,
             bit_pattern: Vec::new(),
+            decode_threads: 1,
         };
         assert!(seg.load().is_err());
     }
@@ -3497,6 +3678,7 @@ mod tests {
             program: &program,
             order_leaf: None,
             bit_pattern: Vec::new(),
+            decode_threads: 1,
         };
         assert!(seg.load().is_err());
     }
@@ -3927,11 +4109,11 @@ mod tests {
         super::load_leaf(&file.row_group(0).unwrap(), index, pt, false, list).unwrap()
     }
 
-    // engine_column_load_leaf_1a209f83: `is_list(&field) && list ==
+    // engine_column_load_typed_1a209f83: `is_list(&field) && list ==
     // ListRead::Flat` (#809). `lst` is one row holding `["x"]`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_1a209f83__v1_a_flat_list_read_is_a_typed_list_column() {
+    fn mcdc__engine_column_load_typed_1a209f83__v1_a_flat_list_read_is_a_typed_list_column() {
         let super::Loaded::Typed(super::Decoded::Column(column)) =
             nested_shapes_load("lst", super::ListRead::Flat)
         else {
@@ -3946,7 +4128,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_1a209f83__v2_a_list_read_in_full_is_values() {
+    fn mcdc__engine_column_load_typed_1a209f83__v2_a_list_read_in_full_is_values() {
         let super::Loaded::Values(values) = nested_shapes_load("lst", super::ListRead::Full) else {
             panic!("a full list read is values");
         };
@@ -3958,18 +4140,18 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_1a209f83__v3_a_map_is_values_whatever_the_flag() {
+    fn mcdc__engine_column_load_typed_1a209f83__v3_a_map_is_values_whatever_the_flag() {
         let super::Loaded::Values(values) = nested_shapes_load("m", super::ListRead::Flat) else {
             panic!("a map is read as values");
         };
         assert!(matches!(values.as_slice(), [Value::Map(_)]), "{values:?}");
     }
 
-    // engine_column_load_leaf_601ae351: `is_list(&field) && list ==
+    // engine_column_load_typed_601ae351: `is_list(&field) && list ==
     // ListRead::LevelsOnly` (#846). `lst` is one row holding `["x"]`.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_601ae351__v1_a_levels_only_list_read_is_a_typed_presence_column(
+    fn mcdc__engine_column_load_typed_601ae351__v1_a_levels_only_list_read_is_a_typed_presence_column(
     ) {
         let super::Loaded::Typed(super::Decoded::Column(column)) =
             nested_shapes_load("lst", super::ListRead::LevelsOnly)
@@ -3982,7 +4164,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_601ae351__v2_a_list_read_in_full_is_not_a_presence_column() {
+    fn mcdc__engine_column_load_typed_601ae351__v2_a_list_read_in_full_is_not_a_presence_column() {
         let super::Loaded::Values(values) = nested_shapes_load("lst", super::ListRead::Full) else {
             panic!("a full list read is values");
         };
@@ -3991,7 +4173,7 @@ mod tests {
 
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_601ae351__v3_a_map_is_values_under_levels_only() {
+    fn mcdc__engine_column_load_typed_601ae351__v3_a_map_is_values_under_levels_only() {
         let super::Loaded::Values(values) = nested_shapes_load("m", super::ListRead::LevelsOnly)
         else {
             panic!("a map is read as values");
@@ -4026,11 +4208,56 @@ mod tests {
         assert_eq!(nested_shapes_leaf("st"), None);
     }
 
+    /// #632/#600: `Decimal || (bit_pattern && UInt64)`, a DECIMAL (the
+    /// first leaf true) loads as exact values, whatever the flag.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_load_typed_b671311e__v4_a_decimal_reads_exact_values() {
+        use crate::storage::parquet::writer::{
+            ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+        };
+        let specs = vec![ColumnSpec::new(
+            "d",
+            ColumnType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            true,
+        )];
+        let mut w = ParquetWriter::new(Vec::new(), specs, WriterOptions::default()).unwrap();
+        w.write_columns(vec![ColumnValues::Decimal(vec![Some(150), None])])
+            .unwrap();
+        let (bytes, _) = w.finish().unwrap();
+        let file = ParquetFile::open(&bytes).unwrap();
+        let rg = file.row_group(0).unwrap();
+        let want = vec![
+            Value::Decimal {
+                unscaled: 150,
+                scale: 2,
+            },
+            Value::Null,
+        ];
+        for bit_pattern in [false, true] {
+            let loaded = super::load_leaf(
+                &rg,
+                0,
+                PhysicalType::Int32,
+                bit_pattern,
+                super::ListRead::Full,
+            )
+            .unwrap();
+            let super::Loaded::Values(got) = loaded else {
+                panic!("a DECIMAL loads as values");
+            };
+            assert_eq!(got, want);
+        }
+    }
+
     /// #600: `bit_pattern && annotation == UInt64`, leaf A false -- without
     /// the flag a `UINT_64` above `i64::MAX` is still an error (#595).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_57155792__v1_flag_off_keeps_the_error() {
+    fn mcdc__engine_column_load_typed_b671311e__v1_flag_off_keeps_the_error() {
         // An error shows as the empty stand-in `values` returns.
         assert_eq!(
             load_both(0, PhysicalType::Int64, false),
@@ -4042,14 +4269,14 @@ mod tests {
     /// reads it as usual (typed).
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_57155792__v2_flag_on_plain_column_reads_typed() {
+    fn mcdc__engine_column_load_typed_b671311e__v2_flag_on_plain_column_reads_typed() {
         assert_eq!(load_both(1, PhysicalType::Int64, true), (None, None));
     }
 
     /// Both true: the `UINT_64` reads as its signed bit pattern.
     #[test]
     #[allow(non_snake_case)]
-    fn mcdc__engine_column_load_leaf_57155792__v3_flag_on_uint64_reads_the_bit_pattern() {
+    fn mcdc__engine_column_load_typed_b671311e__v3_flag_on_uint64_reads_the_bit_pattern() {
         let want = Some(vec![Value::Int(5), Value::Int(-1)]);
         assert_eq!(
             load_both(0, PhysicalType::Int64, true),

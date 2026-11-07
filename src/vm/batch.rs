@@ -1300,6 +1300,61 @@ fn to_scalar_value(v: &Value) -> crate::value::Value {
     }
 }
 
+/// `abs(decimal)`, `round(decimal[, n])` and `round(integer[, n])` for one
+/// row, in the argument's own type as DuckDB gives them (#1016, #1017):
+/// `abs` keeps the scale, `round` of a decimal drops to scale
+/// `max(n, 0)` (half away from zero) and `round` of an integer is that
+/// integer. `None` for any other call, which the row functions answer.
+fn exact_abs_round(name: &str, args: &[&[Value]], row: usize) -> Option<Value> {
+    let is_abs = name.eq_ignore_ascii_case("abs");
+    let is_round = name.eq_ignore_ascii_case("round");
+    if !(is_abs && args.len() == 1 || is_round && matches!(args.len(), 1 | 2)) {
+        return None;
+    }
+    let x = args.first()?.get(row)?;
+    let digits = match args.get(1) {
+        None => 0,
+        Some(col) => match col.get(row)? {
+            Value::Int(n) => *n,
+            _ => return None,
+        },
+    };
+    match x {
+        Value::Decimal { unscaled, scale } if is_abs => Some(Value::Decimal {
+            unscaled: unscaled.checked_abs()?,
+            scale: *scale,
+        }),
+        Value::Decimal { unscaled, scale } => {
+            let scale_i = i64::from(*scale);
+            if digits >= scale_i {
+                return Some(x.clone());
+            }
+            // Digits dropped, and the kept scale (`max(n, 0)`).
+            let drop = u32::try_from(scale_i.checked_sub(digits)?).ok()?;
+            let kept = u8::try_from(digits.max(0)).ok()?;
+            let p = pow10(drop)?;
+            let (q, r) = (unscaled.checked_div(p)?, unscaled.checked_rem(p)?);
+            let q = if r.checked_abs()?.checked_mul(2)? >= p {
+                q.checked_add(unscaled.signum())?
+            } else {
+                q
+            };
+            // A negative `n` rounds to tens, hundreds, ...: scale 0 still.
+            let back = if digits < 0 {
+                pow10(u32::try_from(digits.checked_neg()?).ok()?)?
+            } else {
+                1
+            };
+            Some(Value::Decimal {
+                unscaled: q.checked_mul(back)?,
+                scale: kept,
+            })
+        }
+        Value::Int(_) if is_round && digits >= 0 => Some(x.clone()),
+        _ => None,
+    }
+}
+
 /// [`crate::value::Value`] -> [`Value`], the reverse of
 /// [`to_scalar_value`].
 fn from_scalar_value(v: crate::value::Value) -> Value {
@@ -2011,6 +2066,17 @@ pub trait Segment: Send + Sync {
 /// `run_parallel`/`run_parallel_top_n`'s doc comments require, without a
 /// work-stealing dependency.
 pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+    run_morsels_with(host_threads(), items, f)
+}
+
+/// [`run_morsels`] on at most `threads` workers (#800): a pool that runs
+/// inside a worker of another pool takes only its share of the cores, so
+/// the two never exceed the host's parallelism between them.
+pub(crate) fn run_morsels_with<I: Sync, T: Send>(
+    threads: usize,
+    items: &[I],
+    f: impl Fn(&I) -> T + Sync,
+) -> Vec<T> {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -2019,7 +2085,7 @@ pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + S
         return Vec::new();
     }
 
-    let num_threads = pool_size(len);
+    let num_threads = threads.clamp(1, len);
     if num_threads == 1 {
         return items.iter().map(f).collect();
     }
@@ -2052,15 +2118,18 @@ pub(crate) fn run_morsels<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + S
     results.into_iter().map(|(_, result)| result).collect()
 }
 
-/// Workers for `len` items: the host's parallelism, at most `len`. One
-/// means the pools run on the calling thread without spawning, which is
-/// also what a host that cannot spawn threads gets (`wasm32-unknown-unknown`
-/// reports no parallelism).
-fn pool_size(len: usize) -> usize {
+/// The host's parallelism. One means the pools run on the calling thread
+/// without spawning, which is also what a host that cannot spawn threads
+/// gets (`wasm32-unknown-unknown` reports no parallelism).
+pub(crate) fn host_threads() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
-        .min(len)
+}
+
+/// Workers for `len` items: the host's parallelism, at most `len`.
+fn pool_size(len: usize) -> usize {
+    host_threads().min(len)
 }
 
 /// [`run_morsels`] where each worker carries state across every item it
@@ -5076,6 +5145,15 @@ impl RunningAgg {
             Some(Value::Int(i)) => self.push_i64(*i),
             Some(Value::Float(x)) => self.push_f64(*x),
             Some(Value::Decimal { unscaled, scale }) => self.push_decimal(*unscaled, *scale),
+            // `SUM(BOOLEAN)` is the count of true values, as in DuckDB (#1020);
+            // `MIN`/`MAX` still order the booleans themselves.
+            Some(Value::Bool(b)) => {
+                self.row_count = self.row_count.saturating_add(1);
+                self.non_null_count = self.non_null_count.saturating_add(1);
+                self.numeric_count = self.numeric_count.saturating_add(1);
+                self.int_sum = self.int_sum.saturating_add(i128::from(*b));
+                self.push_extreme(&Value::Bool(*b));
+            }
             // Not summed, but counted and ordered: `MIN`/`MAX` of text.
             Some(other) => {
                 self.row_count = self.row_count.saturating_add(1);
@@ -5234,9 +5312,16 @@ impl RunningAgg {
                 }
                 Value::Decimal { unscaled, scale }
             }
-            AggFunc::Sum => Value::Int(
-                i64::try_from(self.int_sum).map_err(|_| VmError::IntegerOverflow { opcode })?,
-            ),
+            // Integers widen like DuckDB's HUGEINT: past i64 the exact total
+            // is a scale-0 decimal, an error only past DECIMAL(38) (#1018).
+            AggFunc::Sum => match i64::try_from(self.int_sum) {
+                Ok(n) => Value::Int(n),
+                Err(_) if self.int_sum.unsigned_abs() < 10_u128.pow(38) => Value::Decimal {
+                    unscaled: self.int_sum,
+                    scale: 0,
+                },
+                Err(_) => return Err(VmError::IntegerOverflow { opcode }),
+            },
             AggFunc::Avg if self.numeric_count == 0 => Value::Null,
             AggFunc::Avg => {
                 #[allow(
@@ -6656,6 +6741,13 @@ impl Vm {
                     let date_trunc =
                         name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN);
                     for row in 0..num_rows {
+                        // #1016/#1017: `abs`/`round` keep a decimal or
+                        // integer argument's type; the row functions
+                        // would answer in `f64`.
+                        if let Some(exact) = exact_abs_round(name, &arg_regs, row) {
+                            result.push(exact);
+                            continue;
+                        }
                         for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
                             *slot = to_scalar_value(&reg[row]);
                         }
@@ -9319,6 +9411,124 @@ fn compare_values(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1016/#1017: `exact_abs_round` answers `abs`/`round` of a decimal or
+    /// an integer exactly, and `None` for anything else.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_5dcc7d74__v1_other_function_is_not_exact() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("upper", &[&col], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_5dcc7d74__v2_abs_takes_the_exact_path() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), Some(dec(125, 2)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_a8154dca__v1_abs_keeps_the_scale() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), Some(dec(125, 2)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_a8154dca__v2_round_is_not_abs() {
+        let col = [dec(-125, 2)];
+        assert_eq!(exact_abs_round("round", &[&col], 0), Some(dec(-1, 0)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v1_round_of_an_integer_is_that_integer() {
+        let col = [Value::Int(7)];
+        assert_eq!(exact_abs_round("round", &[&col], 0), Some(Value::Int(7)));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v2_abs_of_an_integer_is_not_exact() {
+        let col = [Value::Int(-7)];
+        assert_eq!(exact_abs_round("abs", &[&col], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_05de988c__v3_negative_digits_is_not_exact() {
+        let col = [Value::Int(7)];
+        let digits = [Value::Int(-1)];
+        assert_eq!(exact_abs_round("round", &[&col, &digits], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_19976354__v1_no_digits_dropped_keeps_the_value() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(2)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(125, 2))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_19976354__v2_digits_dropped_rounds() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_98876afc__v1_half_rounds_away_from_zero() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_98876afc__v2_below_half_rounds_down() {
+        let col = [dec(124, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(12, 1))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_398c2161__v1_negative_digits_round_to_tens() {
+        let col = [dec(1250, 0)];
+        let digits = [Value::Int(-2)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(1300, 0))
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_exact_abs_round_398c2161__v2_positive_digits_keep_the_scale() {
+        let col = [dec(125, 2)];
+        let digits = [Value::Int(1)];
+        assert_eq!(
+            exact_abs_round("round", &[&col, &digits], 0),
+            Some(dec(13, 1))
+        );
+    }
 
     /// #891: the join index, IN-list sets and dictionaries hash through
     /// [`SlotState`]; keys built to collide in its unseeded form spread.
@@ -12376,6 +12586,30 @@ mod tests {
         ];
         assert_eq!(sets(1 << 20), expected);
         assert_eq!(sets(0), expected);
+    }
+
+    /// `SUM(BOOLEAN)` is the count of true values, `NULL` only when no
+    /// row is non-null (#1020); `MIN`/`MAX` keep ordering the booleans.
+    #[test]
+    fn sum_of_booleans_counts_true_values() {
+        let fold = |values: &[Value], func| {
+            let mut acc = RunningAgg::default();
+            for v in values {
+                acc.push(Some(v));
+            }
+            acc.finalize(func, false, "test").unwrap()
+        };
+        let mixed = [
+            Value::Bool(true),
+            Value::Null,
+            Value::Bool(false),
+            Value::Bool(true),
+        ];
+        assert_eq!(fold(&mixed, AggFunc::Sum), Value::Int(2));
+        assert_eq!(fold(&[Value::Bool(false)], AggFunc::Sum), Value::Int(0));
+        assert_eq!(fold(&[Value::Null], AggFunc::Sum), Value::Null);
+        assert_eq!(fold(&mixed, AggFunc::Max), Value::Bool(true));
+        assert_eq!(fold(&mixed, AggFunc::Min), Value::Bool(false));
     }
 
     /// #823: a string distinct accumulator that holds nothing, one string
