@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.234.1] - 2026-11-07
+
+### Fixed
+
+- Tools: `tools/s3_garage.sh` now defaults to port 39000 (not Garage's stock 3900) and refuses a busy port (#1015)
+
 ## [0.234.0] - 2026-11-07
 
 ### Added
