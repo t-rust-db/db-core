@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.236.0] - 2026-11-07
+
+### Added
+
+- S3: `exchange(stream, request)` speaks HTTP/1.1 over any `Read + Write`, so an application's TLS `Transport` reuses db-core's request writer and response parser (#1041, tools#125)
+
 ## [0.235.0] - 2026-11-07
 
 ### Added

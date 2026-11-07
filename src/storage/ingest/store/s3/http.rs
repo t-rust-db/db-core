@@ -130,24 +130,35 @@ impl Transport for PlainHttp {
         let mut stream = TcpStream::connect(addr)?;
         stream.set_read_timeout(Some(self.timeout))?;
         stream.set_write_timeout(Some(self.timeout))?;
-        let mut head = format!(
-            "{} {} HTTP/1.1\r\nhost: {}\r\ncontent-length: {}\r\nconnection: close\r\n",
-            request.method,
-            request.target,
-            request.endpoint.host_header(),
-            request.body.len()
-        );
-        for (name, value) in &request.headers {
-            head.push_str(&format!("{name}: {value}\r\n"));
-        }
-        head.push_str("\r\n");
-        stream.write_all(head.as_bytes())?;
-        stream.write_all(&request.body)?;
-        stream.flush()?;
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw)?;
-        parse_response(&raw, &request.method)
+        exchange(&mut stream, request)
     }
+}
+
+/// Writes `request` to `stream` as HTTP/1.1 with `Connection: close`, reads
+/// to the end and parses the response. The stream is the caller's: a
+/// [`TcpStream`] for [`PlainHttp`], or a TLS stream over one, so an
+/// application can add HTTPS by connecting and calling this.
+pub fn exchange<S: Read + Write>(
+    stream: &mut S,
+    request: &HttpRequest,
+) -> io::Result<HttpResponse> {
+    let mut head = format!(
+        "{} {} HTTP/1.1\r\nhost: {}\r\ncontent-length: {}\r\nconnection: close\r\n",
+        request.method,
+        request.target,
+        request.endpoint.host_header(),
+        request.body.len()
+    );
+    for (name, value) in &request.headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("\r\n");
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(&request.body)?;
+    stream.flush()?;
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw)?;
+    parse_response(&raw, &request.method)
 }
 
 fn invalid(why: &str) -> io::Error {
@@ -284,6 +295,46 @@ mod tests {
         assert!(seen.contains("x-test: 1\r\n") && seen.contains("content-length: 7\r\n"));
         assert!(seen.contains(&format!("host: 127.0.0.1:{port}\r\n")));
         assert!(seen.ends_with("\r\n\r\npayload"));
+    }
+
+    /// A stream over two buffers: the server's reply in, the request out.
+    struct Duplex {
+        reply: std::io::Cursor<Vec<u8>>,
+        sent: Vec<u8>,
+    }
+
+    impl Read for Duplex {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.reply.read(buf)
+        }
+    }
+
+    impl Write for Duplex {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.sent.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn exchange_speaks_http_over_any_stream() {
+        let mut stream = Duplex {
+            reply: std::io::Cursor::new(
+                b"HTTP/1.1 200 OK\r\nETag: \"e\"\r\nContent-Length: 2\r\n\r\nok".to_vec(),
+            ),
+            sent: Vec::new(),
+        };
+        let mut req = request(443, "PUT", b"body");
+        req.endpoint.https = true;
+        let resp = exchange(&mut stream, &req).unwrap();
+        assert_eq!((resp.status, resp.body.as_slice()), (200, &b"ok"[..]));
+        assert_eq!(resp.header("etag"), Some("\"e\""));
+        let sent = String::from_utf8(stream.sent).unwrap();
+        assert!(sent.starts_with("PUT "), "{sent}");
+        assert!(sent.contains("connection: close\r\n"), "{sent}");
+        assert!(sent.ends_with("\r\n\r\nbody"), "{sent}");
     }
 
     #[test]

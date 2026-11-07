@@ -32,7 +32,7 @@ use super::lease::{publish_once, ConditionalObjects, Lease, ManifestFence};
 use super::{check_key, TableStore};
 use crate::storage::column::{MmapRegion, VfsFile};
 use crate::storage::ingest::manifest::MANIFEST_FILE;
-pub use http::{Endpoint, HttpRequest, HttpResponse, PlainHttp, Transport};
+pub use http::{exchange, Endpoint, HttpRequest, HttpResponse, PlainHttp, Transport};
 use sha256::{hex, sha256};
 pub use sigv4::Credentials;
 use sigv4::{amz_date, authorization, canonical_query, uri_encode, SignInput};
