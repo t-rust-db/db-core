@@ -4,12 +4,18 @@
 //! signatures are checked against a real server by the `s3_garage` tests.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use super::super::conformance;
+use super::super::Store;
 use super::sha256::{hex, sha256};
 use super::*;
+
+/// The parts of one upload by part number.
+type Parts = BTreeMap<usize, Vec<u8>>;
+/// Uploads in progress: id -> (key, parts).
+type Uploads = BTreeMap<String, (String, Parts)>;
 
 /// A tiny in-memory S3 bucket.
 #[derive(Default)]
@@ -23,6 +29,21 @@ struct FakeS3 {
     seen: Mutex<Vec<(String, String, String)>>,
     /// 5xx answers still to give before behaving.
     flaky: AtomicU64,
+    /// Multipart uploads in progress: id -> (key, parts by number).
+    uploads: Mutex<Uploads>,
+    next_upload: AtomicU64,
+    /// Keys per listing page; 0 is no limit.
+    page_size: AtomicUsize,
+    /// Whether uploading a part is refused (403).
+    deny_parts: AtomicBool,
+}
+
+/// The value of query parameter `name`, decoded.
+fn param(query: &str, name: &str) -> Option<String> {
+    query
+        .split('&')
+        .find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == name))
+        .map(|(_, v)| percent_decode(v))
 }
 
 fn percent_decode(s: &str) -> String {
@@ -120,19 +141,86 @@ impl Transport for FakeS3 {
             .or_else(|| path.strip_prefix('/').filter(|_| !path.starts_with("/bkt")))
             .unwrap_or_default()
             .to_string();
+        if key == "forbidden" {
+            return Ok(response(403, &[], xml_error("AccessDenied")));
+        }
         let mut objects = self.objects.lock().unwrap();
         match req.method.as_str() {
+            "POST" if query.starts_with("uploads") => {
+                let id = format!("u{}", self.next_upload.fetch_add(1, Ordering::SeqCst));
+                self.uploads
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), (key, BTreeMap::new()));
+                let body = format!("<InitiateMultipartUploadResult><UploadId>{id}</UploadId></InitiateMultipartUploadResult>");
+                Ok(response(200, &[], body.into_bytes()))
+            }
+            "POST" if param(query, "uploadId").is_some() => {
+                let id = param(query, "uploadId").unwrap();
+                if self.conditional
+                    && header("if-none-match") == Some("*")
+                    && objects.contains_key(&key)
+                {
+                    return Ok(response(412, &[], xml_error("PreconditionFailed")));
+                }
+                let (_, parts) = self.uploads.lock().unwrap().remove(&id).unwrap();
+                let whole: Vec<u8> = parts.into_values().flatten().collect();
+                let etag = self.etag();
+                objects.insert(key, (whole, etag));
+                Ok(response(
+                    200,
+                    &[],
+                    b"<CompleteMultipartUploadResult/>".to_vec(),
+                ))
+            }
+            "PUT" if param(query, "partNumber").is_some() => {
+                if self.deny_parts.load(Ordering::SeqCst) {
+                    return Ok(response(403, &[], xml_error("AccessDenied")));
+                }
+                let number: usize = param(query, "partNumber").unwrap().parse().unwrap();
+                let id = param(query, "uploadId").unwrap();
+                self.uploads
+                    .lock()
+                    .unwrap()
+                    .get_mut(&id)
+                    .unwrap()
+                    .1
+                    .insert(number, req.body.clone());
+                Ok(response(
+                    200,
+                    &[("etag", format!("\"p{number}\""))],
+                    Vec::new(),
+                ))
+            }
+            "DELETE" if param(query, "uploadId").is_some() => {
+                self.uploads
+                    .lock()
+                    .unwrap()
+                    .remove(&param(query, "uploadId").unwrap());
+                Ok(response(204, &[], Vec::new()))
+            }
             "GET" if query.contains("list-type=2") => {
-                let prefix = query
-                    .split('&')
-                    .find_map(|kv| kv.strip_prefix("prefix="))
-                    .map(percent_decode)
-                    .unwrap_or_default();
+                let prefix = param(query, "prefix").unwrap_or_default();
+                let after = param(query, "continuation-token");
+                let page = self.page_size.load(Ordering::SeqCst);
+                let mut keys: Vec<&String> = objects
+                    .keys()
+                    .filter(|k| k.starts_with(&prefix) && after.as_ref().is_none_or(|a| *k > a))
+                    .collect();
+                let truncated = page > 0 && keys.len() > page;
+                if truncated {
+                    keys.truncate(page);
+                }
                 let mut body = String::from("<ListBucketResult>");
-                for k in objects.keys().filter(|k| k.starts_with(&prefix)) {
+                for k in &keys {
                     body.push_str(&format!("<Contents><Key>{k}</Key></Contents>"));
                 }
-                body.push_str("<IsTruncated>false</IsTruncated></ListBucketResult>");
+                if let (true, Some(last)) = (truncated, keys.last()) {
+                    body.push_str(&format!("<IsTruncated>true</IsTruncated><NextContinuationToken>{last}</NextContinuationToken>"));
+                } else {
+                    body.push_str("<IsTruncated>false</IsTruncated>");
+                }
+                body.push_str("</ListBucketResult>");
                 Ok(response(200, &[], body.into_bytes()))
             }
             "GET" | "HEAD" => match objects.get(&key) {
@@ -362,4 +450,219 @@ fn a_ranged_read_fetches_only_the_range() {
     assert_eq!(f.read_at(10, &mut buf).unwrap(), 0);
     // One HEAD to open, then a GET per read that reaches the object.
     assert_eq!(fake.count("HEAD"), 1);
+}
+
+#[test]
+fn the_contract_holds_through_the_store_enum() {
+    // The `Store::S3` and `StoreFile::S3` delegations, not just `S3Store`.
+    let fake = FakeS3::new(false);
+    conformance::run(&Store::S3(store(&fake, CommitMode::Auto)));
+}
+
+fn multipart_store(fake: &Arc<FakeS3>) -> S3Store {
+    let mut cfg = config(CommitMode::Auto);
+    cfg.multipart_threshold = 10;
+    cfg.part_size = 5;
+    S3Store::with_transport(cfg, Arc::clone(fake) as Arc<dyn Transport>).unwrap()
+}
+
+fn local_file(tag: &str, bytes: &[u8]) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("db-core-s3-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("f");
+    std::fs::write(&file, bytes).unwrap();
+    (dir, file)
+}
+
+#[test]
+fn a_large_file_is_uploaded_in_parts_and_assembled_in_order() {
+    for conditional in [false, true] {
+        let fake = FakeS3::new(conditional);
+        let s = multipart_store(&fake);
+        let bytes: Vec<u8> = (0u8..23).collect();
+        let (dir, file) = local_file("mp", &bytes);
+        // Opening the store probed it with two PUTs.
+        let before = fake.count("PUT");
+        s.publish(&file, "data/big").unwrap();
+        assert!(!file.exists());
+        assert_eq!(s.get("data/big").unwrap().as_deref(), Some(&bytes[..]));
+        assert!(
+            fake.uploads.lock().unwrap().is_empty(),
+            "no upload left open"
+        );
+        // 23 bytes in 5-byte parts: five of them, and no other PUT.
+        assert_eq!(fake.count("PUT") - before, 5);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[test]
+fn a_large_file_under_a_taken_name_is_a_retry_or_another_writers() {
+    let fake = FakeS3::new(true);
+    let s = multipart_store(&fake);
+    let bytes: Vec<u8> = (0u8..23).collect();
+    let (dir, file) = local_file("mp-taken", &bytes);
+    s.publish(&file, "data/big").unwrap();
+    // The same size is a retry of this very publish.
+    std::fs::write(&file, &bytes).unwrap();
+    s.publish(&file, "data/big").unwrap();
+    assert!(!file.exists());
+    // A different size is someone else's file.
+    std::fs::write(&file, vec![9u8; 30]).unwrap();
+    let err = s.publish(&file, "data/big").unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+    assert_eq!(s.get("data/big").unwrap().as_deref(), Some(&bytes[..]));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_refused_part_aborts_the_upload() {
+    let fake = FakeS3::new(false);
+    let s = multipart_store(&fake);
+    fake.deny_parts.store(true, Ordering::SeqCst);
+    let (dir, file) = local_file("mp-deny", &[7u8; 23]);
+    let err = s.publish(&file, "data/big").unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+    assert!(
+        fake.uploads.lock().unwrap().is_empty(),
+        "the upload was aborted"
+    );
+    assert_eq!(s.get("data/big").unwrap(), None);
+    assert!(file.exists(), "the local file is kept for a retry");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_listing_follows_its_continuation_tokens() {
+    let fake = FakeS3::new(false);
+    let s = store(&fake, CommitMode::SingleWriter);
+    for k in ["data/e", "data/a", "data/d", "data/b", "data/c"] {
+        s.put(k, b"x").unwrap();
+    }
+    fake.page_size.store(2, Ordering::SeqCst);
+    let keys = s.list("data/").unwrap();
+    assert_eq!(keys, ["data/a", "data/b", "data/c", "data/d", "data/e"]);
+    // Three pages of at most two keys.
+    assert_eq!(fake.count("GET"), 3);
+}
+
+#[test]
+fn a_forbidden_request_is_a_permission_error_with_the_s3_code() {
+    let fake = FakeS3::new(false);
+    let s = store(&fake, CommitMode::SingleWriter);
+    let err = s.get("forbidden").unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    assert!(err.to_string().contains("AccessDenied"), "{err}");
+}
+
+#[test]
+fn an_unusable_endpoint_is_refused_up_front_and_an_unreachable_one_fails_requests() {
+    let mut cfg = config(CommitMode::SingleWriter);
+    cfg.endpoint = "ftp://nowhere".to_string();
+    assert_eq!(
+        S3Store::new(cfg).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+
+    // Nothing listens on port 1: the request fails, after its retries.
+    let mut cfg = config(CommitMode::SingleWriter);
+    cfg.endpoint = "http://127.0.0.1:1".to_string();
+    let s = S3Store::new(cfg).unwrap();
+    assert!(s.get("k").is_err());
+}
+
+fn no_env(_: &str) -> Option<String> {
+    None
+}
+
+fn creds() -> Credentials {
+    config(CommitMode::Auto).credentials
+}
+
+#[test]
+fn a_uri_names_bucket_prefix_and_options() {
+    let cfg = S3Config::from_uri_with(
+        "s3://bkt/tables/events/?endpoint=http://127.0.0.1:3900&region=garage&commit=single-writer",
+        no_env,
+        creds(),
+    )
+    .unwrap();
+    assert_eq!(cfg.bucket, "bkt");
+    assert_eq!(cfg.prefix, "tables/events");
+    assert_eq!(cfg.endpoint, "http://127.0.0.1:3900");
+    assert_eq!(cfg.region, "garage");
+    assert!(cfg.path_style, "a custom endpoint is addressed path-style");
+    assert_eq!(cfg.commit, CommitMode::SingleWriter);
+
+    // Percent-escapes in a value, and no prefix.
+    let cfg = S3Config::from_uri_with(
+        "s3://bkt?endpoint=http%3A%2F%2Fminio%3A9000&path_style=false&commit=conditional-put",
+        no_env,
+        creds(),
+    )
+    .unwrap();
+    assert_eq!(
+        (cfg.prefix.as_str(), cfg.endpoint.as_str()),
+        ("", "http://minio:9000")
+    );
+    assert!(!cfg.path_style);
+    assert_eq!(cfg.commit, CommitMode::ConditionalPut);
+}
+
+#[test]
+fn what_a_uri_leaves_out_comes_from_the_environment_or_is_aws() {
+    // Nothing at all: AWS S3 in us-east-1, virtual-host style.
+    let cfg = S3Config::from_uri_with("s3://bkt/p", no_env, creds()).unwrap();
+    assert_eq!(cfg.endpoint, "https://s3.us-east-1.amazonaws.com");
+    assert_eq!(cfg.region, "us-east-1");
+    assert!(!cfg.path_style);
+    assert_eq!(cfg.commit, CommitMode::Auto);
+
+    let env = |name: &str| match name {
+        "AWS_DEFAULT_REGION" => Some("eu-west-1".to_string()),
+        _ => None,
+    };
+    let cfg = S3Config::from_uri_with("s3://bkt", env, creds()).unwrap();
+    assert_eq!(cfg.endpoint, "https://s3.eu-west-1.amazonaws.com");
+
+    // AWS_REGION beats AWS_DEFAULT_REGION; AWS_ENDPOINT_URL is a custom endpoint.
+    let env = |name: &str| match name {
+        "AWS_REGION" => Some("garage".to_string()),
+        "AWS_DEFAULT_REGION" => Some("eu-west-1".to_string()),
+        "AWS_ENDPOINT_URL" => Some("http://localhost:3900".to_string()),
+        _ => None,
+    };
+    let cfg = S3Config::from_uri_with("s3://bkt", env, creds()).unwrap();
+    assert_eq!(
+        (cfg.region.as_str(), cfg.endpoint.as_str()),
+        ("garage", "http://localhost:3900")
+    );
+    assert!(cfg.path_style);
+    // The URI beats the environment.
+    let cfg = S3Config::from_uri_with(
+        "s3://bkt?region=us-west-2&endpoint=http://x:1",
+        env,
+        creds(),
+    )
+    .unwrap();
+    assert_eq!(
+        (cfg.region.as_str(), cfg.endpoint.as_str()),
+        ("us-west-2", "http://x:1")
+    );
+}
+
+#[test]
+fn a_bad_uri_is_refused_with_the_reason() {
+    for (uri, why) in [
+        ("https://bkt/p", "not an s3:// URI"),
+        ("s3://", "no bucket"),
+        ("s3:///prefix", "no bucket"),
+        ("s3://bkt?region=a&typo=1", "unknown option"),
+        ("s3://bkt?path_style=yes", "path_style"),
+        ("s3://bkt?commit=fast", "commit"),
+    ] {
+        let err = S3Config::from_uri_with(uri, no_env, creds()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{uri}");
+        assert!(err.to_string().contains(why), "{uri}: {err}");
+    }
 }

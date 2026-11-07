@@ -48,6 +48,7 @@ pub(crate) fn run(store: &impl TableStore) {
     assert_eq!(&buf, b"3456");
     assert_eq!(f.read_at(8, &mut buf).unwrap(), 2);
     assert_eq!(f.read_at(10, &mut buf).unwrap(), 0);
+    assert_eq!(&*f.mmap().unwrap(), b"0123456789");
     assert_eq!(
         store.open("missing").err().unwrap().kind(),
         ErrorKind::NotFound

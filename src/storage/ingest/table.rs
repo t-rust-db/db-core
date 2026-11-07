@@ -152,6 +152,14 @@ impl TableWriter {
     /// writes the manifest, cleans up after an interrupted flush, and
     /// rebuilds pages from the WAL above `flushed_lsn`.
     pub fn open(table: &Path, options: TableOptions) -> Result<TableWriter, IngestError> {
+        if table.to_string_lossy().starts_with("s3://") {
+            // Not a directory to create. The WAL needs a local one of its
+            // own, so a remote table is opened with `open_in`.
+            return Err(IngestError::Unsupported(format!(
+                "{} is not a local directory: open it with `TableWriter::open_in(local_dir, Store::at(uri)?, options)`",
+                table.display()
+            )));
+        }
         TableWriter::open_in(table, Store::Local(LocalFs::new(table)), options)
     }
 

@@ -5,6 +5,7 @@
 use super::*;
 use crate::storage::ingest::layout::{TierOptions, DAY_NS, HOUR_NS};
 use crate::storage::ingest::store::memory::MemoryStore;
+use crate::storage::ingest::StoreReader;
 use crate::storage::parquet::ParquetFile;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -333,4 +334,107 @@ fn a_store_without_conditional_puts_has_no_lease_and_no_fence() {
     let _a = TableWriter::open_in(&f.local, f.store(), TableOptions::default()).unwrap();
     assert!(TableWriter::open_in(&other, f.store(), TableOptions::default()).is_ok());
     fs::remove_dir_all(&other).ok();
+}
+
+#[test]
+fn a_remote_location_is_not_a_directory_for_open() {
+    let err = TableWriter::open(
+        std::path::Path::new("s3://bucket/events"),
+        TableOptions::default(),
+    )
+    .unwrap_err();
+    assert!(matches!(err, IngestError::Unsupported(_)), "{err}");
+    assert!(err.to_string().contains("open_in"), "{err}");
+    // A path is still a path.
+    let f = Fixture::new();
+    assert!(TableWriter::open(&f.local, TableOptions::default()).is_ok());
+}
+
+#[test]
+fn a_location_is_a_directory_unless_it_is_s3() {
+    let f = Fixture::new();
+    let local = Store::at(f.local.to_str().unwrap()).unwrap();
+    assert!(matches!(local, Store::Local(_)));
+    #[cfg(not(feature = "storage-s3"))]
+    assert_eq!(
+        Store::at("s3://b/p").unwrap_err().kind(),
+        io::ErrorKind::Unsupported
+    );
+}
+
+fn first_file_address(r: &StoreReader) -> usize {
+    r.snapshot()
+        .files()
+        .next()
+        .map_or(0, |(_, bytes)| bytes.as_ptr() as usize)
+}
+
+#[test]
+fn a_store_reader_follows_the_writer_and_keeps_the_files_it_has() {
+    let f = Fixture::new();
+    let mut w = f.open(TableOptions::default()).unwrap();
+    let mut lines = append(&mut w, 0..4);
+    w.flush_all().unwrap();
+
+    let mut reader = StoreReader::open(f.store()).unwrap();
+    assert_eq!(reader.snapshot().files().count(), 1);
+    let first = first_file_address(&reader);
+
+    // The writer flushes again: one refresh later the reader has both files,
+    // and the one it had is the same mapping, not fetched again.
+    lines.extend(append(&mut w, 4..9));
+    w.flush_all().unwrap();
+    assert_eq!(
+        reader.snapshot().files().count(),
+        1,
+        "nothing changes until refresh"
+    );
+    let snapshot = reader.refresh().unwrap();
+    assert_eq!(snapshot.files().count(), 2);
+    assert_eq!(*snapshot.manifest(), w.manifest());
+    assert_eq!(first_file_address(&reader), first);
+    let records: usize = reader
+        .snapshot()
+        .files()
+        .map(|(e, _)| usize::try_from(e.rows).unwrap())
+        .sum();
+    assert_eq!(records, lines.len());
+
+    // Nothing new: the same files again.
+    assert_eq!(reader.refresh().unwrap().files().count(), 2);
+}
+
+#[test]
+fn a_store_reader_lets_go_of_files_a_compaction_replaced() {
+    let f = Fixture::new();
+    set_clock(0, 10, 0);
+    let mut w = f.open(tiered()).unwrap();
+    append(&mut w, 0..4);
+    set_clock(0, 11, 0);
+    append(&mut w, 4..8);
+    set_clock(1, 0, 0);
+    append(&mut w, 8..9);
+    w.flush().unwrap();
+    let mut reader = StoreReader::open(f.store()).unwrap();
+    assert!(reader.snapshot().files().count() >= 2);
+
+    w.compact().unwrap();
+    set_clock(1, 0, 61_000_000_000);
+    w.compact().unwrap();
+    // The hours are deleted from the store; the next manifest does not list them.
+    let snapshot = reader.refresh().unwrap();
+    assert_eq!(snapshot.files().count(), 1);
+    assert!(snapshot
+        .files()
+        .all(|(e, _)| e.path.starts_with("archive/")));
+}
+
+#[test]
+fn a_store_reader_of_nothing_is_not_found() {
+    let f = Fixture::new();
+    let err = StoreReader::open(f.store()).unwrap_err();
+    assert!(
+        matches!(&err, IngestError::Io(e) if e.kind() == io::ErrorKind::NotFound),
+        "{err}"
+    );
 }

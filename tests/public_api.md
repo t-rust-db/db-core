@@ -4361,6 +4361,13 @@ pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::snapshot::StoreReader
+impl db_core::storage::ingest::snapshot::StoreReader
+pub fn db_core::storage::ingest::snapshot::StoreReader::open(db_core::storage::ingest::store::Store) -> core::result::Result<db_core::storage::ingest::snapshot::StoreReader, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::StoreReader::refresh(&mut self) -> core::result::Result<&db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::StoreReader::snapshot(&self) -> &db_core::storage::ingest::snapshot::Snapshot
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::StoreReader
+pub fn db_core::storage::ingest::snapshot::StoreReader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::snapshot::TableReader
 impl db_core::storage::ingest::snapshot::TableReader
 pub fn db_core::storage::ingest::snapshot::TableReader::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::TableReader, db_core::storage::ingest::error::IngestError>
@@ -4420,7 +4427,9 @@ impl db_core::storage::ingest::store::s3::Credentials
 pub fn db_core::storage::ingest::store::s3::Credentials::from_chain() -> core::io::error::Result<db_core::storage::ingest::store::s3::Credentials>
 pub fn db_core::storage::ingest::store::s3::Credentials::from_env() -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
 pub fn db_core::storage::ingest::store::s3::Credentials::from_ini(&str, &str) -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
+pub fn db_core::storage::ingest::store::s3::Credentials::from_lookup(impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
 pub fn db_core::storage::ingest::store::s3::Credentials::from_shared_file() -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
+pub fn db_core::storage::ingest::store::s3::Credentials::from_shared_file_with(impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>, impl core::ops::function::Fn(&std::path::Path) -> core::option::Option<alloc::string::String>) -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
 impl core::clone::Clone for db_core::storage::ingest::store::s3::Credentials
 pub fn db_core::storage::ingest::store::s3::Credentials::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::store::s3::Credentials
@@ -4482,6 +4491,9 @@ pub db_core::storage::ingest::store::s3::S3Config::path_style: bool
 pub db_core::storage::ingest::store::s3::S3Config::prefix: alloc::string::String
 pub db_core::storage::ingest::store::s3::S3Config::region: alloc::string::String
 impl db_core::storage::ingest::store::s3::S3Config
+pub fn db_core::storage::ingest::store::s3::S3Config::from_uri(&str, db_core::storage::ingest::store::s3::Credentials) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Config>
+pub fn db_core::storage::ingest::store::s3::S3Config::from_uri_with(&str, impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>, db_core::storage::ingest::store::s3::Credentials) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Config>
+impl db_core::storage::ingest::store::s3::S3Config
 pub fn db_core::storage::ingest::store::s3::S3Config::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, db_core::storage::ingest::store::s3::Credentials) -> db_core::storage::ingest::store::s3::S3Config
 impl core::clone::Clone for db_core::storage::ingest::store::s3::S3Config
 pub fn db_core::storage::ingest::store::s3::S3Config::clone(&self) -> Self
@@ -4498,6 +4510,7 @@ pub struct db_core::storage::ingest::store::s3::S3Store
 impl db_core::storage::ingest::store::s3::S3Store
 pub fn db_core::storage::ingest::store::s3::S3Store::is_conditional(&self) -> bool
 pub fn db_core::storage::ingest::store::s3::S3Store::new(db_core::storage::ingest::store::s3::S3Config) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Store>
+pub fn db_core::storage::ingest::store::s3::S3Store::open_uri(&str) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Store>
 pub fn db_core::storage::ingest::store::s3::S3Store::with_transport(db_core::storage::ingest::store::s3::S3Config, alloc::rcs::arc::Arc<dyn db_core::storage::ingest::store::s3::Transport>) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Store>
 impl core::clone::Clone for db_core::storage::ingest::store::s3::S3Store
 pub fn db_core::storage::ingest::store::s3::S3Store::clone(&self) -> Self
@@ -4522,6 +4535,7 @@ pub enum db_core::storage::ingest::store::Store
 pub db_core::storage::ingest::store::Store::Local(db_core::storage::ingest::LocalFs)
 pub db_core::storage::ingest::store::Store::S3(db_core::storage::ingest::store::s3::S3Store)
 impl db_core::storage::ingest::store::Store
+pub fn db_core::storage::ingest::store::Store::at(&str) -> core::io::error::Result<db_core::storage::ingest::store::Store>
 pub fn db_core::storage::ingest::store::Store::local(impl core::convert::Into<std::path::PathBuf>) -> db_core::storage::ingest::store::Store
 impl core::clone::Clone for db_core::storage::ingest::store::Store
 pub fn db_core::storage::ingest::store::Store::clone(&self) -> Self
@@ -4923,6 +4937,7 @@ pub enum db_core::storage::ingest::Store
 pub db_core::storage::ingest::Store::Local(db_core::storage::ingest::LocalFs)
 pub db_core::storage::ingest::Store::S3(db_core::storage::ingest::store::s3::S3Store)
 impl db_core::storage::ingest::store::Store
+pub fn db_core::storage::ingest::store::Store::at(&str) -> core::io::error::Result<db_core::storage::ingest::store::Store>
 pub fn db_core::storage::ingest::store::Store::local(impl core::convert::Into<std::path::PathBuf>) -> db_core::storage::ingest::store::Store
 impl core::clone::Clone for db_core::storage::ingest::store::Store
 pub fn db_core::storage::ingest::store::Store::clone(&self) -> Self
@@ -5126,6 +5141,13 @@ pub fn db_core::storage::ingest::snapshot::Snapshot::rows(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::schema(&self) -> core::result::Result<alloc::vec::Vec<db_core::storage::parquet::schema::ColumnSpec>, db_core::storage::ingest::error::IngestError>
 impl core::fmt::Debug for db_core::storage::ingest::snapshot::Snapshot
 pub fn db_core::storage::ingest::snapshot::Snapshot::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct db_core::storage::ingest::StoreReader
+impl db_core::storage::ingest::snapshot::StoreReader
+pub fn db_core::storage::ingest::snapshot::StoreReader::open(db_core::storage::ingest::store::Store) -> core::result::Result<db_core::storage::ingest::snapshot::StoreReader, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::StoreReader::refresh(&mut self) -> core::result::Result<&db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::snapshot::StoreReader::snapshot(&self) -> &db_core::storage::ingest::snapshot::Snapshot
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::StoreReader
+pub fn db_core::storage::ingest::snapshot::StoreReader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::Table
 impl db_core::storage::ingest::handle::Table
 pub fn db_core::storage::ingest::handle::Table::append(&self, &[u8], db_core::storage::ingest::wal::Ack) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>

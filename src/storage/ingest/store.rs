@@ -163,6 +163,27 @@ impl Store {
     pub fn local(dir: impl Into<std::path::PathBuf>) -> Store {
         Store::Local(LocalFs::new(dir))
     }
+
+    /// The store at `location`: an `s3://bucket/prefix[?options]` URI (the
+    /// `storage-s3` feature; see `S3Config::from_uri` for the options), or
+    /// else a local directory.
+    ///
+    /// ```ignore
+    /// let store = Store::at("s3://bucket/events?endpoint=http://garage:3900")?;
+    /// let writer = TableWriter::open_in(Path::new("/var/lib/frank/events"), store, options)?;
+    /// ```
+    pub fn at(location: &str) -> io::Result<Store> {
+        if location.starts_with("s3://") {
+            #[cfg(feature = "storage-s3")]
+            return s3::S3Store::open_uri(location).map(Store::S3);
+            #[cfg(not(feature = "storage-s3"))]
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "an s3:// table needs the `storage-s3` feature",
+            ));
+        }
+        Ok(Store::local(location))
+    }
 }
 
 impl TableStore for Store {

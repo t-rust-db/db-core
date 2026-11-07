@@ -101,6 +101,106 @@ impl S3Config {
     }
 }
 
+/// `%XX` decoded; anything that is not an escape stays.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let escaped = (b == b'%')
+            .then(|| bytes.get(i.saturating_add(1)..i.saturating_add(3)))
+            .flatten()
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match escaped {
+            Some(v) => {
+                out.push(v);
+                i = i.saturating_add(3);
+            }
+            None => {
+                out.push(b);
+                i = i.saturating_add(1);
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+impl S3Config {
+    /// Parses `s3://bucket[/prefix][?option=value&...]`, signing with
+    /// `credentials`. The options are `endpoint=URL`, `region=NAME`,
+    /// `path_style=true|false` and `commit=auto|single-writer|conditional-put`
+    /// (a typo is an error, not ignored).
+    ///
+    /// What the URI leaves out comes from the environment, like the AWS
+    /// tools: the endpoint from `AWS_ENDPOINT_URL`, the region from
+    /// `AWS_REGION` or `AWS_DEFAULT_REGION` (else `us-east-1`). With no
+    /// endpoint at all the store is AWS S3, addressed virtual-host style; a
+    /// custom endpoint (Garage, MinIO) is addressed path-style.
+    pub fn from_uri(uri: &str, credentials: Credentials) -> io::Result<S3Config> {
+        S3Config::from_uri_with(uri, |name| std::env::var(name).ok(), credentials)
+    }
+
+    /// [`S3Config::from_uri`] over any way of looking a variable up.
+    pub fn from_uri_with(
+        uri: &str,
+        get: impl Fn(&str) -> Option<String>,
+        credentials: Credentials,
+    ) -> io::Result<S3Config> {
+        let bad =
+            |why: &str| io::Error::new(io::ErrorKind::InvalidInput, format!("{uri:?}: {why}"));
+        let rest = uri
+            .strip_prefix("s3://")
+            .ok_or_else(|| bad("not an s3:// URI"))?;
+        let (location, query) = rest.split_once('?').unwrap_or((rest, ""));
+        let (bucket, prefix) = location.split_once('/').unwrap_or((location, ""));
+        if bucket.is_empty() {
+            return Err(bad("no bucket"));
+        }
+        let (mut endpoint, mut region, mut path_style, mut commit) = (None, None, None, None);
+        for pair in query.split('&').filter(|p| !p.is_empty()) {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let value = percent_decode(value);
+            match name {
+                "endpoint" => endpoint = Some(value),
+                "region" => region = Some(value),
+                "path_style" => {
+                    path_style = Some(match value.as_str() {
+                        "true" => true,
+                        "false" => false,
+                        _ => return Err(bad("path_style is true or false")),
+                    });
+                }
+                "commit" => {
+                    commit = Some(match value.as_str() {
+                        "auto" => CommitMode::Auto,
+                        "single-writer" => CommitMode::SingleWriter,
+                        "conditional-put" => CommitMode::ConditionalPut,
+                        _ => return Err(bad("commit is auto, single-writer or conditional-put")),
+                    });
+                }
+                other => return Err(bad(&format!("unknown option {other:?}"))),
+            }
+        }
+        let region = region
+            .or_else(|| get("AWS_REGION"))
+            .or_else(|| get("AWS_DEFAULT_REGION"))
+            .unwrap_or_else(|| "us-east-1".to_string());
+        let custom = endpoint
+            .or_else(|| get("AWS_ENDPOINT_URL"))
+            .filter(|e| !e.is_empty());
+        let path_style = path_style.unwrap_or(custom.is_some());
+        let endpoint = custom.unwrap_or_else(|| format!("https://s3.{region}.amazonaws.com"));
+        let mut cfg = S3Config::new(endpoint, region, bucket, credentials);
+        cfg.prefix = prefix.trim_matches('/').to_string();
+        cfg.path_style = path_style;
+        if let Some(commit) = commit {
+            cfg.commit = commit;
+        }
+        Ok(cfg)
+    }
+}
+
 /// Signs and sends requests.
 struct Client {
     cfg: S3Config,
@@ -446,6 +546,13 @@ impl S3Store {
     /// Opens the store over plain HTTP (see the module docs for HTTPS).
     pub fn new(cfg: S3Config) -> io::Result<S3Store> {
         S3Store::with_transport(cfg, Arc::new(PlainHttp::default()))
+    }
+
+    /// Opens the table at an `s3://bucket/prefix` URI (see
+    /// [`S3Config::from_uri`]) with credentials from the environment or the
+    /// shared credentials file, over plain HTTP.
+    pub fn open_uri(uri: &str) -> io::Result<S3Store> {
+        S3Store::new(S3Config::from_uri(uri, Credentials::from_chain()?)?)
     }
 
     /// Opens the store over `transport`. In [`CommitMode::Auto`] this probes

@@ -33,7 +33,7 @@ use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, HeadPage, Page, PageBody};
 use super::record::{check_row, decode_row, pad_row};
 use super::recover::{read_from, read_tail, WalPos};
-use super::store::{LocalFs, TableStore};
+use super::store::{LocalFs, Store, TableStore};
 use super::wal::{Record, WAL_DIR};
 use crate::storage::column::MmapRegion;
 use crate::storage::parquet::footer::PhysicalType;
@@ -625,6 +625,98 @@ impl TableReader {
             sealed_folded: sealed,
         });
         Ok(specs)
+    }
+}
+
+/// A reader of a table kept in a [`Store`] (an object store, say): the
+/// committed files only, as [`Snapshot::open_in`] reads them, kept up to date
+/// by [`StoreReader::refresh`], which maps only the files it has not mapped.
+/// There is no WAL tail: records not yet flushed are in the writer's local
+/// WAL, which a store does not hold.
+pub struct StoreReader {
+    store: Store,
+    /// Mapped files by key, kept while the manifest lists them.
+    mapped: Vec<(String, Arc<MmapRegion>)>,
+    snapshot: Snapshot,
+}
+
+impl fmt::Debug for StoreReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StoreReader")
+            .field("store", &self.store)
+            .field("files", &self.mapped.len())
+            .finish()
+    }
+}
+
+impl StoreReader {
+    /// Opens the table in `store` and reads it once.
+    pub fn open(store: Store) -> Result<StoreReader, IngestError> {
+        let snapshot = Snapshot::open_in(&store)?;
+        let mapped = snapshot
+            .manifest
+            .files
+            .iter()
+            .zip(&snapshot.files)
+            .map(|(entry, region)| (entry.path.clone(), Arc::clone(region)))
+            .collect();
+        Ok(StoreReader {
+            store,
+            mapped,
+            snapshot,
+        })
+    }
+
+    /// The snapshot the last refresh (or the open) took.
+    #[must_use]
+    pub fn snapshot(&self) -> &Snapshot {
+        &self.snapshot
+    }
+
+    /// Reads the manifest again and returns the new snapshot. A file the
+    /// manifest no longer lists is let go; a new one is fetched.
+    pub fn refresh(&mut self) -> Result<&Snapshot, IngestError> {
+        for _ in 0..ATTEMPTS {
+            let manifest = Manifest::read_from(&self.store)?.ok_or_else(|| {
+                IngestError::Io(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "no manifest.json, not a table",
+                ))
+            })?;
+            let mut mapped = Vec::with_capacity(manifest.files.len());
+            let mut missing = false;
+            for entry in &manifest.files {
+                let kept = self.mapped.iter().find(|(key, _)| *key == entry.path);
+                let region = match kept {
+                    Some((_, region)) => Arc::clone(region),
+                    None => match self.store.map(&entry.path) {
+                        Ok(region) => Arc::new(region),
+                        // A newer manifest no longer lists it.
+                        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                            missing = true;
+                            break;
+                        }
+                        Err(e) => return Err(e.into()),
+                    },
+                };
+                mapped.push((entry.path.clone(), region));
+            }
+            if missing {
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
+            self.snapshot = Snapshot {
+                files: mapped.iter().map(|(_, r)| Arc::clone(r)).collect(),
+                manifest,
+                pages: Vec::new(),
+                schema: None,
+            };
+            self.mapped = mapped;
+            return Ok(&self.snapshot);
+        }
+        Err(IngestError::Corrupt(format!(
+            "a listed file does not match the manifest after {ATTEMPTS} reads"
+        )))
     }
 }
 

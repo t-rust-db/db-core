@@ -13,6 +13,7 @@ use super::store_tests::{append, rows, set_clock, sorted, tiered};
 use super::*;
 use crate::storage::column::VfsFile;
 use crate::storage::ingest::store::s3::{CommitMode, Credentials, S3Config, S3Store};
+use crate::storage::ingest::StoreReader;
 
 fn env(name: &str) -> String {
     std::env::var(name)
@@ -25,6 +26,7 @@ struct Garage {
     store: Store,
     s3: S3Store,
     local: PathBuf,
+    prefix: String,
 }
 
 impl Garage {
@@ -40,6 +42,7 @@ impl Garage {
             Credentials::from_env().expect("AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY"),
         );
         cfg.prefix = format!("tests/{unique}");
+        let prefix = cfg.prefix.clone();
         // Small parts, so a few MiB exercise the multipart path.
         cfg.multipart_threshold = 6 << 20;
         cfg.part_size = 5 << 20;
@@ -50,6 +53,7 @@ impl Garage {
             store: Store::S3(s3.clone()),
             s3,
             local,
+            prefix,
         }
     }
 
@@ -181,4 +185,32 @@ fn s3_garage_hours_days_and_retention() {
     assert!(g.store.list("live/").unwrap().is_empty());
     assert_eq!(g.store.list("archive/").unwrap().len(), 1);
     assert_eq!(rows(&w), sorted(lines));
+}
+
+#[test]
+#[ignore = "needs an S3 endpoint: tools/s3_garage.sh up"]
+fn s3_garage_opens_by_uri_and_a_reader_follows_the_writer() {
+    let g = Garage::new("uri");
+    let uri = format!(
+        "s3://{}/{}?endpoint={}&region={}",
+        env("DB_CORE_S3_BUCKET"),
+        g.prefix,
+        env("DB_CORE_S3_ENDPOINT"),
+        env("DB_CORE_S3_REGION"),
+    );
+    let mut w =
+        TableWriter::open_in(&g.local, Store::at(&uri).unwrap(), TableOptions::default()).unwrap();
+    let mut lines = append(&mut w, 0..5);
+    w.flush_all().unwrap();
+
+    let mut reader = StoreReader::open(Store::at(&uri).unwrap()).unwrap();
+    assert_eq!(reader.snapshot().files().count(), 1);
+    lines.extend(append(&mut w, 5..12));
+    w.flush_all().unwrap();
+    assert_eq!(reader.refresh().unwrap().files().count(), 2);
+    let rows_in_files: u64 = reader.snapshot().files().map(|(e, _)| e.rows).sum();
+    assert_eq!(rows_in_files, lines.len() as u64);
+
+    // A path is refused by `open`, not turned into a directory named "s3:".
+    assert!(TableWriter::open(std::path::Path::new(&uri), TableOptions::default()).is_err());
 }
