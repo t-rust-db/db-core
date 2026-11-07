@@ -2541,8 +2541,6 @@ SELECT count(DISTINCT b) FROM typed_nulls
 ----
 2
 
-# #1020: sum(BOOLEAN) returns NULL
-skipif db-core
 query I rowsort
 SELECT sum(b) FROM typed_nulls
 ----
@@ -2568,8 +2566,6 @@ SELECT count(DISTINCT b) FROM null_groups
 ----
 2
 
-# #1020: sum(BOOLEAN) returns NULL
-skipif db-core
 query I rowsort
 SELECT sum(b) FROM null_groups
 ----
