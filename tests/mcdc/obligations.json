@@ -38412,7 +38412,7 @@
   {
     "id": "storage_ingest_handle_with_276e7a39",
     "file": "src/storage/ingest/handle.rs",
-    "line": 87,
+    "line": 106,
     "decision": "match self.lock()?.as_mut() {\n            Some(writer) => f(writer),\n            None => Err(IngestError::Wal(WalError::Closed)),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38422,7 +38422,7 @@
   {
     "id": "storage_ingest_handle_append_batch_eca85633",
     "file": "src/storage/ingest/handle.rs",
-    "line": 117,
+    "line": 136,
     "decision": "let Some(why) = lines\n            .iter()\n            .find_map(|l| super::page::invalid_line(l.as_ref()))",
     "conditions": 1,
     "vectors_required": 2,
@@ -38432,7 +38432,7 @@
   {
     "id": "storage_ingest_handle_append_batch_834054c0",
     "file": "src/storage/ingest/handle.rs",
-    "line": 127,
+    "line": 146,
     "decision": "i.saturating_add(1) == count",
     "conditions": 1,
     "vectors_required": 2,
@@ -38442,7 +38442,7 @@
   {
     "id": "storage_ingest_handle_close_b61ddc4a",
     "file": "src/storage/ingest/handle.rs",
-    "line": 167,
+    "line": 186,
     "decision": "match self.lock()?.take() {\n            Some(writer) => writer.close(),\n            None => Ok(()),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38452,7 +38452,7 @@
   {
     "id": "storage_ingest_handle_ingest_lines_ae0963dd",
     "file": "src/storage/ingest/handle.rs",
-    "line": 180,
+    "line": 199,
     "decision": "input.read_until(b'\\n', &mut buf)? == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -38462,7 +38462,7 @@
   {
     "id": "storage_ingest_handle_ingest_lines_f5279ad3",
     "file": "src/storage/ingest/handle.rs",
-    "line": 183,
+    "line": 202,
     "decision": "let Some(line) = trimmed(&buf)",
     "conditions": 1,
     "vectors_required": 2,
@@ -38472,7 +38472,7 @@
   {
     "id": "storage_ingest_handle_ingest_lines_328fb315",
     "file": "src/storage/ingest/handle.rs",
-    "line": 188,
+    "line": 207,
     "decision": "count > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -38482,7 +38482,7 @@
   {
     "id": "storage_ingest_handle_follow_d88efca7",
     "file": "src/storage/ingest/handle.rs",
-    "line": 203,
+    "line": 222,
     "decision": "self.lock()?.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -38492,7 +38492,7 @@
   {
     "id": "storage_ingest_handle_follow_e8c69f89",
     "file": "src/storage/ingest/handle.rs",
-    "line": 204,
+    "line": 223,
     "decision": "match file.refresh()? {\n                Refresh::New(blocks) => match self.append_blocks(&file, &blocks, &state)? {\n                    Some(n) => count = count.saturating_add(n),\n                    None => break,\n                },\n                Refresh::Truncated => {\n                    file = LogFile::open_at(path, 0)?;\n                    save(&state, file.identity(), 0)?;\n                }\n                Refresh::NoNew => {\n                    // A rotation: once the new file exists, read what the\n                    // old one got since the last look, then switch.\n                    if file.rotated()? {\n                        // Until the new file appears, keep waiting.\n                        let new = match LogFile::open_at(path, 0) {\n                            Ok(new) => Some(new),\n                            Err(e) if e.kind() == io::ErrorKind::NotFound => None,\n                            Err(e) => return Err(e.into()),\n                        };\n                        if let Some(new) = new {\n                            if let Refresh::New(blocks) = file.refresh()? {\n                                match self.append_blocks(&file, &blocks, &state)? {\n                                    Some(n) => count = count.saturating_add(n),\n                                    None => break,\n                                }\n                            }\n                            file = new;\n                            save(&state, file.identity(), 0)?;\n                            continue;\n                        }\n                    }\n                    std::thread::sleep(FOLLOW_POLL);\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38502,7 +38502,7 @@
   {
     "id": "storage_ingest_handle_follow_26aabc8b",
     "file": "src/storage/ingest/handle.rs",
-    "line": 205,
+    "line": 224,
     "decision": "match self.append_blocks(&file, &blocks, &state)? {\n                    Some(n) => count = count.saturating_add(n),\n                    None => break,\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38512,7 +38512,7 @@
   {
     "id": "storage_ingest_handle_follow_1b49d7a6",
     "file": "src/storage/ingest/handle.rs",
-    "line": 216,
+    "line": 235,
     "decision": "file.rotated()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -38522,7 +38522,7 @@
   {
     "id": "storage_ingest_handle_follow_23ce51b3",
     "file": "src/storage/ingest/handle.rs",
-    "line": 218,
+    "line": 237,
     "decision": "match LogFile::open_at(path, 0) {\n                            Ok(new) => Some(new),\n                            Err(e) if e.kind() == io::ErrorKind::NotFound => None,\n                            Err(e) => return Err(e.into()),\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38532,7 +38532,7 @@
   {
     "id": "storage_ingest_handle_follow_20fc5e15",
     "file": "src/storage/ingest/handle.rs",
-    "line": 220,
+    "line": 239,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -38542,7 +38542,7 @@
   {
     "id": "storage_ingest_handle_follow_d53f774d",
     "file": "src/storage/ingest/handle.rs",
-    "line": 223,
+    "line": 242,
     "decision": "let Some(new) = new",
     "conditions": 1,
     "vectors_required": 2,
@@ -38552,7 +38552,7 @@
   {
     "id": "storage_ingest_handle_follow_d52bb775",
     "file": "src/storage/ingest/handle.rs",
-    "line": 224,
+    "line": 243,
     "decision": "let Refresh::New(blocks) = file.refresh()?",
     "conditions": 1,
     "vectors_required": 2,
@@ -38562,7 +38562,7 @@
   {
     "id": "storage_ingest_handle_follow_26aabc8b_2",
     "file": "src/storage/ingest/handle.rs",
-    "line": 225,
+    "line": 244,
     "decision": "match self.append_blocks(&file, &blocks, &state)? {\n                                    Some(n) => count = count.saturating_add(n),\n                                    None => break,\n                                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38572,7 +38572,7 @@
   {
     "id": "storage_ingest_handle_append_blocks_a8b3ea61",
     "file": "src/storage/ingest/handle.rs",
-    "line": 261,
+    "line": 280,
     "decision": "match appended {\n            Ok(n) => n,\n            // Closed while reading: what was appended is in the WAL, and\n            // the offset stays at the last batch.\n            Err(IngestError::Wal(WalError::Closed)) => return Ok(None),\n            Err(e) => return Err(e),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38582,7 +38582,7 @@
   {
     "id": "storage_ingest_handle_append_blocks_9dcaa518",
     "file": "src/storage/ingest/handle.rs",
-    "line": 268,
+    "line": 287,
     "decision": "let Some(end) = blocks.last().map(Block::end_off)",
     "conditions": 1,
     "vectors_required": 2,
@@ -38592,7 +38592,7 @@
   {
     "id": "storage_ingest_handle_state_name_8a402fee",
     "file": "src/storage/ingest/handle.rs",
-    "line": 299,
+    "line": 318,
     "decision": "c.is_ascii_alphanumeric() || c == '.'",
     "conditions": 2,
     "vectors_required": 3,
@@ -38602,7 +38602,7 @@
   {
     "id": "storage_ingest_handle_resume_eab4cb46",
     "file": "src/storage/ingest/handle.rs",
-    "line": 315,
+    "line": 334,
     "decision": "match fs::read_to_string(state) {\n        Ok(text) => text,\n        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(LogFile::open_at(path, 0)?),\n        Err(e) => return Err(e.into()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -38612,7 +38612,7 @@
   {
     "id": "storage_ingest_handle_resume_20fc5e15",
     "file": "src/storage/ingest/handle.rs",
-    "line": 317,
+    "line": 336,
     "decision": "e.kind() == io::ErrorKind::NotFound",
     "conditions": 1,
     "vectors_required": 2,
@@ -38622,7 +38622,7 @@
   {
     "id": "storage_ingest_handle_resume_6ba5a2bb",
     "file": "src/storage/ingest/handle.rs",
-    "line": 330,
+    "line": 349,
     "decision": "file.identity() != (FileIdentity { dev, ino }) || file.len()? < offset",
     "conditions": 2,
     "vectors_required": 3,

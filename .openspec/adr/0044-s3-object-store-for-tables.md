@@ -4,9 +4,10 @@ Date: 2026-11-07
 
 ## Context
 
-#1015: FRANK runs on a laptop (a local directory) and on AWS (S3), and in a
-trial on Garage, a self-hosted S3-compatible store. It hands db-core a
-directory path, so the backend has to be here. The ingest write path
+#1015: a table has to live on a local filesystem (a laptop, a container) and
+on S3 (AWS), and in trials on Garage, a self-hosted S3-compatible store. A
+caller hands db-core a directory path, so the backend has to be here. The
+ingest write path
 (ADR 0027-0029) leaned on what only a filesystem gives: `rename`, `fsync`,
 append, `flock`, and directory renames.
 

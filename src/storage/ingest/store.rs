@@ -170,7 +170,7 @@ impl Store {
     ///
     /// ```ignore
     /// let store = Store::at("s3://bucket/events?endpoint=http://garage:3900")?;
-    /// let writer = TableWriter::open_in(Path::new("/var/lib/frank/events"), store, options)?;
+    /// let writer = TableWriter::open_in(Path::new("/var/lib/app/events"), store, options)?;
     /// ```
     pub fn at(location: &str) -> io::Result<Store> {
         if location.starts_with("s3://") {

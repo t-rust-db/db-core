@@ -4079,6 +4079,7 @@ pub fn db_core::storage::ingest::handle::Table::follow(&self, impl core::convert
 pub fn db_core::storage::ingest::handle::Table::ingest_lines(&self, impl alloc::io::buf_read::BufRead) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::handle::Table::is_closed(&self) -> bool
 pub fn db_core::storage::ingest::handle::Table::open(impl core::convert::AsRef<std::path::Path>, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::handle::Table, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::open_in(impl core::convert::AsRef<std::path::Path>, db_core::storage::ingest::store::Store, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::handle::Table, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::handle::Table::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::handle::Table::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
 impl db_core::storage::ingest::handle::Table
@@ -5163,6 +5164,7 @@ pub fn db_core::storage::ingest::handle::Table::follow(&self, impl core::convert
 pub fn db_core::storage::ingest::handle::Table::ingest_lines(&self, impl alloc::io::buf_read::BufRead) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::handle::Table::is_closed(&self) -> bool
 pub fn db_core::storage::ingest::handle::Table::open(impl core::convert::AsRef<std::path::Path>, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::handle::Table, db_core::storage::ingest::error::IngestError>
+pub fn db_core::storage::ingest::handle::Table::open_in(impl core::convert::AsRef<std::path::Path>, db_core::storage::ingest::store::Store, db_core::storage::ingest::table::TableOptions) -> core::result::Result<db_core::storage::ingest::handle::Table, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::handle::Table::snapshot(&self) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::handle::Table::sync(&self) -> core::result::Result<u64, db_core::storage::ingest::error::IngestError>
 impl db_core::storage::ingest::handle::Table

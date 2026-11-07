@@ -546,3 +546,32 @@ fn retention_drops_the_oldest_days_from_a_store_with_conditional_puts() {
         &f.store(),
     );
 }
+
+#[test]
+fn a_table_handle_runs_on_a_store() {
+    use crate::storage::ingest::Table;
+    let f = Fixture::new();
+    let table = Table::open_in(&f.local, f.store(), TableOptions::default()).unwrap();
+    assert_eq!(table.dir(), f.local, "the directory is the local one");
+    // Clones share the writer: append through both, then flush into the store.
+    let clone = table.clone();
+    table.append(line(0).as_bytes(), Ack::Durable).unwrap();
+    clone.append(line(1).as_bytes(), Ack::Durable).unwrap();
+    table.flush().unwrap();
+    assert_eq!(f.mem.list("data/").unwrap().len(), 1);
+    assert!(
+        !f.local.join("data").exists(),
+        "no Parquet on the local disk"
+    );
+    assert_eq!(table.snapshot().unwrap().manifest().flushed_lsn, 2);
+    // A reader of the store alone sees the flushed rows.
+    let reader = Snapshot::open_in(&f.store()).unwrap();
+    assert_eq!(reader.files().count(), 1);
+    // The table is leased to this handle; a second one is refused.
+    assert!(matches!(
+        Table::open_in(&f.local, f.store(), TableOptions::default()),
+        Err(IngestError::Wal(WalError::Locked))
+    ));
+    table.close().unwrap();
+    assert!(table.is_closed() && clone.is_closed());
+}

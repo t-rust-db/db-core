@@ -2627,3 +2627,34 @@ fn an_engine_over_a_store_queries_what_is_flushed_and_follows_the_writer() {
     let empty = Store::Memory(Arc::new(MemoryStore::default()));
     assert!(TableEngine::open_in("nothing", empty).is_err());
 }
+
+#[test]
+fn a_table_handle_on_a_store_queries_what_it_holds() {
+    use crate::storage::ingest::store::memory::MemoryStore;
+    use crate::storage::ingest::Table;
+    use std::sync::Arc;
+    let t = TempTable::new();
+    let mem = Arc::new(MemoryStore::default());
+    let table = Table::open_in(
+        &t.0,
+        Store::Memory(Arc::clone(&mem)),
+        TableOptions::default(),
+    )
+    .unwrap();
+    table.append(br#"{"n":1}"#, Ack::Durable).unwrap();
+    table.append(br#"{"n":2}"#, Ack::Durable).unwrap();
+    table.flush().unwrap();
+    table.append(br#"{"n":3}"#, Ack::Durable).unwrap();
+    // The handle's own snapshot has the flushed file and the pending record;
+    // the table is named after the local directory.
+    assert_eq!(
+        table.query("SELECT count(*) FROM logs").unwrap().rows,
+        vec![vec![Cell::Int(3)]]
+    );
+    // An engine over the store alone sees what was flushed.
+    let mut engine = TableEngine::open_in("logs", Store::Memory(mem)).unwrap();
+    assert_eq!(
+        engine.run_query("SELECT count(*) FROM logs").unwrap().rows,
+        vec![vec![Cell::Int(2)]]
+    );
+}
