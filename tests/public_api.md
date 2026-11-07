@@ -4534,6 +4534,7 @@ pub trait db_core::storage::ingest::store::s3::Transport: core::marker::Send + c
 pub fn db_core::storage::ingest::store::s3::Transport::send(&self, &db_core::storage::ingest::store::s3::HttpRequest) -> core::io::error::Result<db_core::storage::ingest::store::s3::HttpResponse>
 impl db_core::storage::ingest::store::s3::Transport for db_core::storage::ingest::store::s3::PlainHttp
 pub fn db_core::storage::ingest::store::s3::PlainHttp::send(&self, &db_core::storage::ingest::store::s3::HttpRequest) -> core::io::error::Result<db_core::storage::ingest::store::s3::HttpResponse>
+pub fn db_core::storage::ingest::store::s3::exchange<S: alloc::io::read::Read + core::io::write::Write>(&mut S, &db_core::storage::ingest::store::s3::HttpRequest) -> core::io::error::Result<db_core::storage::ingest::store::s3::HttpResponse>
 pub enum db_core::storage::ingest::store::Store
 pub db_core::storage::ingest::store::Store::Local(db_core::storage::ingest::LocalFs)
 pub db_core::storage::ingest::store::Store::S3(db_core::storage::ingest::store::s3::S3Store)

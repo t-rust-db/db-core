@@ -41832,7 +41832,7 @@
   {
     "id": "storage_ingest_store_s3_http_parse_response_36fac4a0",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 188,
+    "line": 199,
     "decision": "method == \"HEAD\" || status == 204 || status == 304",
     "conditions": 3,
     "vectors_required": 4,
@@ -41842,7 +41842,7 @@
   {
     "id": "storage_ingest_store_s3_http_parse_response_458fce3c",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 190,
+    "line": 201,
     "decision": "find_header(\"transfer-encoding\").is_some_and(|v| v.eq_ignore_ascii_case(\"chunked\"))",
     "conditions": 1,
     "vectors_required": 2,
@@ -41852,7 +41852,7 @@
   {
     "id": "storage_ingest_store_s3_http_parse_response_c9674b28",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 192,
+    "line": 203,
     "decision": "let Some(len) = find_header(\"content-length\").and_then(|v| v.parse::<usize>().ok())",
     "conditions": 1,
     "vectors_required": 2,
@@ -41862,7 +41862,7 @@
   {
     "id": "storage_ingest_store_s3_http_parse_response_524e6146",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 193,
+    "line": 204,
     "decision": "rest.len() < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -41872,7 +41872,7 @@
   {
     "id": "storage_ingest_store_s3_http_dechunk_35d003ad",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 216,
+    "line": 227,
     "decision": "size == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41882,7 +41882,7 @@
   {
     "id": "storage_ingest_store_s3_http_serve_once_d14d8ebb",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 253,
+    "line": 264,
     "decision": "seen.len() >= end + len",
     "conditions": 1,
     "vectors_required": 2,
