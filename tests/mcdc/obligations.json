@@ -20270,9 +20270,39 @@
     "wildcard_risk": false
   },
   {
+    "id": "engine_resolve_open_column_table_a46209ce",
+    "file": "src/engine/resolve.rs",
+    "line": 1795,
+    "decision": "let Some(uri) = path.to_str().filter(|_| is_store_uri(path))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_open_column_table_ed6e602c",
+    "file": "src/engine/resolve.rs",
+    "line": 1797,
+    "decision": "path.is_dir()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "engine_resolve_check_distinct_table_names_bf054ff7",
+    "file": "src/engine/resolve.rs",
+    "line": 1815,
+    "decision": "seen.iter().any(|n| n.eq_ignore_ascii_case(&name))",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "engine_resolve_open_sqlite_files_6e86d86f",
     "file": "src/engine/resolve.rs",
-    "line": 1783,
+    "line": 1830,
     "decision": "files.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -20282,7 +20312,7 @@
   {
     "id": "engine_resolve_open_sqlite_files_f381c546",
     "file": "src/engine/resolve.rs",
-    "line": 1791,
+    "line": 1838,
     "decision": "opened.iter().any(|f| f.name.eq_ignore_ascii_case(name))",
     "conditions": 1,
     "vectors_required": 2,
@@ -20290,20 +20320,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "engine_resolve_open_column_tables_sqlite_b4b02329",
+    "id": "engine_resolve_open_column_tables_sqlite_202274b1",
     "file": "src/engine/resolve.rs",
-    "line": 1849,
-    "decision": "parquets.iter().any(|p| p.is_dir())",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
-    "id": "engine_resolve_open_column_tables_sqlite_ed6e602c",
-    "file": "src/engine/resolve.rs",
-    "line": 1851,
-    "decision": "path.is_dir()",
+    "line": 1900,
+    "decision": "parquets.iter().any(|p| is_table_location(p))",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -20312,7 +20332,7 @@
   {
     "id": "engine_resolve_run_query_9b11baa3",
     "file": "src/engine/resolve.rs",
-    "line": 1911,
+    "line": 1961,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, lookups } => {\n                run_stream_sqlite_query(driving, &sqlite_files(lookups), sql)\n            }\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving,\n                others,\n                lookups,\n            } => run_sources_query(&file_sources(driving, others), &sqlite_files(lookups), sql),\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite { driving, lookups } => {\n                driving.refresh()?;\n                run_sources_query(&[ColumnSource::Dir(driving)], &sqlite_files(lookups), sql)\n            }\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::ColumnTablesSqlite {\n                driving,\n                others,\n                lookups,\n            } => {\n                for table in std::iter::once(&mut *driving).chain(others.iter_mut()) {\n                    if let ColumnTable::Dir(engine) = table {\n                        engine.refresh()?;\n                    }\n                }\n                run_sources_query(\n                    &std::iter::once(&*driving)\n                        .chain(others.iter())\n                        .map(ColumnTable::source)\n                        .collect::<Vec<_>>(),\n                    &sqlite_files(lookups),\n                    sql,\n                )\n            }\n            CrossModeEngine::StreamStream { left, right } => {\n                run_stream_stream_query(left, right, sql)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20322,7 +20342,7 @@
   {
     "id": "engine_resolve_run_query_8f122d39",
     "file": "src/engine/resolve.rs",
-    "line": 1933,
+    "line": 1983,
     "decision": "let ColumnTable::Dir(engine) = table",
     "conditions": 1,
     "vectors_required": 2,
@@ -20332,7 +20352,7 @@
   {
     "id": "engine_resolve_explain_plan_45a0229f",
     "file": "src/engine/resolve.rs",
-    "line": 1953,
+    "line": 2003,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, lookups } => {\n                explain_stream_sqlite_plan(driving, &sqlite_files(lookups), sql)\n            }\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving,\n                others,\n                lookups,\n            } => explain_column_plan(&file_sources(driving, others), &sqlite_files(lookups), sql),\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite { driving, lookups } => {\n                explain_column_plan(&[ColumnSource::Dir(driving)], &sqlite_files(lookups), sql)\n            }\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::ColumnTablesSqlite {\n                driving,\n                others,\n                lookups,\n            } => explain_column_plan(\n                &std::iter::once(driving)\n                    .chain(others.iter())\n                    .map(ColumnTable::source)\n                    .collect::<Vec<_>>(),\n                &sqlite_files(lookups),\n                sql,\n            ),\n            CrossModeEngine::StreamStream { left, right } => {\n                explain_stream_stream_plan(left, right, sql)\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20342,7 +20362,7 @@
   {
     "id": "engine_resolve_explain_opcodes_534abc8a",
     "file": "src/engine/resolve.rs",
-    "line": 1987,
+    "line": 2037,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, lookups } => {\n                explain_opcodes_query(driving, &sqlite_files(lookups), sql)?\n            }\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving,\n                others,\n                lookups,\n            } => {\n                explain_column_opcodes(&file_sources(driving, others), &sqlite_files(lookups), sql)?\n            }\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite { driving, lookups } => {\n                explain_column_opcodes(&[ColumnSource::Dir(driving)], &sqlite_files(lookups), sql)?\n            }\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::ColumnTablesSqlite {\n                driving,\n                others,\n                lookups,\n            } => explain_column_opcodes(\n                &std::iter::once(driving)\n                    .chain(others.iter())\n                    .map(ColumnTable::source)\n                    .collect::<Vec<_>>(),\n                &sqlite_files(lookups),\n                sql,\n            )?,\n            CrossModeEngine::StreamStream { left, .. } => {\n                explain_opcodes_stream_stream_query(left, sql)?\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20352,7 +20372,7 @@
   {
     "id": "engine_resolve_stats_1aeec5b7",
     "file": "src/engine/resolve.rs",
-    "line": 2024,
+    "line": 2074,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, .. } => driving.stats(),\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite { driving, .. } => driving.stats(),\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite { driving, .. } => driving.stats(),\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::ColumnTablesSqlite { driving, .. } => match driving {\n                ColumnTable::File(engine) => engine.stats(),\n                ColumnTable::Dir(engine) => engine.stats(),\n            },\n            CrossModeEngine::StreamStream { left, .. } => left.stats(),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20362,7 +20382,7 @@
   {
     "id": "engine_resolve_stats_ae0222fc",
     "file": "src/engine/resolve.rs",
-    "line": 2031,
+    "line": 2081,
     "decision": "match driving {\n                ColumnTable::File(engine) => engine.stats(),\n                ColumnTable::Dir(engine) => engine.stats(),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20372,7 +20392,7 @@
   {
     "id": "engine_resolve_tables_d98374a4",
     "file": "src/engine/resolve.rs",
-    "line": 2040,
+    "line": 2090,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite { driving, .. } => driving.tables()?,\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite {\n                driving, others, ..\n            } => {\n                let mut tables = driving.tables()?;\n                for other in others {\n                    tables.extend(other.tables()?);\n                }\n                tables\n            }\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite { driving, .. } => driving.tables()?,\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::ColumnTablesSqlite {\n                driving, others, ..\n            } => {\n                let mut tables = Vec::new();\n                for table in std::iter::once(driving).chain(others.iter()) {\n                    tables.extend(match table {\n                        ColumnTable::File(engine) => engine.tables()?,\n                        ColumnTable::Dir(engine) => engine.tables()?,\n                    });\n                }\n                tables\n            }\n            CrossModeEngine::StreamStream { left, right } => {\n                let mut tables = left.tables()?;\n                tables.extend(right.tables()?);\n                tables\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20382,7 +20402,7 @@
   {
     "id": "engine_resolve_tables_f7c8162a",
     "file": "src/engine/resolve.rs",
-    "line": 2060,
+    "line": 2110,
     "decision": "match table {\n                        ColumnTable::File(engine) => engine.tables()?,\n                        ColumnTable::Dir(engine) => engine.tables()?,\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -20392,7 +20412,7 @@
   {
     "id": "engine_resolve_lookups_4c630f6d",
     "file": "src/engine/resolve.rs",
-    "line": 2083,
+    "line": 2133,
     "decision": "match self {\n            CrossModeEngine::StreamSqlite { lookups, .. } => lookups,\n            #[cfg(feature = \"engine-column\")]\n            CrossModeEngine::ColumnSqlite { lookups, .. } => lookups,\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::TableSqlite { lookups, .. } => lookups,\n            #[cfg(all(feature = \"engine-column\", feature = \"ingest-read\"))]\n            CrossModeEngine::ColumnTablesSqlite { lookups, .. } => lookups,\n            CrossModeEngine::StreamStream { .. } => &[],\n        }",
     "conditions": 0,
     "vectors_required": 0,
