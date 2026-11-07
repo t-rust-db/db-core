@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use super::{check_key, TableStore};
+use crate::storage::column::posix::PosixFile;
 use crate::storage::column::{MmapRegion, PosixVfs, Vfs, VfsFile};
 
 /// A table stored as files under one directory.
@@ -31,6 +32,12 @@ impl LocalFs {
 }
 
 impl TableStore for LocalFs {
+    type File = PosixFile;
+
+    fn open(&self, key: &str) -> io::Result<PosixFile> {
+        PosixVfs.open(&self.path(key)?)
+    }
+
     fn get(&self, key: &str) -> io::Result<Option<Vec<u8>>> {
         match fs::read(self.path(key)?) {
             Ok(bytes) => Ok(Some(bytes)),
@@ -45,6 +52,11 @@ impl TableStore for LocalFs {
 
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
         let path = self.path(key)?;
+        let parent = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        super::super::create_dir_all_synced(parent)?;
         let mut tmp = path.clone().into_os_string();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
@@ -54,11 +66,29 @@ impl TableStore for LocalFs {
             file.sync_all()?;
         }
         fs::rename(&tmp, &path)?;
-        let parent = match path.parent() {
+        File::open(parent)?.sync_all()
+    }
+
+    fn publish(&self, local: &Path, key: &str) -> io::Result<()> {
+        let target = self.path(key)?;
+        let parent = match target.parent() {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => Path::new("."),
         };
+        super::super::create_dir_all_synced(parent)?;
+        fs::rename(local, &target)?;
         File::open(parent)?.sync_all()
+    }
+
+    fn remove_empty_dirs(&self, prefix: &str) -> io::Result<()> {
+        let base = prefix.trim_end_matches('/');
+        let dir = if base.is_empty() {
+            self.root.clone()
+        } else {
+            self.path(base)?
+        };
+        prune(&dir, false)?;
+        Ok(())
     }
 
     fn delete(&self, key: &str) -> io::Result<()> {
@@ -77,6 +107,28 @@ impl TableStore for LocalFs {
         keys.sort();
         Ok(keys)
     }
+}
+
+/// Removes the empty directories under `dir` (and `dir` itself when
+/// `remove_self`); returns whether `dir` is left empty.
+fn prune(dir: &Path, remove_self: bool) -> io::Result<bool> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let mut empty = true;
+    for entry in entries {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() && prune(&entry.path(), true)? {
+            continue;
+        }
+        empty = false;
+    }
+    if empty && remove_self {
+        fs::remove_dir(dir)?;
+    }
+    Ok(empty)
 }
 
 /// Appends the key of every file under `dir` (whose own key is `base`).
@@ -113,6 +165,26 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
         fs::create_dir_all(&dir).unwrap();
         LocalFs::new(dir)
+    }
+
+    #[test]
+    fn local_fs_meets_the_table_store_contract() {
+        let s = temp("contract");
+        super::super::conformance::run(&s);
+        fs::remove_dir_all(s.root()).unwrap();
+    }
+
+    #[test]
+    fn remove_empty_dirs_prunes_only_empty_ones() {
+        let s = temp("prune");
+        fs::create_dir_all(s.root().join("live/a/b")).unwrap();
+        fs::create_dir_all(s.root().join("live/keep")).unwrap();
+        s.put("live/keep/f", b"").unwrap();
+        s.remove_empty_dirs("live/").unwrap();
+        assert!(!s.root().join("live/a").exists());
+        assert!(s.root().join("live/keep/f").exists());
+        assert!(s.root().join("live").exists());
+        fs::remove_dir_all(s.root()).unwrap();
     }
 
     #[test]

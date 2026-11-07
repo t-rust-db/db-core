@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.233.0] - 2026-11-07
+
+### Added
+
+- Ingest: `TableWriter::open_in` and `Snapshot::open_in` run a table on a `Store` (manifest and Parquet files in the store; WAL, lock and scratch stay local); `TableStore` gains `open`, `publish` and `remove_empty_dirs` (#1015 phase 3)
+
 ## [0.232.0] - 2026-11-07
 
 ### Changed
