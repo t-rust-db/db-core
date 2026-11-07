@@ -438,3 +438,111 @@ fn a_store_reader_of_nothing_is_not_found() {
         "{err}"
     );
 }
+
+/// [`tiered`] keeping `days` closed days.
+pub(super) fn retaining(days: u32) -> TableOptions {
+    let mut options = tiered();
+    if let Layout::Tiered(tier) = &mut options.layout {
+        tier.retention_days = Some(days);
+    }
+    options
+}
+
+/// Records `range`, one an hour from day 0, hour 0: (day, record).
+fn hourly(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<(i64, String)> {
+    range
+        .map(|i| {
+            let hour = i64::try_from(i).unwrap();
+            set_clock(hour / 24, hour % 24, 0);
+            let l = line(i);
+            w.append(l.as_bytes(), Ack::Durable).unwrap();
+            (hour / 24, l)
+        })
+        .collect()
+}
+
+/// Retention on a store (ADR 0028): the oldest days are dropped whole in one
+/// commit, their objects leave the store only after the grace period, and a
+/// reopen and a reader of the store alone both see where it stopped. `open`
+/// opens the table (again), `store` is where its files live.
+pub(super) fn retention_drops_the_oldest_days(open: impl Fn() -> TableWriter, store: &Store) {
+    let mut w = open();
+    // Four days and an hour, a record an hour.
+    let records = hourly(&mut w, 0..97);
+    w.compact().unwrap();
+    let kept: Vec<String> = records
+        .iter()
+        .filter(|(day, _)| *day >= 2)
+        .map(|(_, l)| l.clone())
+        .collect();
+    assert_eq!(rows(&w), sorted(kept.clone()));
+    let m = w.manifest();
+    assert_eq!(m.dropped_lsn, 48, "days 0 and 1 are dropped");
+    assert_eq!(m.files.first().map(|f| f.lsn_lo), Some(49));
+    assert!(m
+        .files
+        .iter()
+        .filter(|f| f.area == Area::Archive)
+        .all(|f| f.path.starts_with("archive/date=2026-10-13")
+            || f.path.starts_with("archive/date=2026-10-14")));
+    assert_eq!(
+        w.pending_deletes().count(),
+        2 + 24 * 4,
+        "2 dropped days, 4 days of merged hours"
+    );
+    // Dropped from the manifest, still in the store until the grace is over.
+    assert!(!store.list("archive/date=2026-10-11/").unwrap().is_empty());
+    assert!(!store.list("archive/date=2026-10-12/").unwrap().is_empty());
+
+    set_clock(4, 2, 0);
+    w.compact().unwrap();
+    assert!(store.list("archive/date=2026-10-11/").unwrap().is_empty());
+    assert!(store.list("archive/date=2026-10-12/").unwrap().is_empty());
+    // Only the open day (day 4, 2026-10-15) still has hours in `live/`: the
+    // closed days were merged into the archive and their hours deleted.
+    assert!(store
+        .list("live/")
+        .unwrap()
+        .iter()
+        .all(|k| k.starts_with("live/date=2026-10-15")));
+    let mut listed: Vec<String> = w.manifest().files.iter().map(|e| e.path.clone()).collect();
+    listed.sort();
+    let stored: Vec<String> = store
+        .list("")
+        .unwrap()
+        .into_iter()
+        .filter(|k| k.ends_with(".parquet"))
+        .collect();
+    assert_eq!(
+        stored, listed,
+        "the store holds exactly the manifest's files"
+    );
+
+    // A reopen reads dropped_lsn and the table carries on; so does a reader
+    // of the store alone.
+    drop(w);
+    let mut w = open();
+    assert_eq!(w.manifest().dropped_lsn, 48);
+    let mut kept = kept;
+    kept.extend(append(&mut w, 200..201));
+    w.flush_all().unwrap();
+    assert_eq!(rows(&w), sorted(kept));
+    assert_eq!(Snapshot::open_in(store).unwrap().manifest().dropped_lsn, 48);
+}
+
+#[test]
+fn retention_drops_the_oldest_days_from_the_store() {
+    let f = Fixture::new();
+    retention_drops_the_oldest_days(|| f.open(retaining(2)).unwrap(), &f.store());
+}
+
+#[test]
+fn retention_drops_the_oldest_days_from_a_store_with_conditional_puts() {
+    // The same through a fenced manifest and a lease: a clean reopen takes
+    // the lease the dropped writer released.
+    let f = Fixture::conditional();
+    retention_drops_the_oldest_days(
+        || TableWriter::open_in(&f.local, f.client(), retaining(2)).unwrap(),
+        &f.store(),
+    );
+}

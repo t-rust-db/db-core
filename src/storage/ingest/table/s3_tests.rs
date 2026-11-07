@@ -9,7 +9,9 @@
 
 #![cfg(feature = "storage-s3")]
 
-use super::store_tests::{append, rows, set_clock, sorted, tiered};
+use super::store_tests::{
+    append, retaining, retention_drops_the_oldest_days, rows, set_clock, sorted, tiered,
+};
 use super::*;
 use crate::storage::column::VfsFile;
 use crate::storage::ingest::store::s3::{CommitMode, Credentials, S3Config, S3Store};
@@ -213,4 +215,11 @@ fn s3_garage_opens_by_uri_and_a_reader_follows_the_writer() {
 
     // A path is refused by `open`, not turned into a directory named "s3:".
     assert!(TableWriter::open(std::path::Path::new(&uri), TableOptions::default()).is_err());
+}
+
+#[test]
+#[ignore = "needs an S3 endpoint: tools/s3_garage.sh up"]
+fn s3_garage_retention_drops_the_oldest_days() {
+    let g = Garage::new("retention");
+    retention_drops_the_oldest_days(|| g.open(retaining(2)).unwrap(), &g.store);
 }

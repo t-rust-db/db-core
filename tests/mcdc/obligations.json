@@ -42720,6 +42720,16 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_table_store_tests_retaining_740f3227",
+    "file": "src/storage/ingest/table/store_tests.rs",
+    "line": 445,
+    "decision": "let Layout::Tiered(tier) = &mut options.layout",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_ingest_table_tiered_tests_walk_03cfa916",
     "file": "src/storage/ingest/table/tiered_tests.rs",
     "line": 119,
