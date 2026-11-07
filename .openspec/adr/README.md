@@ -78,3 +78,4 @@ Row storage (`storage::row`), moved from sqlite-rs's `.openspec/adr/` (#575); ea
 - [0041](0041-pragma-synchronous-fsync-policy.md) — `PRAGMA synchronous` fsync-skip policy, and why `SynchronousMode` lives in `header.rs`
 - [0042](0042-macos-plain-fsync-not-fullfsync.md) — On macOS, `Vfs::sync` calls plain `fsync(2)`, not `std`'s `F_FULLFSYNC`
 - [0043](0043-attached-databases.md) — Several SQLite files per connection: named cross-mode files and row-engine `ATTACH`
+- [0044](0044-s3-object-store-for-tables.md) — An object store (S3) for striped tables: `Store`, local WAL, conditional-put fencing and a lease, no TLS in db-core

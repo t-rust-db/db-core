@@ -18,11 +18,11 @@ fn scratch() -> std::path::PathBuf {
     dir
 }
 
-pub(super) fn run(store: &impl TableStore) {
+pub(crate) fn run(store: &impl TableStore) {
     // Empty: missing objects are None / NotFound, and listing is empty.
     assert_eq!(store.get("a").unwrap(), None);
     assert_eq!(store.map("a").err().unwrap().kind(), ErrorKind::NotFound);
-    assert_eq!(store.delete("a").err().unwrap().kind(), ErrorKind::NotFound);
+    store.delete("a").unwrap(); // idempotent
     assert!(store.list("").unwrap().is_empty());
 
     // Put, then replace: the last put wins, and the key is listed once.
@@ -48,14 +48,15 @@ pub(super) fn run(store: &impl TableStore) {
     assert_eq!(&buf, b"3456");
     assert_eq!(f.read_at(8, &mut buf).unwrap(), 2);
     assert_eq!(f.read_at(10, &mut buf).unwrap(), 0);
+    assert_eq!(&*f.mmap().unwrap(), b"0123456789");
     assert_eq!(
         store.open("missing").err().unwrap().kind(),
         ErrorKind::NotFound
     );
     store.delete("o").unwrap();
 
-    // Publish moves a local file in (creating its "directory"), replaces an
-    // object already there, and leaves nothing behind locally.
+    // Publish moves a local file in (creating its "directory") and leaves
+    // nothing behind locally; publishing the same bytes again is fine.
     let dir = scratch();
     let file = dir.join("f");
     std::fs::write(&file, b"first").unwrap();
@@ -65,12 +66,24 @@ pub(super) fn run(store: &impl TableStore) {
         store.get("pub/deep/f").unwrap().as_deref(),
         Some(&b"first"[..])
     );
-    std::fs::write(&file, b"second").unwrap();
+    std::fs::write(&file, b"first").unwrap();
     store.publish(&file, "pub/deep/f").unwrap();
-    assert_eq!(
-        store.get("pub/deep/f").unwrap().as_deref(),
-        Some(&b"second"[..])
-    );
+    // Different bytes under a taken name are either replaced or refused (a
+    // store with conditional puts), and the object matches the outcome.
+    std::fs::write(&file, b"second").unwrap();
+    match store.publish(&file, "pub/deep/f") {
+        Ok(()) => assert_eq!(
+            store.get("pub/deep/f").unwrap().as_deref(),
+            Some(&b"second"[..])
+        ),
+        Err(e) => {
+            assert_eq!(e.kind(), ErrorKind::AlreadyExists);
+            assert_eq!(
+                store.get("pub/deep/f").unwrap().as_deref(),
+                Some(&b"first"[..])
+            );
+        }
+    }
     assert_eq!(
         store
             .publish(&dir.join("absent"), "pub/x")

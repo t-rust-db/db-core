@@ -3,7 +3,7 @@ members = [".", "fuzz/gen", "fuzz/run"]
 
 [package]
 name = "db-core"
-version = "0.233.0"
+version = "0.234.0"
 # The [[bench]] targets below are declared explicitly; `benches/common.rs`
 # is their shared harness module, not a bench of its own.
 autobenches = false
@@ -573,6 +573,12 @@ ingest-read = ["storage-column", "storage-stream", "vm-batch"]
 # Record ingestion (ADR 0027-0029): the WAL (#571), flush (#572), tiers
 # (#573) and the Table API (#574), on top of ingest-read.
 ingest = ["ingest-read", "storage-column-write"]
+# An S3-compatible object store (AWS S3, Garage, MinIO) as a table's store
+# (#1015): SigV4, a plain-HTTP transport, multipart upload, conditional-put
+# fencing and a writer lease. Std only; not in `default`, so the wasm and
+# no-thread builds are untouched. TLS is the embedding application's
+# `Transport`, or a later opt-in feature.
+storage-s3 = ["ingest"]
 storage-stream = ["vm-stream"]
 # Test-support helpers (e.g. `storage::row::btree::test_minimal_db`)
 # for consumers' own test suites -- enable from `[dev-dependencies]`

@@ -11,14 +11,19 @@
 use std::io;
 use std::path::Path;
 
+use self::lease::Lease;
 use crate::storage::column::posix::PosixFile;
 use crate::storage::column::{MmapRegion, VfsFile};
 
 #[cfg(test)]
-mod conformance;
+pub(crate) mod conformance;
+pub mod lease;
 mod local;
 #[cfg(test)]
 pub(crate) mod memory;
+
+#[cfg(feature = "storage-s3")]
+pub mod s3;
 
 pub use local::LocalFs;
 
@@ -63,16 +68,31 @@ pub trait TableStore: Send + Sync {
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()>;
 
     /// Moves the finished local file `local` into the store as `key`,
-    /// durably, and replaces any object already there. The file is gone from
-    /// `local` after `Ok`. A crash leaves the object either absent or whole.
+    /// durably. The file is gone from `local` after `Ok`. A crash leaves the
+    /// object either absent or whole. Publishing the same bytes again is
+    /// `Ok`. Different bytes under a name already taken replace the object,
+    /// except in a store with conditional puts, where that name was taken by
+    /// another writer and the publish fails with
+    /// [`io::ErrorKind::AlreadyExists`], leaving the object as it was.
     fn publish(&self, local: &Path, key: &str) -> io::Result<()>;
 
-    /// Removes the object; a missing one is [`io::ErrorKind::NotFound`].
+    /// Removes the object. Idempotent: a missing one is `Ok`, as an object
+    /// store's delete is.
     fn delete(&self, key: &str) -> io::Result<()>;
 
     /// Removes directories under `prefix` that hold no objects. A store
     /// with no directories (an object store) has nothing to do.
     fn remove_empty_dirs(&self, prefix: &str) -> io::Result<()>;
+
+    /// The writer lease this store grants `owner`, if it can (it has
+    /// conditional puts). `None`: a local directory protects a table with
+    /// its lock file instead, and a store without conditional puts relies on
+    /// the writer's local lock. [`io::ErrorKind::AlreadyExists`]: another
+    /// writer holds the table.
+    fn lease(&self, owner: &str) -> io::Result<Option<Lease>> {
+        let _ = owner;
+        Ok(None)
+    }
 
     /// The keys under `prefix` (a directory-like prefix such as `data/`,
     /// or empty for all), sorted.
@@ -86,6 +106,9 @@ pub trait TableStore: Send + Sync {
 pub enum Store {
     /// A directory on the local filesystem.
     Local(LocalFs),
+    /// A bucket on an S3-compatible object store.
+    #[cfg(feature = "storage-s3")]
+    S3(s3::S3Store),
     /// In memory, for tests.
     #[cfg(test)]
     Memory(std::sync::Arc<memory::MemoryStore>),
@@ -95,6 +118,9 @@ pub enum Store {
 pub enum StoreFile {
     /// From the local filesystem.
     Local(PosixFile),
+    /// From an S3-compatible object store.
+    #[cfg(feature = "storage-s3")]
+    S3(s3::S3File),
     /// From memory, for tests.
     #[cfg(test)]
     Memory(crate::storage::column::memory::MemoryFile),
@@ -104,6 +130,8 @@ impl VfsFile for StoreFile {
     fn size(&self) -> io::Result<u64> {
         match self {
             StoreFile::Local(f) => f.size(),
+            #[cfg(feature = "storage-s3")]
+            StoreFile::S3(f) => f.size(),
             #[cfg(test)]
             StoreFile::Memory(f) => f.size(),
         }
@@ -112,6 +140,8 @@ impl VfsFile for StoreFile {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             StoreFile::Local(f) => f.read_at(offset, buf),
+            #[cfg(feature = "storage-s3")]
+            StoreFile::S3(f) => f.read_at(offset, buf),
             #[cfg(test)]
             StoreFile::Memory(f) => f.read_at(offset, buf),
         }
@@ -120,6 +150,8 @@ impl VfsFile for StoreFile {
     fn mmap(&self) -> io::Result<MmapRegion> {
         match self {
             StoreFile::Local(f) => f.mmap(),
+            #[cfg(feature = "storage-s3")]
+            StoreFile::S3(f) => f.mmap(),
             #[cfg(test)]
             StoreFile::Memory(f) => f.mmap(),
         }
@@ -131,6 +163,27 @@ impl Store {
     pub fn local(dir: impl Into<std::path::PathBuf>) -> Store {
         Store::Local(LocalFs::new(dir))
     }
+
+    /// The store at `location`: an `s3://bucket/prefix[?options]` URI (the
+    /// `storage-s3` feature; see `S3Config::from_uri` for the options), or
+    /// else a local directory.
+    ///
+    /// ```ignore
+    /// let store = Store::at("s3://bucket/events?endpoint=http://garage:3900")?;
+    /// let writer = TableWriter::open_in(Path::new("/var/lib/app/events"), store, options)?;
+    /// ```
+    pub fn at(location: &str) -> io::Result<Store> {
+        if location.starts_with("s3://") {
+            #[cfg(feature = "storage-s3")]
+            return s3::S3Store::open_uri(location).map(Store::S3);
+            #[cfg(not(feature = "storage-s3"))]
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "an s3:// table needs the `storage-s3` feature",
+            ));
+        }
+        Ok(Store::local(location))
+    }
 }
 
 impl TableStore for Store {
@@ -139,6 +192,8 @@ impl TableStore for Store {
     fn open(&self, key: &str) -> io::Result<StoreFile> {
         match self {
             Store::Local(s) => s.open(key).map(StoreFile::Local),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.open(key).map(StoreFile::S3),
             #[cfg(test)]
             Store::Memory(s) => s.open(key).map(StoreFile::Memory),
         }
@@ -147,6 +202,8 @@ impl TableStore for Store {
     fn get(&self, key: &str) -> io::Result<Option<Vec<u8>>> {
         match self {
             Store::Local(s) => s.get(key),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.get(key),
             #[cfg(test)]
             Store::Memory(s) => s.get(key),
         }
@@ -155,6 +212,8 @@ impl TableStore for Store {
     fn map(&self, key: &str) -> io::Result<MmapRegion> {
         match self {
             Store::Local(s) => s.map(key),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.map(key),
             #[cfg(test)]
             Store::Memory(s) => s.map(key),
         }
@@ -163,6 +222,8 @@ impl TableStore for Store {
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
         match self {
             Store::Local(s) => s.put(key, bytes),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.put(key, bytes),
             #[cfg(test)]
             Store::Memory(s) => s.put(key, bytes),
         }
@@ -171,6 +232,8 @@ impl TableStore for Store {
     fn publish(&self, local: &Path, key: &str) -> io::Result<()> {
         match self {
             Store::Local(s) => s.publish(local, key),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.publish(local, key),
             #[cfg(test)]
             Store::Memory(s) => s.publish(local, key),
         }
@@ -179,14 +242,30 @@ impl TableStore for Store {
     fn delete(&self, key: &str) -> io::Result<()> {
         match self {
             Store::Local(s) => s.delete(key),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.delete(key),
             #[cfg(test)]
             Store::Memory(s) => s.delete(key),
+        }
+    }
+
+    fn lease(&self, owner: &str) -> io::Result<Option<Lease>> {
+        // Only the test store and the S3 store grant leases.
+        let _ = owner;
+        match self {
+            Store::Local(_) => Ok(None),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.lease(owner),
+            #[cfg(test)]
+            Store::Memory(s) => s.lease(owner),
         }
     }
 
     fn remove_empty_dirs(&self, prefix: &str) -> io::Result<()> {
         match self {
             Store::Local(s) => s.remove_empty_dirs(prefix),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.remove_empty_dirs(prefix),
             #[cfg(test)]
             Store::Memory(s) => s.remove_empty_dirs(prefix),
         }
@@ -195,6 +274,8 @@ impl TableStore for Store {
     fn list(&self, prefix: &str) -> io::Result<Vec<String>> {
         match self {
             Store::Local(s) => s.list(prefix),
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s.list(prefix),
             #[cfg(test)]
             Store::Memory(s) => s.list(prefix),
         }

@@ -1,36 +1,96 @@
 //! An in-memory [`TableStore`] for tests, with crash injection: after a
 //! set number of writes, every later write fails and applies nothing, as
 //! a process that died at that point would leave the store.
+//!
+//! [`MemoryStore::conditional`] also models a store with conditional puts
+//! (AWS S3): the manifest is fenced and the writer takes a lease.
+//! [`MemoryStore::client`] is a second handle on the same objects with its
+//! own fence, like a second process talking to one bucket.
 
 use std::collections::BTreeMap;
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use super::lease::{publish_once, ConditionalObjects, Lease, ManifestFence};
 use super::{check_key, TableStore};
 use crate::storage::column::memory::MemoryFile;
 use crate::storage::column::{MmapRegion, Vfs};
+use crate::storage::ingest::manifest::MANIFEST_FILE;
 
+/// The objects every client of one store shares.
 #[derive(Default, Debug)]
-pub struct MemoryStore {
-    objects: Mutex<BTreeMap<String, Vec<u8>>>,
+struct Shared {
+    objects: Mutex<BTreeMap<String, (Vec<u8>, u64)>>,
+    /// The last object version handed out: every write gets a fresh one.
+    last_version: AtomicU64,
     /// Writes still allowed; `None` lets every write through.
     writes_left: Mutex<Option<usize>>,
+    /// Whether the store honours conditional puts, like AWS S3 (and not
+    /// like Garage).
+    conditional: bool,
+    lease_ttl_ms: AtomicU64,
+}
+
+/// Test-only; see the module docs.
+#[derive(Default, Debug)]
+pub struct MemoryStore {
+    shared: Arc<Shared>,
+    fence: ManifestFence,
 }
 
 impl MemoryStore {
+    /// A store with conditional puts: manifest commits are fenced and the
+    /// writer takes a lease.
+    pub fn conditional() -> MemoryStore {
+        MemoryStore {
+            shared: Arc::new(Shared {
+                conditional: true,
+                lease_ttl_ms: AtomicU64::new(30_000),
+                ..Shared::default()
+            }),
+            fence: ManifestFence::default(),
+        }
+    }
+
+    /// Another client of the same objects, with a fence of its own.
+    pub fn client(&self) -> MemoryStore {
+        MemoryStore {
+            shared: Arc::clone(&self.shared),
+            fence: ManifestFence::default(),
+        }
+    }
+
+    fn bump(&self) -> u64 {
+        self.shared
+            .last_version
+            .fetch_add(1, Ordering::SeqCst)
+            .wrapping_add(1)
+    }
+
+    fn insert(&self, key: &str, bytes: &[u8]) {
+        let version = self.bump();
+        self.shared
+            .objects
+            .lock()
+            .unwrap()
+            .insert(key.to_owned(), (bytes.to_vec(), version));
+    }
+
     /// Lets the next `writes` puts or deletes through, then fails all later
     /// ones with nothing applied: a crash after that many writes.
     pub fn crash_after(&self, writes: usize) {
-        *self.writes_left.lock().unwrap() = Some(writes);
+        *self.shared.writes_left.lock().unwrap() = Some(writes);
     }
 
     /// Ends the injected crash: writes go through again, as after a restart.
     pub fn lift_crash(&self) {
-        *self.writes_left.lock().unwrap() = None;
+        *self.shared.writes_left.lock().unwrap() = None;
     }
 
     fn write_allowed(&self) -> io::Result<()> {
-        let mut left = self.writes_left.lock().unwrap();
+        let mut left = self.shared.writes_left.lock().unwrap();
         match left.as_mut() {
             Some(0) => Err(io::Error::other("injected crash")),
             Some(n) => {
@@ -39,6 +99,21 @@ impl MemoryStore {
             }
             None => Ok(()),
         }
+    }
+
+    /// The writer lease, if this store grants one.
+    pub fn lease(self: &Arc<Self>, owner: &str) -> io::Result<Option<Lease>> {
+        if !self.shared.conditional {
+            return Ok(None);
+        }
+        let ttl = Duration::from_millis(self.shared.lease_ttl_ms.load(Ordering::SeqCst));
+        Lease::acquire(Arc::clone(self), owner, ttl).map(Some)
+    }
+
+    /// Sets the lease TTL (default 30 s) for leases taken from now on.
+    pub fn set_lease_ttl(&self, ttl: Duration) {
+        let ms = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
+        self.shared.lease_ttl_ms.store(ms, Ordering::SeqCst);
     }
 }
 
@@ -54,20 +129,19 @@ impl TableStore for MemoryStore {
         vfs.open(std::path::Path::new("object"))
     }
 
-    fn publish(&self, local: &std::path::Path, key: &str) -> io::Result<()> {
-        check_key(key)?;
-        let bytes = std::fs::read(local)?;
-        self.put(key, &bytes)?;
-        std::fs::remove_file(local)
-    }
-
-    fn remove_empty_dirs(&self, _prefix: &str) -> io::Result<()> {
-        Ok(())
-    }
-
     fn get(&self, key: &str) -> io::Result<Option<Vec<u8>>> {
         check_key(key)?;
-        Ok(self.objects.lock().unwrap().get(key).cloned())
+        if self.shared.conditional && key == MANIFEST_FILE {
+            // A read of the manifest is what the fence holds a commit to.
+            return Ok(self.get_versioned(key)?.map(|(bytes, _)| bytes));
+        }
+        Ok(self
+            .shared
+            .objects
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|(b, _)| b.clone()))
     }
 
     fn map(&self, key: &str) -> io::Result<MmapRegion> {
@@ -80,20 +154,40 @@ impl TableStore for MemoryStore {
     fn put(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
         check_key(key)?;
         self.write_allowed()?;
-        self.objects
-            .lock()
-            .unwrap()
-            .insert(key.to_owned(), bytes.to_vec());
+        if self.shared.conditional && key == MANIFEST_FILE {
+            return self.fence.commit(self, key, bytes);
+        }
+        self.insert(key, bytes);
+        Ok(())
+    }
+
+    fn publish(&self, local: &std::path::Path, key: &str) -> io::Result<()> {
+        check_key(key)?;
+        let bytes = std::fs::read(local)?;
+        if self.shared.conditional {
+            self.write_allowed()?;
+            publish_once(self, key, &bytes)?;
+        } else {
+            self.put(key, &bytes)?;
+        }
+        std::fs::remove_file(local)
+    }
+
+    fn lease(&self, _owner: &str) -> io::Result<Option<Lease>> {
+        // Leases need the `Arc` handle: see `Store::lease`.
+        Ok(None)
+    }
+
+    fn remove_empty_dirs(&self, _prefix: &str) -> io::Result<()> {
         Ok(())
     }
 
     fn delete(&self, key: &str) -> io::Result<()> {
         check_key(key)?;
         self.write_allowed()?;
-        match self.objects.lock().unwrap().remove(key) {
-            Some(_) => Ok(()),
-            None => Err(io::Error::from(io::ErrorKind::NotFound)),
-        }
+        // Idempotent, like an object store's delete.
+        self.shared.objects.lock().unwrap().remove(key);
+        Ok(())
     }
 
     fn list(&self, prefix: &str) -> io::Result<Vec<String>> {
@@ -107,6 +201,7 @@ impl TableStore for MemoryStore {
                 || key.strip_prefix(base).is_some_and(|r| r.starts_with('/'))
         };
         Ok(self
+            .shared
             .objects
             .lock()
             .unwrap()
@@ -114,6 +209,49 @@ impl TableStore for MemoryStore {
             .filter(|key| under(key))
             .cloned()
             .collect())
+    }
+}
+
+impl ConditionalObjects for MemoryStore {
+    fn get_versioned(&self, key: &str) -> io::Result<Option<(Vec<u8>, String)>> {
+        let found = self
+            .shared
+            .objects
+            .lock()
+            .unwrap()
+            .get(key)
+            .map(|(bytes, v)| (bytes.clone(), v.to_string()));
+        if key == MANIFEST_FILE && self.shared.conditional {
+            self.fence.saw(found.as_ref().map(|(_, v)| v.clone()));
+        }
+        Ok(found)
+    }
+
+    fn put_if_absent(&self, key: &str, bytes: &[u8]) -> io::Result<Option<String>> {
+        check_key(key)?;
+        let mut objects = self.shared.objects.lock().unwrap();
+        if objects.contains_key(key) {
+            return Ok(None);
+        }
+        let version = self.bump();
+        objects.insert(key.to_owned(), (bytes.to_vec(), version));
+        Ok(Some(version.to_string()))
+    }
+
+    fn put_if_match(&self, key: &str, bytes: &[u8], version: &str) -> io::Result<Option<String>> {
+        check_key(key)?;
+        let mut objects = self.shared.objects.lock().unwrap();
+        if objects.get(key).map(|(_, v)| v.to_string()).as_deref() != Some(version) {
+            return Ok(None);
+        }
+        let new = self.bump();
+        objects.insert(key.to_owned(), (bytes.to_vec(), new));
+        Ok(Some(new.to_string()))
+    }
+
+    fn remove(&self, key: &str) -> io::Result<()> {
+        self.shared.objects.lock().unwrap().remove(key);
+        Ok(())
     }
 }
 

@@ -205,7 +205,7 @@ check-panic-allows: ## Policy gate: no panic-lint allows in production src/ (see
 # Feature sets a downstream crate enables together, each checked as one (#738):
 # a helper gated on one feature but used under another builds alone and fails here.
 FEATURE_SETS := engine-column,ingest-read parser-column,vm-batch,codegen-batch,emit-batch,storage-column,engine-column,ingest-read
-FEATURES := storage-row storage-column storage-column-write ingest-read ingest storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
+FEATURES := storage-row storage-column storage-column-write ingest-read ingest storage-s3 storage-stream engine-row engine-column engine-stream parser-row vm-row codegen-row vm-batch codegen-batch emit-batch
 
 check-features: ## Each Cargo feature builds standalone, without warnings (cargo check --no-default-features --features X)
 	@for f in $(FEATURES) $(FEATURE_SETS); do \
@@ -362,6 +362,12 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # CursorFactory>`/`Box<dyn Transaction>`/`Box<dyn SchemaStorage>` to the Vm
 # and hold `Rc<dyn PageSource>`. Same exemption, same reason, as vm.rs.
 #
+# `src/storage/ingest/store/s3.rs` and `s3/*` (#1015): the network boundary.
+# The S3 client holds an `Arc<dyn Transport>`: the embedding application
+# supplies the TLS transport db-core does not carry, so the transport is
+# necessarily dynamic (the same exemption, for the same reason, as the
+# `Vfs` implementors above). The feature is off by default.
+#
 # `src/json_path.rs` (#307): `JsonValue<'a>` is a zero-copy parser --
 # every variant borrows string spans from the source line rather than
 # allocating, which is the whole point (`storage::stream::json`'s
@@ -369,7 +375,7 @@ check-deny: ## Supply-chain policy: license/ban/source checks (see deny.toml)
 # lifetime shape as `ParquetFile<'a>` above, moved here from the already-
 # excluded `src/storage/stream/*` so `functions::json_extract` can share
 # it without a second parser.
-MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/vm/* src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/parquet.rs src/storage/parquet/compression.rs src/storage/parquet/decimal.rs src/storage/parquet/encoding.rs src/storage/parquet/footer.rs src/storage/parquet/nested.rs src/storage/parquet/page.rs src/storage/parquet/parquet_file.rs src/storage/parquet/reader.rs src/storage/parquet/schema_tree.rs src/storage/parquet/thrift.rs src/storage/parquet/compression/snappy.rs src/storage/parquet/compression/zstd.rs src/storage/stream/* src/engine/stream.rs src/json_path.rs
+MVL_LIMIT_EXCLUDE := src/vm/row/vm.rs src/vm/row/vm/* src/vm/row/cursor.rs src/vm/row/cursor_factory.rs src/vm/row/cursor_conformance.rs src/engine/row.rs src/engine/row/adapter.rs src/engine/column.rs src/storage/row/vfs.rs src/storage/row/vfs/page_source.rs src/storage/row/vfs/unix.rs src/storage/row/vfs/memory.rs src/storage/row/vfs/fcntl.rs src/storage/column/mmap.rs src/storage/ingest/store/s3.rs src/storage/ingest/store/s3/* src/storage/parquet.rs src/storage/parquet/compression.rs src/storage/parquet/decimal.rs src/storage/parquet/encoding.rs src/storage/parquet/footer.rs src/storage/parquet/nested.rs src/storage/parquet/page.rs src/storage/parquet/parquet_file.rs src/storage/parquet/reader.rs src/storage/parquet/schema_tree.rs src/storage/parquet/thrift.rs src/storage/parquet/compression/snappy.rs src/storage/parquet/compression/zstd.rs src/storage/stream/* src/engine/stream.rs src/json_path.rs
 
 check-mvl-limit: ## Qualified-subset gate (cargo-mvl-limit) over src/, minus the documented dyn boundary (MVL_LIMIT_EXCLUDE)
 	@command -v cargo-mvl-limit >/dev/null 2>&1 || { \

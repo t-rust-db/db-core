@@ -38,6 +38,7 @@
 //! public, cloneable handle over it, with the line sources.
 
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
@@ -52,6 +53,7 @@ use super::record::{
     RecordValue,
 };
 use super::snapshot::Snapshot;
+use super::store::lease::Lease;
 use super::store::{LocalFs, Store, TableStore};
 use super::tier::Output;
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
@@ -139,6 +141,8 @@ pub struct TableWriter {
     last_observed: i64,
     /// The hour whose runs are in `staging/` or queued to go there.
     spilled_hour: Option<i64>,
+    // Dropped last: the table stays leased until the flusher is gone.
+    _lease: Option<Lease>,
     #[cfg(test)]
     pub(super) crash_after: Option<u8>,
 }
@@ -148,6 +152,14 @@ impl TableWriter {
     /// writes the manifest, cleans up after an interrupted flush, and
     /// rebuilds pages from the WAL above `flushed_lsn`.
     pub fn open(table: &Path, options: TableOptions) -> Result<TableWriter, IngestError> {
+        if table.to_string_lossy().starts_with("s3://") {
+            // Not a directory to create. The WAL needs a local one of its
+            // own, so a remote table is opened with `open_in`.
+            return Err(IngestError::Unsupported(format!(
+                "{} is not a local directory: open it with `TableWriter::open_in(local_dir, Store::at(uri)?, options)`",
+                table.display()
+            )));
+        }
         TableWriter::open_in(table, Store::Local(LocalFs::new(table)), options)
     }
 
@@ -161,9 +173,16 @@ impl TableWriter {
         options: TableOptions,
     ) -> Result<TableWriter, IngestError> {
         let table = local;
+        let owner = format!("{}-{}", std::process::id(), now_ns());
         let lock = TableLock::acquire(table).map_err(|e| match e {
             LockError::Held => IngestError::Wal(WalError::Locked),
             LockError::Io(e) => IngestError::Io(e),
+        })?;
+        // A store with conditional puts also leases the table, so a second
+        // writer on another machine is refused too.
+        let lease = store.lease(&owner).map_err(|e| match e.kind() {
+            io::ErrorKind::AlreadyExists => IngestError::Wal(WalError::Locked),
+            _ => IngestError::Io(e),
         })?;
         if let Some(schema) = &options.schema {
             if let Some(why) = invalid_schema(schema) {
@@ -278,6 +297,7 @@ impl TableWriter {
             sealed: Vec::new(),
             last_observed: i64::MIN,
             spilled_hour,
+            _lease: lease,
             #[cfg(test)]
             crash_after: None,
         };
@@ -861,6 +881,8 @@ fn clean_up(local: &Path, store: &Store, manifest: &Manifest) -> Result<(), Inge
 mod flusher;
 #[cfg(test)]
 mod record_tests;
+#[cfg(test)]
+mod s3_tests;
 #[cfg(test)]
 mod store_tests;
 #[cfg(test)]

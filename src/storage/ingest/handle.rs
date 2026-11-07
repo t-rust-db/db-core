@@ -33,6 +33,7 @@ use super::error::IngestError;
 use super::manifest::FileEntry;
 use super::record::RecordValue;
 use super::snapshot::Snapshot;
+use super::store::Store;
 use super::table::{TableOptions, TableWriter};
 use super::wal::{Ack, WalError};
 use crate::storage::stream::file::{Block, FileIdentity, LogFile, Refresh};
@@ -63,7 +64,25 @@ impl Table {
         })
     }
 
-    /// The table directory.
+    /// [`Table::open`] with the manifest and the Parquet files kept in
+    /// `store` and the rest (the WAL, the writer lock, the `follow` resume
+    /// points) in the local directory `local`; see
+    /// [`TableWriter::open_in`]. Every other method is as for a table opened
+    /// with `open`.
+    pub fn open_in(
+        local: impl AsRef<Path>,
+        store: Store,
+        options: TableOptions,
+    ) -> Result<Table, IngestError> {
+        let writer = TableWriter::open_in(local.as_ref(), store, options)?;
+        Ok(Table {
+            dir: local.as_ref().to_path_buf(),
+            writer: Arc::new(Mutex::new(Some(writer))),
+        })
+    }
+
+    /// The table directory: the local directory, for a table kept in a
+    /// [`Store`] too.
     pub fn dir(&self) -> &Path {
         &self.dir
     }

@@ -2536,3 +2536,125 @@ fn distinct_counts_of_string_columns_agree_with_a_model_in_every_state() {
     assert!(w.manifest().files.is_empty(), "no file yet");
     check(&cases, "pages only", |sql| answer(&w, sql));
 }
+
+#[test]
+fn a_table_location_is_named_after_its_last_segment() {
+    for (location, name) in [
+        ("s3://bucket/events", "events"),
+        ("s3://bucket/tables/events/", "events"),
+        (
+            "s3://bucket/events?endpoint=http://h:3900&region=garage",
+            "events",
+        ),
+        ("s3://bucket", "bucket"),
+    ] {
+        assert_eq!(location_name(location), name, "{location}");
+    }
+}
+
+#[test]
+fn a_local_location_opens_like_a_path() {
+    let t = TempTable::new();
+    let mut w = t.writer();
+    append(&mut w, &[r#"{"n":1}"#, r#"{"n":2}"#]);
+    w.flush_all().unwrap();
+    let mut engine = TableEngine::open_at(t.0.to_str().unwrap()).unwrap();
+    assert_eq!(engine.table_name(), "logs");
+    assert_eq!(engine.path(), t.0);
+    assert_eq!(
+        engine.run_query("SELECT count(*) FROM logs").unwrap().rows,
+        vec![vec![Cell::Int(2)]]
+    );
+}
+
+#[test]
+fn an_engine_over_a_store_queries_what_is_flushed_and_follows_the_writer() {
+    use crate::storage::ingest::store::memory::MemoryStore;
+    use std::sync::Arc;
+    let t = TempTable::new();
+    let mem = Arc::new(MemoryStore::default());
+    let store = || Store::Memory(Arc::clone(&mem));
+    let mut w = TableWriter::open_in(&t.0, store(), TableOptions::default()).unwrap();
+    append(
+        &mut w,
+        &[r#"{"level":"info","n":1}"#, r#"{"level":"warn","n":2}"#],
+    );
+    w.flush_all().unwrap();
+
+    let mut engine = TableEngine::open_in("events", store()).unwrap();
+    assert_eq!(engine.table_name(), "events");
+    assert_eq!(engine.path(), Path::new(""));
+    let count = |engine: &mut TableEngine| {
+        engine
+            .run_query("SELECT count(*) FROM events")
+            .unwrap()
+            .rows
+    };
+    assert_eq!(count(&mut engine), vec![vec![Cell::Int(2)]]);
+    // A lines table's records are its `raw` column.
+    assert_eq!(
+        engine
+            .run_query("SELECT raw FROM events ORDER BY raw")
+            .unwrap()
+            .rows,
+        vec![
+            vec![text(r#"{"level":"info","n":1}"#)],
+            vec![text(r#"{"level":"warn","n":2}"#)]
+        ]
+    );
+
+    // More flushed rows are seen by the next query; unflushed ones are not,
+    // since a store holds no WAL tail.
+    append(&mut w, &[r#"{"level":"info","n":3}"#]);
+    w.flush_all().unwrap();
+    append(&mut w, &[r#"{"level":"info","n":4}"#]);
+    assert_eq!(count(&mut engine), vec![vec![Cell::Int(3)]]);
+    assert_eq!(
+        engine.reader_stats().refreshes,
+        0,
+        "a store reader keeps no tail statistics"
+    );
+    assert_eq!(
+        engine.stats(),
+        FileStats::Batch {
+            row_groups: 2,
+            rows: 3
+        }
+    );
+    assert_eq!(engine.tables().unwrap().len(), 1);
+
+    // A store with no table is an open error, not a panic.
+    let empty = Store::Memory(Arc::new(MemoryStore::default()));
+    assert!(TableEngine::open_in("nothing", empty).is_err());
+}
+
+#[test]
+fn a_table_handle_on_a_store_queries_what_it_holds() {
+    use crate::storage::ingest::store::memory::MemoryStore;
+    use crate::storage::ingest::Table;
+    use std::sync::Arc;
+    let t = TempTable::new();
+    let mem = Arc::new(MemoryStore::default());
+    let table = Table::open_in(
+        &t.0,
+        Store::Memory(Arc::clone(&mem)),
+        TableOptions::default(),
+    )
+    .unwrap();
+    table.append(br#"{"n":1}"#, Ack::Durable).unwrap();
+    table.append(br#"{"n":2}"#, Ack::Durable).unwrap();
+    table.flush().unwrap();
+    table.append(br#"{"n":3}"#, Ack::Durable).unwrap();
+    // The handle's own snapshot has the flushed file and the pending record;
+    // the table is named after the local directory.
+    assert_eq!(
+        table.query("SELECT count(*) FROM logs").unwrap().rows,
+        vec![vec![Cell::Int(3)]]
+    );
+    // An engine over the store alone sees what was flushed.
+    let mut engine = TableEngine::open_in("logs", Store::Memory(mem)).unwrap();
+    assert_eq!(
+        engine.run_query("SELECT count(*) FROM logs").unwrap().rows,
+        vec![vec![Cell::Int(2)]]
+    );
+}

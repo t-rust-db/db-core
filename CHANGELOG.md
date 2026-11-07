@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.234.0] - 2026-11-07
+
+### Added
+
+- Ingest: `storage-s3` feature (off by default, no dependencies): `S3Store` for Garage, MinIO and AWS S3 (given a TLS `Transport`) with SigV4, multipart upload, conditional-put manifest fencing and a writer lease; `Store::at` opens an `s3://` URI, `StoreReader` follows a table in a store, `Table::open_in` and `TableEngine` use one, and `publish` never replaces another writer's file on a store with conditional puts (#1015 phases 4-5)
+
 ## [0.233.0] - 2026-11-07
 
 ### Added

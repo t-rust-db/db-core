@@ -92,7 +92,10 @@ impl TableStore for LocalFs {
     }
 
     fn delete(&self, key: &str) -> io::Result<()> {
-        fs::remove_file(self.path(key)?)
+        match fs::remove_file(self.path(key)?) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
     }
 
     fn list(&self, prefix: &str) -> io::Result<Vec<String>> {
@@ -213,13 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn map_and_delete_report_a_missing_object_as_not_found() {
+    fn map_reports_a_missing_object_as_not_found_and_delete_is_idempotent() {
         let s = temp("gone");
         s.put("x", b"hello").unwrap();
         assert_eq!(&*s.map("x").unwrap(), b"hello");
         s.delete("x").unwrap();
         assert_eq!(s.map("x").err().unwrap().kind(), io::ErrorKind::NotFound);
-        assert_eq!(s.delete("x").err().unwrap().kind(), io::ErrorKind::NotFound);
+        s.delete("x").unwrap();
         fs::remove_dir_all(s.root()).unwrap();
     }
 
