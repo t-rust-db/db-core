@@ -1776,6 +1776,52 @@ pub enum CrossModeEngine {
     },
 }
 
+/// Whether `path` is a table location (a table directory or an `s3://` URI)
+/// rather than a Parquet file (#1037).
+#[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+fn is_table_location(path: &Path) -> bool {
+    path.is_dir() || is_store_uri(path)
+}
+
+#[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+fn is_store_uri(path: &Path) -> bool {
+    path.to_str().is_some_and(|p| p.starts_with("s3://"))
+}
+
+/// Opens one column table: an `s3://` URI or a table directory as a fresh
+/// snapshot per query, else a Parquet file (#1037).
+#[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+fn open_column_table(path: &Path) -> Result<ColumnTable, EngineError> {
+    if let Some(uri) = path.to_str().filter(|_| is_store_uri(path)) {
+        Ok(ColumnTable::Dir(Box::new(TableEngine::open_at(uri)?)))
+    } else if path.is_dir() {
+        Ok(ColumnTable::Dir(Box::new(TableEngine::open(path)?)))
+    } else {
+        Ok(ColumnTable::File(BatchEngine::open(path)?))
+    }
+}
+
+/// Rejects two tables of one session under the same name (#1037): a
+/// location's name is its last segment, so `s3://a/events` and a local
+/// `events/` directory would otherwise collide silently.
+#[cfg(all(feature = "engine-column", feature = "ingest-read"))]
+fn check_distinct_table_names<'a>(
+    tables: impl Iterator<Item = &'a ColumnTable>,
+) -> Result<(), EngineError> {
+    let mut seen: Vec<String> = Vec::new();
+    for table in tables {
+        let name = table.source().table_name().to_string();
+        if seen.iter().any(|n| n.eq_ignore_ascii_case(&name)) {
+            return Err(EngineError::new(
+                ErrorKind::Open,
+                format!("two tables are named {name}"),
+            ));
+        }
+        seen.push(name);
+    }
+    Ok(())
+}
+
 /// Opens the named SQLite files of a cross-mode engine (#924): at least
 /// one, and no two under the same name.
 #[cfg(feature = "engine-column")]
@@ -1831,6 +1877,10 @@ impl CrossModeEngine {
     /// SQLite lookup tables) probes with the larger and builds the other in
     /// memory. At least one table is required.
     ///
+    /// A path starting `s3://` is an object-store table location (#1037; the
+    /// `storage-s3` feature), read as committed files only. Any mix of the
+    /// three kinds opens; two tables may not share a name.
+    ///
     /// `lookups` are the SQLite files, each `(name, path)` (#924): a query
     /// names a table of one bare when no other file has a table of that
     /// name, and as `name.table` otherwise. At least one is required.
@@ -1846,17 +1896,16 @@ impl CrossModeEngine {
             ));
         };
         #[cfg(feature = "ingest-read")]
-        if parquets.iter().any(|p| p.is_dir()) {
-            let open = |path: &Path| -> Result<ColumnTable, EngineError> {
-                if path.is_dir() {
-                    Ok(ColumnTable::Dir(Box::new(TableEngine::open(path)?)))
-                } else {
-                    Ok(ColumnTable::File(BatchEngine::open(path)?))
-                }
-            };
+        if parquets.iter().any(|p| is_table_location(p)) {
+            let driving = open_column_table(first)?;
+            let others = rest
+                .iter()
+                .map(|p| open_column_table(p))
+                .collect::<Result<Vec<_>, _>>()?;
+            check_distinct_table_names(std::iter::once(&driving).chain(others.iter()))?;
             return Ok(CrossModeEngine::ColumnTablesSqlite {
-                driving: open(first)?,
-                others: rest.iter().map(|p| open(p)).collect::<Result<_, _>>()?,
+                driving,
+                others,
                 lookups: open_sqlite_files(lookups)?,
             });
         }

@@ -456,3 +456,38 @@ fn a_left_join_chain_keeps_its_written_order() {
     );
     assert!(message.contains("joined before it"), "{kind:?}: {message}");
 }
+
+#[test]
+fn an_s3_location_is_opened_as_a_table_not_a_parquet_file() {
+    // Nothing listens on this endpoint (or the feature is off): either way
+    // the entry is routed to the store reader, which fails to open it, not
+    // to the Parquet reader, which would report a missing file.
+    let f = Fixture::new();
+    let events = f.path("events");
+    let machine = f.path("machine.db");
+    let uri = Path::new("s3://bucket/remote?endpoint=http://127.0.0.1:1&region=test");
+    let err = CrossModeEngine::open_column_tables_sqlite(
+        &[events.as_path(), uri],
+        &[("m", machine.as_path())],
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Open, "{err}");
+    assert!(!err.to_string().contains("No such file"), "{err}");
+}
+
+#[test]
+fn two_table_locations_may_not_share_a_name() {
+    let f = Fixture::new();
+    let events = f.path("events");
+    let machine = f.path("machine.db");
+    let err = CrossModeEngine::open_column_tables_sqlite(
+        &[events.as_path(), events.as_path()],
+        &[("m", machine.as_path())],
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Open, "{err}");
+    assert!(
+        err.to_string().contains("two tables are named events"),
+        "{err}"
+    );
+}
