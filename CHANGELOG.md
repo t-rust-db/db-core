@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.232.0] - 2026-11-07
+
+### Changed
+
+- A row group's typed column chunks decode in parallel on spare cores when a scan has fewer row groups than cores (#800)
+
 ## [0.231.4] - 2026-11-07
 
 ### Fixed
