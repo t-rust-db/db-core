@@ -1329,15 +1329,11 @@ SELECT sum(i64) FROM int_bounds
 ----
 4611686018427387902
 
-# #1018: sum(BIGINT) overflows instead of widening
-skipif db-core
 query I rowsort
 SELECT sum(i64) FROM int_bounds WHERE id <= 6
 ----
 -9223372036854775809
 
-# #1018: sum(BIGINT) overflows instead of widening
-skipif db-core
 query I rowsort
 SELECT sum(i64) FROM int_bounds WHERE id >= 7
 ----
@@ -2504,8 +2500,6 @@ NULL
 12
 -333333333333.333
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, abs(d) FROM int_bounds WHERE id NOT IN (1) ORDER BY id
 ----
@@ -3223,8 +3217,6 @@ SELECT sum(i64), sum(i32), sum(i16), sum(i8) FROM int_bounds
 16382
 62
 
-# #1018: sum(BIGINT) overflows instead of widening
-skipif db-core
 query I rowsort
 SELECT sum(i64) FROM int_bounds WHERE id IN (6, 7)
 ----
@@ -3418,8 +3410,6 @@ SELECT id FROM int_bounds ORDER BY f, id
 10
 8
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query ITT nosort
 SELECT id, d + 0.001, d - 0.001 FROM int_bounds WHERE id IN (2, 3, 4, 5, 6, 9, 10, 11, 12) ORDER BY id
 ----

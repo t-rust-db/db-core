@@ -350,8 +350,6 @@ WRONG: dict[str, tuple[str, str]] = {
         "#1019",
         "HAVING count(n) resolves n to the select alias",
     ),
-    "SELECT sum(b) FROM null_groups": ("#1020", "sum(BOOLEAN) returns NULL"),
-    "SELECT sum(b) FROM typed_nulls": ("#1020", "sum(BOOLEAN) returns NULL"),
 }
 
 files: dict[str, list[str]] = {}

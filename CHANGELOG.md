@@ -4,6 +4,42 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.233.0] - 2026-11-07
+
+### Added
+
+- Ingest: `TableWriter::open_in` and `Snapshot::open_in` run a table on a `Store` (manifest and Parquet files in the store; WAL, lock and scratch stay local); `TableStore` gains `open`, `publish` and `remove_empty_dirs` (#1015 phase 3)
+
+## [0.232.0] - 2026-11-07
+
+### Changed
+
+- A row group's typed column chunks decode in parallel on spare cores when a scan has fewer row groups than cores (#800)
+
+## [0.231.4] - 2026-11-07
+
+### Fixed
+
+- `SUM(BOOLEAN)` returned `NULL`; it now counts true values, as DuckDB does (#1020)
+
+## [0.231.3] - 2026-11-06
+
+### Fixed
+
+- `HAVING count(n)` no longer resolves `n` to a select-list alias of the same name; the aggregate's argument binds to the table column, as DuckDB does (#1019)
+
+## [0.231.2] - 2026-11-06
+
+### Fixed
+
+- column: DECIMAL expressions with decimal literals, `abs` and `round` keep exact DECIMAL type and scale; `round` of an integer returns an integer (#1016, #1017).
+
+## [0.231.1] - 2026-11-06
+
+### Fixed
+
+- `sum(BIGINT)` widens past 64 bits to an exact DECIMAL(38, 0) instead of erroring with "integer overflow", matching DuckDB (#1018)
+
 ## [0.231.0] - 2026-11-06
 
 ### Added

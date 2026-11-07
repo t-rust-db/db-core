@@ -3026,8 +3026,6 @@ NULL
 11
 NULL
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query ITT nosort
 SELECT id, -d, abs(d) FROM null_groups ORDER BY id LIMIT 12
 ----
@@ -3068,8 +3066,6 @@ NULL
 -0.77
 0.77
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, abs(d) + abs(-1) FROM null_groups ORDER BY id LIMIT 12
 ----
@@ -3098,8 +3094,6 @@ NULL
 11
 1.77
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query TTT rowsort
 SELECT max(abs(d)), min(abs(d)), sum(abs(d)) FROM null_groups
 ----
@@ -3971,8 +3965,6 @@ NULL
 9
 0.70875
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(v) FROM null_groups ORDER BY id LIMIT 12
 ----
@@ -4001,8 +3993,6 @@ NULL
 11
 -67
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(v, 1) FROM null_groups ORDER BY id LIMIT 12
 ----
@@ -4031,8 +4021,6 @@ NULL
 11
 -67
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(v, 2) FROM null_groups ORDER BY id LIMIT 12
 ----
@@ -4061,8 +4049,6 @@ NULL
 11
 -67
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(k) FROM null_groups ORDER BY id LIMIT 12
 ----
@@ -4091,8 +4077,6 @@ SELECT id, round(k) FROM null_groups ORDER BY id LIMIT 12
 11
 4
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(k, 1) FROM null_groups ORDER BY id LIMIT 12
 ----
@@ -4121,8 +4105,6 @@ SELECT id, round(k, 1) FROM null_groups ORDER BY id LIMIT 12
 11
 4
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(k, 2) FROM null_groups ORDER BY id LIMIT 12
 ----
@@ -7312,8 +7294,6 @@ NULL
 12
 NULL
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query ITT nosort
 SELECT id, -d, abs(d) FROM typed_nulls ORDER BY id LIMIT 12
 ----
@@ -7354,8 +7334,6 @@ SELECT id, -d, abs(d) FROM typed_nulls ORDER BY id LIMIT 12
 -450.28
 450.28
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, abs(d) + abs(-1) FROM typed_nulls ORDER BY id LIMIT 12
 ----
@@ -7384,8 +7362,6 @@ SELECT id, abs(d) + abs(-1) FROM typed_nulls ORDER BY id LIMIT 12
 12
 451.28
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query TTT rowsort
 SELECT max(abs(d)), min(abs(d)), sum(abs(d)) FROM typed_nulls
 ----
@@ -8257,8 +8233,6 @@ SELECT id, d * f FROM typed_nulls ORDER BY id LIMIT 10
 10
 4743.375
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(n) FROM typed_nulls ORDER BY id LIMIT 12
 ----
@@ -8287,8 +8261,6 @@ NULL
 12
 -56
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(n, 1) FROM typed_nulls ORDER BY id LIMIT 12
 ----
@@ -8317,8 +8289,6 @@ NULL
 12
 -56
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(n, 2) FROM typed_nulls ORDER BY id LIMIT 12
 ----
@@ -8347,8 +8317,6 @@ NULL
 12
 -56
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(id) FROM typed_nulls ORDER BY id LIMIT 12
 ----
@@ -8377,8 +8345,6 @@ SELECT id, round(id) FROM typed_nulls ORDER BY id LIMIT 12
 12
 12
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(id, 1) FROM typed_nulls ORDER BY id LIMIT 12
 ----
@@ -8407,8 +8373,6 @@ SELECT id, round(id, 1) FROM typed_nulls ORDER BY id LIMIT 12
 12
 12
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(id, 2) FROM typed_nulls ORDER BY id LIMIT 12
 ----
@@ -11598,8 +11562,6 @@ NULL
 11
 NULL
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query ITT nosort
 SELECT id, -d, abs(d) FROM multi_rg ORDER BY id LIMIT 12
 ----
@@ -11640,8 +11602,6 @@ NULL
 NULL
 NULL
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query IT nosort
 SELECT id, abs(d) + abs(-1) FROM multi_rg ORDER BY id LIMIT 12
 ----
@@ -11670,8 +11630,6 @@ NULL
 11
 NULL
 
-# #1016: DECIMAL expression evaluated as DOUBLE
-skipif db-core
 query TTT rowsort
 SELECT max(abs(d)), min(abs(d)), sum(abs(d)) FROM multi_rg
 ----
@@ -12543,8 +12501,6 @@ NULL
 9
 49.91625
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(k) FROM multi_rg ORDER BY id LIMIT 12
 ----
@@ -12573,8 +12529,6 @@ NULL
 11
 -159
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(k, 1) FROM multi_rg ORDER BY id LIMIT 12
 ----
@@ -12603,8 +12557,6 @@ NULL
 11
 -159
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(k, 2) FROM multi_rg ORDER BY id LIMIT 12
 ----
@@ -12633,8 +12585,6 @@ NULL
 11
 -159
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(blk) FROM multi_rg ORDER BY id LIMIT 12
 ----
@@ -12663,8 +12613,6 @@ SELECT id, round(blk) FROM multi_rg ORDER BY id LIMIT 12
 11
 0
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(blk, 1) FROM multi_rg ORDER BY id LIMIT 12
 ----
@@ -12693,8 +12641,6 @@ SELECT id, round(blk, 1) FROM multi_rg ORDER BY id LIMIT 12
 11
 0
 
-# #1017: round() of an integer returns DOUBLE
-skipif db-core
 query II nosort
 SELECT id, round(blk, 2) FROM multi_rg ORDER BY id LIMIT 12
 ----
