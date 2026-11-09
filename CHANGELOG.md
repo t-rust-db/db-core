@@ -4,6 +4,16 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.237.0] - 2026-11-09
+
+### Added
+
+- S3 storage signs with an IAM role's credentials, an ECS task role (container credentials endpoint) or an EC2 instance role (IMDSv2), fetched again before they expire; `Credentials::from_chain` returns a `CredentialSource` and `S3Config` takes `impl Into<CredentialSource>` (#1042)
+
+### Fixed
+
+- `PlainHttp` applies its timeout to connecting as well, so an unreachable host fails after the timeout instead of hanging (#1042)
+
 ## [0.236.0] - 2026-11-07
 
 ### Added
