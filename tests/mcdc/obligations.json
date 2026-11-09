@@ -41242,7 +41242,7 @@
   {
     "id": "storage_ingest_store_s3_percent_decode_5eae6dca",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 109,
+    "line": 110,
     "decision": "let Some(&b) = bytes.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41252,7 +41252,7 @@
   {
     "id": "storage_ingest_store_s3_percent_decode_0b217f32",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 115,
+    "line": 116,
     "decision": "match escaped {\n            Some(v) => {\n                out.push(v);\n                i = i.saturating_add(3);\n            }\n            None => {\n                out.push(b);\n                i = i.saturating_add(1);\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41262,7 +41262,7 @@
   {
     "id": "storage_ingest_store_s3_from_uri_with_7ce3d296",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 157,
+    "line": 158,
     "decision": "bucket.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41272,7 +41272,7 @@
   {
     "id": "storage_ingest_store_s3_from_uri_with_3eab2afa",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 164,
+    "line": 165,
     "decision": "match name {\n                \"endpoint\" => endpoint = Some(value),\n                \"region\" => region = Some(value),\n                \"path_style\" => {\n                    path_style = Some(match value.as_str() {\n                        \"true\" => true,\n                        \"false\" => false,\n                        _ => return Err(bad(\"path_style is true or false\")),\n                    });\n                }\n                \"commit\" => {\n                    commit = Some(match value.as_str() {\n                        \"auto\" => CommitMode::Auto,\n                        \"single-writer\" => CommitMode::SingleWriter,\n                        \"conditional-put\" => CommitMode::ConditionalPut,\n                        _ => return Err(bad(\"commit is auto, single-writer or conditional-put\")),\n                    });\n                }\n                other => return Err(bad(&format!(\"unknown option {other:?}\"))),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41282,7 +41282,7 @@
   {
     "id": "storage_ingest_store_s3_from_uri_with_1c4c369f",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 168,
+    "line": 169,
     "decision": "match value.as_str() {\n                        \"true\" => true,\n                        \"false\" => false,\n                        _ => return Err(bad(\"path_style is true or false\")),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41292,7 +41292,7 @@
   {
     "id": "storage_ingest_store_s3_from_uri_with_a4f4faec",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 175,
+    "line": 176,
     "decision": "match value.as_str() {\n                        \"auto\" => CommitMode::Auto,\n                        \"single-writer\" => CommitMode::SingleWriter,\n                        \"conditional-put\" => CommitMode::ConditionalPut,\n                        _ => return Err(bad(\"commit is auto, single-writer or conditional-put\")),\n                    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41302,7 +41302,7 @@
   {
     "id": "storage_ingest_store_s3_from_uri_with_1bcb19b6",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 197,
+    "line": 198,
     "decision": "let Some(commit) = commit",
     "conditions": 1,
     "vectors_required": 2,
@@ -41312,7 +41312,7 @@
   {
     "id": "storage_ingest_store_s3_status_error_d81bebbd",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 225,
+    "line": 226,
     "decision": "match resp.status {\n        401 | 403 => io::ErrorKind::PermissionDenied,\n        404 => io::ErrorKind::NotFound,\n        _ => io::ErrorKind::Other,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41322,7 +41322,7 @@
   {
     "id": "storage_ingest_store_s3_full_key_f9e3201b",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 240,
+    "line": 241,
     "decision": "prefix.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41332,7 +41332,7 @@
   {
     "id": "storage_ingest_store_s3_call_678c1a4a",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 257,
+    "line": 258,
     "decision": "self.cfg.path_style",
     "conditions": 1,
     "vectors_required": 2,
@@ -41342,7 +41342,7 @@
   {
     "id": "storage_ingest_store_s3_call_0df50352",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 258,
+    "line": 259,
     "decision": "match &object {\n                Some(o) => format!(\"/{}/{o}\", self.cfg.bucket),\n                None => format!(\"/{}\", self.cfg.bucket),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41350,10 +41350,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_store_s3_call_2682291f",
+    "id": "storage_ingest_store_s3_call_743adba3",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 282,
-    "decision": "let Some(token) = &self.cfg.credentials.session_token",
+    "line": 284,
+    "decision": "let Some(token) = &credentials.session_token",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -41362,7 +41362,7 @@
   {
     "id": "storage_ingest_store_s3_call_c7bce030",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 305,
+    "line": 307,
     "decision": "cq.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41372,7 +41372,7 @@
   {
     "id": "storage_ingest_store_s3_call_retrying_06520c41",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 331,
+    "line": 333,
     "decision": "attempt > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41382,7 +41382,7 @@
   {
     "id": "storage_ingest_store_s3_call_retrying_de29308a",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 334,
+    "line": 336,
     "decision": "match self.call(method, key, query, extra, body) {\n                Ok(resp) if resp.status >= 500 => last = Some(Ok(resp)),\n                Ok(resp) => return Ok(resp),\n                Err(e) => last = Some(Err(e)),\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41392,7 +41392,7 @@
   {
     "id": "storage_ingest_store_s3_call_retrying_482b7e7e",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 335,
+    "line": 337,
     "decision": "resp.status >= 500",
     "conditions": 1,
     "vectors_required": 2,
@@ -41402,7 +41402,7 @@
   {
     "id": "storage_ingest_store_s3_expect_52094114",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 345,
+    "line": 347,
     "decision": "(200..300).contains(&resp.status) || also.contains(&resp.status)",
     "conditions": 2,
     "vectors_required": 3,
@@ -41412,7 +41412,7 @@
   {
     "id": "storage_ingest_store_s3_put_object_cae48424",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 370,
+    "line": 372,
     "decision": "condition.is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41422,7 +41422,7 @@
   {
     "id": "storage_ingest_store_s3_conditional_put_01f4473f",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 388,
+    "line": 390,
     "decision": "matches!(resp.status, 404 | 409 | 412)",
     "conditions": 1,
     "vectors_required": 2,
@@ -41432,7 +41432,7 @@
   {
     "id": "storage_ingest_store_s3_head_size_7e7d1856",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 399,
+    "line": 401,
     "decision": "resp.status == 404",
     "conditions": 1,
     "vectors_required": 2,
@@ -41442,7 +41442,7 @@
   {
     "id": "storage_ingest_store_s3_put_multipart_a13f751a",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 440,
+    "line": 442,
     "decision": "create_only",
     "conditions": 1,
     "vectors_required": 2,
@@ -41452,7 +41452,7 @@
   {
     "id": "storage_ingest_store_s3_put_multipart_b127c6f0",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 452,
+    "line": 454,
     "decision": "done.status == 412 || done.status == 409",
     "conditions": 2,
     "vectors_required": 3,
@@ -41462,7 +41462,7 @@
   {
     "id": "storage_ingest_store_s3_put_multipart_39060ca3",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 459,
+    "line": 461,
     "decision": "String::from_utf8_lossy(&done.body).contains(\"<Error>\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -41472,7 +41472,7 @@
   {
     "id": "storage_ingest_store_s3_put_multipart_3b0d5528",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 464,
+    "line": 466,
     "decision": "uploaded.is_err()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41482,7 +41482,7 @@
   {
     "id": "storage_ingest_store_s3_upload_parts_e29e1875",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 489,
+    "line": 491,
     "decision": "part.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41492,7 +41492,7 @@
   {
     "id": "storage_ingest_store_s3_get_versioned_5af5391e",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 508,
+    "line": 510,
     "decision": "match self.get_whole(key)? {\n            Some(resp) => {\n                let etag = Client::etag(&resp)?;\n                Some((resp.body, etag))\n            }\n            None => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41502,7 +41502,7 @@
   {
     "id": "storage_ingest_store_s3_get_versioned_8bce033d",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 515,
+    "line": 517,
     "decision": "key == MANIFEST_FILE",
     "conditions": 1,
     "vectors_required": 2,
@@ -41512,7 +41512,7 @@
   {
     "id": "storage_ingest_store_s3_with_transport_d63fa779",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 569,
+    "line": 571,
     "decision": "match mode {\n            CommitMode::SingleWriter => false,\n            CommitMode::Auto => probe_conditional(&client).unwrap_or(false),\n            CommitMode::ConditionalPut => {\n                if !probe_conditional(&client)? {\n                    return Err(io::Error::new(\n                        io::ErrorKind::Unsupported,\n                        \"this store ignores If-None-Match, so conditional-put commits \\\n                         cannot protect the table; use CommitMode::SingleWriter\",\n                    ));\n                }\n                true\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41522,7 +41522,7 @@
   {
     "id": "storage_ingest_store_s3_with_transport_036a90c2",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 573,
+    "line": 575,
     "decision": "!probe_conditional(&client)?",
     "conditions": 1,
     "vectors_required": 2,
@@ -41532,7 +41532,7 @@
   {
     "id": "storage_ingest_store_s3_probe_conditional_290334bb",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 602,
+    "line": 604,
     "decision": "client.put_if_absent(&key, b\"probe\")?.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41542,7 +41542,7 @@
   {
     "id": "storage_ingest_store_s3_read_at_72262def",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 628,
+    "line": 630,
     "decision": "offset >= self.size || buf.is_empty()",
     "conditions": 2,
     "vectors_required": 3,
@@ -41552,7 +41552,7 @@
   {
     "id": "storage_ingest_store_s3_read_at_17edc5ca",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 645,
+    "line": 647,
     "decision": "resp.status == 206",
     "conditions": 1,
     "vectors_required": 2,
@@ -41562,7 +41562,7 @@
   {
     "id": "storage_ingest_store_s3_read_at_db81a130",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 654,
+    "line": 656,
     "decision": "let (Some(to), Some(from)) = (buf.get_mut(..n), body.get(..n))",
     "conditions": 1,
     "vectors_required": 2,
@@ -41572,7 +41572,7 @@
   {
     "id": "storage_ingest_store_s3_put_74835f07",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 701,
+    "line": 703,
     "decision": "self.conditional && key == MANIFEST_FILE",
     "conditions": 2,
     "vectors_required": 3,
@@ -41582,7 +41582,7 @@
   {
     "id": "storage_ingest_store_s3_publish_0d11c9ac",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 710,
+    "line": 712,
     "decision": "len >= self.client.cfg.multipart_threshold",
     "conditions": 1,
     "vectors_required": 2,
@@ -41592,7 +41592,7 @@
   {
     "id": "storage_ingest_store_s3_publish_9fba92ad",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 711,
+    "line": 713,
     "decision": "self.conditional",
     "conditions": 1,
     "vectors_required": 2,
@@ -41602,7 +41602,7 @@
   {
     "id": "storage_ingest_store_s3_publish_c873cf25",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 714,
+    "line": 716,
     "decision": "match self.client.head_size(key)? {\n                    Some(existing) if existing == len => return std::fs::remove_file(local),\n                    Some(_) => {\n                        return Err(super::lease::fenced(\n                            \"another writer already published a different object under this name\",\n                        ))\n                    }\n                    None => {}\n                }",
     "conditions": 0,
     "vectors_required": 0,
@@ -41612,7 +41612,7 @@
   {
     "id": "storage_ingest_store_s3_publish_4d38865f",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 715,
+    "line": 717,
     "decision": "existing == len",
     "conditions": 1,
     "vectors_required": 2,
@@ -41622,7 +41622,7 @@
   {
     "id": "storage_ingest_store_s3_publish_9fba92ad_2",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 727,
+    "line": 729,
     "decision": "self.conditional",
     "conditions": 1,
     "vectors_required": 2,
@@ -41632,7 +41632,7 @@
   {
     "id": "storage_ingest_store_s3_lease_1d00fc65",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 742,
+    "line": 744,
     "decision": "!self.conditional",
     "conditions": 1,
     "vectors_required": 2,
@@ -41642,7 +41642,7 @@
   {
     "id": "storage_ingest_store_s3_list_47c3d388",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 754,
+    "line": 756,
     "decision": "!base.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41652,7 +41652,7 @@
   {
     "id": "storage_ingest_store_s3_list_0bd28e42",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 760,
+    "line": 762,
     "decision": "!part.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41662,7 +41662,7 @@
   {
     "id": "storage_ingest_store_s3_list_a92ec213",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 765,
+    "line": 767,
     "decision": "table.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41672,7 +41672,7 @@
   {
     "id": "storage_ingest_store_s3_list_604dd0c8",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 777,
+    "line": 779,
     "decision": "let Some(t) = &token",
     "conditions": 1,
     "vectors_required": 2,
@@ -41682,7 +41682,7 @@
   {
     "id": "storage_ingest_store_s3_list_9f2fdda2",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 790,
+    "line": 792,
     "decision": "xml::first(&body, \"IsTruncated\").as_deref() != Some(\"true\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -41692,7 +41692,7 @@
   {
     "id": "storage_ingest_store_s3_list_83886523",
     "file": "src/storage/ingest/store/s3.rs",
-    "line": 794,
+    "line": 796,
     "decision": "token.is_none()",
     "conditions": 1,
     "vectors_required": 2,
@@ -41702,7 +41702,7 @@
   {
     "id": "storage_ingest_store_s3_credentials_from_ini_1ce1a301",
     "file": "src/storage/ingest/store/s3/credentials.rs",
-    "line": 33,
+    "line": 54,
     "decision": "line.is_empty() || line.starts_with('#') || line.starts_with(';')",
     "conditions": 3,
     "vectors_required": 4,
@@ -41712,7 +41712,7 @@
   {
     "id": "storage_ingest_store_s3_credentials_from_ini_685f74eb",
     "file": "src/storage/ingest/store/s3/credentials.rs",
-    "line": 36,
+    "line": 57,
     "decision": "let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']'))",
     "conditions": 1,
     "vectors_required": 2,
@@ -41722,7 +41722,7 @@
   {
     "id": "storage_ingest_store_s3_credentials_from_ini_423a0970",
     "file": "src/storage/ingest/store/s3/credentials.rs",
-    "line": 43,
+    "line": 64,
     "decision": "!in_profile",
     "conditions": 1,
     "vectors_required": 2,
@@ -41732,12 +41732,262 @@
   {
     "id": "storage_ingest_store_s3_credentials_from_ini_b950907a",
     "file": "src/storage/ingest/store/s3/credentials.rs",
-    "line": 47,
+    "line": 68,
     "decision": "match key.trim() {\n                \"aws_access_key_id\" => access_key = Some(value),\n                \"aws_secret_access_key\" => secret_key = Some(value),\n                \"aws_session_token\" => token = Some(value),\n                _ => {}\n            }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_fmt_67454f33",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 151,
+    "decision": "match &*self.inner {\n            Source::Fixed(c) => f.debug_tuple(\"Fixed\").field(c).finish(),\n            Source::Role(role) => match &role.fetch {\n                Fetch::Container { url, .. } => f.debug_tuple(\"ContainerRole\").field(url).finish(),\n                Fetch::Imds { endpoint } => f.debug_tuple(\"InstanceRole\").field(endpoint).finish(),\n            },\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_fmt_e5e0289b",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 153,
+    "decision": "match &role.fetch {\n                Fetch::Container { url, .. } => f.debug_tuple(\"ContainerRole\").field(url).finish(),\n                Fetch::Imds { endpoint } => f.debug_tuple(\"InstanceRole\").field(endpoint).finish(),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_current_99ea75cf",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 174,
+    "decision": "match &*self.inner {\n            Source::Fixed(c) => Ok(c.clone()),\n            Source::Role(role) => role.current(unix_now()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_chain_with_01141cef",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 197,
+    "decision": "let Some(c) = Credentials::from_lookup(&get)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_chain_with_bad7703a",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 200,
+    "decision": "let Some(c) = Credentials::from_shared_file_with(&get, &read)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_chain_with_abbf5c0f",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 203,
+    "decision": "match container_url(&get) {\n            Some(url) => Fetch::Container {\n                url,\n                auth: container_auth(&get, &read),\n            },\n            None => {\n                let disabled = get(\"AWS_EC2_METADATA_DISABLED\")\n                    .is_some_and(|v| v.eq_ignore_ascii_case(\"true\"));\n                if disabled {\n                    return Err(no_credentials(\"the instance metadata service is disabled\"));\n                }\n                let endpoint = get(\"AWS_EC2_METADATA_SERVICE_ENDPOINT\")\n                    .filter(|e| !e.is_empty())\n                    .unwrap_or_else(|| IMDS_ENDPOINT.to_string());\n                Fetch::Imds {\n                    endpoint: endpoint.trim_end_matches('/').to_string(),\n                }\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_chain_with_b92d7d38",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 211,
+    "decision": "disabled",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_chain_with_04093697",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 227,
+    "decision": "let Err(e) = role.current(unix_now())",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_chain_with_e8e85bf4",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 228,
+    "decision": "match role.fetch {\n                Fetch::Imds { .. } => no_credentials(&format!(\"no instance role: {e}\")),\n                Fetch::Container { .. } => e,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_current_0f97a4e7",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 248,
+    "decision": "let Some(h) = fresh",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_current_5096240b",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 251,
+    "decision": "match self.fetch() {\n            Ok(new) => {\n                let credentials = new.credentials.clone();\n                *held = Some(new);\n                Ok(credentials)\n            }\n            Err(e) => match held.as_ref().filter(|h| now < h.expires) {\n                Some(h) => Ok(h.credentials.clone()),\n                None => Err(e),\n            },\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_current_605002b2",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 257,
+    "decision": "match held.as_ref().filter(|h| now < h.expires) {\n                Some(h) => Ok(h.credentials.clone()),\n                None => Err(e),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_fetch_881aec7d",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 265,
+    "decision": "match &self.fetch {\n            Fetch::Container { url, auth } => {\n                let headers = auth\n                    .iter()\n                    .map(|a| (\"authorization\".to_string(), a.clone()))\n                    .collect();\n                parse_role_json(&self.get(url, \"GET\", headers)?)\n            }\n            Fetch::Imds { endpoint } => {\n                let ttl = (\n                    \"x-aws-ec2-metadata-token-ttl-seconds\".to_string(),\n                    \"21600\".to_string(),\n                );\n                let token = self.get(&format!(\"{endpoint}/latest/api/token\"), \"PUT\", vec![ttl])?;\n                let with_token = || vec![(\"x-aws-ec2-metadata-token\".to_string(), token.clone())];\n                let base = format!(\"{endpoint}/latest/meta-data/iam/security-credentials/\");\n                let roles = self.get(&base, \"GET\", with_token())?;\n                let name = roles.lines().map(str::trim).find(|l| !l.is_empty());\n                let name = name.ok_or_else(|| invalid(\"the instance has no role\"))?;\n                parse_role_json(&self.get(&format!(\"{base}{name}\"), \"GET\", with_token())?)\n            }\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_get_1f886034",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 299,
+    "decision": "resp.status != 200",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_split_url_3db24ff9",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 317,
+    "decision": "path.is_empty()",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_container_url_2150465c",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 323,
+    "decision": "match relative {\n        Some(r) => Some(format!(\"{CONTAINER_HOST}{r}\")),\n        None => get(\"AWS_CONTAINER_CREDENTIALS_FULL_URI\").filter(|v| !v.is_empty()),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_container_auth_e192584e",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 334,
+    "decision": "match token {\n        Some(t) => Some(t),\n        None => get(\"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE\")\n            .and_then(|file| read(Path::new(&file)))\n            .map(|t| t.trim().to_string()),\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_parse_role_json_766b45e1",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 353,
+    "decision": "match v {\n                // The parser leaves escapes as they are; `\\/` is the one a\n                // base64 secret or token can carry.\n                JsonValue::Str(s) => Some(s.replace(\"\\\\/\", \"/\")),\n                _ => None,\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_send_ba8c815c",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 489,
+    "decision": "status == 0",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_imds_64ab0184",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 524,
+    "decision": "match (r.method.as_str(), r.target.as_str()) {\n                (\"PUT\", \"/latest/api/token\") => (200, \"T0K\".to_string()),\n                (\"GET\", \"/latest/meta-data/iam/security-credentials/\") if token => {\n                    (200, \"frank-test-instance\\n\".to_string())\n                }\n                (\"GET\", \"/latest/meta-data/iam/security-credentials/frank-test-instance\")\n                    if token =>\n                {\n                    (200, role_json(\"ASIAROLE\", \"2099-01-01T00:00:00Z\"))\n                }\n                _ => (401, String::new()),\n            }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_imds_7677702f",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 526,
+    "decision": "token",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_imds_7677702f_2",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 530,
+    "decision": "token",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_no_instance_role_is_no_credentials_401a2c72",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 604,
+    "decision": "match r.method.as_str() {\n            \"PUT\" => (200, \"T\".to_string()),\n            _ => (200, String::new()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_the_ecs_task_role_comes_from_the_container_endpoint_53344e7a",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 614,
+    "decision": "match (r.target.as_str(), header(r, \"authorization\")) {\n            (\"/v2/credentials/abc\", None) => (200, role_json(\"ASIATASK\", \"2099-01-01T00:00:00Z\")),\n            (\"/creds\", Some(\"secret-token\")) => {\n                (200, role_json(\"ASIAFULL\", \"2099-01-01T00:00:00Z\"))\n            }\n            _ => (403, String::new()),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_store_s3_credentials_a_role_is_fetched_again_before_it_expires_and_kept_if_that_fails_a4c5161f",
+    "file": "src/storage/ingest/store/s3/credentials.rs",
+    "line": 662,
+    "decision": "u.load(std::sync::atomic::Ordering::SeqCst)",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
   },
   {
     "id": "storage_ingest_store_s3_http_parse_71224a52",
@@ -41830,9 +42080,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_store_s3_http_connect_8029df95",
+    "file": "src/storage/ingest/store/s3/http.rs",
+    "line": 142,
+    "decision": "match TcpStream::connect_timeout(&addr, timeout) {\n            Ok(stream) => return Ok(stream),\n            Err(e) => last = Some(e),\n        }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": false
+  },
+  {
     "id": "storage_ingest_store_s3_http_parse_response_36fac4a0",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 199,
+    "line": 217,
     "decision": "method == \"HEAD\" || status == 204 || status == 304",
     "conditions": 3,
     "vectors_required": 4,
@@ -41842,7 +42102,7 @@
   {
     "id": "storage_ingest_store_s3_http_parse_response_458fce3c",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 201,
+    "line": 219,
     "decision": "find_header(\"transfer-encoding\").is_some_and(|v| v.eq_ignore_ascii_case(\"chunked\"))",
     "conditions": 1,
     "vectors_required": 2,
@@ -41852,7 +42112,7 @@
   {
     "id": "storage_ingest_store_s3_http_parse_response_c9674b28",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 203,
+    "line": 221,
     "decision": "let Some(len) = find_header(\"content-length\").and_then(|v| v.parse::<usize>().ok())",
     "conditions": 1,
     "vectors_required": 2,
@@ -41862,7 +42122,7 @@
   {
     "id": "storage_ingest_store_s3_http_parse_response_524e6146",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 204,
+    "line": 222,
     "decision": "rest.len() < len",
     "conditions": 1,
     "vectors_required": 2,
@@ -41872,7 +42132,7 @@
   {
     "id": "storage_ingest_store_s3_http_dechunk_35d003ad",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 227,
+    "line": 245,
     "decision": "size == 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -41882,7 +42142,7 @@
   {
     "id": "storage_ingest_store_s3_http_serve_once_d14d8ebb",
     "file": "src/storage/ingest/store/s3/http.rs",
-    "line": 264,
+    "line": 282,
     "decision": "seen.len() >= end + len",
     "conditions": 1,
     "vectors_required": 2,
@@ -42160,9 +42420,19 @@
     "wildcard_risk": false
   },
   {
+    "id": "storage_ingest_store_s3_tests_every_request_is_signed_with_the_sources_current_credentials_c2f41756",
+    "file": "src/storage/ingest/store/s3/tests.rs",
+    "line": 353,
+    "decision": "match name {\n        \"AWS_ACCESS_KEY_ID\" => Some(\"AKTEST\".to_string()),\n        \"AWS_SECRET_ACCESS_KEY\" => Some(\"sk\".to_string()),\n        \"AWS_SESSION_TOKEN\" => Some(\"session\".to_string()),\n        _ => None,\n    }",
+    "conditions": 0,
+    "vectors_required": 0,
+    "compiler_void": true,
+    "wildcard_risk": true
+  },
+  {
     "id": "storage_ingest_store_s3_tests_what_a_uri_leaves_out_comes_from_the_environment_or_is_aws_04f66e49",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 621,
+    "line": 664,
     "decision": "match name {\n        \"AWS_DEFAULT_REGION\" => Some(\"eu-west-1\".to_string()),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -42172,7 +42442,7 @@
   {
     "id": "storage_ingest_store_s3_tests_what_a_uri_leaves_out_comes_from_the_environment_or_is_aws_dccc9235",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 629,
+    "line": 672,
     "decision": "match name {\n        \"AWS_REGION\" => Some(\"garage\".to_string()),\n        \"AWS_DEFAULT_REGION\" => Some(\"eu-west-1\".to_string()),\n        \"AWS_ENDPOINT_URL\" => Some(\"http://localhost:3900\".to_string()),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,

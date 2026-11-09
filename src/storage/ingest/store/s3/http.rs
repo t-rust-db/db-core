@@ -4,7 +4,7 @@
 //! carry: the embedding application supplies one.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 /// Where requests go.
@@ -126,12 +126,30 @@ impl Transport for PlainHttp {
                 "https needs a TLS transport; PlainHttp speaks http only",
             ));
         }
-        let addr = (request.endpoint.host.as_str(), request.endpoint.port);
-        let mut stream = TcpStream::connect(addr)?;
+        let mut stream = connect(&request.endpoint, self.timeout)?;
         stream.set_read_timeout(Some(self.timeout))?;
         stream.set_write_timeout(Some(self.timeout))?;
         exchange(&mut stream, request)
     }
+}
+
+/// A TCP connection to `endpoint`, giving up on each address after
+/// `timeout`: an unreachable host (no instance metadata service on a
+/// laptop) otherwise hangs for the operating system's minute or more.
+fn connect(endpoint: &Endpoint, timeout: Duration) -> io::Result<TcpStream> {
+    let mut last = None;
+    for addr in (endpoint.host.as_str(), endpoint.port).to_socket_addrs()? {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} has no address", endpoint.host),
+        )
+    }))
 }
 
 /// Writes `request` to `stream` as HTTP/1.1 with `Connection: close`, reads

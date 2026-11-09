@@ -4422,12 +4422,22 @@ impl core::fmt::Debug for db_core::storage::ingest::store::s3::CommitMode
 pub fn db_core::storage::ingest::store::s3::CommitMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for db_core::storage::ingest::store::s3::CommitMode
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::store::s3::CommitMode
+pub struct db_core::storage::ingest::store::s3::CredentialSource
+impl db_core::storage::ingest::store::s3::CredentialSource
+pub fn db_core::storage::ingest::store::s3::CredentialSource::chain_with(impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>, impl core::ops::function::Fn(&std::path::Path) -> core::option::Option<alloc::string::String>, alloc::rcs::arc::Arc<dyn db_core::storage::ingest::store::s3::Transport>) -> core::io::error::Result<db_core::storage::ingest::store::s3::CredentialSource>
+pub fn db_core::storage::ingest::store::s3::CredentialSource::current(&self) -> core::io::error::Result<db_core::storage::ingest::store::s3::Credentials>
+impl core::clone::Clone for db_core::storage::ingest::store::s3::CredentialSource
+pub fn db_core::storage::ingest::store::s3::CredentialSource::clone(&self) -> Self
+impl core::convert::From<db_core::storage::ingest::store::s3::Credentials> for db_core::storage::ingest::store::s3::CredentialSource
+pub fn db_core::storage::ingest::store::s3::CredentialSource::from(db_core::storage::ingest::store::s3::Credentials) -> db_core::storage::ingest::store::s3::CredentialSource
+impl core::fmt::Debug for db_core::storage::ingest::store::s3::CredentialSource
+pub fn db_core::storage::ingest::store::s3::CredentialSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::store::s3::Credentials
 pub db_core::storage::ingest::store::s3::Credentials::access_key: alloc::string::String
 pub db_core::storage::ingest::store::s3::Credentials::secret_key: alloc::string::String
 pub db_core::storage::ingest::store::s3::Credentials::session_token: core::option::Option<alloc::string::String>
 impl db_core::storage::ingest::store::s3::Credentials
-pub fn db_core::storage::ingest::store::s3::Credentials::from_chain() -> core::io::error::Result<db_core::storage::ingest::store::s3::Credentials>
+pub fn db_core::storage::ingest::store::s3::Credentials::from_chain() -> core::io::error::Result<db_core::storage::ingest::store::s3::CredentialSource>
 pub fn db_core::storage::ingest::store::s3::Credentials::from_env() -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
 pub fn db_core::storage::ingest::store::s3::Credentials::from_ini(&str, &str) -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
 pub fn db_core::storage::ingest::store::s3::Credentials::from_lookup(impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
@@ -4435,6 +4445,8 @@ pub fn db_core::storage::ingest::store::s3::Credentials::from_shared_file() -> c
 pub fn db_core::storage::ingest::store::s3::Credentials::from_shared_file_with(impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>, impl core::ops::function::Fn(&std::path::Path) -> core::option::Option<alloc::string::String>) -> core::option::Option<db_core::storage::ingest::store::s3::Credentials>
 impl core::clone::Clone for db_core::storage::ingest::store::s3::Credentials
 pub fn db_core::storage::ingest::store::s3::Credentials::clone(&self) -> Self
+impl core::convert::From<db_core::storage::ingest::store::s3::Credentials> for db_core::storage::ingest::store::s3::CredentialSource
+pub fn db_core::storage::ingest::store::s3::CredentialSource::from(db_core::storage::ingest::store::s3::Credentials) -> db_core::storage::ingest::store::s3::CredentialSource
 impl core::fmt::Debug for db_core::storage::ingest::store::s3::Credentials
 pub fn db_core::storage::ingest::store::s3::Credentials::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::store::s3::Endpoint
@@ -4485,7 +4497,7 @@ pub fn db_core::storage::ingest::store::s3::PlainHttp::send(&self, &db_core::sto
 pub struct db_core::storage::ingest::store::s3::S3Config
 pub db_core::storage::ingest::store::s3::S3Config::bucket: alloc::string::String
 pub db_core::storage::ingest::store::s3::S3Config::commit: db_core::storage::ingest::store::s3::CommitMode
-pub db_core::storage::ingest::store::s3::S3Config::credentials: db_core::storage::ingest::store::s3::Credentials
+pub db_core::storage::ingest::store::s3::S3Config::credentials: db_core::storage::ingest::store::s3::CredentialSource
 pub db_core::storage::ingest::store::s3::S3Config::endpoint: alloc::string::String
 pub db_core::storage::ingest::store::s3::S3Config::lease_ttl: core::time::Duration
 pub db_core::storage::ingest::store::s3::S3Config::multipart_threshold: u64
@@ -4494,10 +4506,10 @@ pub db_core::storage::ingest::store::s3::S3Config::path_style: bool
 pub db_core::storage::ingest::store::s3::S3Config::prefix: alloc::string::String
 pub db_core::storage::ingest::store::s3::S3Config::region: alloc::string::String
 impl db_core::storage::ingest::store::s3::S3Config
-pub fn db_core::storage::ingest::store::s3::S3Config::from_uri(&str, db_core::storage::ingest::store::s3::Credentials) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Config>
-pub fn db_core::storage::ingest::store::s3::S3Config::from_uri_with(&str, impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>, db_core::storage::ingest::store::s3::Credentials) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Config>
+pub fn db_core::storage::ingest::store::s3::S3Config::from_uri(&str, impl core::convert::Into<db_core::storage::ingest::store::s3::CredentialSource>) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Config>
+pub fn db_core::storage::ingest::store::s3::S3Config::from_uri_with(&str, impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>, impl core::convert::Into<db_core::storage::ingest::store::s3::CredentialSource>) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Config>
 impl db_core::storage::ingest::store::s3::S3Config
-pub fn db_core::storage::ingest::store::s3::S3Config::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, db_core::storage::ingest::store::s3::Credentials) -> db_core::storage::ingest::store::s3::S3Config
+pub fn db_core::storage::ingest::store::s3::S3Config::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<db_core::storage::ingest::store::s3::CredentialSource>) -> db_core::storage::ingest::store::s3::S3Config
 impl core::clone::Clone for db_core::storage::ingest::store::s3::S3Config
 pub fn db_core::storage::ingest::store::s3::S3Config::clone(&self) -> Self
 impl core::fmt::Debug for db_core::storage::ingest::store::s3::S3Config

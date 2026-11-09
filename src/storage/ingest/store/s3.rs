@@ -16,6 +16,7 @@
 //! only protection, which does not reach a second machine.
 
 mod credentials;
+pub use credentials::CredentialSource;
 mod http;
 mod sha256;
 mod sigv4;
@@ -66,8 +67,8 @@ pub struct S3Config {
     pub prefix: String,
     /// `/bucket/key` addressing (Garage, MinIO) rather than `bucket.host`.
     pub path_style: bool,
-    /// What signs the requests.
-    pub credentials: Credentials,
+    /// What signs the requests: fixed credentials or a role's.
+    pub credentials: CredentialSource,
     /// How a second writer is kept out.
     pub commit: CommitMode,
     /// How long a writer lease lasts without renewal.
@@ -84,7 +85,7 @@ impl S3Config {
         endpoint: impl Into<String>,
         region: impl Into<String>,
         bucket: impl Into<String>,
-        credentials: Credentials,
+        credentials: impl Into<CredentialSource>,
     ) -> S3Config {
         S3Config {
             endpoint: endpoint.into(),
@@ -92,7 +93,7 @@ impl S3Config {
             bucket: bucket.into(),
             prefix: String::new(),
             path_style: true,
-            credentials,
+            credentials: credentials.into(),
             commit: CommitMode::Auto,
             lease_ttl: Duration::from_secs(30),
             multipart_threshold: 64 << 20,
@@ -137,7 +138,7 @@ impl S3Config {
     /// `AWS_REGION` or `AWS_DEFAULT_REGION` (else `us-east-1`). With no
     /// endpoint at all the store is AWS S3, addressed virtual-host style; a
     /// custom endpoint (Garage, MinIO) is addressed path-style.
-    pub fn from_uri(uri: &str, credentials: Credentials) -> io::Result<S3Config> {
+    pub fn from_uri(uri: &str, credentials: impl Into<CredentialSource>) -> io::Result<S3Config> {
         S3Config::from_uri_with(uri, |name| std::env::var(name).ok(), credentials)
     }
 
@@ -145,7 +146,7 @@ impl S3Config {
     pub fn from_uri_with(
         uri: &str,
         get: impl Fn(&str) -> Option<String>,
-        credentials: Credentials,
+        credentials: impl Into<CredentialSource>,
     ) -> io::Result<S3Config> {
         let bad =
             |why: &str| io::Error::new(io::ErrorKind::InvalidInput, format!("{uri:?}: {why}"));
@@ -279,7 +280,8 @@ impl Client {
             ("x-amz-content-sha256".to_string(), payload_hash.clone()),
             ("x-amz-date".to_string(), amz.clone()),
         ];
-        if let Some(token) = &self.cfg.credentials.session_token {
+        let credentials = self.cfg.credentials.current()?;
+        if let Some(token) = &credentials.session_token {
             headers.push(("x-amz-security-token".to_string(), token.clone()));
         }
         headers.extend(
@@ -288,7 +290,7 @@ impl Client {
                 .map(|(k, v)| (k.to_ascii_lowercase(), v.clone())),
         );
         let auth = authorization(
-            &self.cfg.credentials,
+            &credentials,
             &SignInput {
                 method,
                 path: &path,

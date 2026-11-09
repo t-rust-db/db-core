@@ -335,6 +335,49 @@ fn virtual_host_addressing_puts_the_bucket_in_the_host() {
     );
 }
 
+/// Passes requests on to a [`FakeS3`] and keeps their headers.
+struct Headers {
+    s3: Arc<FakeS3>,
+    seen: Mutex<Vec<Vec<(String, String)>>>,
+}
+
+impl Transport for Headers {
+    fn send(&self, request: &HttpRequest) -> io::Result<HttpResponse> {
+        self.seen.lock().unwrap().push(request.headers.clone());
+        self.s3.send(request)
+    }
+}
+
+#[test]
+fn every_request_is_signed_with_the_sources_current_credentials() {
+    let env = |name: &str| match name {
+        "AWS_ACCESS_KEY_ID" => Some("AKTEST".to_string()),
+        "AWS_SECRET_ACCESS_KEY" => Some("sk".to_string()),
+        "AWS_SESSION_TOKEN" => Some("session".to_string()),
+        _ => None,
+    };
+    let source =
+        CredentialSource::chain_with(env, |_| None, Arc::new(PlainHttp::default())).unwrap();
+    let mut cfg = config(CommitMode::SingleWriter);
+    cfg.credentials = source;
+    let t = Arc::new(Headers {
+        s3: FakeS3::new(false),
+        seen: Mutex::new(Vec::new()),
+    });
+    let s = S3Store::with_transport(cfg, Arc::clone(&t) as Arc<dyn Transport>).unwrap();
+    s.put("k", b"v").unwrap();
+    let seen = t.seen.lock().unwrap();
+    let headers = seen.last().unwrap();
+    let get = |name: &str| {
+        headers
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+    };
+    assert_eq!(get("x-amz-security-token"), Some("session"));
+    assert!(get("authorization").unwrap().contains("Credential=AKTEST/"));
+}
+
 #[test]
 fn the_probe_tells_a_store_with_conditional_puts_from_one_without() {
     let aws = FakeS3::new(true);
@@ -575,7 +618,7 @@ fn no_env(_: &str) -> Option<String> {
     None
 }
 
-fn creds() -> Credentials {
+fn creds() -> CredentialSource {
     config(CommitMode::Auto).credentials
 }
 
