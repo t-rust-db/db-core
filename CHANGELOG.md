@@ -4,6 +4,17 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.238.0] - 2026-11-10
+
+### Added
+
+- Column and stream engines: string functions (`length`, `upper`, `lower`, `substr`, `trim`, `replace`, `instr`, `concat`, `concat_ws`, `starts_with`, `contains`, `strpos`, `left`, `right`, `lpad`, `rpad`, `split_part`, ...) with DuckDB's answers (#1046)
+- Column and stream engines: `strftime(ts, fmt)`, `date_part`, `extract(part FROM ts)`, `year`..`second`, `epoch`, `epoch_ms`, `CAST(ts AS VARCHAR|DATE)` (#1046)
+
+### Changed
+
+- A TIMESTAMP output column (including `date_trunc` and `min`/`max` results) prints as ISO 8601 in the column and stream engines (#1046)
+
 ## [0.237.0] - 2026-11-09
 
 ### Added
