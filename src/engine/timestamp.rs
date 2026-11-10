@@ -11,13 +11,13 @@ use crate::parser::ast::{BinaryOp, Expr, ExprKind, FunctionArgs, Literal, Result
 
 use super::{Cell, EngineError, ErrorKind};
 
-/// The rewrite this engine applies to every parsed `SELECT` before
+/// The rewrite the column engine applies to every parsed `SELECT` before
 /// planning, for a caller that parses and plans itself: a quoted
 /// timestamp compared with a TIMESTAMP column becomes the column's integer
 /// units (#679), and `date_trunc(part, ts)` becomes the column dialect's
 /// `__date_trunc(part, ts, per_second)` (#647). `timestamps` comes from
-/// [`parquet_timestamp_columns`] or
-/// [`snapshot_timestamp_columns`](table::snapshot_timestamp_columns).
+/// [`parquet_timestamp_columns`](crate::engine::column::parquet_timestamp_columns)
+/// or [`snapshot_timestamp_columns`](crate::engine::column::table::snapshot_timestamp_columns).
 pub fn resolve_timestamps(
     select: &mut Select,
     timestamps: &[(String, i64)],
