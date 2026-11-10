@@ -51,7 +51,7 @@ use super::{
 pub const TABLE: &str = "log";
 
 /// The `log` table's TIMESTAMP columns and their units per second, for
-/// [`crate::engine::column::resolve_timestamps`] (#1046): the stream
+/// [`crate::engine::timestamp::resolve_timestamps`] (#1046): the stream
 /// engine's event and observation times are nanoseconds since the epoch.
 pub(crate) fn stream_timestamps() -> Vec<(String, i64)> {
     vec![
@@ -384,7 +384,7 @@ impl StreamEngine {
         // quoted comparisons, `date_trunc`, the date/time functions and
         // the TIMESTAMP casts.
         let mut select = select;
-        crate::engine::column::resolve_timestamps(&mut select, &stream_timestamps())?;
+        crate::engine::timestamp::resolve_timestamps(&mut select, &stream_timestamps())?;
         Ok(select)
     }
 
@@ -608,13 +608,13 @@ impl StreamEngine {
         let rows = self.merge_retained_summaries(select, requested_range, rows, &mut scope_report);
         // #1046: a timestamp-valued output column prints as ISO 8601, as
         // DuckDB prints a TIMESTAMP (the stream's `timestamp` is ns).
-        let units = crate::engine::column::output_column_units(select, &stream_timestamps());
+        let units = crate::engine::timestamp::output_column_units(select, &stream_timestamps());
         Ok(QueryResult {
             columns: planner::output_column_names(select),
             rows: rows
                 .into_iter()
                 .map(|r| {
-                    crate::engine::column::render_timestamp_cells(
+                    crate::engine::timestamp::render_timestamp_cells(
                         r.into_iter().map(Cell::from).collect(),
                         &units,
                     )

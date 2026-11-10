@@ -39,6 +39,10 @@ pub mod column;
 #[cfg(feature = "engine-stream")]
 pub mod stream;
 
+// TIMESTAMP rewrite and ISO rendering shared by both batch engines (#1046).
+#[cfg(any(feature = "engine-column", feature = "engine-stream"))]
+pub(crate) mod timestamp;
+
 /// Compiling and evaluating a bare boolean expression against one
 /// already-materialized row (#369) -- [`Engine::compile_predicate`]'s
 /// return type. Reuses `WHERE`'s own grammar and compiler; needs no
