@@ -160,6 +160,51 @@ NULL_TYPES_QUERIES=(
   "SELECT count(nullif(n, 0)), count(nullif(s, 'a')), count(nullif(s, 'zzz')) FROM __TABLE__"
 )
 
+# #1046: every string and date/time function the column dialect now takes,
+# on a fixture with NULLs, non-ASCII text and a TIMESTAMP column
+# (`strtime`), plus timestamp edges (before 1970, year 1 and 9999, NULL;
+# `ts_edges`). BOOLEAN prints as 0/1 here, so the DuckDB half casts it to
+# INT; a DOUBLE prints at the fixed 2 decimals column_oracle uses, so the
+# DuckDB half casts it to DECIMAL(18,2). DuckDB >= 2.0's CSV writer also
+# quotes non-ASCII fields, where 1.5.x (the version pinned for the uv
+# checks) does not -- run this with that 1.5.x on PATH for byte parity.
+STRTIME=tests/fixtures/parquet/strtime.parquet
+STRTIME_QUERIES=(
+  "SELECT id, s, length(s), upper(s), lower(s) FROM __TABLE__ ORDER BY id|SELECT id, s, length(s), upper(s), lower(s) FROM __TABLE__ ORDER BY id"
+  "SELECT id, substr(s, 2, 3), substr(s, -2), trim(s), replace(s, 'l', 'L'), instr(s, 'a') FROM __TABLE__ ORDER BY id|SELECT id, substr(s, 2, 3), substr(s, -2), trim(s), replace(s, 'l', 'L'), instr(s, 'a') FROM __TABLE__ ORDER BY id"
+  "SELECT id, substr(s, 0, 3), substr(s, 0), substr(s, -2, 1), substr(s, 2, 0), substr(s, 2, -1), substr(s, 10) FROM __TABLE__ ORDER BY id|SELECT id, substr(s, 0, 3), substr(s, 0), substr(s, -2, 1), substr(s, 2, 0), substr(s, 2, -1), substr(s, 10) FROM __TABLE__ ORDER BY id"
+  "SELECT id, ltrim(s), rtrim(s), trim(s, 'hoé') FROM __TABLE__ ORDER BY id|SELECT id, ltrim(s), rtrim(s), trim(s, 'hoé') FROM __TABLE__ ORDER BY id"
+  "SELECT id, concat(s, '-', id), concat_ws('/', s, 'x', NULL) FROM __TABLE__ ORDER BY id|SELECT id, concat(s, '-', id), concat_ws('/', s, 'x', NULL) FROM __TABLE__ ORDER BY id"
+  "SELECT id, starts_with(s, 'h'), contains(s, 'ï'), strpos(s, 'l'), instr(s, 'ß') FROM __TABLE__ ORDER BY id|SELECT id, starts_with(s, 'h')::INT, contains(s, 'ï')::INT, strpos(s, 'l'), instr(s, 'ß') FROM __TABLE__ ORDER BY id"
+  "SELECT id, left(s, 3), right(s, 3), left(s, -1), right(s, -1), lpad(s, 10, 'é'), rpad(s, 10, '-') FROM __TABLE__ ORDER BY id|SELECT id, left(s, 3), right(s, 3), left(s, -1), right(s, -1), lpad(s, 10, 'é'), rpad(s, 10, '-') FROM __TABLE__ ORDER BY id"
+  "SELECT id, lpad(s, 4, '*'), rpad(s, 4, '*'), left(s, 0), right(s, 100) FROM __TABLE__ ORDER BY id|SELECT id, lpad(s, 4, '*'), rpad(s, 4, '*'), left(s, 0), right(s, 100) FROM __TABLE__ ORDER BY id"
+  "SELECT id, split_part(s, ',', 1), split_part(s, ',', 2), split_part(s, ',', -1), split_part(s, ',', 0), split_part(s, 'x', 1) FROM __TABLE__ ORDER BY id|SELECT id, split_part(s, ',', 1), split_part(s, ',', 2), split_part(s, ',', -1), split_part(s, ',', 0), split_part(s, 'x', 1) FROM __TABLE__ ORDER BY id"
+  "SELECT id, upper(trim(s)), replace(upper(s), 'É', 'E') FROM __TABLE__ ORDER BY id|SELECT id, upper(trim(s)), replace(upper(s), 'É', 'E') FROM __TABLE__ ORDER BY id"
+  "SELECT count(*) FROM __TABLE__ WHERE starts_with(s, 'h') OR contains(s, 'ß')|SELECT count(*) FROM __TABLE__ WHERE starts_with(s, 'h') OR contains(s, 'ß')"
+  "SELECT upper(s) AS u, count(*) FROM __TABLE__ GROUP BY u ORDER BY u|SELECT upper(s) AS u, count(*) FROM __TABLE__ GROUP BY u ORDER BY u"
+  "SELECT id, ts, CAST(ts AS VARCHAR), CAST(ts AS DATE) FROM __TABLE__ ORDER BY id|SELECT id, ts, CAST(ts AS VARCHAR), CAST(ts AS DATE) FROM __TABLE__ ORDER BY id"
+  "SELECT id, year(ts), month(ts), day(ts), hour(ts), minute(ts), second(ts) FROM __TABLE__ ORDER BY id|SELECT id, year(ts), month(ts), day(ts), hour(ts), minute(ts), second(ts) FROM __TABLE__ ORDER BY id"
+  "SELECT id, date_part('year', ts), date_part('quarter', ts), date_part('week', ts), date_part('doy', ts), date_part('dow', ts), date_part('isodow', ts), date_part('millisecond', ts), date_part('microsecond', ts), date_part('decade', ts), date_part('century', ts), epoch_ms(ts) FROM __TABLE__ ORDER BY id|SELECT id, date_part('year', ts), date_part('quarter', ts), date_part('week', ts), date_part('doy', ts), date_part('dow', ts), date_part('isodow', ts), date_part('millisecond', ts), date_part('microsecond', ts), date_part('decade', ts), date_part('century', ts), epoch_ms(ts) FROM __TABLE__ ORDER BY id"
+  "SELECT id, extract(year FROM ts), extract(hour FROM ts) FROM __TABLE__ ORDER BY id|SELECT id, extract(year FROM ts), extract(hour FROM ts) FROM __TABLE__ ORDER BY id"
+  "SELECT id, date_part('epoch', ts), epoch_ms(ts) FROM __TABLE__ WHERE id < 4 ORDER BY id|SELECT id, date_part('epoch', ts)::DECIMAL(18,2), epoch_ms(ts) FROM __TABLE__ WHERE id < 4 ORDER BY id"
+  "SELECT id, strftime(ts, '%Y-%m-%d %H:%M:%S'), strftime(ts, '%f'), strftime(ts, '%j %a %A %b %B %p %I %u %w') FROM __TABLE__ ORDER BY id|SELECT id, strftime(ts, '%Y-%m-%d %H:%M:%S'), strftime(ts, '%f'), strftime(ts, '%j %a %A %b %B %p %I %u %w') FROM __TABLE__ ORDER BY id"
+  "SELECT id, strftime(ts, '%c'), strftime(ts, '%x %X %z') FROM __TABLE__ ORDER BY id|SELECT id, strftime(ts, '%c'), strftime(ts, '%x %X %z') FROM __TABLE__ ORDER BY id"
+  "SELECT id, date_trunc('day', ts), date_trunc('hour', ts) FROM __TABLE__ ORDER BY id|SELECT id, date_trunc('day', ts), date_trunc('hour', ts) FROM __TABLE__ ORDER BY id"
+  "SELECT date_trunc('hour', ts) AS h, count(*) FROM __TABLE__ GROUP BY h ORDER BY h LIMIT 8|SELECT date_trunc('hour', ts) AS h, count(*) FROM __TABLE__ GROUP BY h ORDER BY h LIMIT 8"
+  "SELECT id, year(date_trunc('day', ts)), strftime(date_trunc('day', ts), '%Y-%m-%d') FROM __TABLE__ ORDER BY id|SELECT id, year(date_trunc('day', ts)), strftime(date_trunc('day', ts), '%Y-%m-%d') FROM __TABLE__ ORDER BY id"
+  "SELECT count(*) FROM __TABLE__ WHERE year(ts) = 2026 AND ts > '2026-01-01'|SELECT count(*) FROM __TABLE__ WHERE year(ts) = 2026 AND ts > '2026-01-01'"
+)
+
+TS_EDGES=tests/fixtures/parquet/ts_edges.parquet
+TS_EDGES_QUERIES=(
+  "SELECT id, ts, CAST(ts AS VARCHAR), CAST(ts AS DATE) FROM __TABLE__ ORDER BY id|SELECT id, ts, CAST(ts AS VARCHAR), CAST(ts AS DATE) FROM __TABLE__ ORDER BY id"
+  "SELECT id, year(ts), month(ts), day(ts), hour(ts), minute(ts), second(ts), epoch_ms(ts) FROM __TABLE__ ORDER BY id|SELECT id, year(ts), month(ts), day(ts), hour(ts), minute(ts), second(ts), epoch_ms(ts) FROM __TABLE__ ORDER BY id"
+  "SELECT id, strftime(ts, '%Y-%m-%d %H:%M:%S.%f'), strftime(ts, '%j %A %B %I %p %u %w %V %G') FROM __TABLE__ ORDER BY id|SELECT id, strftime(ts, '%Y-%m-%d %H:%M:%S.%f'), strftime(ts, '%j %A %B %I %p %u %w %V %G') FROM __TABLE__ ORDER BY id"
+  "SELECT min(ts), max(ts) FROM __TABLE__|SELECT min(ts), max(ts) FROM __TABLE__"
+  "SELECT count(*) FROM __TABLE__ WHERE year(ts) = 2026|SELECT count(*) FROM __TABLE__ WHERE year(ts) = 2026"
+  "SELECT date_trunc('month', ts) AS m, count(*) FROM __TABLE__ GROUP BY m ORDER BY m|SELECT date_trunc('month', ts) AS m, count(*) FROM __TABLE__ GROUP BY m ORDER BY m"
+)
+
 cargo build --release --example column_oracle -q
 
 fail=0
@@ -170,7 +215,7 @@ for fixture in "${FIXTURES[@]}"; do
     db_core_q="${pair%%|*}"
     duckdb_q="${pair##*|}"
     db_sql="${db_core_q//__TABLE__/$table}"
-    duck_sql="${duckdb_q//__TABLE__/\'$fixture\'}"
+    duck_sql="${duckdb_q//__TABLE__/'$fixture'}"
 
     got="$(./target/release/examples/column_oracle "$fixture" "$db_sql")"
     want="$(duckdb -csv -noheader -c "$duck_sql")"
@@ -188,7 +233,7 @@ done
 table="$(basename "$NULL_TYPES" .parquet)"
 for q in "${NULL_TYPES_QUERIES[@]}"; do
   got="$(./target/release/examples/column_oracle "$NULL_TYPES" "${q//__TABLE__/$table}")"
-  want="$(duckdb -csv -noheader -c "${q//__TABLE__/\'$NULL_TYPES\'}")"
+  want="$(duckdb -csv -noheader -c "${q//__TABLE__/'$NULL_TYPES'}")"
   checked=$((checked + 1))
   if [[ "$got" != "$want" ]]; then
     echo "MISMATCH: $NULL_TYPES :: $q"
@@ -196,6 +241,30 @@ for q in "${NULL_TYPES_QUERIES[@]}"; do
     echo "  duckdb:  $want"
     fail=1
   fi
+done
+
+for fixture in "$STRTIME" "$TS_EDGES"; do
+  table="$(basename "$fixture" .parquet)"
+  if [[ "$fixture" == "$STRTIME" ]]; then
+    pairs=("${STRTIME_QUERIES[@]}")
+  else
+    pairs=("${TS_EDGES_QUERIES[@]}")
+  fi
+  for pair in "${pairs[@]}"; do
+    db_core_q="${pair%%|*}"
+    duckdb_q="${pair##*|}"
+    db_sql="${db_core_q//__TABLE__/$table}"
+    duck_sql="${duckdb_q//__TABLE__/'$fixture'}"
+    got="$(./target/release/examples/column_oracle "$fixture" "$db_sql")"
+    want="$(duckdb -csv -noheader -c "$duck_sql")"
+    checked=$((checked + 1))
+    if [[ "$got" != "$want" ]]; then
+      echo "MISMATCH: $fixture :: $db_sql"
+      echo "  db-core: $got"
+      echo "  duckdb:  $want"
+      fail=1
+    fi
+  done
 done
 
 if [[ "$fail" -ne 0 ]]; then

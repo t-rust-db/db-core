@@ -171,6 +171,52 @@ fails with a malformed-program error if the passes ever disagree. A single
 grouping is one row per distinct combination of the arguments within a key,
 and the final merge adds one regrouping per extra distinct.
 
+## As built (#1046): string and date/time functions, ISO TIMESTAMP
+
+The column and stream engines took the string and date/time families that
+`db_core::functions` already had, plus the names only DuckDB has. The
+parser's and the planner's allow-lists are now one table,
+`functions::is_known_column_scalar` (they used to be two copies that had
+to be kept in agreement); `functions::call_column_dialect` is the VM's
+second entry point next to `functions::call`, consulted first by
+`Opcode::Call`. The row engine never consults either, so `unit_sqlite_parity`
+is unchanged.
+
+- **String.** `length upper lower substr substring trim ltrim rtrim
+  replace instr concat concat_ws` share the sqlite3 bodies where the
+  answers agree; where DuckDB differs there is a second entry point:
+  `upper`/`lower` fold Unicode with the *simple* case mapping (ß→ẞ, İ→i,
+  not Rust's full mappings SS/i̇), and every string function refuses a
+  non-VARCHAR argument ("no function matches ..."), where sqlite3 coerces.
+  DuckDB-only names live only in the column table: `starts_with`,
+  `contains`, `strpos` (an `instr` alias), `left`, `right`, `lpad`, `rpad`
+  (3-argument; an empty fill errors), `split_part` (1-based, negative from
+  the end, empty delimiter splits per character). `length` also takes a
+  LIST (its element count), answered in the VM before the scalar value
+  conversion, which has no list.
+- **Time.** A TIMESTAMP column stays an integer of its units per second in
+  the VM; as for `__date_trunc` (#647), the engine rewrites every call that
+  needs the units — `date_part(part, ts)`, `extract(part FROM ts)` (a
+  column-dialect token the grammar lowers to `date_part`), `year`..`second`,
+  `strftime(ts, fmt)` in DuckDB's argument order, `epoch`, `epoch_ms`, and
+  `CAST(ts AS VARCHAR|TEXT|DATE)` — appending the units as a final literal
+  argument to a `__`-prefixed call in `functions::datetime`, which shares
+  the module's calendar math (`DateTime`, `civil_from_days`) but has
+  DuckDB's `strftime` specifier set (`%f` is the six-digit microsecond
+  field, `%n` the nanosecond one; `%s`/`%e`/`%J` are errors) and
+  `date_part`'s parts (including that `decade` is year/10 while
+  `century`/`millennium` are ordinal numbers — 2026 gives 202, 21 and 3).
+  `epoch` is a DOUBLE of seconds, `epoch_ms` an INTEGER truncated toward
+  zero. Only `CAST(... AS VARCHAR|TEXT|DATE)` parses; over anything but a
+  TIMESTAMP it is a compile error, as the other CAST pins in
+  `errors_1014.test` stay errors.
+- **ISO output.** A timestamp-valued output column — a TIMESTAMP column, a
+  `__date_trunc` result, or a `min`/`max` of one — renders as ISO 8601
+  (`2026-11-09 16:00:00`, fraction at the column's precision with
+  trailing zeros trimmed), so ms/µs/ns storage of one instant prints the
+  same, as DuckDB prints a TIMESTAMP. The stream engine's ns `timestamp`
+  and `observed_ts` get the same rewrites and rendering.
+
 ## Addendum: `sum(BIGINT)` widens (#1018)
 
 DuckDB's `sum(BIGINT)` is HUGEINT. The column engine has no 128-bit `Value`,

@@ -326,7 +326,13 @@ primary         ::= column-ref
                    | INTEGER
                    | FLOAT
                    | STRING
-                   | "(" expr ")" ;
+                   | "(" expr ")"
+                   | "EXTRACT" "(" identifier "FROM" expr ")" ;
+                     (* #1046: column-dialect only -- the tokenizer emits
+                        an EXTRACT token only in subscript mode, so in
+                        sqlite-rs's dialect `extract` stays an identifier
+                        and a call to it fails as an unknown function. The
+                        AST lowers it to the `date_part(part, expr)` call. *)
 
 (* ----- GROUP BY / ORDER BY / LIMIT ----- *)
 

@@ -495,7 +495,11 @@ pub(crate) fn timestamp_literals(
 ) -> Result<(), EngineError> {
     for_each_expr_mut(select, &mut |e| {
         timestamp_operator(e, timestamps)?;
-        date_trunc_units(e, timestamps)
+        date_trunc_units(e, timestamps)?;
+        // #1046: the rest of the date/time family over a TIMESTAMP, and
+        // the TIMESTAMP casts, take the column's units too.
+        time_fn_units(e, timestamps)?;
+        cast_units(e, timestamps)
     })?;
     if timestamps.is_empty() {
         return Ok(());
@@ -518,6 +522,42 @@ fn timestamp_column<'e>(expr: &'e Expr, timestamps: &[(String, i64)]) -> Option<
             .find(|(c, _)| c.eq_ignore_ascii_case(name))
             .map(|(_, per_second)| (name.as_str(), *per_second)),
         ExprKind::Paren(inner) => timestamp_column(inner, timestamps),
+        _ => None,
+    }
+}
+
+/// The units per second of `expr` when it is timestamp-valued (#1046): a
+/// TIMESTAMP column, a parenthesized one, a rewritten
+/// `__date_trunc(part, ts, units)` result (whose units are its third
+/// argument), or a `min`/`max` of one of those -- so `min(ts)` prints as
+/// ISO 8601 too, as DuckDB prints a TIMESTAMP aggregate.
+fn expr_timestamp_units(expr: &Expr, timestamps: &[(String, i64)]) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::Column { .. } | ExprKind::Paren(_) => {
+            timestamp_column(expr, timestamps).map(|(_, per_second)| per_second)
+        }
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(args),
+            ..
+        } if name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN)
+            && args.len() == 3 =>
+        {
+            match args.get(2).map(|a| &a.kind) {
+                Some(ExprKind::Literal(Literal::Integer(per_second))) => Some(*per_second),
+                _ => None,
+            }
+        }
+        ExprKind::FunctionCall {
+            name,
+            args: FunctionArgs::List(args),
+            ..
+        } if (name.eq_ignore_ascii_case("min") || name.eq_ignore_ascii_case("max"))
+            && args.len() == 1 =>
+        {
+            args.first()
+                .and_then(|a| expr_timestamp_units(a, timestamps))
+        }
         _ => None,
     }
 }
@@ -574,8 +614,7 @@ fn date_trunc_units(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(),
     }
     let per_second = args
         .get(1)
-        .and_then(|a| timestamp_column(a, timestamps))
-        .map(|(_, per_second)| per_second)
+        .and_then(|a| expr_timestamp_units(a, timestamps))
         .ok_or_else(|| {
             compile("date_trunc(part, ts) takes a TIMESTAMP column for ts".to_string())
         })?;
@@ -587,23 +626,198 @@ fn date_trunc_units(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(),
     Ok(())
 }
 
-/// The units per second of a rewritten `__date_trunc(part, ts, units)`
-/// (#647): its result is in its column's units.
-fn date_trunc_result_units(expr: &Expr) -> Option<i64> {
-    match &expr.kind {
-        ExprKind::FunctionCall {
-            name,
-            args: FunctionArgs::List(args),
-            ..
-        } if name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN) => {
-            match args.get(2).map(|a| &a.kind) {
-                Some(ExprKind::Literal(Literal::Integer(units))) => Some(*units),
-                _ => None,
+/// The date/time functions over a timestamp-valued expression, rewritten
+/// to the column dialect's `__`-prefixed calls with the units appended,
+/// exactly as `date_trunc` is (#647, #1046): `date_part(part, ts)` and
+/// `extract(part FROM ts)` (which the grammar lowers to `date_part`),
+/// `year`..`second(ts)`, `strftime(ts, fmt)` (DuckDB's argument order),
+/// `epoch(ts)`, `epoch_ms(ts)`. A call whose timestamp argument is no
+/// TIMESTAMP is an error before any row is read, as in DuckDB.
+fn time_fn_units(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(), EngineError> {
+    use crate::functions::datetime::{DATE_PART_FN, EPOCH_FN, EPOCH_MS_FN, STRFTIME_FN};
+    let span = expr.span;
+    let ExprKind::FunctionCall {
+        name,
+        args: FunctionArgs::List(args),
+        ..
+    } = &mut expr.kind
+    else {
+        return Ok(());
+    };
+    let compile = |message: String| EngineError::new(ErrorKind::Compile, message);
+    let lower = name.to_ascii_lowercase();
+
+    // `year(ts)` .. `second(ts)` lower to `date_part('year', ts, units)`.
+    let shorthand = match lower.as_str() {
+        "year" => Some("year"),
+        "month" => Some("month"),
+        "day" => Some("day"),
+        "hour" => Some("hour"),
+        "minute" => Some("minute"),
+        "second" => Some("second"),
+        _ => None,
+    };
+    if let Some(part) = shorthand {
+        if args.len() != 1 {
+            return Ok(());
+        }
+        let per_second = args
+            .first()
+            .and_then(|a| expr_timestamp_units(a, timestamps))
+            .ok_or_else(|| {
+                compile(format!(
+                    "{lower}() takes a TIMESTAMP column for its argument"
+                ))
+            })?;
+        *name = DATE_PART_FN.to_string();
+        args.insert(
+            0,
+            Expr {
+                kind: ExprKind::Literal(Literal::Str(part.to_string())),
+                span,
+            },
+        );
+        args.push(Expr {
+            kind: ExprKind::Literal(Literal::Integer(per_second)),
+            span,
+        });
+        return Ok(());
+    }
+
+    let (fn_name, ts_index, arity) = match lower.as_str() {
+        "date_part" => (DATE_PART_FN, 1, 2),
+        // DuckDB's order: the timestamp is the first argument.
+        "strftime" => (STRFTIME_FN, 0, 2),
+        "epoch" => (EPOCH_FN, 0, 1),
+        "epoch_ms" => (EPOCH_MS_FN, 0, 1),
+        _ => return Ok(()),
+    };
+    if args.len() != arity {
+        return Ok(());
+    }
+    if lower == "date_part" {
+        if let Some(ExprKind::Literal(Literal::Str(part))) = args.first().map(|a| &a.kind) {
+            if !crate::functions::datetime::known_extract_part(part) {
+                return Err(compile(crate::functions::datetime::unknown_extract_part(
+                    part,
+                )));
             }
         }
-        ExprKind::Paren(inner) => date_trunc_result_units(inner),
-        _ => None,
     }
+    let per_second = args
+        .get(ts_index)
+        .and_then(|a| expr_timestamp_units(a, timestamps))
+        .ok_or_else(|| {
+            compile(format!(
+                "{lower}() takes a TIMESTAMP column as its {}-argument",
+                if ts_index == 0 { "first" } else { "second" }
+            ))
+        })?;
+    *name = fn_name.to_string();
+    args.push(Expr {
+        kind: ExprKind::Literal(Literal::Integer(per_second)),
+        span,
+    });
+    Ok(())
+}
+
+/// `CAST(x AS VARCHAR|TEXT|DATE)` (#1046): over a timestamp-valued `x`
+/// the cast becomes the column dialect's `__timestamp_text` /
+/// `__timestamp_date` call with the units appended; over anything else it
+/// is a compile error (the parser admits only these three types, so this
+/// is the whole supported CAST surface).
+fn cast_units(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(), EngineError> {
+    use crate::functions::datetime::{TIMESTAMP_DATE_FN, TIMESTAMP_TEXT_FN};
+    let span = expr.span;
+    let ExprKind::Cast {
+        expr: inner,
+        type_name,
+    } = &mut expr.kind
+    else {
+        return Ok(());
+    };
+    let head = type_name
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let fn_name = match head.as_str() {
+        "VARCHAR" | "TEXT" => TIMESTAMP_TEXT_FN,
+        "DATE" => TIMESTAMP_DATE_FN,
+        _ => return Ok(()),
+    };
+    let per_second = expr_timestamp_units(inner, timestamps).ok_or_else(|| {
+        EngineError::new(
+            ErrorKind::Compile,
+            format!("CAST(x AS {head}) is only supported over a TIMESTAMP column; x is not one"),
+        )
+    })?;
+    let inner = std::mem::replace(
+        &mut **inner,
+        Expr {
+            kind: ExprKind::Literal(Literal::Null),
+            span,
+        },
+    );
+    *expr = Expr {
+        kind: ExprKind::FunctionCall {
+            name: fn_name.to_string(),
+            distinct: false,
+            args: FunctionArgs::List(vec![
+                inner,
+                Expr {
+                    kind: ExprKind::Literal(Literal::Integer(per_second)),
+                    span,
+                },
+            ]),
+            tail: None,
+        },
+        span,
+    };
+    Ok(())
+}
+
+/// The units per second of an output column's expression when it is
+/// timestamp-valued (#1046): a TIMESTAMP column or a `__date_trunc`
+/// result. `None` for anything else.
+pub(crate) fn output_timestamp_units(expr: &Expr, timestamps: &[(String, i64)]) -> Option<i64> {
+    expr_timestamp_units(expr, timestamps)
+}
+
+/// Per-output-column units of `select`'s select list, for rendering
+/// timestamp-valued columns as ISO 8601 (#1046).
+pub(crate) fn output_column_units(
+    select: &Select,
+    timestamps: &[(String, i64)],
+) -> Vec<Option<i64>> {
+    select
+        .columns
+        .iter()
+        .map(|col| match col {
+            crate::parser::ast::ResultColumn::Expr { expr, .. } => {
+                output_timestamp_units(expr, timestamps)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// One result row's cells, with a timestamp-valued column's integer
+/// printed as ISO 8601, as DuckDB prints a TIMESTAMP -- ms, µs and ns
+/// storage of one instant all print the same (#1046).
+pub(crate) fn render_timestamp_cells(row: Vec<Cell>, units: &[Option<i64>]) -> Vec<Cell> {
+    row.into_iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let cell = v;
+            match (units.get(i), &cell) {
+                (Some(Some(per_second)), Cell::Int(n)) => {
+                    crate::functions::datetime::iso8601(*n, *per_second).map_or(cell, Cell::Text)
+                }
+                _ => cell,
+            }
+        })
+        .collect()
 }
 
 /// Calls `f` on every expression of `select` -- select list, WHERE,
@@ -711,14 +925,9 @@ fn rewrite_timestamp_literals(
     expr: &mut Expr,
     timestamps: &[(String, i64)],
 ) -> Result<(), EngineError> {
-    let units = |e: &Expr| match &e.kind {
-        ExprKind::Column { name, .. } => timestamps
-            .iter()
-            .find(|(c, _)| c.eq_ignore_ascii_case(name))
-            .map(|(_, per_second)| *per_second),
-        // #647: `date_trunc('day', ts) = '2026-01-05'`.
-        _ => date_trunc_result_units(e),
-    };
+    // #647/#1046: a TIMESTAMP column, or a `__date_trunc` result, compared
+    // with a quoted value (`date_trunc('day', ts) = '2026-01-05'`).
+    let units = |e: &Expr| expr_timestamp_units(e, timestamps);
     match &mut expr.kind {
         ExprKind::Binary {
             op:
@@ -2126,14 +2335,22 @@ fn opcode_sections(select: &Select) -> Result<Vec<OpcodeSection>, EngineError> {
         .collect())
 }
 
-/// Query output as a [`QueryResult`] with `select`'s column names.
-fn query_result(select: &Select, output: crate::vm::batch::QueryOutput) -> QueryResult {
+/// Query output as a [`QueryResult`] with `select`'s column names. A
+/// timestamp-valued output column (a TIMESTAMP column, or a `date_trunc`
+/// result over one) prints as ISO 8601, as DuckDB prints a TIMESTAMP --
+/// ms, µs and ns storage of one instant all print the same (#1046).
+fn query_result(
+    select: &Select,
+    output: crate::vm::batch::QueryOutput,
+    timestamps: &[(String, i64)],
+) -> QueryResult {
+    let units = output_column_units(select, timestamps);
     QueryResult {
         columns: planner::output_column_names(select),
         rows: output
             .into_rows()
             .into_iter()
-            .map(|r| r.into_iter().map(Cell::from).collect())
+            .map(|r| render_timestamp_cells(r.into_iter().map(Cell::from).collect(), &units))
             .collect(),
         ..Default::default()
     }
@@ -2181,7 +2398,7 @@ impl Engine for BatchEngine {
         }
         let output = engine::run(&segments, &program)
             .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
-        Ok(query_result(&select, output))
+        Ok(query_result(&select, output, &self.timestamps))
     }
 
     fn explain_plan(&self, sql: &str) -> Result<Vec<PlanRow>, EngineError> {
@@ -2485,10 +2702,19 @@ mod tests {
             text.contains("'2026-01-01'"),
             "a non-timestamp column keeps its text: {text}"
         );
+        // #1046: `min`/`max` of a TIMESTAMP column are timestamp-valued
+        // too, so the quoted bound becomes the column's integer units, as
+        // DuckDB casts it; an aggregate over a non-timestamp column keeps
+        // its text.
         let grouped = rewrite("SELECT s FROM t GROUP BY s HAVING max(ts) > '2026-01-01'").unwrap();
         assert!(
+            format!("{}", grouped.having.unwrap()).contains("1767225600000000"),
+            "max(ts) > '2026-01-01' becomes an integer comparison"
+        );
+        let grouped = rewrite("SELECT s FROM t GROUP BY s HAVING max(s) > '2026-01-01'").unwrap();
+        assert!(
             format!("{}", grouped.having.unwrap()).contains("'2026-01-01'"),
-            "an aggregate's column is not a bare column"
+            "an aggregate's non-timestamp column keeps its text"
         );
         assert!(rewrite("SELECT count(*) FROM t WHERE ts = 'yesterday-ish'").is_err());
         assert!(timestamp_literals(
@@ -2569,7 +2795,10 @@ mod tests {
             call_name(&expr),
             crate::functions::date_trunc::DATE_TRUNC_FN
         );
-        assert_eq!(super::date_trunc_result_units(&expr), Some(1_000_000_000));
+        assert_eq!(
+            super::output_timestamp_units(&expr, &ts),
+            Some(1_000_000_000)
+        );
     }
 
     #[test]
@@ -3192,7 +3421,7 @@ mod tests {
         let run = |clause| {
             let segments = file_segments(&file, &columns, clause, &program).unwrap();
             let output = engine::run(&segments, &program).unwrap();
-            (segments.len(), query_result(&select, output).rows)
+            (segments.len(), query_result(&select, output, &[]).rows)
         };
         let (all_groups, expected) = run(None);
         let (pruned_groups, rows) = run(select.where_clause.as_ref());
@@ -3233,7 +3462,7 @@ mod tests {
         .unwrap();
         assert_eq!(segments.len(), file.num_row_groups());
         let output = engine::run(&segments, &program).unwrap();
-        assert_eq!(query_result(&select, output).rows, expected);
+        assert_eq!(query_result(&select, output, &[]).rows, expected);
 
         let err = file_segments(&file, &["p.nosuch".to_string()], None, &program)
             .err()

@@ -50,6 +50,16 @@ use super::{
 /// The one table name a stream engine serves.
 pub const TABLE: &str = "log";
 
+/// The `log` table's TIMESTAMP columns and their units per second, for
+/// [`crate::engine::column::resolve_timestamps`] (#1046): the stream
+/// engine's event and observation times are nanoseconds since the epoch.
+pub(crate) fn stream_timestamps() -> Vec<(String, i64)> {
+    vec![
+        ("timestamp".to_string(), 1_000_000_000),
+        ("observed_ts".to_string(), 1_000_000_000),
+    ]
+}
+
 /// Default ring budget: bytes of log held hot.
 pub const DEFAULT_BUDGET: usize = 64 * 1024 * 1024;
 
@@ -368,6 +378,13 @@ impl StreamEngine {
             ));
         }
         let select = planner::expand_star(&select, &self.columns()).map_err(plan_err)?;
+        // #1046: the stream engine plans with `codegen::batch`, so its
+        // `timestamp`/`observed_ts` (ns since the epoch) get the same
+        // timestamp resolution as a Parquet file's TIMESTAMP columns --
+        // quoted comparisons, `date_trunc`, the date/time functions and
+        // the TIMESTAMP casts.
+        let mut select = select;
+        crate::engine::column::resolve_timestamps(&mut select, &stream_timestamps())?;
         Ok(select)
     }
 
@@ -589,11 +606,19 @@ impl StreamEngine {
         let now = self.clock.now_ns();
         let requested_range = effective_time_range(&program.prune.scope, now, &program.prune.preds);
         let rows = self.merge_retained_summaries(select, requested_range, rows, &mut scope_report);
+        // #1046: a timestamp-valued output column prints as ISO 8601, as
+        // DuckDB prints a TIMESTAMP (the stream's `timestamp` is ns).
+        let units = crate::engine::column::output_column_units(select, &stream_timestamps());
         Ok(QueryResult {
             columns: planner::output_column_names(select),
             rows: rows
                 .into_iter()
-                .map(|r| r.into_iter().map(Cell::from).collect())
+                .map(|r| {
+                    crate::engine::column::render_timestamp_cells(
+                        r.into_iter().map(Cell::from).collect(),
+                        &units,
+                    )
+                })
                 .collect(),
             scope_report: Some(scope_report),
         })

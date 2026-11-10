@@ -242,28 +242,29 @@ fn a_timestamp_column_compares_with_a_quoted_timestamp() {
 /// TIMESTAMP_MICROS column: whole (eager load) and at the rows a filter
 /// keeps (the two-phase load's positional decode), compared with a quoted
 /// timestamp, under `date_trunc` and in aggregates. It used to fail with
-/// "unexpected end of page data" (the string reader). Expectations are
-/// DuckDB's `epoch_us` of the same values.
+/// "unexpected end of page data" (the string reader). #1046: a TIMESTAMP
+/// value prints as ISO 8601, as DuckDB prints one, so the expectations are
+/// DuckDB's rendering of the same instants.
 #[test]
 fn a_legacy_int96_timestamp_column_reads_as_a_timestamp() {
-    let ts = |us: i64| Cell::Int(us);
+    let ts = |iso: &str| Cell::Text(iso.to_string());
     assert_eq!(
         rows(INT96_EVENTS, "SELECT ts FROM int96_events ORDER BY id"),
         [
-            vec![ts(1_767_609_000_000_000)],
-            vec![ts(1_767_657_599_999_999)],
+            vec![ts("2026-01-05 10:30:00")],
+            vec![ts("2026-01-05 23:59:59.999999")],
             vec![Cell::Null],
-            vec![ts(-43_200_000_000)],
-            vec![ts(1_767_609_000_000_000)],
-            vec![ts(1_769_904_000_000_001)],
+            vec![ts("1969-12-31 12:00:00")],
+            vec![ts("2026-01-05 10:30:00")],
+            vec![ts("2026-02-01 00:00:00.000001")],
         ]
     );
     assert_eq!(
         rows(INT96_EVENTS, "SELECT ts FROM int96_events WHERE id >= 3"),
         [
-            vec![ts(-43_200_000_000)],
-            vec![ts(1_767_609_000_000_000)],
-            vec![ts(1_769_904_000_000_001)],
+            vec![ts("1969-12-31 12:00:00")],
+            vec![ts("2026-01-05 10:30:00")],
+            vec![ts("2026-02-01 00:00:00.000001")],
         ]
     );
     assert_eq!(
@@ -279,9 +280,9 @@ fn a_legacy_int96_timestamp_column_reads_as_a_timestamp() {
             "SELECT date_trunc('day', ts) AS d, count(*) FROM int96_events GROUP BY 1 ORDER BY 1"
         ),
         [
-            vec![ts(-86_400_000_000), Cell::Int(1)],
-            vec![ts(1_767_571_200_000_000), Cell::Int(3)],
-            vec![ts(1_769_904_000_000_000), Cell::Int(1)],
+            vec![ts("1969-12-31 00:00:00"), Cell::Int(1)],
+            vec![ts("2026-01-05 00:00:00"), Cell::Int(3)],
+            vec![ts("2026-02-01 00:00:00"), Cell::Int(1)],
             vec![Cell::Null, Cell::Int(1)],
         ]
     );
@@ -291,8 +292,8 @@ fn a_legacy_int96_timestamp_column_reads_as_a_timestamp() {
             "SELECT min(ts), max(ts), count(ts) FROM int96_events"
         ),
         [vec![
-            ts(-43_200_000_000),
-            ts(1_769_904_000_000_001),
+            ts("1969-12-31 12:00:00"),
+            ts("2026-02-01 00:00:00.000001"),
             Cell::Int(5)
         ]]
     );

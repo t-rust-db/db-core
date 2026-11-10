@@ -167,16 +167,39 @@ fn parse_script(text: &str) -> Result<Vec<Record>, String> {
     Ok(records)
 }
 
-/// The fixture a query reads: the word after its first `FROM`.
+/// The fixture a query reads: the word after its first top-level `FROM`
+/// -- an `extract(... FROM x)`'s `FROM` (#1046) is inside parentheses and
+/// does not name the fixture.
 fn table_of(sql: &str) -> Option<String> {
-    let words: Vec<&str> = sql.split_whitespace().collect();
-    let at = words.iter().position(|w| w.eq_ignore_ascii_case("from"))?;
-    let name = words.get(at + 1)?;
-    let name: String = name
-        .chars()
-        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .collect();
-    Some(name)
+    fn word_byte(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || b == b'_'
+    }
+    let bytes = sql.as_bytes();
+    let mut depth = 0i32;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0
+            && bytes
+                .get(i..i + 4)
+                .is_some_and(|w| w.eq_ignore_ascii_case(b"from"))
+            && bytes.get(i.wrapping_sub(1)).is_none_or(|&p| !word_byte(p))
+            && bytes.get(i + 4).is_none_or(|&n| !word_byte(n))
+        {
+            // The matched `from` is ASCII, so `i + 4` is a char boundary.
+            let rest = sql.get(i + 4..)?;
+            let name: String = rest
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            return Some(name);
+        }
+    }
+    None
 }
 
 fn fixture_dir() -> PathBuf {

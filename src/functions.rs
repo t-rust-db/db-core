@@ -45,7 +45,9 @@ use crate::value::{len_to_i64, Collation, Value};
 // [`lookup`] through its own `lookup`.
 #[cfg(feature = "vm-batch")]
 pub(crate) mod date_trunc;
-mod datetime;
+// `pub(crate)` for the column dialect's TIMESTAMP entry points and names
+// (#1046): the engine rewrites calls to them and reads the column units.
+pub(crate) mod datetime;
 pub(crate) mod fp;
 mod json;
 mod math;
@@ -1761,6 +1763,73 @@ pub(crate) fn is_numeric_scalar(name: &str, arity: usize) -> bool {
     NUMERIC_SCALARS
         .iter()
         .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
+}
+
+/// The scalar functions the column dialect's two allow-lists
+/// (`parser::column::is_known_scalar_function` and
+/// `codegen::batch::is_known_scalar_function`) accept, by name and arity,
+/// on top of [`takes_any_expression`] and the map functions (#1046). One
+/// table here so the two copies cannot drift; the `__`-prefixed names are
+/// what the engine rewrites a user-facing call to once it knows a
+/// TIMESTAMP column's units (#647, #1046) -- both spellings are listed,
+/// as for `date_trunc`/`__date_trunc`.
+#[cfg(feature = "parser-column")]
+pub(crate) fn is_known_column_scalar(name: &str, arity: usize) -> bool {
+    match name.to_ascii_lowercase().as_str() {
+        // #307/#651/#839: JSON, logfmt, regexp.
+        "json_extract" | "json_extract_string" => arity == 2,
+        "json_array_length" | "json_type" => arity == 1 || arity == 2,
+        "json_valid" => arity == 1,
+        "logfmt_extract" => arity == 2,
+        "regexp_extract" => arity == 3,
+        // #679: `x ILIKE p` parses as this call.
+        "ilike" => arity == 2,
+        // #647/#1046: date/time over a TIMESTAMP column, before and
+        // after the engine's rewrite.
+        "date_trunc" => arity == 2,
+        "__date_trunc" => arity == 3,
+        "date_part" => arity == 2,
+        "__date_part" => arity == 3,
+        "year" | "month" | "day" | "hour" | "minute" | "second" => arity == 1,
+        "epoch" => arity == 1,
+        "epoch_ms" => arity == 1,
+        "__epoch" => arity == 2,
+        "__epoch_ms" => arity == 2,
+        "strftime" => arity == 2,
+        "__strftime" => arity == 3,
+        "__timestamp_text" | "__timestamp_date" => arity == 2,
+        // #1046: the string family. `concat`/`concat_ws` take any type
+        // (DuckDB's are variadic ANY); the rest take VARCHAR.
+        "length" | "upper" | "lower" => arity == 1,
+        "substr" | "substring" => arity == 2 || arity == 3,
+        "trim" | "ltrim" | "rtrim" => arity == 1 || arity == 2,
+        "replace" => arity == 3,
+        "instr" => arity == 2,
+        "concat" => arity >= 1,
+        "concat_ws" => arity >= 2,
+        // #1046: names only DuckDB has.
+        "starts_with" | "contains" | "strpos" => arity == 2,
+        "left" | "right" => arity == 2,
+        "lpad" | "rpad" => arity == 2 || arity == 3,
+        "split_part" => arity == 3,
+        _ => takes_any_expression(name, arity),
+    }
+}
+
+/// The column dialect's entry point for `name(args)` when it differs from
+/// the shared sqlite3 one or exists only in the column dialect (ADR 0030,
+/// #1046): `Some` with that answer, `None` to fall back to [`call`]. The
+/// VM's `Opcode::Call` consults this before [`call`]; the row engine
+/// never does, so its answers are unchanged.
+pub(crate) fn call_column_dialect(
+    name: &str,
+    args: &[Value],
+) -> Option<Result<Value, FunctionError>> {
+    let lower = name.to_ascii_lowercase();
+    let f = text::lookup_column(&lower, args.len())
+        .or_else(|| datetime::lookup_column(&lower, args.len()))
+        .or_else(|| (lower == date_trunc::DATE_TRUNC_FN).then_some(date_trunc::call as ScalarFn));
+    f.map(|f| f(args))
 }
 
 /// What `parser::column` lowers `CASE` to (#725): `__select(cond, then,

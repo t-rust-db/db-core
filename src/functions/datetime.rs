@@ -70,6 +70,11 @@ struct DateTime {
     is_utc: bool,
     /// The time is known to be local time.
     is_local: bool,
+    /// Sub-second part in nanoseconds, set only by [`from_epoch`] for the
+    /// column dialect's TIMESTAMP (epoch units) functions (#1046): the
+    /// row engine never sets it, and its `strftime` conversions never read
+    /// it.
+    ns_frac: Option<i64>,
 }
 
 /// The function named `name` (lowercase) at `arity`, if this family has
@@ -1448,6 +1453,562 @@ fn timediff(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
         d1.mi,
         pad6(fmt_fixed(d1.s, 3))
     )))
+}
+
+// ---- The column dialect's TIMESTAMP functions (#1046) -------------------
+//
+// A column `TIMESTAMP` is an integer count of `per_second` units since
+// 1970-01-01 UTC (the Parquet reader hands it to the VM as a plain
+// integer; the engine rewrites every call that needs the units to one of
+// the `__`-prefixed names below with `per_second` appended, as it already
+// did for `__date_trunc` (#647)). DuckDB is the oracle for each answer
+// (ADR 0030): `strftime` takes its arguments in DuckDB's order
+// (`strftime(ts, fmt)`), `date_part`/`extract` and the `year`..`second`
+// shorthands extract a field, `epoch`/`epoch_ms` give the seconds, and a
+// TIMESTAMP casts or prints as ISO 8601.
+
+/// The internal name the engine rewrites `date_part(part, ts)` (and
+/// `extract(part FROM ts)`, which the grammar lowers to it) to, with the
+/// column's units per second as a third argument.
+pub(crate) const DATE_PART_FN: &str = "__date_part";
+/// `__strftime(ts, fmt, per_second)`: DuckDB's argument order, unlike
+/// sqlite3's `strftime(fmt, ts)`.
+pub(crate) const STRFTIME_FN: &str = "__strftime";
+/// `__epoch(ts, per_second)` and `__epoch_ms(ts, per_second)`.
+pub(crate) const EPOCH_FN: &str = "__epoch";
+pub(crate) const EPOCH_MS_FN: &str = "__epoch_ms";
+/// `__timestamp_text(ts, per_second)` / `__timestamp_date(ts,
+/// per_second)`: `CAST(ts AS VARCHAR)` / `CAST(ts AS DATE)`.
+pub(crate) const TIMESTAMP_TEXT_FN: &str = "__timestamp_text";
+pub(crate) const TIMESTAMP_DATE_FN: &str = "__timestamp_date";
+
+/// The column-dialect name `name` (lowercase) at `arity`, if this family
+/// has one. These names are not SQL-namable (they start with `__`), so the
+/// row engine's registry never sees them.
+pub(super) fn lookup_column(name: &str, arity: usize) -> Option<ScalarFn> {
+    Some(match (name, arity) {
+        (DATE_PART_FN, 3) => date_part_column,
+        (STRFTIME_FN, 3) => strftime_column,
+        (EPOCH_FN, 2) => epoch_column,
+        (EPOCH_MS_FN, 2) => epoch_ms_column,
+        (TIMESTAMP_TEXT_FN, 2) => timestamp_text_column,
+        (TIMESTAMP_DATE_FN, 2) => timestamp_date_column,
+        _ => return None,
+    })
+}
+
+/// The `part` names DuckDB's `date_part`/`extract` recognize (any case),
+/// as far as the column dialect implements them (#1046).
+pub(crate) fn known_extract_part(part: &str) -> bool {
+    matches!(
+        part.to_ascii_lowercase().as_str(),
+        "year"
+            | "years"
+            | "y"
+            | "yr"
+            | "yrs"
+            | "quarter"
+            | "quarters"
+            | "month"
+            | "months"
+            | "mon"
+            | "mons"
+            | "week"
+            | "weeks"
+            | "w"
+            | "weekofyear"
+            | "yearweek"
+            | "isoyear"
+            | "day"
+            | "days"
+            | "d"
+            | "dayofmonth"
+            | "dayofyear"
+            | "doy"
+            | "dayofweek"
+            | "dow"
+            | "isodow"
+            | "hour"
+            | "hours"
+            | "h"
+            | "hr"
+            | "hrs"
+            | "minute"
+            | "minutes"
+            | "min"
+            | "mins"
+            | "m"
+            | "second"
+            | "seconds"
+            | "sec"
+            | "secs"
+            | "s"
+            | "millisecond"
+            | "milliseconds"
+            | "ms"
+            | "msec"
+            | "msecs"
+            | "msecond"
+            | "mseconds"
+            | "microsecond"
+            | "microseconds"
+            | "us"
+            | "usec"
+            | "usecs"
+            | "usecond"
+            | "useconds"
+            | "nanosecond"
+            | "nanoseconds"
+            | "ns"
+            | "epoch"
+            | "decade"
+            | "decades"
+            | "dec"
+            | "decs"
+            | "century"
+            | "centuries"
+            | "c"
+            | "cent"
+            | "millennium"
+            | "millennia"
+            | "mil"
+            | "mils"
+    )
+}
+
+/// DuckDB's error for an `extract` part it does not know.
+pub(crate) fn unknown_extract_part(part: &str) -> String {
+    format!("extract specifier \"{part}\" not recognized")
+}
+
+/// A [`DateTime`] from `value` (`per_second` units since 1970-01-01 UTC),
+/// with the sub-second part kept exactly in [`DateTime::ns_frac`]: the
+/// calendar fields come from `date_trunc`'s exact integer civil-date
+/// conversion, not from julian-day f64 math, so ns timestamps stay exact.
+/// `None` past `i64` or for a non-positive `per_second`.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "the sub-second part is < 1 s; f64 carries it exactly enough for %f/%S"
+)]
+fn from_epoch(value: i64, per_second: i64) -> Option<DateTime> {
+    if per_second <= 0 {
+        return None;
+    }
+    let seconds = value.checked_div_euclid(per_second)?;
+    let frac = value.checked_rem_euclid(per_second)?;
+    let ns_frac = i64::try_from(
+        i128::from(frac)
+            .checked_mul(1_000_000_000)?
+            .checked_div(i128::from(per_second))?,
+    )
+    .ok()?;
+    let days = seconds.checked_div_euclid(86_400)?;
+    let sod = seconds.checked_rem_euclid(86_400)?;
+    let (y, mo, d) = super::date_trunc::civil_from_days(days)?;
+    let ijd = UNIX_EPOCH_JD_MS.checked_add(seconds.checked_mul(1_000)?)?;
+    Some(DateTime {
+        ijd,
+        y,
+        mo: i64::from(mo),
+        d: i64::from(d),
+        h: sod.checked_div(3_600).unwrap_or_default(),
+        mi: sod
+            .checked_div(60)
+            .and_then(|m| m.checked_rem(60))
+            .unwrap_or_default(),
+        s: sod.checked_rem(60).unwrap_or_default() as f64 + ns_frac as f64 / 1e9,
+        valid_jd: true,
+        valid_ymd: true,
+        valid_hms: true,
+        ns_frac: Some(ns_frac),
+        ..Default::default()
+    })
+}
+
+/// The ordinal number of the `size`-wide unit `y` falls in, C-style:
+/// `y / size` plus one when there is a remainder (2026's century is 21,
+/// 2000's is 20), as DuckDB's `date_part('century'/'millennium')` computes
+/// it. `None` only on a zero `size` (never called with one).
+fn ordinal(y: i64, size: i64) -> Option<i64> {
+    let q = y.checked_div(size)?;
+    if y.checked_rem(size)? != 0 {
+        q.checked_add(1)
+    } else {
+        Some(q)
+    }
+}
+
+/// `per_second` out of `args`' last slot, or the units are missing.
+fn units_arg(args: &[Value]) -> Result<i64, FunctionError> {
+    match args.last() {
+        Some(Value::Integer(p)) if *p > 0 => Ok(*p),
+        _ => Err(FunctionError::Sql(
+            "the column's units per second are missing".into(),
+        )),
+    }
+}
+
+/// `__date_part(part, ts, per_second)`: DuckDB's `date_part`/`extract`
+/// over a TIMESTAMP, as an INTEGER -- except `epoch`, a DOUBLE of seconds
+/// with the fraction (#1046). NULL `part` or `ts` is NULL; an unknown
+/// part is an error, as in DuckDB.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "epoch as a DOUBLE is DuckDB's own answer, f64-rounded like DuckDB's"
+)]
+fn date_part_column(args: &[Value]) -> Result<Value, FunctionError> {
+    let sql = |m: String| FunctionError::Sql(m);
+    let [part, value, ..] = args else {
+        return Err(sql(format!(
+            "{DATE_PART_FN} takes 3 arguments, got {}",
+            args.len()
+        )));
+    };
+    let (Value::Text(part), Value::Integer(value)) = (part, value) else {
+        return match (part, value) {
+            (Value::Null, _) | (_, Value::Null) => Ok(Value::Null),
+            _ => Err(sql(format!(
+                "{DATE_PART_FN} takes a part name and a TIMESTAMP"
+            ))),
+        };
+    };
+    let per_second = units_arg(args)?;
+    if !known_extract_part(part) {
+        return Err(sql(unknown_extract_part(part)));
+    }
+    let x = from_epoch(*value, per_second)
+        .ok_or_else(|| sql("date_part: timestamp out of range".to_string()))?;
+    let ns = x.ns_frac.unwrap_or(0);
+    let sec = f2i(x.s);
+    let part = part.to_ascii_lowercase();
+    let out = match part.as_str() {
+        "year" | "years" | "y" | "yr" | "yrs" => Value::Integer(x.y),
+        "quarter" | "quarters" => Value::Integer(
+            x.mo.checked_sub(1)
+                .and_then(|m| m.checked_div(3))
+                .and_then(|q| q.checked_add(1))
+                .unwrap_or_default(),
+        ),
+        "month" | "months" | "mon" | "mons" => Value::Integer(x.mo),
+        "week" | "weeks" | "w" | "weekofyear" | "yearweek" => {
+            Value::Integer((W(days_after_jan01(&iso_thursday(&x)) / 7) + W(1)).0)
+        }
+        "isoyear" => Value::Integer(iso_thursday(&x).y),
+        "day" | "days" | "d" | "dayofmonth" => Value::Integer(x.d),
+        "dayofyear" | "doy" => {
+            Value::Integer(days_after_jan01(&x).checked_add(1).unwrap_or_default())
+        }
+        "dayofweek" | "dow" => Value::Integer(days_after_sunday(&x)),
+        "isodow" => {
+            let w = days_after_sunday(&x);
+            Value::Integer(if w == 0 { 7 } else { w })
+        }
+        "hour" | "hours" | "h" | "hr" | "hrs" => Value::Integer(x.h),
+        "minute" | "minutes" | "min" | "mins" | "m" => Value::Integer(x.mi),
+        "second" | "seconds" | "sec" | "secs" | "s" => Value::Integer(sec),
+        "millisecond" | "milliseconds" | "ms" | "msec" | "msecs" | "msecond" | "mseconds" => {
+            Value::Integer(
+                sec.checked_mul(1_000)
+                    .and_then(|s| s.checked_add(ns.checked_div(1_000_000).unwrap_or_default()))
+                    .unwrap_or_default(),
+            )
+        }
+        "microsecond" | "microseconds" | "us" | "usec" | "usecs" | "usecond" | "useconds" => {
+            Value::Integer(
+                sec.checked_mul(1_000_000)
+                    .and_then(|s| s.checked_add(ns.checked_div(1_000).unwrap_or_default()))
+                    .unwrap_or_default(),
+            )
+        }
+        // DuckDB recognizes `nanosecond` only for a TIMESTAMP_NS.
+        "nanosecond" | "nanoseconds" | "ns" if per_second == 1_000_000_000 => Value::Integer(ns),
+        "epoch" => Value::Real(*value as f64 / per_second as f64),
+        // DuckDB's date_part gives the unit's number, not the start year
+        // date_trunc gives (2020): decade is year/10 truncated toward zero
+        // (2026 -> 202), century and millennium the ordinal number
+        // (2026 -> 21 and 3, 2000 -> 20 and 2) -- all as DuckDB 1.5.6
+        // answers them.
+        "decade" | "decades" | "dec" | "decs" => {
+            Value::Integer(x.y.checked_div(10).unwrap_or_default())
+        }
+        "century" | "centuries" | "c" | "cent" => {
+            Value::Integer(ordinal(x.y, 100).unwrap_or_default())
+        }
+        "millennium" | "millennia" | "mil" | "mils" => {
+            Value::Integer(ordinal(x.y, 1_000).unwrap_or_default())
+        }
+        _ => return Err(sql(unknown_extract_part(part.as_str()))),
+    };
+    Ok(out)
+}
+
+/// The English weekday name of `days_after_sunday`'s index (0 = Sunday),
+/// abbreviated or full, as DuckDB's `%a`/`%A` print it.
+fn weekday(w: i64, full: bool) -> String {
+    const SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const FULL: [&str; 7] = [
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+    ];
+    let at = usize::try_from(w).unwrap_or(0) % 7;
+    let name = if full { FULL } else { SHORT };
+    name.get(at).copied().unwrap_or_default().to_string()
+}
+
+/// The English month name of `mo` (1..=12), abbreviated or full, as
+/// DuckDB's `%b`/`%B` print it.
+fn month_name(mo: i64, full: bool) -> String {
+    const SHORT: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    const FULL: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+    let at = usize::try_from(mo.saturating_sub(1)).unwrap_or(0) % 12;
+    let name = if full { FULL } else { SHORT };
+    name.get(at).copied().unwrap_or_default().to_string()
+}
+
+/// One `strftime` conversion `cf` of `x` as DuckDB 1.5 answers it (#1046):
+/// DuckDB's specifier set, not sqlite3's -- `%e`/`%k`/`%l`/`%s`/`%J` and
+/// friends are errors there, `%f` is the six-digit microsecond field, `%n`
+/// the nine-digit nanosecond one, `%z` `+00` for a UTC timestamp. `Err` for
+/// a specifier DuckDB does not recognize.
+fn strftime_conv_column(cf: char, x: &DateTime) -> Result<String, String> {
+    let twelve = |h: i64| match h {
+        0 => 12,
+        h if h > 12 => (W(h) - W(12)).0,
+        h => h,
+    };
+    let ns = x.ns_frac.unwrap_or(0);
+    let unrecognized = || format!("Unrecognized format for strftime/strptime: %{cf}");
+    Ok(match cf {
+        'd' => format!("{:02}", x.d),
+        'm' => format!("{:02}", x.mo),
+        'Y' => format!("{:04}", x.y),
+        'y' => format!("{:02}", x.y.rem_euclid(100)),
+        'H' => format!("{:02}", x.h),
+        'M' => format!("{:02}", x.mi),
+        'S' => format!("{:02}", f2i(x.s)),
+        // The six-digit microsecond field (DuckDB's %f), not sqlite3's
+        // `SS.SSS`.
+        'f' => format!("{:06}", ns.checked_div(1_000).unwrap_or_default()),
+        // The nine-digit nanosecond field.
+        'n' => format!("{:09}", ns),
+        'j' => format!(
+            "{:03}",
+            days_after_jan01(x).checked_add(1).unwrap_or_default()
+        ),
+        'a' => weekday(days_after_sunday(x), false),
+        'A' => weekday(days_after_sunday(x), true),
+        'b' | 'h' => month_name(x.mo, false),
+        'B' => month_name(x.mo, true),
+        'p' => (if x.h >= 12 { "PM" } else { "AM" }).to_string(),
+        'I' => format!("{:02}", twelve(x.h)),
+        'u' => {
+            let w = days_after_sunday(x);
+            (if w == 0 { 7 } else { w }).to_string()
+        }
+        'w' => days_after_sunday(x).to_string(),
+        'U' => format!(
+            "{:02}",
+            (W(days_after_jan01(x)) - W(days_after_sunday(x)) + W(7)).0 / 7
+        ),
+        'W' => format!(
+            "{:02}",
+            (W(days_after_jan01(x)) - W(days_after_monday(x)) + W(7)).0 / 7
+        ),
+        'V' => format!(
+            "{:02}",
+            (W(days_after_jan01(&iso_thursday(x)) / 7) + W(1)).0
+        ),
+        'G' => format!("{:04}", iso_thursday(x).y),
+        'g' => format!("{:02}", iso_thursday(x).y.rem_euclid(100)),
+        'c' => format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            x.y,
+            x.mo,
+            x.d,
+            x.h,
+            x.mi,
+            f2i(x.s)
+        ),
+        'x' => format!("{:04}-{:02}-{:02}", x.y, x.mo, x.d),
+        'X' | 'T' => format!("{:02}:{:02}:{:02}", x.h, x.mi, f2i(x.s)),
+        // A UTC timestamp: the offset is always +00, the zone name empty.
+        'z' => "+00".to_string(),
+        'Z' => String::new(),
+        '%' => "%".to_string(),
+        _ => return Err(unrecognized()),
+    })
+}
+
+/// `__strftime(ts, fmt, per_second)`: DuckDB's `strftime(ts, fmt)` -- the
+/// timestamp first -- over a TIMESTAMP, sharing this module's calendar
+/// math but with DuckDB's specifier set (#1046). NULL `ts` or `fmt` is
+/// NULL; a specifier DuckDB does not recognize is an error.
+fn strftime_column(args: &[Value]) -> Result<Value, FunctionError> {
+    let [value, fmt, ..] = args else {
+        return Err(FunctionError::Sql(format!(
+            "{STRFTIME_FN} takes 3 arguments, got {}",
+            args.len()
+        )));
+    };
+    let (value, fmt) = match (value, fmt) {
+        (Value::Null, _) | (_, Value::Null) => return Ok(Value::Null),
+        (Value::Integer(v), Value::Text(f)) => (*v, f.clone()),
+        _ => {
+            return Err(FunctionError::Sql(format!(
+                "{STRFTIME_FN} takes a TIMESTAMP and a format string"
+            )))
+        }
+    };
+    let per_second = units_arg(args)?;
+    let x = from_epoch(value, per_second)
+        .ok_or_else(|| FunctionError::Sql("strftime: timestamp out of range".to_string()))?;
+    let mut out = String::with_capacity(fmt.len());
+    let mut chars = fmt.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        let Some(cf) = chars.next() else {
+            return Err(FunctionError::Sql(
+                "Failed to parse format specifier: Unrecognized format for strftime/strptime: %"
+                    .to_string(),
+            ));
+        };
+        let s = strftime_conv_column(cf, &x).map_err(|why| {
+            FunctionError::Sql(format!("Failed to parse format specifier: {why}"))
+        })?;
+        out.push_str(&s);
+    }
+    Ok(Value::Text(out.into()))
+}
+
+/// `__epoch(ts, per_second)`: DuckDB's `epoch(ts)`, seconds since
+/// 1970-01-01 UTC as a DOUBLE with the fraction.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "epoch as a DOUBLE is DuckDB's own answer, f64-rounded like DuckDB's"
+)]
+fn epoch_column(args: &[Value]) -> Result<Value, FunctionError> {
+    match args.first() {
+        Some(Value::Null) | None => Ok(Value::Null),
+        Some(Value::Integer(v)) => {
+            let per_second = units_arg(args)?;
+            Ok(Value::Real(*v as f64 / per_second as f64))
+        }
+        _ => Err(FunctionError::Sql(format!("{EPOCH_FN} takes a TIMESTAMP"))),
+    }
+}
+
+/// `__epoch_ms(ts, per_second)`: DuckDB 1.5's `epoch_ms(ts)`, milliseconds
+/// since the epoch as an INTEGER, truncated toward zero (a negative
+/// nanosecond timestamp gives 0, as DuckDB does; DuckDB 2.0 rounds half
+/// away from zero instead).
+fn epoch_ms_column(args: &[Value]) -> Result<Value, FunctionError> {
+    match args.first() {
+        Some(Value::Null) | None => Ok(Value::Null),
+        Some(Value::Integer(v)) => {
+            let per_second = units_arg(args)?;
+            let per_ms = per_second.checked_div(1_000).unwrap_or(1);
+            if per_ms < 1 {
+                return Err(FunctionError::Sql(format!(
+                    "{EPOCH_MS_FN}: the column's units are finer than a millisecond"
+                )));
+            }
+            Ok(Value::Integer(v.checked_div(per_ms).ok_or_else(|| {
+                FunctionError::Sql(format!("{EPOCH_MS_FN}: out of range"))
+            })?))
+        }
+        _ => Err(FunctionError::Sql(format!(
+            "{EPOCH_MS_FN} takes a TIMESTAMP"
+        ))),
+    }
+}
+
+/// `value` (`per_second` units since 1970-01-01 UTC) as DuckDB prints a
+/// TIMESTAMP: ISO 8601, `YYYY-MM-DD HH:MM:SS` plus the fractional second
+/// at the column's precision with trailing zeros trimmed -- so ms, µs and
+/// ns storage of one instant all print the same (#1046). `None` past the
+/// civil range.
+pub(crate) fn iso8601(value: i64, per_second: i64) -> Option<String> {
+    if per_second <= 0 {
+        return None;
+    }
+    let x = from_epoch(value, per_second)?;
+    let mut out = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        x.y,
+        x.mo,
+        x.d,
+        x.h,
+        x.mi,
+        f2i(x.s)
+    );
+    let frac = value.checked_rem_euclid(per_second)?;
+    if frac != 0 {
+        let digits = match per_second {
+            1_000 => 3,
+            1_000_000 => 6,
+            _ => 9,
+        };
+        let frac = format!("{frac:0>digits$}");
+        out.push('.');
+        out.push_str(frac.trim_end_matches('0'));
+    }
+    Some(out)
+}
+
+/// `__timestamp_text(ts, per_second)`: `CAST(ts AS VARCHAR)` in the column
+/// dialect -- the ISO 8601 text above.
+fn timestamp_text_column(args: &[Value]) -> Result<Value, FunctionError> {
+    match args.first() {
+        Some(Value::Null) | None => Ok(Value::Null),
+        Some(Value::Integer(v)) => {
+            let per_second = units_arg(args)?;
+            iso8601(*v, per_second)
+                .map(|s| Value::Text(s.into()))
+                .ok_or_else(|| FunctionError::Sql("cast: timestamp out of range".to_string()))
+        }
+        _ => Err(FunctionError::Sql(format!(
+            "{TIMESTAMP_TEXT_FN} takes a TIMESTAMP"
+        ))),
+    }
+}
+
+/// `__timestamp_date(ts, per_second)`: `CAST(ts AS DATE)` -- `YYYY-MM-DD`.
+fn timestamp_date_column(args: &[Value]) -> Result<Value, FunctionError> {
+    match args.first() {
+        Some(Value::Null) | None => Ok(Value::Null),
+        Some(Value::Integer(v)) => {
+            let per_second = units_arg(args)?;
+            from_epoch(*v, per_second)
+                .map(|x| Value::Text(format!("{:04}-{:02}-{:02}", x.y, x.mo, x.d).into()))
+                .ok_or_else(|| FunctionError::Sql("cast: timestamp out of range".to_string()))
+        }
+        _ => Err(FunctionError::Sql(format!(
+            "{TIMESTAMP_DATE_FN} takes a TIMESTAMP"
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -2952,6 +3513,182 @@ mod tests {
         assert_eq!(
             call("timediff", &[t("2024-02-15"), t("2024-03-10")]),
             t("-0000-00-24 00:00:00.000")
+        );
+    }
+
+    // ---- the column dialect's TIMESTAMP entry points (#1046): DuckDB
+    // ---- 1.5.6's answers, probed one by one. A TIMESTAMP here is
+    // ---- microseconds since the epoch (per_second = 1_000_000).
+
+    /// `__name(args, per_second)` through the column-dialect dispatch.
+    fn cc(name: &str, args: &[Value]) -> Value {
+        super::super::call_column_dialect(name, args)
+            .unwrap_or_else(|| panic!("{name} has no column entry point"))
+            .unwrap()
+    }
+
+    /// 2026-11-09 16:30:45.123456 UTC in microseconds.
+    const T_US: i64 = 1_794_241_845_123_456;
+    const PS_US: i64 = 1_000_000;
+
+    fn ts_args(name: &str, value: i64, extra: &[Value]) -> Vec<Value> {
+        let mut v = vec![Value::Integer(value)];
+        v.extend_from_slice(extra);
+        v.push(Value::Integer(PS_US));
+        let _ = name;
+        v
+    }
+
+    #[test]
+    fn column_date_part_matches_duckdb() {
+        let p = |part: &str, v: i64| {
+            cc(
+                "__date_part",
+                &[t(part), Value::Integer(v), Value::Integer(PS_US)],
+            )
+        };
+        assert_eq!(p("year", T_US), Value::Integer(2026));
+        assert_eq!(p("month", T_US), Value::Integer(11));
+        assert_eq!(p("day", T_US), Value::Integer(9));
+        assert_eq!(p("hour", T_US), Value::Integer(16));
+        assert_eq!(p("minute", T_US), Value::Integer(30));
+        assert_eq!(p("second", T_US), Value::Integer(45));
+        assert_eq!(p("quarter", T_US), Value::Integer(4));
+        assert_eq!(p("week", T_US), Value::Integer(46));
+        assert_eq!(p("doy", T_US), Value::Integer(313));
+        assert_eq!(p("dow", T_US), Value::Integer(1));
+        assert_eq!(p("isodow", T_US), Value::Integer(1));
+        assert_eq!(p("millisecond", T_US), Value::Integer(45_123));
+        assert_eq!(p("microsecond", T_US), Value::Integer(45_123_456));
+        assert_eq!(p("decade", T_US), Value::Integer(202));
+        assert_eq!(p("century", T_US), Value::Integer(21));
+        assert_eq!(p("millennium", T_US), Value::Integer(3));
+        assert_eq!(p("epoch", T_US), Value::Real(1_794_241_845.123456));
+        // Before 1970: the civil fields, the fraction kept.
+        let neg = -1; // 1969-12-31 23:59:59.999999
+        assert_eq!(p("second", neg), Value::Integer(59));
+        assert_eq!(p("millisecond", neg), Value::Integer(59_999));
+        assert_eq!(p("year", neg), Value::Integer(1969));
+        assert_eq!(
+            cc(
+                "__date_part",
+                &[Value::Null, Value::Integer(T_US), Value::Integer(PS_US)]
+            ),
+            Value::Null
+        );
+        assert!(super::super::call_column_dialect(
+            "__date_part",
+            &[t("fortnight"), Value::Integer(T_US), Value::Integer(PS_US)]
+        )
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("not recognized"));
+        // `nanosecond` only on a nanosecond column.
+        let ns = T_US * 1000 + 789;
+        assert_eq!(
+            cc(
+                "__date_part",
+                &[
+                    t("nanosecond"),
+                    Value::Integer(ns),
+                    Value::Integer(1_000_000_000)
+                ]
+            ),
+            Value::Integer(123_456_789)
+        );
+        assert!(super::super::call_column_dialect(
+            "__date_part",
+            &[t("nanosecond"), Value::Integer(T_US), Value::Integer(PS_US)]
+        )
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("not recognized"));
+    }
+
+    #[test]
+    fn column_strftime_matches_duckdb() {
+        let f = |fmt: &str| {
+            cc(
+                "__strftime",
+                &[Value::Integer(T_US), t(fmt), Value::Integer(PS_US)],
+            )
+        };
+        assert_eq!(f("%Y-%m-%d %H:%M:%S"), t("2026-11-09 16:30:45"));
+        assert_eq!(f("%f"), t("123456"));
+        assert_eq!(f("%j"), t("313"));
+        assert_eq!(f("%a %A %b %B"), t("Mon Monday Nov November"));
+        assert_eq!(f("%p %I %u %w"), t("PM 04 1 1"));
+        assert_eq!(f("%V %G"), t("46 2026"));
+        assert_eq!(f("%c"), t("2026-11-09 16:30:45"));
+        assert_eq!(f("%x %X"), t("2026-11-09 16:30:45"));
+        assert_eq!(f("%z"), t("+00"));
+        assert_eq!(f("%%"), t("%"));
+        // %s is not a DuckDB strftime specifier.
+        assert!(super::super::call_column_dialect(
+            "__strftime",
+            &[Value::Integer(T_US), t("%s"), Value::Integer(PS_US)]
+        )
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("Unrecognized format"));
+        assert_eq!(
+            cc("__strftime", &[Value::Null, t("%Y"), Value::Integer(PS_US)]),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn column_epoch_and_iso_match_duckdb() {
+        assert_eq!(
+            cc("__epoch", &ts_args("__epoch", T_US, &[])),
+            Value::Real(1_794_241_845.123456)
+        );
+        assert_eq!(
+            cc("__epoch_ms", &ts_args("__epoch_ms", T_US, &[])),
+            Value::Integer(1_794_241_845_123)
+        );
+        // Truncated toward zero past the millisecond, as DuckDB 1.5.6
+        // (the pinned oracle) does: -1 ns gives 0, -500 µs gives 0.
+        let ns = -1i64;
+        assert_eq!(
+            cc(
+                "__epoch_ms",
+                &[Value::Integer(ns), Value::Integer(1_000_000_000)]
+            ),
+            Value::Integer(0)
+        );
+        assert_eq!(
+            cc("__epoch_ms", &[Value::Integer(-500), Value::Integer(PS_US)]),
+            Value::Integer(0)
+        );
+        // ISO 8601: ms, µs and ns storage of one instant print the same.
+        assert_eq!(
+            iso8601(T_US, PS_US).as_deref(),
+            Some("2026-11-09 16:30:45.123456")
+        );
+        assert_eq!(
+            iso8601(T_US * 1000 + 789, 1_000_000_000).as_deref(),
+            Some("2026-11-09 16:30:45.123456789")
+        );
+        assert_eq!(
+            iso8601(T_US / 1000, 1_000).as_deref(),
+            Some("2026-11-09 16:30:45.123")
+        );
+        assert_eq!(iso8601(0, PS_US).as_deref(), Some("1970-01-01 00:00:00"));
+        assert_eq!(
+            iso8601(-1, PS_US).as_deref(),
+            Some("1969-12-31 23:59:59.999999")
+        );
+        assert_eq!(
+            cc("__timestamp_text", &ts_args("__timestamp_text", T_US, &[])),
+            t("2026-11-09 16:30:45.123456")
+        );
+        assert_eq!(
+            cc("__timestamp_date", &ts_args("__timestamp_date", T_US, &[])),
+            t("2026-11-09")
         );
     }
 }

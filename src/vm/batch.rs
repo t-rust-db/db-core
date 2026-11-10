@@ -6737,9 +6737,10 @@ impl Vm {
                     // sqlite3 ones.
                     let late_json_extract = name.eq_ignore_ascii_case("json_extract");
                     let late_json_string = name.eq_ignore_ascii_case("json_extract_string");
-                    // #647: the column dialect's date_trunc, not a row function.
-                    let date_trunc =
-                        name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN);
+                    // #1046: `length` of a LIST column is its element count
+                    // (DuckDB's `length(list)`); the scalar value model has
+                    // no list, so it is answered here, before conversion.
+                    let length_list = name.eq_ignore_ascii_case("length") && arg_regs.len() == 1;
                     for row in 0..num_rows {
                         // #1016/#1017: `abs`/`round` keep a decimal or
                         // integer argument's type; the row functions
@@ -6748,6 +6749,14 @@ impl Vm {
                             result.push(exact);
                             continue;
                         }
+                        if length_list {
+                            if let Value::List(items) = &arg_regs[0][row] {
+                                result.push(Value::Int(
+                                    i64::try_from(items.len()).unwrap_or(i64::MAX),
+                                ));
+                                continue;
+                            }
+                        }
                         for (slot, reg) in call_args.iter_mut().zip(&arg_regs) {
                             *slot = to_scalar_value(&reg[row]);
                         }
@@ -6755,8 +6764,13 @@ impl Vm {
                             crate::functions::late_json_extract(&call_args)
                         } else if late_json_string {
                             crate::functions::late_json_extract_string(&call_args)
-                        } else if date_trunc {
-                            crate::functions::date_trunc::call(&call_args)
+                        } else if let Some(column_answer) =
+                            crate::functions::call_column_dialect(name, &call_args)
+                        {
+                            // #647/#1046: the column dialect's own entry
+                            // points (date_trunc, the string and date/time
+                            // functions), not the row engine's sqlite3 ones.
+                            column_answer
                         } else {
                             crate::functions::call(name, &call_args)
                         }
@@ -6765,7 +6779,18 @@ impl Vm {
                             opcode,
                             message: e.to_string(),
                         })?;
-                        result.push(from_scalar_value(value));
+                        let mut value = from_scalar_value(value);
+                        // #1046: `starts_with`/`contains` answer a BOOLEAN,
+                        // which the scalar value model carries as 0/1.
+                        if matches!(
+                            name.to_ascii_lowercase().as_str(),
+                            "starts_with" | "contains"
+                        ) {
+                            if let Value::Int(i) = value {
+                                value = Value::Bool(i != 0);
+                            }
+                        }
+                        result.push(value);
                     }
                     result
                 };

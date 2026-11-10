@@ -94,6 +94,11 @@ pub enum TokenKind {
     /// ([`Tokenizer::tokenize_with_subscripts`], #679), where it is
     /// DuckDB's operator; in sqlite3's dialect it stays an identifier.
     Ilike,
+    /// `EXTRACT`: a word only in the column dialect
+    /// ([`Tokenizer::tokenize_with_subscripts`], #1046), where
+    /// `EXTRACT(part FROM x)` is DuckDB's `date_part`; in sqlite3's
+    /// dialect it stays an identifier and fails as an unknown function.
+    Extract,
     /// `.`
     Dot,
     /// `+`
@@ -769,6 +774,11 @@ impl Tokenizer {
             {
                 tok.kind = TokenKind::Ilike;
             }
+            if subscripts
+                && matches!(&tok.kind, TokenKind::Identifier(w) if w.eq_ignore_ascii_case("extract"))
+            {
+                tok.kind = TokenKind::Extract;
+            }
             tokenizer.after_expr = matches!(
                 tok.kind,
                 TokenKind::Identifier(_) | TokenKind::RParen | TokenKind::RBracket
@@ -1391,6 +1401,23 @@ fn is_ident_continue(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1046: `EXTRACT` is a token only in the column dialect, like
+    /// `ILIKE`; in sqlite3's it stays an identifier (and a call to it fails
+    /// as an unknown function, as sqlite3 does).
+    #[test]
+    fn extract_is_a_token_only_in_the_column_dialect() {
+        let kinds = |toks: Vec<Token>| toks.into_iter().map(|t| t.kind).collect::<Vec<_>>();
+        assert!(
+            kinds(Tokenizer::tokenize_with_subscripts("EXTRACT(year FROM ts)"))
+                .contains(&TokenKind::Extract)
+        );
+        assert!(
+            kinds(Tokenizer::tokenize_with_subscripts("extract(year from ts)"))
+                .contains(&TokenKind::Extract)
+        );
+        assert!(!kinds(Tokenizer::tokenize("EXTRACT(year FROM ts)")).contains(&TokenKind::Extract));
+    }
 
     /// #679: `ILIKE` is an operator only in the column dialect; in
     /// sqlite3's it stays an identifier.
