@@ -63,7 +63,9 @@ SELECT a.id FROM typed_nulls a JOIN production b ON a.id = b.id
 statement error
 SELECT id, row_number() OVER (ORDER BY id) FROM typed_nulls
 
-# scalar function families (#1021): math, string, date
+# scalar function families (#1021): math, string, date. #1046 lifted the
+# string and date/time families onto the allow-list (their answer records
+# live in functions_1046.test); math stays refused here.
 statement error
 SELECT floor(f) FROM typed_nulls
 
@@ -72,21 +74,6 @@ SELECT sqrt(f) FROM typed_nulls
 
 statement error
 SELECT power(n, 2) FROM typed_nulls
-
-statement error
-SELECT lower(s) FROM typed_nulls
-
-statement error
-SELECT upper(s) FROM typed_nulls
-
-statement error
-SELECT substr(s, 1, 2) FROM typed_nulls
-
-statement error
-SELECT year(ts) FROM typed_nulls
-
-statement error
-SELECT date_part('year', ts) FROM typed_nulls
 
 # forms (#1021)
 statement error

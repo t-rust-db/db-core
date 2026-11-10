@@ -646,3 +646,101 @@ fn json_array_elements_text_lists_a_json_array() {
         ]
     );
 }
+
+/// #1046: the stream engine plans with `codegen::batch`, so the string and
+/// date/time functions work there too, and its ns `timestamp` prints as
+/// ISO 8601, as DuckDB prints a TIMESTAMP.
+#[test]
+fn string_and_time_functions_work_and_timestamps_print_iso() {
+    let mut e = open();
+
+    // A string function in WHERE, against the independent PRI oracle.
+    let kern = oracle().iter().filter(|(f, _)| *f == "kern").count();
+    assert_eq!(
+        rows(
+            &mut e,
+            "SELECT count(*) FROM log WHERE upper(facility) = 'KERN'"
+        )[0][0],
+        Cell::Int(kern as i64)
+    );
+
+    // GROUP BY a string function, ordered by it.
+    let got: BTreeMap<String, i64> = rows(
+        &mut e,
+        "SELECT upper(facility) AS f, count(*) FROM log GROUP BY f ORDER BY f",
+    )
+    .into_iter()
+    .map(|r| match (&r[0], &r[1]) {
+        (Cell::Text(f), Cell::Int(n)) => (f.clone(), *n),
+        other => panic!("{other:?}"),
+    })
+    .collect();
+    let mut want: BTreeMap<String, i64> = BTreeMap::new();
+    for (f, _) in oracle() {
+        *want.entry(f.to_uppercase()).or_default() += 1;
+    }
+    assert_eq!(got, want);
+
+    // A time function over the ns `timestamp` column; the fixture's
+    // RFC 3164 lines all carry the current year.
+    let year = match &rows(&mut e, "SELECT year(timestamp) FROM log LIMIT 1")[0][0] {
+        Cell::Int(y) => *y,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        rows(
+            &mut e,
+            &format!("SELECT count(*) FROM log WHERE year(timestamp) = {year}")
+        )[0][0],
+        Cell::Int(1000)
+    );
+    assert_eq!(
+        rows(&mut e, "SELECT strftime(timestamp, '%Y') FROM log LIMIT 1")[0][0],
+        Cell::Text(year.to_string())
+    );
+    assert_eq!(
+        rows(&mut e, "SELECT epoch_ms(timestamp) > 0 FROM log LIMIT 1")[0][0],
+        Cell::Bool(true)
+    );
+
+    // `timestamp` itself, and a `date_trunc` bucket, print as ISO 8601.
+    let iso = |s: &str| {
+        s.len() >= 19
+            && s.as_bytes()[4] == b'-'
+            && s.as_bytes()[7] == b'-'
+            && s.as_bytes()[10] == b' '
+            && s.as_bytes()[13] == b':'
+            && s.as_bytes()[16] == b':'
+            && s.starts_with(&format!("{year}-"))
+    };
+    let iso_day = |s: &str| iso(s) && s.ends_with("00:00:00");
+    match &rows(&mut e, "SELECT timestamp FROM log LIMIT 1")[0][0] {
+        Cell::Text(s) => assert!(iso(s), "{s:?}"),
+        other => panic!("{other:?}"),
+    }
+    let buckets = rows(
+        &mut e,
+        "SELECT date_trunc('day', timestamp) AS d, count(*) FROM log GROUP BY d ORDER BY d",
+    );
+    let total: i64 = buckets
+        .iter()
+        .map(|r| match &r[1] {
+            Cell::Int(n) => *n,
+            other => panic!("{other:?}"),
+        })
+        .sum();
+    assert_eq!(total, 1000);
+    for r in &buckets {
+        match &r[0] {
+            Cell::Text(d) => assert!(iso_day(d), "{d:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    // `min`/`max` of the timestamp print as ISO too.
+    match &rows(&mut e, "SELECT min(timestamp), max(timestamp) FROM log")[0][..] {
+        [Cell::Text(lo), Cell::Text(hi)] => {
+            assert!(lo.starts_with(&format!("{year}-")) && hi.starts_with(&format!("{year}-")));
+        }
+        other => panic!("{other:?}"),
+    }
+}

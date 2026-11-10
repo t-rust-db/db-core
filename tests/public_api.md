@@ -2517,6 +2517,7 @@ pub db_core::parser::row::tokenizer::TokenKind::Dot
 pub db_core::parser::row::tokenizer::TokenKind::Eof
 pub db_core::parser::row::tokenizer::TokenKind::Eq
 pub db_core::parser::row::tokenizer::TokenKind::Error(alloc::string::String)
+pub db_core::parser::row::tokenizer::TokenKind::Extract
 pub db_core::parser::row::tokenizer::TokenKind::False
 pub db_core::parser::row::tokenizer::TokenKind::Float(f64)
 pub db_core::parser::row::tokenizer::TokenKind::Ge

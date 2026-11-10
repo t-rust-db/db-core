@@ -3193,6 +3193,9 @@ impl Parser {
             }
             TokenKind::Keyword(Keyword::CASE) => self.case_expr(),
             TokenKind::Keyword(Keyword::CAST) => self.cast_expr(),
+            // #1046: `EXTRACT(part FROM x)` (column dialect only: the
+            // tokenizer emits this token only in subscript mode).
+            TokenKind::Extract => self.extract_expr(),
             TokenKind::Keyword(Keyword::EXISTS) => {
                 let start = self.advance_span();
                 self.exists_tail(start, false)
@@ -3492,6 +3495,35 @@ impl Parser {
             kind: ExprKind::Cast {
                 expr: Box::new(inner),
                 type_name,
+            },
+            span: join_span(start, end),
+        })
+    }
+
+    /// `EXTRACT(part FROM x)` (column dialect, #1046): lowered to the
+    /// `date_part(part, x)` call, so no expression walker sees a new form.
+    /// The token only exists in the column dialect's tokenizer; in
+    /// sqlite3's dialect `extract` stays an identifier, and a call to it
+    /// fails as an unknown function, as sqlite3 does.
+    fn extract_expr(&mut self) -> PResult<Expr> {
+        let start = self.advance_span(); // EXTRACT
+        self.expect_punct(TokenKind::LParen, "'(' after EXTRACT")?;
+        let (part, part_span) = self.identifier()?;
+        self.expect_kw(Keyword::FROM)?;
+        let value = self.expr()?;
+        let end = self.expect_punct(TokenKind::RParen, "')' to close EXTRACT")?;
+        Ok(Expr {
+            kind: ExprKind::FunctionCall {
+                name: "date_part".to_string(),
+                distinct: false,
+                args: FunctionArgs::List(vec![
+                    Expr {
+                        kind: ExprKind::Literal(Literal::Str(part)),
+                        span: part_span,
+                    },
+                    value,
+                ]),
+                tail: None,
             },
             span: join_span(start, end),
         })

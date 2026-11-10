@@ -22,8 +22,7 @@ use std::sync::Arc;
 
 use crate::codegen::batch::{self as planner, PlanError, TableStats};
 use crate::parser::ast::{
-    BinaryOp, Expr, ExprKind, FunctionArgs, Literal, OrderingTerm, ResultColumn, Select,
-    TableRefKind,
+    BinaryOp, Expr, ExprKind, Literal, OrderingTerm, ResultColumn, Select, TableRefKind,
 };
 use crate::parser::ParseError;
 use crate::storage::column::posix::PosixFile;
@@ -38,6 +37,8 @@ use crate::vm::batch::{
 };
 use crate::vm::column::{Bitmap, Column};
 use crate::vm::engine;
+
+use super::timestamp::{output_column_units, render_timestamp_cells, timestamp_literals};
 
 #[cfg(all(
     feature = "ingest-read",
@@ -470,322 +471,7 @@ pub fn parquet_timestamp_columns(file: &ParquetFile<'_>) -> Vec<(String, i64)> {
     timestamp_columns(file)
 }
 
-/// The rewrite this engine applies to every parsed `SELECT` before
-/// planning, for a caller that parses and plans itself: a quoted
-/// timestamp compared with a TIMESTAMP column becomes the column's integer
-/// units (#679), and `date_trunc(part, ts)` becomes the column dialect's
-/// `__date_trunc(part, ts, per_second)` (#647). `timestamps` comes from
-/// [`parquet_timestamp_columns`] or
-/// [`snapshot_timestamp_columns`](table::snapshot_timestamp_columns).
-pub fn resolve_timestamps(
-    select: &mut Select,
-    timestamps: &[(String, i64)],
-) -> Result<(), EngineError> {
-    timestamp_literals(select, timestamps)
-}
-
-/// Rewrites every comparison of a TIMESTAMP column with a quoted value
-/// in WHERE and HAVING into a comparison with the column's integer units
-/// (#679): `ts >= '2026-01-02'` compared the raw microseconds with text
-/// and matched nothing. A quoted value that is no timestamp is an error,
-/// as in DuckDB.
-pub(crate) fn timestamp_literals(
-    select: &mut Select,
-    timestamps: &[(String, i64)],
-) -> Result<(), EngineError> {
-    for_each_expr_mut(select, &mut |e| {
-        timestamp_operator(e, timestamps)?;
-        date_trunc_units(e, timestamps)
-    })?;
-    if timestamps.is_empty() {
-        return Ok(());
-    }
-    if let Some(e) = select.where_clause.as_mut() {
-        rewrite_timestamp_literals(e, timestamps)?;
-    }
-    if let Some(e) = select.having.as_mut() {
-        rewrite_timestamp_literals(e, timestamps)?;
-    }
-    Ok(())
-}
-
-/// The name and units per second of `expr` when it is a TIMESTAMP column
-/// (in parentheses or not), else `None`.
-fn timestamp_column<'e>(expr: &'e Expr, timestamps: &[(String, i64)]) -> Option<(&'e str, i64)> {
-    match &expr.kind {
-        ExprKind::Column { name, .. } => timestamps
-            .iter()
-            .find(|(c, _)| c.eq_ignore_ascii_case(name))
-            .map(|(_, per_second)| (name.as_str(), *per_second)),
-        ExprKind::Paren(inner) => timestamp_column(inner, timestamps),
-        _ => None,
-    }
-}
-
-/// `//` and `%` are not defined for a TIMESTAMP, as in DuckDB (#647):
-/// its values are integers here, but `ts // 86400000000` would bucket by
-/// a unit the reader can't see. `date_trunc` buckets a timestamp.
-fn timestamp_operator(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(), EngineError> {
-    if let ExprKind::Binary {
-        op: op @ (BinaryOp::IntDiv | BinaryOp::Mod),
-        lhs,
-        rhs,
-    } = &expr.kind
-    {
-        if let Some((name, _)) = [lhs, rhs]
-            .into_iter()
-            .find_map(|side| timestamp_column(side, timestamps))
-        {
-            let symbol = if *op == BinaryOp::IntDiv { "//" } else { "%" };
-            return Err(EngineError::new(
-                ErrorKind::Compile,
-                format!(
-                    "operator {symbol} is not defined for TIMESTAMP column {name}; \
-                     use date_trunc('day', {name}) to bucket it"
-                ),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// `date_trunc(part, ts)` becomes the column dialect's
-/// `__date_trunc(part, ts, per_second)` with the TIMESTAMP column's units
-/// (#647). As in DuckDB, an unknown part and a second argument that is no
-/// TIMESTAMP column are errors, before any row is read.
-fn date_trunc_units(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(), EngineError> {
-    let span = expr.span;
-    let ExprKind::FunctionCall {
-        name,
-        args: FunctionArgs::List(args),
-        ..
-    } = &mut expr.kind
-    else {
-        return Ok(());
-    };
-    if !name.eq_ignore_ascii_case("date_trunc") || args.len() != 2 {
-        return Ok(());
-    }
-    let compile = |message: String| EngineError::new(ErrorKind::Compile, message);
-    if let Some(ExprKind::Literal(Literal::Str(part))) = args.first().map(|a| &a.kind) {
-        if crate::functions::date_trunc::trunc_unit(part).is_none() {
-            return Err(compile(crate::functions::date_trunc::unknown_part(part)));
-        }
-    }
-    let per_second = args
-        .get(1)
-        .and_then(|a| timestamp_column(a, timestamps))
-        .map(|(_, per_second)| per_second)
-        .ok_or_else(|| {
-            compile("date_trunc(part, ts) takes a TIMESTAMP column for ts".to_string())
-        })?;
-    *name = crate::functions::date_trunc::DATE_TRUNC_FN.to_string();
-    args.push(Expr {
-        kind: ExprKind::Literal(Literal::Integer(per_second)),
-        span,
-    });
-    Ok(())
-}
-
-/// The units per second of a rewritten `__date_trunc(part, ts, units)`
-/// (#647): its result is in its column's units.
-fn date_trunc_result_units(expr: &Expr) -> Option<i64> {
-    match &expr.kind {
-        ExprKind::FunctionCall {
-            name,
-            args: FunctionArgs::List(args),
-            ..
-        } if name.eq_ignore_ascii_case(crate::functions::date_trunc::DATE_TRUNC_FN) => {
-            match args.get(2).map(|a| &a.kind) {
-                Some(ExprKind::Literal(Literal::Integer(units))) => Some(*units),
-                _ => None,
-            }
-        }
-        ExprKind::Paren(inner) => date_trunc_result_units(inner),
-        _ => None,
-    }
-}
-
-/// Calls `f` on every expression of `select` -- select list, WHERE,
-/// GROUP BY, HAVING and ORDER BY -- children before parents (#647).
-/// Subqueries are left out: their columns are another table's.
-fn for_each_expr_mut<F>(select: &mut Select, f: &mut F) -> Result<(), EngineError>
-where
-    F: FnMut(&mut Expr) -> Result<(), EngineError>,
-{
-    for column in &mut select.columns {
-        if let ResultColumn::Expr { expr, .. } = column {
-            walk_expr_mut(expr, f)?;
-        }
-    }
-    if let Some(e) = select.where_clause.as_mut() {
-        walk_expr_mut(e, f)?;
-    }
-    for e in &mut select.group_by {
-        walk_expr_mut(e, f)?;
-    }
-    if let Some(e) = select.having.as_mut() {
-        walk_expr_mut(e, f)?;
-    }
-    for term in &mut select.order_by {
-        walk_expr_mut(&mut term.expr, f)?;
-    }
-    Ok(())
-}
-
-fn walk_expr_mut<F>(expr: &mut Expr, f: &mut F) -> Result<(), EngineError>
-where
-    F: FnMut(&mut Expr) -> Result<(), EngineError>,
-{
-    match &mut expr.kind {
-        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {
-            walk_expr_mut(lhs, f)?;
-            walk_expr_mut(rhs, f)?;
-        }
-        ExprKind::Unary { expr: inner, .. }
-        | ExprKind::Paren(inner)
-        | ExprKind::IsNull { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::Collate { expr: inner, .. }
-        | ExprKind::InSubquery { expr: inner, .. } => walk_expr_mut(inner, f)?,
-        ExprKind::FunctionCall {
-            args: FunctionArgs::List(list),
-            ..
-        } => {
-            for e in list {
-                walk_expr_mut(e, f)?;
-            }
-        }
-        ExprKind::In {
-            expr: inner, list, ..
-        } => {
-            walk_expr_mut(inner, f)?;
-            for e in list {
-                walk_expr_mut(e, f)?;
-            }
-        }
-        ExprKind::Between {
-            expr: inner,
-            lo,
-            hi,
-            ..
-        } => {
-            walk_expr_mut(inner, f)?;
-            walk_expr_mut(lo, f)?;
-            walk_expr_mut(hi, f)?;
-        }
-        ExprKind::Like {
-            expr: inner,
-            pattern,
-            escape,
-            ..
-        } => {
-            walk_expr_mut(inner, f)?;
-            walk_expr_mut(pattern, f)?;
-            if let Some(e) = escape {
-                walk_expr_mut(e, f)?;
-            }
-        }
-        ExprKind::Case {
-            operand,
-            whens,
-            else_,
-        } => {
-            if let Some(e) = operand {
-                walk_expr_mut(e, f)?;
-            }
-            for (w, t) in whens {
-                walk_expr_mut(w, f)?;
-                walk_expr_mut(t, f)?;
-            }
-            if let Some(e) = else_ {
-                walk_expr_mut(e, f)?;
-            }
-        }
-        _ => {}
-    }
-    f(expr)
-}
-
-fn rewrite_timestamp_literals(
-    expr: &mut Expr,
-    timestamps: &[(String, i64)],
-) -> Result<(), EngineError> {
-    let units = |e: &Expr| match &e.kind {
-        ExprKind::Column { name, .. } => timestamps
-            .iter()
-            .find(|(c, _)| c.eq_ignore_ascii_case(name))
-            .map(|(_, per_second)| *per_second),
-        // #647: `date_trunc('day', ts) = '2026-01-05'`.
-        _ => date_trunc_result_units(e),
-    };
-    match &mut expr.kind {
-        ExprKind::Binary {
-            op:
-                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,
-            lhs,
-            rhs,
-        } => {
-            let (lhs_units, rhs_units) = (units(lhs), units(rhs));
-            for (per_second, literal) in [(lhs_units, &mut **rhs), (rhs_units, &mut **lhs)] {
-                if let (Some(per_second), ExprKind::Literal(Literal::Str(text))) =
-                    (per_second, &literal.kind)
-                {
-                    let value = timestamp_units(text, per_second).ok_or_else(|| {
-                        EngineError::new(
-                            ErrorKind::Compile,
-                            format!("conversion error: '{text}' is not a timestamp"),
-                        )
-                    })?;
-                    literal.kind = ExprKind::Literal(Literal::Integer(value));
-                    break;
-                }
-            }
-            Ok(())
-        }
-        ExprKind::Binary { lhs, rhs, .. } => {
-            rewrite_timestamp_literals(lhs, timestamps)?;
-            rewrite_timestamp_literals(rhs, timestamps)
-        }
-        ExprKind::Unary { expr: inner, .. } | ExprKind::Paren(inner) => {
-            rewrite_timestamp_literals(inner, timestamps)
-        }
-        _ => Ok(()),
-    }
-}
-
-/// `text` (`YYYY-MM-DD`, optionally with `[T ]HH:MM[:SS[.fraction]]`, UTC)
-/// in `per_second` units since the epoch; `None` if it is no timestamp.
-fn timestamp_units(text: &str, per_second: i64) -> Option<i64> {
-    let text = text.trim();
-    let (whole, fraction) = match text.split_once('.') {
-        Some((whole, fraction)) => (whole, fraction),
-        None => (text, ""),
-    };
-    if !fraction.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    // A literal names its own instant, so the clock is read only for
-    // `'now'`: a host without one (`wasm32-unknown-unknown`) panics on it.
-    let arg = [crate::value::Value::Text(whole.to_string().into())];
-    let parsed = if whole.eq_ignore_ascii_case("now") {
-        crate::functions::call("unixepoch", &arg)
-    } else {
-        crate::functions::call_at("unixepoch", &arg, 0)
-    };
-    let seconds = match parsed {
-        Ok(crate::value::Value::Integer(s)) => s,
-        _ => return None,
-    };
-    // The fraction to the unit's precision (truncated past it).
-    let digits = per_second.checked_ilog10().unwrap_or(0) as usize;
-    let mut sub: String = fraction.chars().take(digits).collect();
-    while sub.len() < digits {
-        sub.push('0');
-    }
-    let sub: i64 = if sub.is_empty() { 0 } else { sub.parse().ok()? };
-    seconds.checked_mul(per_second)?.checked_add(sub)
-}
+pub use super::timestamp::resolve_timestamps;
 
 /// A top-level `MAP` field of two leaves.
 fn is_map(field: &crate::storage::parquet::Field) -> bool {
@@ -2126,14 +1812,22 @@ fn opcode_sections(select: &Select) -> Result<Vec<OpcodeSection>, EngineError> {
         .collect())
 }
 
-/// Query output as a [`QueryResult`] with `select`'s column names.
-fn query_result(select: &Select, output: crate::vm::batch::QueryOutput) -> QueryResult {
+/// Query output as a [`QueryResult`] with `select`'s column names. A
+/// timestamp-valued output column (a TIMESTAMP column, or a `date_trunc`
+/// result over one) prints as ISO 8601, as DuckDB prints a TIMESTAMP --
+/// ms, µs and ns storage of one instant all print the same (#1046).
+fn query_result(
+    select: &Select,
+    output: crate::vm::batch::QueryOutput,
+    timestamps: &[(String, i64)],
+) -> QueryResult {
+    let units = output_column_units(select, timestamps);
     QueryResult {
         columns: planner::output_column_names(select),
         rows: output
             .into_rows()
             .into_iter()
-            .map(|r| r.into_iter().map(Cell::from).collect())
+            .map(|r| render_timestamp_cells(r.into_iter().map(Cell::from).collect(), &units))
             .collect(),
         ..Default::default()
     }
@@ -2181,7 +1875,7 @@ impl Engine for BatchEngine {
         }
         let output = engine::run(&segments, &program)
             .map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
-        Ok(query_result(&select, output))
+        Ok(query_result(&select, output, &self.timestamps))
     }
 
     fn explain_plan(&self, sql: &str) -> Result<Vec<PlanRow>, EngineError> {
@@ -2433,108 +2127,8 @@ mod tests {
         BatchEngine, Engine as _, ErrorKind, Leaf, ParquetFile, Path, PhysicalType, PlanError,
         Program, RowGroupSegment, Value,
     };
-    use super::{timestamp_literals, timestamp_units};
     use crate::parser::ast::Select;
     use crate::vm::batch::host_threads;
-
-    /// #679: a quoted date or timestamp in a column's units -- micro- and
-    /// milliseconds, a fraction kept to the unit's precision -- and `None`
-    /// for text that is no timestamp.
-    #[test]
-    fn timestamp_units_parse_dates_times_and_fractions() {
-        let day = 1_767_225_600; // 2026-01-01T00:00:00Z
-        assert_eq!(
-            timestamp_units("2026-01-01", 1_000_000),
-            Some(day * 1_000_000)
-        );
-        assert_eq!(
-            timestamp_units("2026-01-01 10:00:00", 1_000_000),
-            Some((day + 36_000) * 1_000_000)
-        );
-        assert_eq!(
-            timestamp_units("2026-01-01T00:00:01.5", 1_000_000),
-            Some((day + 1) * 1_000_000 + 500_000)
-        );
-        assert_eq!(
-            timestamp_units("2026-01-01 00:00:00.123456789", 1_000),
-            Some(day * 1_000 + 123)
-        );
-        assert_eq!(timestamp_units("not a time", 1_000_000), None);
-        assert_eq!(timestamp_units("2026-01-01 00:00:00.12x", 1_000_000), None);
-    }
-
-    /// #679: comparisons of a TIMESTAMP column with a quoted value become
-    /// integer comparisons, either side, in WHERE and HAVING; other
-    /// columns and other shapes are left alone; a bad timestamp is an
-    /// error.
-    #[test]
-    fn timestamp_literals_rewrite_comparisons_with_timestamp_columns() {
-        let ts = [("ts".to_string(), 1_000_000)];
-        let rewrite = |q: &str| {
-            let mut select = crate::parser::column::parse(q).unwrap();
-            timestamp_literals(&mut select, &ts).map(|()| select)
-        };
-        let select = rewrite(
-            "SELECT count(*) FROM t WHERE ts >= '2026-01-01' AND ('2026-01-02' > ts OR s = '2026-01-01')",
-        )
-        .unwrap();
-        let text = format!("{}", select.where_clause.unwrap());
-        assert!(text.contains("1767225600000000"), "{text}");
-        assert!(text.contains("1767312000000000"), "{text}");
-        assert!(
-            text.contains("'2026-01-01'"),
-            "a non-timestamp column keeps its text: {text}"
-        );
-        let grouped = rewrite("SELECT s FROM t GROUP BY s HAVING max(ts) > '2026-01-01'").unwrap();
-        assert!(
-            format!("{}", grouped.having.unwrap()).contains("'2026-01-01'"),
-            "an aggregate's column is not a bare column"
-        );
-        assert!(rewrite("SELECT count(*) FROM t WHERE ts = 'yesterday-ish'").is_err());
-        assert!(timestamp_literals(
-            &mut crate::parser::column::parse("SELECT a FROM t").unwrap(),
-            &[]
-        )
-        .is_ok());
-    }
-    /// #647: `//` and `%` on a TIMESTAMP column are refused, as in DuckDB,
-    /// anywhere in the query and through parentheses; on other columns
-    /// they stay.
-    #[test]
-    fn integer_division_of_a_timestamp_column_is_refused() {
-        let ts = [("ts".to_string(), 1_000_000)];
-        let check = |q: &str| {
-            let mut select = crate::parser::column::parse(q).unwrap();
-            timestamp_literals(&mut select, &ts)
-        };
-        for q in [
-            "SELECT ts // 86400000000 FROM t",
-            "SELECT count(*) FROM t GROUP BY ts % 2",
-            "SELECT count(*) FROM t WHERE (ts) // 2 > 0",
-            "SELECT 86400 % ts AS r FROM t ORDER BY r",
-        ] {
-            let err = check(q).unwrap_err();
-            assert!(err.message.contains("TIMESTAMP column ts"), "{q}: {err}");
-        }
-        assert!(check("SELECT a // 2, a % 2 FROM t WHERE ts > 0").is_ok());
-    }
-    // engine_column_date_trunc_units_8a6e38e9 (#647):
-    // `!name.eq_ignore_ascii_case("date_trunc") || args.len() != 2`.
-    use crate::parser::ast::{Expr, ExprKind, FunctionArgs, ResultColumn};
-
-    fn first_item(sql: &str) -> Expr {
-        match crate::parser::column::parse(sql).unwrap().columns.remove(0) {
-            ResultColumn::Expr { expr, .. } => expr,
-            other => panic!("expected an expression: {other:?}"),
-        }
-    }
-
-    fn call_name(expr: &Expr) -> &str {
-        match &expr.kind {
-            ExprKind::FunctionCall { name, .. } => name,
-            _ => "",
-        }
-    }
 
     // engine_column_timestamp_columns_57e483a1:
     // `f.element.physical_type == Some(PhysicalType::Int96)`, reached for a
@@ -2557,44 +2151,6 @@ mod tests {
         assert!(!int96_events_timestamp_columns()
             .iter()
             .any(|(name, _)| name == "id"));
-    }
-
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__engine_column_date_trunc_units_8a6e38e9__v1_two_arg_date_trunc_is_rewritten() {
-        let ts = [("ts".to_string(), 1_000_000_000)];
-        let mut expr = first_item("SELECT date_trunc('day', ts) FROM t");
-        super::date_trunc_units(&mut expr, &ts).unwrap();
-        assert_eq!(
-            call_name(&expr),
-            crate::functions::date_trunc::DATE_TRUNC_FN
-        );
-        assert_eq!(super::date_trunc_result_units(&expr), Some(1_000_000_000));
-    }
-
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__engine_column_date_trunc_units_8a6e38e9__v2_another_function_is_left_alone() {
-        let ts = [("ts".to_string(), 1_000_000)];
-        let mut expr = first_item("SELECT json_extract(ts, '$.a') FROM t");
-        super::date_trunc_units(&mut expr, &ts).unwrap();
-        assert_eq!(call_name(&expr), "json_extract");
-    }
-
-    #[test]
-    #[allow(non_snake_case)]
-    fn mcdc__engine_column_date_trunc_units_8a6e38e9__v3_another_arity_is_left_alone() {
-        let ts = [("ts".to_string(), 1_000_000)];
-        let mut expr = first_item("SELECT date_trunc('day', ts) FROM t");
-        if let ExprKind::FunctionCall {
-            args: FunctionArgs::List(args),
-            ..
-        } = &mut expr.kind
-        {
-            args.pop();
-        }
-        super::date_trunc_units(&mut expr, &ts).unwrap();
-        assert_eq!(call_name(&expr), "date_trunc");
     }
 
     use crate::vm::batch::Segment as _;
@@ -3192,7 +2748,7 @@ mod tests {
         let run = |clause| {
             let segments = file_segments(&file, &columns, clause, &program).unwrap();
             let output = engine::run(&segments, &program).unwrap();
-            (segments.len(), query_result(&select, output).rows)
+            (segments.len(), query_result(&select, output, &[]).rows)
         };
         let (all_groups, expected) = run(None);
         let (pruned_groups, rows) = run(select.where_clause.as_ref());
@@ -3233,7 +2789,7 @@ mod tests {
         .unwrap();
         assert_eq!(segments.len(), file.num_row_groups());
         let output = engine::run(&segments, &program).unwrap();
-        assert_eq!(query_result(&select, output).rows, expected);
+        assert_eq!(query_result(&select, output, &[]).rows, expected);
 
         let err = file_segments(&file, &["p.nosuch".to_string()], None, &program)
             .err()

@@ -7,7 +7,8 @@
     {"file": "codecs.test", "pass": 8, "skip": 0, "fail": 0},
     {"file": "day_bucket_647.test", "pass": 36, "skip": 0, "fail": 0},
     {"file": "distinct_multi_807.test", "pass": 10, "skip": 0, "fail": 0},
-    {"file": "errors_1014.test", "pass": 33, "skip": 0, "fail": 0},
+    {"file": "errors_1014.test", "pass": 28, "skip": 0, "fail": 0},
+    {"file": "functions_1046.test", "pass": 43, "skip": 0, "fail": 0},
     {"file": "group_by_expr_869.test", "pass": 17, "skip": 0, "fail": 0},
     {"file": "having_644.test", "pass": 12, "skip": 0, "fail": 0},
     {"file": "in_list_716.test", "pass": 22, "skip": 0, "fail": 0},
@@ -39,5 +40,5 @@
     {"file": "unnest_filters_812.test", "pass": 7, "skip": 2, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 4694, "skip": 7, "fail": 0}
+  "total": {"pass": 4732, "skip": 7, "fail": 0}
 }

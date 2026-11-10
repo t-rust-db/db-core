@@ -151,8 +151,10 @@ fn monday_of(days: i64) -> Option<i64> {
 }
 
 /// Howard Hinnant's `civil_from_days`: the Gregorian `(year, month, day)`
-/// of day `days` since 1970-01-01.
-fn civil_from_days(days: i64) -> Option<(i64, u32, u32)> {
+/// of day `days` since 1970-01-01. Shared with `datetime`'s column-dialect
+/// functions, which break an epoch timestamp down the same exact way
+/// (#1046).
+pub(crate) fn civil_from_days(days: i64) -> Option<(i64, u32, u32)> {
     let z = days.checked_add(719_468)?;
     let era = z.checked_div_euclid(146_097)?;
     let day_of_era = z.checked_rem_euclid(146_097)?;

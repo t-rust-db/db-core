@@ -586,6 +586,20 @@ fn check_literal_args(name: &str, args: &[AstExpr]) -> Result<()> {
                 "date_trunc's part must be a quoted literal ('day', 'hour', ...)".into(),
             ));
         }
+        // #1046: same for `date_part`/`extract` -- DuckDB takes a
+        // constant part.
+        if i == 0
+            && name.eq_ignore_ascii_case("date_part")
+            && !matches!(
+                arg.kind,
+                ExprKind::Literal(AstLiteral::Str(_) | AstLiteral::Null)
+            )
+        {
+            return Err(unsupported(
+                arg.span,
+                "date_part's part must be a quoted literal ('year', 'hour', ...)".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -883,25 +897,13 @@ fn validate_window_call(
     Ok(())
 }
 
-/// The `#307` scalar functions this validator accepts in a `SELECT`
-/// list -- mirrors `codegen::batch::is_known_scalar_function`, kept as a
-/// separate copy (like [`window_shape`] already is for window functions)
-/// so this validator doesn't depend on the planner.
+/// The scalar functions this validator accepts anywhere an expression is
+/// (#307, #647, #1046): the one table in
+/// [`crate::functions::is_known_column_scalar`] -- this and
+/// `codegen::batch::is_known_scalar_function` both delegate to it, so the
+/// two cannot drift -- plus the map functions.
 pub(crate) fn is_known_scalar_function(name: &str, arity: usize) -> bool {
-    matches!(
-        (name.to_ascii_lowercase().as_str(), arity),
-        ("json_extract" | "json_extract_string", 2)
-            | ("json_array_length", 1 | 2)
-            | ("json_type", 1 | 2)
-            | ("json_valid", 1)
-            | ("logfmt_extract", 2)
-            | ("regexp_extract", 3)
-            | ("ilike", 2)
-            // #647: as written, and as the engine rewrites it with the
-            // TIMESTAMP column's units.
-            | ("date_trunc", 2)
-            | ("__date_trunc", 3)
-    ) || crate::functions::takes_any_expression(name, arity)
+    crate::functions::is_known_column_scalar(name, arity)
         || crate::vm::map_fns::is_map_function_call(name, arity)
 }
 
@@ -1269,6 +1271,28 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
             // (#788, #725).
             let allow = allow_agg && crate::functions::takes_any_expression(name, args.len());
             args.iter_mut().try_for_each(|a| validate_expr(a, allow))
+        }
+        // #1046: `CAST(x AS VARCHAR|TEXT|DATE)`. Only these are accepted;
+        // the engine rewrites the cast over a TIMESTAMP column before
+        // planning and refuses it over anything else, so any other type
+        // stays refused here.
+        ExprKind::Cast {
+            expr: inner,
+            type_name,
+        } => {
+            let head = type_name
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_ascii_uppercase();
+            if matches!(head.as_str(), "VARCHAR" | "TEXT" | "DATE") {
+                validate_expr(inner, allow_agg)
+            } else {
+                Err(unsupported(
+                    expr.span,
+                    format!("unsupported expression form: CAST AS {type_name}"),
+                ))
+            }
         }
         other => Err(unsupported(
             expr.span,
@@ -1898,6 +1922,45 @@ pub fn parse_explain(sql_text: &str) -> Result<(Explain, Select)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1046: `EXTRACT(part FROM x)` lowers to the `date_part(part, x)`
+    /// call, which the subset accepts; the row dialect never sees the
+    /// `EXTRACT` token, so there a call to `extract` fails as sqlite3's
+    /// does.
+    #[test]
+    fn extract_parses_as_a_date_part_call() {
+        let select =
+            parse("SELECT extract(year FROM ts) FROM t WHERE extract(hour FROM ts) > 3").unwrap();
+        let text = format!("{}", select.columns[0]);
+        assert!(text.contains("date_part('year', ts)"), "{text}");
+        let w = format!("{}", select.where_clause.unwrap());
+        assert!(w.contains("date_part('hour', ts) > 3"), "{w}");
+    }
+
+    /// #1046: the string and date/time families are on the allow-list in
+    /// every clause an expression sits in; `date_part`'s part must be a
+    /// quoted literal, and only VARCHAR/TEXT/DATE casts parse.
+    #[test]
+    fn string_and_time_functions_validate_everywhere() {
+        for sql in [
+            "SELECT lower(s), upper(s), length(s), substr(s, 1, 2), substring(s, 2), trim(s), ltrim(s, 'x'), rtrim(s), replace(s, 'a', 'b'), instr(s, 'a'), concat(s, 'x'), concat_ws('-', s, 'y') FROM t",
+            "SELECT starts_with(s, 'a'), contains(s, 'b'), strpos(s, 'c'), left(s, 2), right(s, 2), lpad(s, 5, 'x'), rpad(s, 5, 'y'), split_part(s, ',', 1) FROM t",
+            "SELECT year(ts), month(ts), day(ts), hour(ts), minute(ts), second(ts), date_part('year', ts), epoch(ts), epoch_ms(ts), strftime(ts, '%Y') FROM t",
+            "SELECT id FROM t WHERE upper(s) = 'X' AND year(ts) = 2026 GROUP BY lower(s) HAVING count(*) > 1",
+            "SELECT id, upper(s) FROM t ORDER BY upper(s), id",
+            "SELECT CAST(ts AS VARCHAR), CAST(ts AS DATE), CAST(ts AS TEXT) FROM t",
+        ] {
+            assert!(parse(sql).is_ok(), "{sql}");
+        }
+        // A non-literal date_part part, and other CAST types, stay refused.
+        assert!(parse("SELECT date_part(s, ts) FROM t").is_err());
+        assert!(parse("SELECT CAST(f AS INTEGER) FROM t").is_err());
+        assert!(parse("SELECT n::DOUBLE FROM t").is_err());
+        // Math and the sqlite3-only date functions stay off (#1021).
+        assert!(parse("SELECT floor(f) FROM t").is_err());
+        assert!(parse("SELECT julianday(ts) FROM t").is_err());
+        assert!(parse("SELECT datetime(ts) FROM t").is_err());
+    }
 
     /// #679: `x [NOT] ILIKE p` parses as `[NOT] ilike(x, p)`, which the
     /// column subset accepts; `ILIKE ... ESCAPE` is refused.
@@ -2599,9 +2662,11 @@ mod tests {
                 "SELECT COUNT(*) FROM t GROUP BY (SELECT 1)",
                 "1st GROUP BY term: unsupported expression form: a subquery",
             ),
+            // #1046 lifted the string functions onto the allow-list, so a
+            // still-refused one (math, #1021) pins the message.
             (
-                "SELECT COUNT(*) FROM t GROUP BY upper(region)",
-                "1st GROUP BY term: unsupported expression form: a call to upper()",
+                "SELECT COUNT(*) FROM t GROUP BY floor(region)",
+                "1st GROUP BY term: unsupported expression form: a call to floor()",
             ),
         ] {
             let err = parse(sql).unwrap_err().to_string();
@@ -3343,14 +3408,14 @@ mod tests {
 
     /// MC/DC vector (obligation `parser_column_validate_expr_a300f79e`): leaf B
     /// (`is_known_agg_name`) false -- a scalar function outside the batch
-    /// list (`length`; `abs` joined it in #788) in the SELECT list skips
-    /// the aggregate arm and lands on the column grammar's generic
-    /// "unsupported expression form" rejection, not the "not allowed here"
-    /// aggregate error.
+    /// list (`floor`: math stays off it, #1021; `length`/`abs` joined in
+    /// #788/#1046) in the SELECT list skips the aggregate arm and lands on
+    /// the column grammar's generic "unsupported expression form"
+    /// rejection, not the "not allowed here" aggregate error.
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__parser_column_validate_expr_a300f79e__v3_scalar_function_skips_the_aggregate_arm() {
-        let err = parse("SELECT length(region) * 2 FROM t").unwrap_err();
+        let err = parse("SELECT floor(region) * 2 FROM t").unwrap_err();
         let text = format!("{err:?}");
         assert!(text.contains("unsupported expression form"), "{text}");
         assert!(!text.contains("not allowed here"), "{text}");
@@ -3656,6 +3721,36 @@ mod tests {
     fn mcdc__parser_column_check_literal_args_2c88179f__v4_quoted_or_null_part_is_accepted() {
         assert!(parse("SELECT date_trunc('day', ts) FROM t").is_ok());
         assert!(parse("SELECT date_trunc(NULL, ts) FROM t").is_ok());
+    }
+
+    // parser_column_check_literal_args_917197e3 (#1046): `i == 0 &&
+    // name.eq_ignore_ascii_case("date_part") && !matches!(arg.kind,
+    // Literal(Str | Null))`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_917197e3__v1_date_part_part_from_a_column_is_refused()
+    {
+        let err = parse("SELECT date_part(s, ts) FROM t").unwrap_err();
+        assert!(err.to_string().contains("quoted literal"), "{err}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_917197e3__v2_second_argument_may_be_a_column() {
+        assert!(parse("SELECT date_part('year', ts) FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_917197e3__v3_another_function_takes_a_column_first() {
+        assert!(parse("SELECT round(n, 2) FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_917197e3__v4_quoted_or_null_part_is_accepted() {
+        assert!(parse("SELECT date_part('year', ts) FROM t").is_ok());
+        assert!(parse("SELECT date_part(NULL, ts) FROM t").is_ok());
     }
 
     #[test]

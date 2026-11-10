@@ -1938,7 +1938,10 @@ fn ranked_options() -> TableOptions {
 /// list expression, `UNNEST(string_split(labels, ','))` or `UNNEST(tags)`.
 fn ranked_queries() -> Vec<(&'static str, Vec<Vec<Cell>>)> {
     let int = |v: i64| Cell::Int(v);
-    let ts = |micros: i64| Cell::Int(micros * 1000);
+    // #1046: `min(ts)`/`max(ts)` of a TIMESTAMP column print as ISO 8601.
+    let ts = |micros: i64| {
+        Cell::Text(crate::functions::datetime::iso8601(micros * 1000, 1_000_000_000).unwrap())
+    };
     let row = |label: &str, cells: &[Cell]| {
         let mut row = vec![text(label)];
         row.extend_from_slice(cells);
@@ -2114,8 +2117,9 @@ fn date_trunc_over_a_nanosecond_column_agrees_with_duckdb() {
 }
 
 /// The #647 date_trunc queries over the ranked rows and DuckDB's answers.
+/// #1046: the buckets print as ISO 8601, as DuckDB prints a TIMESTAMP.
 fn check_date_trunc(state: &str, mut run: impl FnMut(&str) -> Answer) {
-    let ns = |micros: i64| Cell::Int(micros * 1000);
+    let iso = |s: &str| Cell::Text(s.to_string());
     let int = Cell::Int;
     assert_eq!(
         run(
@@ -2123,18 +2127,18 @@ fn check_date_trunc(state: &str, mut run: impl FnMut(&str) -> Answer) {
              GROUP BY 1 ORDER BY 1"
         ),
         Ok(vec![
-            vec![ns(1_791_676_800_000_000), int(5), int(1)],
-            vec![ns(1_791_763_200_000_000), int(3), int(6)],
+            vec![iso("2026-10-11 00:00:00"), int(5), int(1)],
+            vec![iso("2026-10-12 00:00:00"), int(3), int(6)],
         ]),
         "{state}"
     );
     assert_eq!(
         run("SELECT date_trunc('hour', ts) AS h, count(*) FROM logs GROUP BY 1 ORDER BY 1"),
         Ok(vec![
-            vec![ns(1_791_712_800_000_000), int(3)],
-            vec![ns(1_791_716_400_000_000), int(2)],
-            vec![ns(1_791_795_600_000_000), int(2)],
-            vec![ns(1_791_799_200_000_000), int(1)],
+            vec![iso("2026-10-11 10:00:00"), int(3)],
+            vec![iso("2026-10-11 11:00:00"), int(2)],
+            vec![iso("2026-10-12 09:00:00"), int(2)],
+            vec![iso("2026-10-12 10:00:00"), int(1)],
         ]),
         "{state}"
     );

@@ -1,0 +1,1245 @@
+# #1046: the string and date/time scalar functions in the column engine,
+# with DuckDB's answers (ADR 0030). `strtime` is the fixture with NULLs,
+# non-ASCII text and a TIMESTAMP column; `ts_edges` adds timestamp edges
+# (before 1970, year 1 and 9999, NULL). Expectations written by
+# `make refresh-column-sqllogictest` from DuckDB, never by hand. String
+# results are wrapped in '[' || .. || ']' where they could be blank, the
+# format's blank line ends a record block.
+
+# ---- string family over text with NULLs, empty and non-ASCII values ----
+
+query ITITT nosort
+SELECT id, s, length(s), upper(s), lower(s) FROM strtime ORDER BY id
+----
+1
+héllo
+5
+HÉLLO
+héllo
+2
+ÉCLAIR
+6
+ÉCLAIR
+éclair
+3
+naïve ß
+7
+NAÏVE ẞ
+naïve ß
+4
+(empty)
+0
+(empty)
+(empty)
+5
+NULL
+NULL
+NULL
+NULL
+6
+a,b,c
+5
+A,B,C
+a,b,c
+7
+  padded  
+10
+  PADDED  
+  padded  
+
+query ITTTTI nosort
+SELECT id, substr(s, 2, 3), '[' || substr(s, -2) || ']', trim(s), replace(s, 'l', 'L'), instr(s, 'a') FROM strtime ORDER BY id
+----
+1
+éll
+[lo]
+héllo
+héLLo
+0
+2
+CLA
+[IR]
+ÉCLAIR
+ÉCLAIR
+0
+3
+aïv
+[ ß]
+naïve ß
+naïve ß
+2
+4
+(empty)
+[]
+(empty)
+(empty)
+0
+5
+NULL
+NULL
+NULL
+NULL
+NULL
+6
+,b,
+[,c]
+a,b,c
+a,b,c
+1
+7
+ pa
+[  ]
+padded
+  padded  
+4
+
+query ITTTTTT nosort
+SELECT id, '[' || substr(s, 0, 3) || ']', '[' || substr(s, 0) || ']', '[' || substr(s, -2, 1) || ']', '[' || substr(s, 2, 0) || ']', '[' || substr(s, 2, -1) || ']', '[' || substr(s, 10) || ']' FROM strtime ORDER BY id
+----
+1
+[hé]
+[héllo]
+[l]
+[]
+[h]
+[]
+2
+[ÉC]
+[ÉCLAIR]
+[I]
+[]
+[É]
+[]
+3
+[na]
+[naïve ß]
+[ ]
+[]
+[n]
+[]
+4
+[]
+[]
+[]
+[]
+[]
+[]
+5
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+6
+[a,]
+[a,b,c]
+[,]
+[]
+[a]
+[]
+7
+[  ]
+[  padded  ]
+[ ]
+[]
+[ ]
+[ ]
+
+query ITTT nosort
+SELECT id, '[' || ltrim(s) || ']', '[' || rtrim(s) || ']', '[' || trim(s, 'hoé') || ']' FROM strtime ORDER BY id
+----
+1
+[héllo]
+[héllo]
+[ll]
+2
+[ÉCLAIR]
+[ÉCLAIR]
+[ÉCLAIR]
+3
+[naïve ß]
+[naïve ß]
+[naïve ß]
+4
+[]
+[]
+[]
+5
+NULL
+NULL
+NULL
+6
+[a,b,c]
+[a,b,c]
+[a,b,c]
+7
+[padded  ]
+[  padded]
+[  padded  ]
+
+query ITT nosort
+SELECT id, concat(s, '-', id), concat_ws('/', s, 'x', NULL) FROM strtime ORDER BY id
+----
+1
+héllo-1
+héllo/x
+2
+ÉCLAIR-2
+ÉCLAIR/x
+3
+naïve ß-3
+naïve ß/x
+4
+-4
+/x
+5
+-5
+x
+6
+a,b,c-6
+a,b,c/x
+7
+  padded  -7
+  padded  /x
+
+query III nosort
+SELECT id, starts_with(s, 'h'), contains(s, 'ï') FROM strtime ORDER BY id
+----
+1
+1
+0
+2
+0
+0
+3
+0
+1
+4
+0
+0
+5
+NULL
+NULL
+6
+0
+0
+7
+0
+0
+
+query III nosort
+SELECT id, strpos(s, 'l'), instr(s, 'ß') FROM strtime ORDER BY id
+----
+1
+3
+0
+2
+0
+0
+3
+0
+7
+4
+0
+0
+5
+NULL
+NULL
+6
+0
+0
+7
+0
+0
+
+query ITTTTTT nosort
+SELECT id, '[' || left(s, 3) || ']', '[' || right(s, 3) || ']', '[' || left(s, -1) || ']', '[' || right(s, -1) || ']', '[' || lpad(s, 10, 'é') || ']', '[' || rpad(s, 10, '-') || ']' FROM strtime ORDER BY id
+----
+1
+[hél]
+[llo]
+[héll]
+[éllo]
+[éééééhéllo]
+[héllo-----]
+2
+[ÉCL]
+[AIR]
+[ÉCLAI]
+[CLAIR]
+[ééééÉCLAIR]
+[ÉCLAIR----]
+3
+[naï]
+[e ß]
+[naïve ]
+[aïve ß]
+[ééénaïve ß]
+[naïve ß---]
+4
+[]
+[]
+[]
+[]
+[éééééééééé]
+[----------]
+5
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+6
+[a,b]
+[b,c]
+[a,b,]
+[,b,c]
+[éééééa,b,c]
+[a,b,c-----]
+7
+[  p]
+[d  ]
+[  padded ]
+[ padded  ]
+[  padded  ]
+[  padded  ]
+
+query ITTTT nosort
+SELECT id, '[' || lpad(s, 4, '*') || ']', '[' || rpad(s, 4, '*') || ']', '[' || left(s, 0) || ']', '[' || right(s, 100) || ']' FROM strtime ORDER BY id
+----
+1
+[héll]
+[héll]
+[]
+[héllo]
+2
+[ÉCLA]
+[ÉCLA]
+[]
+[ÉCLAIR]
+3
+[naïv]
+[naïv]
+[]
+[naïve ß]
+4
+[****]
+[****]
+[]
+[]
+5
+NULL
+NULL
+NULL
+NULL
+6
+[a,b,]
+[a,b,]
+[]
+[a,b,c]
+7
+[  pa]
+[  pa]
+[]
+[  padded  ]
+
+query ITTTTT nosort
+SELECT id, split_part(s, ',', 1), split_part(s, ',', 2), split_part(s, ',', -1), split_part(s, ',', 0), split_part(s, 'x', 1) FROM strtime ORDER BY id
+----
+1
+héllo
+(empty)
+héllo
+(empty)
+héllo
+2
+ÉCLAIR
+(empty)
+ÉCLAIR
+(empty)
+ÉCLAIR
+3
+naïve ß
+(empty)
+naïve ß
+(empty)
+naïve ß
+4
+(empty)
+(empty)
+(empty)
+(empty)
+(empty)
+5
+NULL
+NULL
+NULL
+NULL
+NULL
+6
+a
+b
+c
+(empty)
+a,b,c
+7
+  padded  
+(empty)
+  padded  
+(empty)
+  padded  
+
+# nested expressions as arguments
+query IT nosort
+SELECT id, upper(trim(s)) FROM strtime ORDER BY id
+----
+1
+HÉLLO
+2
+ÉCLAIR
+3
+NAÏVE ẞ
+4
+(empty)
+5
+NULL
+6
+A,B,C
+7
+PADDED
+
+query T nosort
+SELECT replace(upper(s), 'É', 'E') FROM strtime ORDER BY 1
+----
+(empty)
+  PADDED  
+A,B,C
+ECLAIR
+HELLO
+NAÏVE ẞ
+NULL
+
+# in WHERE, GROUP BY and ORDER BY (the ORDER BY term matches a select item)
+query I nosort
+SELECT count(*) FROM strtime WHERE starts_with(s, 'h') OR contains(s, 'ß')
+----
+2
+
+query I nosort
+SELECT count(*) FROM strtime WHERE upper(s) = 'ÉCLAIR'
+----
+1
+
+query TI nosort
+SELECT upper(s) AS u, count(*) FROM strtime GROUP BY u ORDER BY u
+----
+(empty)
+1
+  PADDED  
+1
+A,B,C
+1
+HÉLLO
+1
+NAÏVE ẞ
+1
+ÉCLAIR
+1
+NULL
+1
+
+query II nosort
+SELECT id, length(s) AS n FROM strtime ORDER BY n, id
+----
+4
+0
+1
+5
+6
+5
+2
+6
+3
+7
+7
+10
+5
+NULL
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE instr(s, 'a') > 3 AND length(s) > 5
+----
+3805
+
+query T nosort
+SELECT DISTINCT lower(substr(s, 1, 4)) FROM typed_nulls WHERE id < 30 ORDER BY 1
+----
+(empty)
+alph
+beta
+delt
+gamm
+NULL
+
+# ---- TIMESTAMP prints as ISO 8601, from Parquet and from date_trunc ----
+
+query IT nosort
+SELECT id, ts FROM strtime ORDER BY id
+----
+1
+2026-11-09 16:30:45.123456
+2
+1969-12-31 23:59:59.999999
+3
+1970-01-01 00:00:00
+4
+2038-01-19 03:14:07
+5
+2000-02-29 12:00:00
+6
+NULL
+7
+2100-03-01 00:00:00.000001
+
+query ITTT nosort
+SELECT id, ts, CAST(ts AS VARCHAR), CAST(ts AS DATE) FROM strtime ORDER BY id
+----
+1
+2026-11-09 16:30:45.123456
+2026-11-09 16:30:45.123456
+2026-11-09
+2
+1969-12-31 23:59:59.999999
+1969-12-31 23:59:59.999999
+1969-12-31
+3
+1970-01-01 00:00:00
+1970-01-01 00:00:00
+1970-01-01
+4
+2038-01-19 03:14:07
+2038-01-19 03:14:07
+2038-01-19
+5
+2000-02-29 12:00:00
+2000-02-29 12:00:00
+2000-02-29
+6
+NULL
+NULL
+NULL
+7
+2100-03-01 00:00:00.000001
+2100-03-01 00:00:00.000001
+2100-03-01
+
+query ITT nosort
+SELECT id, CAST(ts AS VARCHAR), CAST(ts AS DATE) FROM ts_edges ORDER BY id
+----
+1
+1970-01-01 00:00:00
+1970-01-01
+2
+1969-12-31 23:59:59
+1969-12-31
+3
+1969-12-31 23:59:59.999999
+1969-12-31
+4
+2038-01-19 03:14:07
+2038-01-19
+5
+2038-01-19 03:14:08
+2038-01-19
+6
+2000-02-29 12:00:00
+2000-02-29
+7
+1900-02-28 23:59:59
+1900-02-28
+8
+1900-03-01 00:00:00
+1900-03-01
+9
+0001-01-01 00:00:00
+0001-01-01
+10
+9999-12-31 23:59:59.999999
+9999-12-31
+11
+2024-02-29 23:59:59.999999
+2024-02-29
+12
+2026-12-31 00:00:00
+2026-12-31
+13
+NULL
+NULL
+14
+1600-01-01 00:00:00
+1600-01-01
+15
+2100-02-28 00:00:01
+2100-02-28
+16
+2100-03-01 00:00:00
+2100-03-01
+17
+2026-01-01 00:00:00.000001
+2026-01-01
+18
+2026-01-01 00:00:00.000002
+2026-01-01
+19
+2026-06-15 12:30:45.123456
+2026-06-15
+20
+2026-06-15 12:30:45.123456
+2026-06-15
+
+query IT nosort
+SELECT id, ts FROM ts_edges ORDER BY id
+----
+1
+1970-01-01 00:00:00
+2
+1969-12-31 23:59:59
+3
+1969-12-31 23:59:59.999999
+4
+2038-01-19 03:14:07
+5
+2038-01-19 03:14:08
+6
+2000-02-29 12:00:00
+7
+1900-02-28 23:59:59
+8
+1900-03-01 00:00:00
+9
+0001-01-01 00:00:00
+10
+9999-12-31 23:59:59.999999
+11
+2024-02-29 23:59:59.999999
+12
+2026-12-31 00:00:00
+13
+NULL
+14
+1600-01-01 00:00:00
+15
+2100-02-28 00:00:01
+16
+2100-03-01 00:00:00
+17
+2026-01-01 00:00:00.000001
+18
+2026-01-01 00:00:00.000002
+19
+2026-06-15 12:30:45.123456
+20
+2026-06-15 12:30:45.123456
+
+query TI nosort
+SELECT date_trunc('hour', ts) AS h, count(*) FROM typed_nulls GROUP BY h ORDER BY h LIMIT 8
+----
+2026-01-01 01:00:00
+1
+2026-01-01 03:00:00
+1
+2026-01-01 04:00:00
+1
+2026-01-01 06:00:00
+1
+2026-01-01 08:00:00
+1
+2026-01-01 09:00:00
+1
+2026-01-01 11:00:00
+1
+2026-01-01 12:00:00
+1
+
+query TI nosort
+SELECT date_trunc('day', ts) AS d, count(*) FROM strtime GROUP BY d ORDER BY d
+----
+1969-12-31 00:00:00
+1
+1970-01-01 00:00:00
+1
+2000-02-29 00:00:00
+1
+2026-11-09 00:00:00
+1
+2038-01-19 00:00:00
+1
+2100-03-01 00:00:00
+1
+NULL
+1
+
+# ---- date/time functions over a TIMESTAMP column ----
+
+query IIIIIII nosort
+SELECT id, year(ts), month(ts), day(ts), hour(ts), minute(ts), second(ts) FROM strtime ORDER BY id
+----
+1
+2026
+11
+9
+16
+30
+45
+2
+1969
+12
+31
+23
+59
+59
+3
+1970
+1
+1
+0
+0
+0
+4
+2038
+1
+19
+3
+14
+7
+5
+2000
+2
+29
+12
+0
+0
+6
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+7
+2100
+3
+1
+0
+0
+0
+
+query IIIIIIIIIIII nosort
+SELECT id, date_part('year', ts), date_part('quarter', ts), date_part('week', ts), date_part('doy', ts), date_part('dow', ts), date_part('isodow', ts), date_part('millisecond', ts), date_part('microsecond', ts), date_part('decade', ts), date_part('century', ts), epoch_ms(ts) FROM strtime ORDER BY id
+----
+1
+2026
+4
+46
+313
+1
+1
+45123
+45123456
+202
+21
+1794241845123
+2
+1969
+4
+1
+365
+3
+3
+59999
+59999999
+196
+20
+0
+3
+1970
+1
+1
+1
+4
+4
+0
+0
+197
+20
+0
+4
+2038
+1
+3
+19
+2
+2
+7000
+7000000
+203
+21
+2147483647000
+5
+2000
+1
+9
+60
+2
+2
+0
+0
+200
+20
+951825600000
+6
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+7
+2100
+1
+9
+60
+1
+1
+0
+1
+210
+21
+4107542400000
+
+query III nosort
+SELECT id, extract(year FROM ts), extract(hour FROM ts) FROM strtime ORDER BY id
+----
+1
+2026
+16
+2
+1969
+23
+3
+1970
+0
+4
+2038
+3
+5
+2000
+12
+6
+NULL
+NULL
+7
+2100
+0
+
+query IRI nosort
+SELECT id, date_part('epoch', ts), epoch_ms(ts) FROM ts_edges ORDER BY id
+----
+1
+0.0
+0
+2
+-1.0
+-1000
+3
+-1.0e-06
+0
+4
+2147483647.0
+2147483647000
+5
+2147483648.0
+2147483648000
+6
+951825600.0
+951825600000
+7
+-2203891201.0
+-2203891201000
+8
+-2203891200.0
+-2203891200000
+9
+-62135596800.0
+-62135596800000
+10
+253402300800.0
+253402300799999
+11
+1709251200.0
+1709251199999
+12
+1798675200.0
+1798675200000
+13
+NULL
+NULL
+14
+-11676096000.0
+-11676096000000
+15
+4107456001.0
+4107456001000
+16
+4107542400.0
+4107542400000
+17
+1767225600.0
+1767225600000
+18
+1767225600.0
+1767225600000
+19
+1781526645.12346
+1781526645123
+20
+1781526645.12346
+1781526645123
+
+query IT nosort
+SELECT id, strftime(ts, '%Y-%m-%d %H:%M:%S') FROM strtime ORDER BY id
+----
+1
+2026-11-09 16:30:45
+2
+1969-12-31 23:59:59
+3
+1970-01-01 00:00:00
+4
+2038-01-19 03:14:07
+5
+2000-02-29 12:00:00
+6
+NULL
+7
+2100-03-01 00:00:00
+
+query ITT nosort
+SELECT id, strftime(ts, '%f'), strftime(ts, '%j %a %A %b %B %p %I %u %w') FROM strtime ORDER BY id
+----
+1
+123456
+313 Mon Monday Nov November PM 04 1 1
+2
+999999
+365 Wed Wednesday Dec December PM 11 3 3
+3
+000000
+001 Thu Thursday Jan January AM 12 4 4
+4
+000000
+019 Tue Tuesday Jan January AM 03 2 2
+5
+000000
+060 Tue Tuesday Feb February PM 12 2 2
+6
+NULL
+NULL
+7
+000001
+060 Mon Monday Mar March AM 12 1 1
+
+query ITT nosort
+SELECT id, strftime(ts, '%c'), strftime(ts, '%x %X %z') FROM ts_edges ORDER BY id
+----
+1
+1970-01-01 00:00:00
+1970-01-01 00:00:00 +00
+2
+1969-12-31 23:59:59
+1969-12-31 23:59:59 +00
+3
+1969-12-31 23:59:59
+1969-12-31 23:59:59 +00
+4
+2038-01-19 03:14:07
+2038-01-19 03:14:07 +00
+5
+2038-01-19 03:14:08
+2038-01-19 03:14:08 +00
+6
+2000-02-29 12:00:00
+2000-02-29 12:00:00 +00
+7
+1900-02-28 23:59:59
+1900-02-28 23:59:59 +00
+8
+1900-03-01 00:00:00
+1900-03-01 00:00:00 +00
+9
+0001-01-01 00:00:00
+0001-01-01 00:00:00 +00
+10
+9999-12-31 23:59:59
+9999-12-31 23:59:59 +00
+11
+2024-02-29 23:59:59
+2024-02-29 23:59:59 +00
+12
+2026-12-31 00:00:00
+2026-12-31 00:00:00 +00
+13
+NULL
+NULL
+14
+1600-01-01 00:00:00
+1600-01-01 00:00:00 +00
+15
+2100-02-28 00:00:01
+2100-02-28 00:00:01 +00
+16
+2100-03-01 00:00:00
+2100-03-01 00:00:00 +00
+17
+2026-01-01 00:00:00
+2026-01-01 00:00:00 +00
+18
+2026-01-01 00:00:00
+2026-01-01 00:00:00 +00
+19
+2026-06-15 12:30:45
+2026-06-15 12:30:45 +00
+20
+2026-06-15 12:30:45
+2026-06-15 12:30:45 +00
+
+query IIIIIII nosort
+SELECT id, year(ts), month(ts), day(ts), hour(ts), date_part('dow', ts), epoch_ms(ts) FROM ts_edges ORDER BY id
+----
+1
+1970
+1
+1
+0
+4
+0
+2
+1969
+12
+31
+23
+3
+-1000
+3
+1969
+12
+31
+23
+3
+0
+4
+2038
+1
+19
+3
+2
+2147483647000
+5
+2038
+1
+19
+3
+2
+2147483648000
+6
+2000
+2
+29
+12
+2
+951825600000
+7
+1900
+2
+28
+23
+3
+-2203891201000
+8
+1900
+3
+1
+0
+4
+-2203891200000
+9
+1
+1
+1
+0
+1
+-62135596800000
+10
+9999
+12
+31
+23
+5
+253402300799999
+11
+2024
+2
+29
+23
+4
+1709251199999
+12
+2026
+12
+31
+0
+4
+1798675200000
+13
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+14
+1600
+1
+1
+0
+6
+-11676096000000
+15
+2100
+2
+28
+0
+0
+4107456001000
+16
+2100
+3
+1
+0
+1
+4107542400000
+17
+2026
+1
+1
+0
+4
+1767225600000
+18
+2026
+1
+1
+0
+4
+1767225600000
+19
+2026
+6
+15
+12
+1
+1781526645123
+20
+2026
+6
+15
+12
+1
+1781526645123
+
+# nested: a date_trunc result feeds the other time functions
+query III nosort
+SELECT id, year(date_trunc('day', ts)), hour(date_trunc('hour', ts)) FROM strtime ORDER BY id
+----
+1
+2026
+16
+2
+1969
+23
+3
+1970
+0
+4
+2038
+3
+5
+2000
+12
+6
+NULL
+NULL
+7
+2100
+0
+
+query TI nosort
+SELECT strftime(date_trunc('day', ts), '%Y-%m-%d'), count(*) FROM strtime GROUP BY 1 ORDER BY 1
+----
+1969-12-31
+1
+1970-01-01
+1
+2000-02-29
+1
+2026-11-09
+1
+2038-01-19
+1
+2100-03-01
+1
+NULL
+1
+
+# in WHERE
+query I nosort
+SELECT count(*) FROM ts_edges WHERE year(ts) = 2026
+----
+5
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE date_part('month', ts) = 6 AND hour(ts) >= 12
+----
+424
+
+query I nosort
+SELECT count(*) FROM typed_nulls WHERE strftime(ts, '%Y') = '2026' AND ts > '2026-06-01'
+----
+3009
+
+# ---- refusals that stay refusals ----
+
+statement error
+SELECT date_part('fortnight', ts) FROM strtime
+
+statement error
+SELECT strftime(ts, '%s') FROM strtime
+
+statement error
+SELECT year(n) FROM typed_nulls
+
+statement error
+SELECT strftime('%Y', ts) FROM strtime
+
+statement error
+SELECT upper(n) FROM typed_nulls
+
+statement error
+SELECT CAST(n AS VARCHAR) FROM typed_nulls

@@ -286,23 +286,15 @@ fn expr_column_name(expr: &AstExpr) -> Option<String> {
     }
 }
 
-/// The `#307` scalar functions this planner accepts in a `SELECT` list
+/// The scalar functions this planner accepts in a `SELECT` list
 /// (checked by name + arity, not the full `crate::functions::call`
 /// registry -- everything else in that registry has never been callable
-/// from SQL here, and opening that up is a separate, unscoped decision).
+/// from SQL here): the one table in
+/// [`crate::functions::is_known_column_scalar`], which
+/// `parser::column::is_known_scalar_function` also reads (#307, #647,
+/// #1046), plus the map functions.
 fn is_known_scalar_function(name: &str, arity: usize) -> bool {
-    matches!(
-        (name.to_ascii_lowercase().as_str(), arity),
-        ("json_extract" | "json_extract_string", 2)
-            | ("json_array_length", 1 | 2)
-            | ("json_type", 1 | 2)
-            | ("json_valid", 1)
-            | ("logfmt_extract", 2)
-            | ("regexp_extract", 3)
-            | ("ilike", 2)
-            | ("date_trunc", 2)
-            | ("__date_trunc", 3)
-    ) || crate::functions::takes_any_expression(name, arity)
+    crate::functions::is_known_column_scalar(name, arity)
         || crate::vm::map_fns::is_map_function_call(name, arity)
 }
 

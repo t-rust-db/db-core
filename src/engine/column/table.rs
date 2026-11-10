@@ -286,7 +286,7 @@ pub fn query_snapshot(
     ));
     let output =
         engine::run(&segments, &program).map_err(|e| EngineError::new(ErrorKind::Execute, e))?;
-    Ok(query_result(&select, output))
+    Ok(query_result(&select, output, &schema_timestamps(&schema)))
 }
 
 /// How many of `snapshot`'s files [`query_snapshot`] opens for `sql`: those

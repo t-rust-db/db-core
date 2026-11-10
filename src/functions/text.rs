@@ -927,6 +927,463 @@ fn round(digits: &[u8], exp: i64, keep: i64) -> (Vec<u8>, i64) {
     (kept, exp)
 }
 
+// ---- The column dialect's string functions (#1046) ----------------------
+//
+// DuckDB is the oracle (ADR 0030). Where it agrees with sqlite3 the shared
+// body above is reused behind a type guard (DuckDB's string functions take
+// VARCHAR, so a non-text argument is an error, not a coercion); where it
+// differs (`upper`/`lower` fold Unicode, `length` takes no BLOB) or only
+// it has the function (`starts_with`, `contains`, `strpos`, `left`,
+// `right`, `lpad`, `rpad`, `split_part`), there is a second entry point
+// here. The row engine never sees these: its registry is `lookup` above.
+
+/// The column-dialect name `name` (lowercase) at `arity`, if this family
+/// has one. Names only DuckDB has are listed here, not in `lookup`, so
+/// the row engine keeps answering "no such function" for them.
+#[cfg(feature = "vm-batch")]
+pub(super) fn lookup_column(name: &str, arity: usize) -> Option<ScalarFn> {
+    Some(match (name, arity) {
+        ("upper", 1) => upper_column,
+        ("lower", 1) => lower_column,
+        ("length", 1) => length_column,
+        ("substr" | "substring", 2 | 3) => substr_column,
+        ("trim", 1 | 2) => trim_column,
+        ("ltrim", 1 | 2) => ltrim_column,
+        ("rtrim", 1 | 2) => rtrim_column,
+        ("replace", 3) => replace_column,
+        ("instr" | "strpos", 2) => instr_column,
+        ("starts_with", 2) => starts_with,
+        ("contains", 2) => contains,
+        ("left", 2) => left_fn,
+        ("right", 2) => right_fn,
+        ("lpad", 2 | 3) => lpad_fn,
+        ("rpad", 2 | 3) => rpad_fn,
+        ("split_part", 3) => split_part,
+        _ => return None,
+    })
+}
+
+/// DuckDB's string functions take VARCHAR: a non-text, non-NULL argument
+/// is an error there ("no function matches"), not sqlite3's coercion.
+#[cfg(feature = "vm-batch")]
+fn text_args(name: &str, args: &[Value]) -> Result<(), FunctionError> {
+    for arg in args {
+        if !matches!(arg, Value::Null | Value::Text(_)) {
+            return Err(FunctionError::Sql(format!(
+                "no function matches {name}({}): the column dialect's string functions take VARCHAR",
+                args.iter()
+                    .map(|a| match a {
+                        Value::Null => "NULL",
+                        Value::Integer(_) => "INTEGER",
+                        Value::Real(_) => "DOUBLE",
+                        Value::Text(_) => "VARCHAR",
+                        Value::Blob(_) => "BLOB",
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `upper(X)`/`lower(X)` as DuckDB: Unicode case mapping, not sqlite3's
+/// ASCII-only one. DuckDB uses the Unicode *simple* case mapping, where
+/// Rust's `char::to_uppercase`/`to_lowercase` use the *full* one: `ß`
+/// uppercases to `ẞ`, not `SS`, and `İ` lowercases to `i`, not `i̇`
+/// (checked against DuckDB 1.5/2.0). A one-character full mapping is the
+/// simple one too, so only the expanding characters need the table below;
+/// anything not in it has no simple mapping and maps to itself (the
+/// ligatures, `ŉ`, `ǰ`, the Armenian `և`, ...).
+#[cfg(feature = "vm-batch")]
+fn simple_case(c: char, upper: bool) -> char {
+    let mapped: String = if upper {
+        c.to_uppercase().collect()
+    } else {
+        c.to_lowercase().collect()
+    };
+    let mut chars = mapped.chars();
+    if let (Some(one), None) = (chars.next(), chars.next()) {
+        return one;
+    }
+    let cp = u32::from(c);
+    let simple = match (upper, cp) {
+        // ß -> ẞ (full mapping is "SS").
+        (true, 0x00DF) => 0x1E9E,
+        // İ -> i (full mapping is "i" + combining dot above).
+        (false, 0x0130) => 0x0069,
+        // Greek with ypogegrammeni: the simple uppercase is the titled form.
+        (true, 0x1F80..=0x1F87) => cp.wrapping_add(8),
+        (true, 0x1F90..=0x1F97) => cp.wrapping_add(8),
+        (true, 0x1FA0..=0x1FA7) => cp.wrapping_add(8),
+        (true, 0x1F00..=0x1F07) => cp.wrapping_add(8),
+        (true, 0x1F10..=0x1F17) => cp.wrapping_add(8),
+        (true, 0x1F20..=0x1F27) => cp.wrapping_add(8),
+        (true, 0x1F30..=0x1F37) => cp.wrapping_add(8),
+        (true, 0x1F40..=0x1F47) => cp.wrapping_add(8),
+        (true, 0x1F60..=0x1F67) => cp.wrapping_add(8),
+        (true, 0x1F51) => 0x1F59,
+        (true, 0x1F53) => 0x1F5B,
+        (true, 0x1F55) => 0x1F5D,
+        (true, 0x1F57) => 0x1F5F,
+        (true, 0x1F70) => 0x1FBA,
+        (true, 0x1F71) => 0x1FBB,
+        (true, 0x1F72) => 0x1FC8,
+        (true, 0x1F73) => 0x1FC9,
+        (true, 0x1F74) => 0x1FCA,
+        (true, 0x1F75) => 0x1FCB,
+        (true, 0x1F76) => 0x1FD8,
+        (true, 0x1F77) => 0x1FDB,
+        (true, 0x1FB3) => 0x1FBC,
+        (true, 0x1FC3) => 0x1FCC,
+        (true, 0x1FF3) => 0x1FFC,
+        (true, 0x1FBE) => 0x0399,
+        // No simple mapping: the character itself.
+        _ => cp,
+    };
+    char::from_u32(simple).unwrap_or(c)
+}
+
+/// `args[i]` as text: `Ok(None)` for NULL or a missing argument, `Err` for
+/// a non-VARCHAR one (DuckDB: "no function matches ...").
+#[cfg(feature = "vm-batch")]
+fn text_at(
+    args: &[Value],
+    i: usize,
+    name: &str,
+) -> Result<Option<std::rc::Rc<str>>, FunctionError> {
+    match args.get(i) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Text(s)) => Ok(Some(s.clone())),
+        Some(other) => Err(FunctionError::Sql(format!(
+            "no function matches {name}(...): {} is not VARCHAR",
+            match other {
+                Value::Integer(_) => "an INTEGER",
+                Value::Real(_) => "a DOUBLE",
+                Value::Blob(_) => "a BLOB",
+                Value::Text(_) | Value::Null => "",
+            }
+        ))),
+    }
+}
+
+/// `upper(X)`/`lower(X)` as DuckDB: Unicode simple case mapping, not
+/// sqlite3's ASCII-only one.
+#[cfg(feature = "vm-batch")]
+fn upper_column(args: &[Value]) -> Result<Value, FunctionError> {
+    Ok(match text_at(args, 0, "upper")? {
+        None => Value::Null,
+        Some(s) => Value::Text(
+            s.chars()
+                .map(|c| simple_case(c, true))
+                .collect::<String>()
+                .into(),
+        ),
+    })
+}
+
+#[cfg(feature = "vm-batch")]
+fn lower_column(args: &[Value]) -> Result<Value, FunctionError> {
+    Ok(match text_at(args, 0, "lower")? {
+        None => Value::Null,
+        Some(s) => Value::Text(
+            s.chars()
+                .map(|c| simple_case(c, false))
+                .collect::<String>()
+                .into(),
+        ),
+    })
+}
+
+/// `length(X)` as DuckDB: characters of a VARCHAR, elements of a LIST
+/// (handled by the VM before conversion), NULL for NULL -- and no BLOB
+/// overload, so a blob is an error.
+#[cfg(feature = "vm-batch")]
+fn length_column(args: &[Value]) -> Result<Value, FunctionError> {
+    Ok(match text_at(args, 0, "length")? {
+        None => Value::Null,
+        Some(s) => Value::Integer(crate::value::len_to_i64(s.chars().count())),
+    })
+}
+
+/// `substr`/`substring` with DuckDB's type rule; the offsets themselves
+/// agree with sqlite3's (checked against DuckDB 1.5: a zero start,
+/// negative start and negative length all match), so the shared body.
+/// Only the string argument must be text -- the start/length are INTEGERs.
+#[cfg(feature = "vm-batch")]
+fn substr_column(args: &[Value]) -> Result<Value, FunctionError> {
+    match args.first() {
+        Some(Value::Text(_)) | Some(Value::Null) | None => {}
+        Some(_) => {
+            return Err(FunctionError::Sql(
+                "no function matches substr(<non-text>, INTEGER, INTEGER)".into(),
+            ))
+        }
+    }
+    super::substr(args)
+}
+
+/// `trim`/`ltrim`/`rtrim` likewise share sqlite3's character-set body; the
+/// optional charset must be text too.
+#[cfg(feature = "vm-batch")]
+fn trim_column(args: &[Value]) -> Result<Value, FunctionError> {
+    trim_guard(args, "trim")?;
+    super::trim_fn(args)
+}
+
+#[cfg(feature = "vm-batch")]
+fn ltrim_column(args: &[Value]) -> Result<Value, FunctionError> {
+    trim_guard(args, "ltrim")?;
+    super::ltrim_fn(args)
+}
+
+#[cfg(feature = "vm-batch")]
+fn rtrim_column(args: &[Value]) -> Result<Value, FunctionError> {
+    trim_guard(args, "rtrim")?;
+    super::rtrim_fn(args)
+}
+
+#[cfg(feature = "vm-batch")]
+fn trim_guard(args: &[Value], name: &str) -> Result<(), FunctionError> {
+    match args.first() {
+        Some(Value::Text(_)) | Some(Value::Null) | None => {}
+        Some(_) => {
+            return Err(FunctionError::Sql(format!(
+                "no function matches {name}(<non-text>[, VARCHAR])"
+            )))
+        }
+    }
+    if let Some(cs) = args.get(1) {
+        if !matches!(cs, Value::Null | Value::Text(_)) {
+            return Err(FunctionError::Sql(format!(
+                "no function matches {name}(VARCHAR, <non-text>)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `replace(S, FROM, TO)`: all text or NULL, then the shared body.
+#[cfg(feature = "vm-batch")]
+fn replace_column(args: &[Value]) -> Result<Value, FunctionError> {
+    if args.iter().any(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    text_args("replace", args)?;
+    super::replace_fn(args)
+}
+
+/// `instr(S, NEEDLE)`/`strpos(S, NEEDLE)`: both VARCHAR, then the shared
+/// char-based body (DuckDB's `strpos` is its alias).
+#[cfg(feature = "vm-batch")]
+fn instr_column(args: &[Value]) -> Result<Value, FunctionError> {
+    if args.iter().any(|v| matches!(v, Value::Null)) {
+        return Ok(Value::Null);
+    }
+    text_args("instr", args)?;
+    super::instr(args)
+}
+
+/// `starts_with(S, PREFIX)`: DuckDB's, case-sensitive; NULL if either is.
+/// The answer is a BOOLEAN, which the scalar value model carries as 0/1;
+/// the VM turns it back into a boolean (#1046).
+#[cfg(feature = "vm-batch")]
+fn starts_with(args: &[Value]) -> Result<Value, FunctionError> {
+    text_args("starts_with", args)?;
+    Ok(match (args.first(), args.get(1)) {
+        (Some(Value::Text(s)), Some(Value::Text(p))) => {
+            Value::Integer(i64::from(s.starts_with(p.as_ref())))
+        }
+        _ => Value::Null,
+    })
+}
+
+/// `contains(S, SUB)`: DuckDB's substring test; NULL if either is.
+#[cfg(feature = "vm-batch")]
+fn contains(args: &[Value]) -> Result<Value, FunctionError> {
+    text_args("contains", args)?;
+    Ok(match (args.first(), args.get(1)) {
+        (Some(Value::Text(s)), Some(Value::Text(p))) => {
+            Value::Integer(i64::from(s.contains(p.as_ref())))
+        }
+        _ => Value::Null,
+    })
+}
+
+/// `left(S, N)`/`right(S, N)`: DuckDB's -- the first/last `N` characters,
+/// or, for a negative `N`, all but the last/first `|N|`.
+#[cfg(feature = "vm-batch")]
+fn left_right(args: &[Value], left: bool) -> Result<Value, FunctionError> {
+    let name = if left { "left" } else { "right" };
+    let s = match args.first() {
+        Some(Value::Text(s)) => s.clone(),
+        Some(Value::Null) | None => return Ok(Value::Null),
+        Some(_) => {
+            return Err(FunctionError::Sql(format!(
+                "no function matches {name}(<non-text>, INTEGER)"
+            )))
+        }
+    };
+    let n = match args.get(1) {
+        Some(Value::Null) | None => return Ok(Value::Null),
+        Some(v) if !matches!(v, Value::Text(_)) => crate::coerce::cast_to_integer(v),
+        Some(_) => {
+            return Err(FunctionError::Sql(
+                "no function matches left(VARCHAR, VARCHAR): N is an INTEGER".into(),
+            ))
+        }
+    };
+    let len = s.chars().count();
+    let out: String = if n >= 0 {
+        let take = usize::try_from(n).unwrap_or(usize::MAX).min(len);
+        if left {
+            s.chars().take(take).collect()
+        } else {
+            s.chars().skip(len.saturating_sub(take)).collect()
+        }
+    } else {
+        let drop = usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
+        if left {
+            s.chars().take(len.saturating_sub(drop)).collect()
+        } else {
+            s.chars().skip(drop).collect()
+        }
+    };
+    Ok(text(out))
+}
+
+#[cfg(feature = "vm-batch")]
+fn left_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    left_right(args, true)
+}
+
+#[cfg(feature = "vm-batch")]
+fn right_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    left_right(args, false)
+}
+
+/// `lpad(S, N, FILL)`/`rpad(S, N, FILL)`: DuckDB's -- pad to `N`
+/// characters with `FILL` (default a space), truncating `S` to `N` when
+/// it is longer; an empty `FILL` is an error ("Insufficient padding").
+#[cfg(feature = "vm-batch")]
+fn lpad_rpad(args: &[Value], left: bool) -> Result<Value, FunctionError> {
+    let name = if left { "lpad" } else { "rpad" };
+    let s = match args.first() {
+        Some(Value::Text(s)) => s.clone(),
+        Some(Value::Null) | None => return Ok(Value::Null),
+        Some(_) => {
+            return Err(FunctionError::Sql(format!(
+                "no function matches {name}(<non-text>, INTEGER, VARCHAR)"
+            )))
+        }
+    };
+    let n = match args.get(1) {
+        Some(Value::Null) | None => return Ok(Value::Null),
+        Some(v) => crate::coerce::cast_to_integer(v),
+    };
+    let fill = match args.get(2) {
+        None => " ",
+        Some(Value::Null) => return Ok(Value::Null),
+        Some(Value::Text(f)) => f.as_ref(),
+        Some(_) => {
+            return Err(FunctionError::Sql(format!(
+                "no function matches {name}(VARCHAR, INTEGER, <non-text>)"
+            )))
+        }
+    };
+    if n <= 0 {
+        return Ok(text(String::new()));
+    }
+    let n = usize::try_from(n).unwrap_or(usize::MAX);
+    let len = s.chars().count();
+    if len >= n {
+        return Ok(text(s.chars().take(n).collect()));
+    }
+    if fill.is_empty() {
+        return Err(FunctionError::Sql(format!(
+            "Invalid Input Error: Insufficient padding in {name}."
+        )));
+    }
+    let need = n.saturating_sub(len);
+    let mut pad = String::new();
+    while pad.chars().count() < need {
+        pad.push_str(fill);
+    }
+    let pad: String = pad.chars().take(need).collect();
+    Ok(text(if left {
+        format!("{pad}{s}")
+    } else {
+        format!("{s}{pad}")
+    }))
+}
+
+#[cfg(feature = "vm-batch")]
+fn lpad_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    lpad_rpad(args, true)
+}
+
+#[cfg(feature = "vm-batch")]
+fn rpad_fn(args: &[Value]) -> Result<Value, FunctionError> {
+    lpad_rpad(args, false)
+}
+
+/// `split_part(S, DELIM, IDX)`: DuckDB's -- the `IDX`-th (1-based,
+/// negative from the end, 0 empty) field of `S` split by `DELIM`; an empty
+/// `DELIM` splits per character.
+#[cfg(feature = "vm-batch")]
+fn split_part(args: &[Value]) -> Result<Value, FunctionError> {
+    let s = match args.first() {
+        Some(Value::Text(s)) => s.clone(),
+        Some(Value::Null) | None => return Ok(Value::Null),
+        Some(_) => {
+            return Err(FunctionError::Sql(
+                "no function matches split_part(<non-text>, VARCHAR, INTEGER)".into(),
+            ))
+        }
+    };
+    let delim = match args.get(1) {
+        Some(Value::Text(d)) => d.clone(),
+        Some(Value::Null) => return Ok(Value::Null),
+        Some(_) => {
+            return Err(FunctionError::Sql(
+                "no function matches split_part(VARCHAR, <non-text>, INTEGER)".into(),
+            ))
+        }
+        None => return Ok(Value::Null),
+    };
+    let idx = match args.get(2) {
+        Some(Value::Null) | None => return Ok(Value::Null),
+        Some(v) if !matches!(v, Value::Text(_)) => crate::coerce::cast_to_integer(v),
+        Some(_) => {
+            return Err(FunctionError::Sql(
+                "no function matches split_part(VARCHAR, VARCHAR, VARCHAR): IDX is an INTEGER"
+                    .into(),
+            ))
+        }
+    };
+    if idx == 0 {
+        return Ok(text(String::new()));
+    }
+    let parts: Vec<String> = if delim.is_empty() {
+        // An empty delimiter splits into single characters.
+        s.chars().map(|c| c.to_string()).collect()
+    } else {
+        s.split(delim.as_ref()).map(str::to_string).collect()
+    };
+    let n = i64::try_from(parts.len()).unwrap_or(i64::MAX);
+    let at = if idx > 0 {
+        idx.saturating_sub(1)
+    } else {
+        n.saturating_add(idx)
+    };
+    Ok(text(
+        parts
+            .get(usize::try_from(at).unwrap_or(usize::MAX))
+            .cloned()
+            .unwrap_or_default(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::call;
@@ -1304,5 +1761,126 @@ mod tests {
     #[allow(non_snake_case)]
     fn mcdc__functions_text_group_thousands_4a6d0c91__v3_on_a_group_boundary() {
         assert_eq!(p(&[t("%,d"), Value::Integer(1234)]), t("1,234"));
+    }
+
+    // ---- the column dialect's entry points (#1046): DuckDB 1.5.6's
+    // ---- answers, probed one by one --------------------------------
+
+    use super::super::call_column_dialect;
+
+    fn c(name: &str, args: &[Value]) -> Value {
+        call_column_dialect(name, args).unwrap().unwrap()
+    }
+
+    fn err(name: &str, args: &[Value]) -> String {
+        call_column_dialect(name, args)
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn column_upper_lower_fold_unicode_simply() {
+        assert_eq!(c("upper", &[t("éclair ÄÖÜ ß")]), t("ÉCLAIR ÄÖÜ ẞ"));
+        assert_eq!(c("lower", &[t("ÉCLAIR ÄÖÜ İ")]), t("éclair äöü i"));
+        assert_eq!(c("upper", &[t("ﬁ")]), t("ﬁ"), "no simple mapping: itself");
+        assert_eq!(c("lower", &[t("ẞ")]), t("ß"));
+        assert_eq!(c("upper", &[Value::Null]), Value::Null);
+        assert!(err("upper", &[Value::Integer(1)]).contains("VARCHAR"));
+    }
+
+    #[test]
+    fn column_length_counts_characters_and_refuses_non_text() {
+        assert_eq!(c("length", &[t("héllo")]), Value::Integer(5));
+        assert_eq!(c("length", &[t("")]), Value::Integer(0));
+        assert_eq!(c("length", &[Value::Null]), Value::Null);
+        assert!(err("length", &[Value::Blob(vec![1u8].into())]).contains("VARCHAR"));
+    }
+
+    #[test]
+    fn column_substr_edges_match_duckdb() {
+        let s = t("hello");
+        let n = |i: i64| Value::Integer(i);
+        for (args, want) in [
+            (vec![s.clone(), n(0), n(3)], "he"),
+            (vec![s.clone(), n(0)], "hello"),
+            (vec![s.clone(), n(-2)], "lo"),
+            (vec![s.clone(), n(-2), n(1)], "l"),
+            (vec![s.clone(), n(2), n(0)], ""),
+            (vec![s.clone(), n(2), n(-1)], "h"),
+            (vec![s.clone(), n(10)], ""),
+        ] {
+            assert_eq!(c("substr", &args), t(want), "{args:?}");
+        }
+        assert_eq!(c("substr", &[t("héllo"), n(2), n(2)]), t("él"));
+        assert_eq!(c("substring", &[s.clone(), n(2)]), t("ello"));
+        assert_eq!(c("substr", &[Value::Null, n(1), n(2)]), Value::Null);
+        assert!(err("substr", &[Value::Integer(1), n(1)]).contains("substr"));
+    }
+
+    #[test]
+    fn column_trim_replace_instr_match_duckdb() {
+        assert_eq!(c("trim", &[t("xxhixx"), t("x")]), t("hi"));
+        assert_eq!(c("ltrim", &[t("  hi  ")]), t("hi  "));
+        assert_eq!(c("rtrim", &[t("xxhixx"), t("x")]), t("xxhi"));
+        assert_eq!(c("replace", &[t("abc"), t(""), t("x")]), t("abc"));
+        assert_eq!(c("replace", &[t("aXbXc"), t("X"), t("")]), t("abc"));
+        assert_eq!(c("replace", &[t("abc"), t("z"), t("y")]), t("abc"));
+        assert_eq!(c("instr", &[t("abc"), t("b")]), Value::Integer(2));
+        assert_eq!(c("instr", &[t("abc"), t("")]), Value::Integer(1));
+        assert_eq!(c("instr", &[t("héllo"), t("l")]), Value::Integer(3));
+        assert_eq!(c("instr", &[t("abc"), t("z")]), Value::Integer(0));
+        assert_eq!(c("instr", &[Value::Null, t("a")]), Value::Null);
+    }
+
+    #[test]
+    fn column_concat_concat_ws_skip_nulls() {
+        assert_eq!(
+            super::super::call("concat", &[t("a"), Value::Null, t("b")]).unwrap(),
+            t("ab")
+        );
+        assert_eq!(super::super::call("concat", &[Value::Null]).unwrap(), t(""));
+        assert_eq!(
+            super::super::call("concat_ws", &[t("-"), t("a"), Value::Null, t("b")]).unwrap(),
+            t("a-b")
+        );
+        assert_eq!(
+            super::super::call("concat_ws", &[Value::Null, t("a")]).unwrap(),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn column_duckdb_only_string_functions_match_duckdb() {
+        let s = t("hello");
+        let n = |i: i64| Value::Integer(i);
+        assert_eq!(c("starts_with", &[s.clone(), t("he")]), Value::Integer(1));
+        assert_eq!(c("starts_with", &[s.clone(), t("HE")]), Value::Integer(0));
+        assert_eq!(c("contains", &[s.clone(), t("ell")]), Value::Integer(1));
+        assert_eq!(c("strpos", &[s.clone(), t("l")]), Value::Integer(3));
+        assert_eq!(c("strpos", &[s.clone(), t("z")]), Value::Integer(0));
+        assert_eq!(c("strpos", &[Value::Null, t("a")]), Value::Null);
+        assert_eq!(c("left", &[s.clone(), n(2)]), t("he"));
+        assert_eq!(c("left", &[s.clone(), n(-2)]), t("hel"));
+        assert_eq!(c("left", &[s.clone(), n(10)]), t("hello"));
+        assert_eq!(c("left", &[s.clone(), n(0)]), t(""));
+        assert_eq!(c("right", &[s.clone(), n(2)]), t("lo"));
+        assert_eq!(c("right", &[s.clone(), n(-2)]), t("llo"));
+        assert_eq!(c("left", &[t("héllo"), n(2)]), t("hé"));
+        assert_eq!(c("lpad", &[t("hi"), n(5), t("xy")]), t("xyxhi"));
+        assert_eq!(c("lpad", &[t("hello"), n(3), t("x")]), t("hel"));
+        assert_eq!(c("lpad", &[t("hi"), n(2), t("xyz")]), t("hi"));
+        assert_eq!(c("lpad", &[t("hi"), n(0), t("x")]), t(""));
+        assert_eq!(c("rpad", &[t("hi"), n(5), t("xy")]), t("hixyx"));
+        assert_eq!(c("rpad", &[t("hello"), n(3), t("x")]), t("hel"));
+        assert_eq!(c("lpad", &[t("héllo"), n(7), t("é")]), t("ééhéllo"));
+        assert!(err("lpad", &[t("hi"), n(5), t("")]).contains("Insufficient padding"));
+        assert_eq!(c("split_part", &[t("a,b,c"), t(","), n(1)]), t("a"));
+        assert_eq!(c("split_part", &[t("a,b,c"), t(","), n(0)]), t(""));
+        assert_eq!(c("split_part", &[t("a,b,c"), t(","), n(-1)]), t("c"));
+        assert_eq!(c("split_part", &[t("a,b,c"), t(","), n(5)]), t(""));
+        assert_eq!(c("split_part", &[t("abc"), t(""), n(1)]), t("a"));
+        assert_eq!(c("split_part", &[t("a,b,c"), t(";"), n(1)]), t("a,b,c"));
+        assert_eq!(c("split_part", &[Value::Null, t(","), n(1)]), Value::Null);
     }
 }
