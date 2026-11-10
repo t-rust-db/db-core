@@ -597,7 +597,8 @@ engine-column = ["storage-column", "parser-column", "vm-batch", "codegen-batch"]
 # The stream engine (ADR 0018): `storage::stream` under `vm::batch` through
 # `storage::stream::adapter`, planned by `codegen::stream` (prune + delegate
 # to `codegen::batch` for the residual query).
-engine-stream = ["storage-stream", "parser-column", "codegen-stream"]
+# It reuses `engine::column`'s TIMESTAMP rewrite and ISO 8601 output (#1046).
+engine-stream = ["storage-stream", "parser-column", "codegen-stream", "engine-column"]
 
 [lints]
 workspace = true

@@ -2105,4 +2105,42 @@ mod mcdc_subscript_vectors {
             TokenKind::Ilike
         );
     }
+
+    // parser_row_tokenizer_tokenize_mode_80f60f18 (#1046): subscripts &&
+    // matches!(.. "extract")
+    fn first_kind(toks: Vec<Token>) -> TokenKind {
+        toks.into_iter()
+            .next()
+            .map(|t| t.kind)
+            .unwrap_or(TokenKind::Eof)
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_tokenize_mode_80f60f18__v1_sqlite_dialect_keeps_extract_an_identifier(
+    ) {
+        assert_eq!(
+            first_kind(Tokenizer::tokenize("EXTRACT")),
+            TokenKind::Identifier("EXTRACT".into())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_tokenize_mode_80f60f18__v2_other_identifier_stays_an_identifier()
+    {
+        assert_eq!(
+            first_kind(Tokenizer::tokenize_with_subscripts("abc")),
+            TokenKind::Identifier("abc".into())
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_tokenize_mode_80f60f18__v3_extract_becomes_the_keyword() {
+        assert_eq!(
+            first_kind(Tokenizer::tokenize_with_subscripts("EXTRACT")),
+            TokenKind::Extract
+        );
+    }
 }

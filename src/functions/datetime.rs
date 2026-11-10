@@ -74,6 +74,7 @@ struct DateTime {
     /// column dialect's TIMESTAMP (epoch units) functions (#1046): the
     /// row engine never sets it, and its `strftime` conversions never read
     /// it.
+    #[cfg(feature = "vm-batch")]
     ns_frac: Option<i64>,
 }
 
@@ -1470,21 +1471,28 @@ fn timediff(args: &[Value], now_ns: i64) -> Result<Value, FunctionError> {
 /// The internal name the engine rewrites `date_part(part, ts)` (and
 /// `extract(part FROM ts)`, which the grammar lowers to it) to, with the
 /// column's units per second as a third argument.
+#[cfg(feature = "vm-batch")]
 pub(crate) const DATE_PART_FN: &str = "__date_part";
 /// `__strftime(ts, fmt, per_second)`: DuckDB's argument order, unlike
 /// sqlite3's `strftime(fmt, ts)`.
+#[cfg(feature = "vm-batch")]
 pub(crate) const STRFTIME_FN: &str = "__strftime";
 /// `__epoch(ts, per_second)` and `__epoch_ms(ts, per_second)`.
+#[cfg(feature = "vm-batch")]
 pub(crate) const EPOCH_FN: &str = "__epoch";
+#[cfg(feature = "vm-batch")]
 pub(crate) const EPOCH_MS_FN: &str = "__epoch_ms";
 /// `__timestamp_text(ts, per_second)` / `__timestamp_date(ts,
 /// per_second)`: `CAST(ts AS VARCHAR)` / `CAST(ts AS DATE)`.
+#[cfg(feature = "vm-batch")]
 pub(crate) const TIMESTAMP_TEXT_FN: &str = "__timestamp_text";
+#[cfg(feature = "vm-batch")]
 pub(crate) const TIMESTAMP_DATE_FN: &str = "__timestamp_date";
 
 /// The column-dialect name `name` (lowercase) at `arity`, if this family
 /// has one. These names are not SQL-namable (they start with `__`), so the
 /// row engine's registry never sees them.
+#[cfg(feature = "vm-batch")]
 pub(super) fn lookup_column(name: &str, arity: usize) -> Option<ScalarFn> {
     Some(match (name, arity) {
         (DATE_PART_FN, 3) => date_part_column,
@@ -1499,6 +1507,7 @@ pub(super) fn lookup_column(name: &str, arity: usize) -> Option<ScalarFn> {
 
 /// The `part` names DuckDB's `date_part`/`extract` recognize (any case),
 /// as far as the column dialect implements them (#1046).
+#[cfg(feature = "vm-batch")]
 pub(crate) fn known_extract_part(part: &str) -> bool {
     matches!(
         part.to_ascii_lowercase().as_str(),
@@ -1577,6 +1586,7 @@ pub(crate) fn known_extract_part(part: &str) -> bool {
 }
 
 /// DuckDB's error for an `extract` part it does not know.
+#[cfg(feature = "vm-batch")]
 pub(crate) fn unknown_extract_part(part: &str) -> String {
     format!("extract specifier \"{part}\" not recognized")
 }
@@ -1590,6 +1600,7 @@ pub(crate) fn unknown_extract_part(part: &str) -> String {
     clippy::cast_precision_loss,
     reason = "the sub-second part is < 1 s; f64 carries it exactly enough for %f/%S"
 )]
+#[cfg(feature = "vm-batch")]
 fn from_epoch(value: i64, per_second: i64) -> Option<DateTime> {
     if per_second <= 0 {
         return None;
@@ -1629,6 +1640,7 @@ fn from_epoch(value: i64, per_second: i64) -> Option<DateTime> {
 /// `y / size` plus one when there is a remainder (2026's century is 21,
 /// 2000's is 20), as DuckDB's `date_part('century'/'millennium')` computes
 /// it. `None` only on a zero `size` (never called with one).
+#[cfg(feature = "vm-batch")]
 fn ordinal(y: i64, size: i64) -> Option<i64> {
     let q = y.checked_div(size)?;
     if y.checked_rem(size)? != 0 {
@@ -1639,6 +1651,7 @@ fn ordinal(y: i64, size: i64) -> Option<i64> {
 }
 
 /// `per_second` out of `args`' last slot, or the units are missing.
+#[cfg(feature = "vm-batch")]
 fn units_arg(args: &[Value]) -> Result<i64, FunctionError> {
     match args.last() {
         Some(Value::Integer(p)) if *p > 0 => Ok(*p),
@@ -1656,6 +1669,7 @@ fn units_arg(args: &[Value]) -> Result<i64, FunctionError> {
     clippy::cast_precision_loss,
     reason = "epoch as a DOUBLE is DuckDB's own answer, f64-rounded like DuckDB's"
 )]
+#[cfg(feature = "vm-batch")]
 fn date_part_column(args: &[Value]) -> Result<Value, FunctionError> {
     let sql = |m: String| FunctionError::Sql(m);
     let [part, value, ..] = args else {
@@ -1744,6 +1758,7 @@ fn date_part_column(args: &[Value]) -> Result<Value, FunctionError> {
 
 /// The English weekday name of `days_after_sunday`'s index (0 = Sunday),
 /// abbreviated or full, as DuckDB's `%a`/`%A` print it.
+#[cfg(feature = "vm-batch")]
 fn weekday(w: i64, full: bool) -> String {
     const SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const FULL: [&str; 7] = [
@@ -1762,6 +1777,7 @@ fn weekday(w: i64, full: bool) -> String {
 
 /// The English month name of `mo` (1..=12), abbreviated or full, as
 /// DuckDB's `%b`/`%B` print it.
+#[cfg(feature = "vm-batch")]
 fn month_name(mo: i64, full: bool) -> String {
     const SHORT: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -1790,6 +1806,7 @@ fn month_name(mo: i64, full: bool) -> String {
 /// friends are errors there, `%f` is the six-digit microsecond field, `%n`
 /// the nine-digit nanosecond one, `%z` `+00` for a UTC timestamp. `Err` for
 /// a specifier DuckDB does not recognize.
+#[cfg(feature = "vm-batch")]
 fn strftime_conv_column(cf: char, x: &DateTime) -> Result<String, String> {
     let twelve = |h: i64| match h {
         0 => 12,
@@ -1863,6 +1880,7 @@ fn strftime_conv_column(cf: char, x: &DateTime) -> Result<String, String> {
 /// timestamp first -- over a TIMESTAMP, sharing this module's calendar
 /// math but with DuckDB's specifier set (#1046). NULL `ts` or `fmt` is
 /// NULL; a specifier DuckDB does not recognize is an error.
+#[cfg(feature = "vm-batch")]
 fn strftime_column(args: &[Value]) -> Result<Value, FunctionError> {
     let [value, fmt, ..] = args else {
         return Err(FunctionError::Sql(format!(
@@ -1909,6 +1927,7 @@ fn strftime_column(args: &[Value]) -> Result<Value, FunctionError> {
     clippy::cast_precision_loss,
     reason = "epoch as a DOUBLE is DuckDB's own answer, f64-rounded like DuckDB's"
 )]
+#[cfg(feature = "vm-batch")]
 fn epoch_column(args: &[Value]) -> Result<Value, FunctionError> {
     match args.first() {
         Some(Value::Null) | None => Ok(Value::Null),
@@ -1924,6 +1943,7 @@ fn epoch_column(args: &[Value]) -> Result<Value, FunctionError> {
 /// since the epoch as an INTEGER, truncated toward zero (a negative
 /// nanosecond timestamp gives 0, as DuckDB does; DuckDB 2.0 rounds half
 /// away from zero instead).
+#[cfg(feature = "vm-batch")]
 fn epoch_ms_column(args: &[Value]) -> Result<Value, FunctionError> {
     match args.first() {
         Some(Value::Null) | None => Ok(Value::Null),
@@ -1950,6 +1970,7 @@ fn epoch_ms_column(args: &[Value]) -> Result<Value, FunctionError> {
 /// at the column's precision with trailing zeros trimmed -- so ms, µs and
 /// ns storage of one instant all print the same (#1046). `None` past the
 /// civil range.
+#[cfg(feature = "vm-batch")]
 pub(crate) fn iso8601(value: i64, per_second: i64) -> Option<String> {
     if per_second <= 0 {
         return None;
@@ -1980,6 +2001,7 @@ pub(crate) fn iso8601(value: i64, per_second: i64) -> Option<String> {
 
 /// `__timestamp_text(ts, per_second)`: `CAST(ts AS VARCHAR)` in the column
 /// dialect -- the ISO 8601 text above.
+#[cfg(feature = "vm-batch")]
 fn timestamp_text_column(args: &[Value]) -> Result<Value, FunctionError> {
     match args.first() {
         Some(Value::Null) | None => Ok(Value::Null),
@@ -1996,6 +2018,7 @@ fn timestamp_text_column(args: &[Value]) -> Result<Value, FunctionError> {
 }
 
 /// `__timestamp_date(ts, per_second)`: `CAST(ts AS DATE)` -- `YYYY-MM-DD`.
+#[cfg(feature = "vm-batch")]
 fn timestamp_date_column(args: &[Value]) -> Result<Value, FunctionError> {
     match args.first() {
         Some(Value::Null) | None => Ok(Value::Null),

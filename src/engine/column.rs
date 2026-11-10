@@ -2826,6 +2826,91 @@ mod tests {
         assert_eq!(call_name(&expr), "date_trunc");
     }
 
+    /// `sql`'s first select item with `date_trunc` rewritten to
+    /// `__date_trunc(part, ts, units)` against a µs `ts`.
+    fn rewritten_item(sql: &str) -> (Expr, [(String, i64); 1]) {
+        let ts = [("ts".to_string(), 1_000_000)];
+        let mut expr = first_item(sql);
+        super::date_trunc_units(&mut expr, &ts).unwrap();
+        (expr, ts)
+    }
+
+    fn pop_arg(expr: &mut Expr) {
+        if let ExprKind::FunctionCall {
+            args: FunctionArgs::List(args),
+            ..
+        } = &mut expr.kind
+        {
+            args.pop();
+        }
+    }
+
+    // engine_column_expr_timestamp_units_fe031764 (#1046):
+    // `name == __date_trunc && args.len() == 3`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_expr_timestamp_units_fe031764__v1_rewritten_date_trunc_has_units() {
+        let (expr, ts) = rewritten_item("SELECT date_trunc('day', ts) FROM t");
+        assert_eq!(super::expr_timestamp_units(&expr, &ts), Some(1_000_000));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_expr_timestamp_units_fe031764__v2_another_function_has_none() {
+        let (expr, ts) = rewritten_item("SELECT abs(ts) FROM t");
+        assert_eq!(super::expr_timestamp_units(&expr, &ts), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_expr_timestamp_units_fe031764__v3_another_arity_has_none() {
+        let (mut expr, ts) = rewritten_item("SELECT date_trunc('day', ts) FROM t");
+        pop_arg(&mut expr);
+        assert_eq!(
+            call_name(&expr),
+            crate::functions::date_trunc::DATE_TRUNC_FN
+        );
+        assert_eq!(super::expr_timestamp_units(&expr, &ts), None);
+    }
+
+    // engine_column_expr_timestamp_units_4343dffd (#1046):
+    // `(name == min || name == max) && args.len() == 1`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_expr_timestamp_units_4343dffd__v1_min_of_a_timestamp_has_units() {
+        let (expr, ts) = rewritten_item("SELECT min(ts) FROM t");
+        assert_eq!(super::expr_timestamp_units(&expr, &ts), Some(1_000_000));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_expr_timestamp_units_4343dffd__v2_max_of_a_timestamp_has_units() {
+        let (expr, ts) = rewritten_item("SELECT max(ts) FROM t");
+        assert_eq!(super::expr_timestamp_units(&expr, &ts), Some(1_000_000));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_expr_timestamp_units_4343dffd__v3_another_aggregate_has_none() {
+        let (expr, ts) = rewritten_item("SELECT abs(ts) FROM t");
+        assert_eq!(super::expr_timestamp_units(&expr, &ts), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__engine_column_expr_timestamp_units_4343dffd__v4_min_with_two_args_has_none() {
+        // The parser refuses `min(ts, ts)`; a second argument is pushed.
+        let (mut expr, ts) = rewritten_item("SELECT min(ts) FROM t");
+        if let ExprKind::FunctionCall {
+            args: FunctionArgs::List(args),
+            ..
+        } = &mut expr.kind
+        {
+            args.push(args[0].clone());
+        }
+        assert_eq!(super::expr_timestamp_units(&expr, &ts), None);
+    }
+
     use crate::vm::batch::Segment as _;
 
     #[test]

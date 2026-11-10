@@ -940,6 +940,7 @@ fn round(digits: &[u8], exp: i64, keep: i64) -> (Vec<u8>, i64) {
 /// The column-dialect name `name` (lowercase) at `arity`, if this family
 /// has one. Names only DuckDB has are listed here, not in `lookup`, so
 /// the row engine keeps answering "no such function" for them.
+#[cfg(feature = "vm-batch")]
 pub(super) fn lookup_column(name: &str, arity: usize) -> Option<ScalarFn> {
     Some(match (name, arity) {
         ("upper", 1) => upper_column,
@@ -964,6 +965,7 @@ pub(super) fn lookup_column(name: &str, arity: usize) -> Option<ScalarFn> {
 
 /// DuckDB's string functions take VARCHAR: a non-text, non-NULL argument
 /// is an error there ("no function matches"), not sqlite3's coercion.
+#[cfg(feature = "vm-batch")]
 fn text_args(name: &str, args: &[Value]) -> Result<(), FunctionError> {
     for arg in args {
         if !matches!(arg, Value::Null | Value::Text(_)) {
@@ -993,6 +995,7 @@ fn text_args(name: &str, args: &[Value]) -> Result<(), FunctionError> {
 /// simple one too, so only the expanding characters need the table below;
 /// anything not in it has no simple mapping and maps to itself (the
 /// ligatures, `ŉ`, `ǰ`, the Armenian `և`, ...).
+#[cfg(feature = "vm-batch")]
 fn simple_case(c: char, upper: bool) -> char {
     let mapped: String = if upper {
         c.to_uppercase().collect()
@@ -1043,6 +1046,7 @@ fn simple_case(c: char, upper: bool) -> char {
 
 /// `args[i]` as text: `Ok(None)` for NULL or a missing argument, `Err` for
 /// a non-VARCHAR one (DuckDB: "no function matches ...").
+#[cfg(feature = "vm-batch")]
 fn text_at(
     args: &[Value],
     i: usize,
@@ -1065,6 +1069,7 @@ fn text_at(
 
 /// `upper(X)`/`lower(X)` as DuckDB: Unicode simple case mapping, not
 /// sqlite3's ASCII-only one.
+#[cfg(feature = "vm-batch")]
 fn upper_column(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(match text_at(args, 0, "upper")? {
         None => Value::Null,
@@ -1077,6 +1082,7 @@ fn upper_column(args: &[Value]) -> Result<Value, FunctionError> {
     })
 }
 
+#[cfg(feature = "vm-batch")]
 fn lower_column(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(match text_at(args, 0, "lower")? {
         None => Value::Null,
@@ -1092,6 +1098,7 @@ fn lower_column(args: &[Value]) -> Result<Value, FunctionError> {
 /// `length(X)` as DuckDB: characters of a VARCHAR, elements of a LIST
 /// (handled by the VM before conversion), NULL for NULL -- and no BLOB
 /// overload, so a blob is an error.
+#[cfg(feature = "vm-batch")]
 fn length_column(args: &[Value]) -> Result<Value, FunctionError> {
     Ok(match text_at(args, 0, "length")? {
         None => Value::Null,
@@ -1103,6 +1110,7 @@ fn length_column(args: &[Value]) -> Result<Value, FunctionError> {
 /// agree with sqlite3's (checked against DuckDB 1.5: a zero start,
 /// negative start and negative length all match), so the shared body.
 /// Only the string argument must be text -- the start/length are INTEGERs.
+#[cfg(feature = "vm-batch")]
 fn substr_column(args: &[Value]) -> Result<Value, FunctionError> {
     match args.first() {
         Some(Value::Text(_)) | Some(Value::Null) | None => {}
@@ -1117,21 +1125,25 @@ fn substr_column(args: &[Value]) -> Result<Value, FunctionError> {
 
 /// `trim`/`ltrim`/`rtrim` likewise share sqlite3's character-set body; the
 /// optional charset must be text too.
+#[cfg(feature = "vm-batch")]
 fn trim_column(args: &[Value]) -> Result<Value, FunctionError> {
     trim_guard(args, "trim")?;
     super::trim_fn(args)
 }
 
+#[cfg(feature = "vm-batch")]
 fn ltrim_column(args: &[Value]) -> Result<Value, FunctionError> {
     trim_guard(args, "ltrim")?;
     super::ltrim_fn(args)
 }
 
+#[cfg(feature = "vm-batch")]
 fn rtrim_column(args: &[Value]) -> Result<Value, FunctionError> {
     trim_guard(args, "rtrim")?;
     super::rtrim_fn(args)
 }
 
+#[cfg(feature = "vm-batch")]
 fn trim_guard(args: &[Value], name: &str) -> Result<(), FunctionError> {
     match args.first() {
         Some(Value::Text(_)) | Some(Value::Null) | None => {}
@@ -1152,6 +1164,7 @@ fn trim_guard(args: &[Value], name: &str) -> Result<(), FunctionError> {
 }
 
 /// `replace(S, FROM, TO)`: all text or NULL, then the shared body.
+#[cfg(feature = "vm-batch")]
 fn replace_column(args: &[Value]) -> Result<Value, FunctionError> {
     if args.iter().any(|v| matches!(v, Value::Null)) {
         return Ok(Value::Null);
@@ -1162,6 +1175,7 @@ fn replace_column(args: &[Value]) -> Result<Value, FunctionError> {
 
 /// `instr(S, NEEDLE)`/`strpos(S, NEEDLE)`: both VARCHAR, then the shared
 /// char-based body (DuckDB's `strpos` is its alias).
+#[cfg(feature = "vm-batch")]
 fn instr_column(args: &[Value]) -> Result<Value, FunctionError> {
     if args.iter().any(|v| matches!(v, Value::Null)) {
         return Ok(Value::Null);
@@ -1173,6 +1187,7 @@ fn instr_column(args: &[Value]) -> Result<Value, FunctionError> {
 /// `starts_with(S, PREFIX)`: DuckDB's, case-sensitive; NULL if either is.
 /// The answer is a BOOLEAN, which the scalar value model carries as 0/1;
 /// the VM turns it back into a boolean (#1046).
+#[cfg(feature = "vm-batch")]
 fn starts_with(args: &[Value]) -> Result<Value, FunctionError> {
     text_args("starts_with", args)?;
     Ok(match (args.first(), args.get(1)) {
@@ -1184,6 +1199,7 @@ fn starts_with(args: &[Value]) -> Result<Value, FunctionError> {
 }
 
 /// `contains(S, SUB)`: DuckDB's substring test; NULL if either is.
+#[cfg(feature = "vm-batch")]
 fn contains(args: &[Value]) -> Result<Value, FunctionError> {
     text_args("contains", args)?;
     Ok(match (args.first(), args.get(1)) {
@@ -1196,6 +1212,7 @@ fn contains(args: &[Value]) -> Result<Value, FunctionError> {
 
 /// `left(S, N)`/`right(S, N)`: DuckDB's -- the first/last `N` characters,
 /// or, for a negative `N`, all but the last/first `|N|`.
+#[cfg(feature = "vm-batch")]
 fn left_right(args: &[Value], left: bool) -> Result<Value, FunctionError> {
     let name = if left { "left" } else { "right" };
     let s = match args.first() {
@@ -1235,10 +1252,12 @@ fn left_right(args: &[Value], left: bool) -> Result<Value, FunctionError> {
     Ok(text(out))
 }
 
+#[cfg(feature = "vm-batch")]
 fn left_fn(args: &[Value]) -> Result<Value, FunctionError> {
     left_right(args, true)
 }
 
+#[cfg(feature = "vm-batch")]
 fn right_fn(args: &[Value]) -> Result<Value, FunctionError> {
     left_right(args, false)
 }
@@ -1246,6 +1265,7 @@ fn right_fn(args: &[Value]) -> Result<Value, FunctionError> {
 /// `lpad(S, N, FILL)`/`rpad(S, N, FILL)`: DuckDB's -- pad to `N`
 /// characters with `FILL` (default a space), truncating `S` to `N` when
 /// it is longer; an empty `FILL` is an error ("Insufficient padding").
+#[cfg(feature = "vm-batch")]
 fn lpad_rpad(args: &[Value], left: bool) -> Result<Value, FunctionError> {
     let name = if left { "lpad" } else { "rpad" };
     let s = match args.first() {
@@ -1297,10 +1317,12 @@ fn lpad_rpad(args: &[Value], left: bool) -> Result<Value, FunctionError> {
     }))
 }
 
+#[cfg(feature = "vm-batch")]
 fn lpad_fn(args: &[Value]) -> Result<Value, FunctionError> {
     lpad_rpad(args, true)
 }
 
+#[cfg(feature = "vm-batch")]
 fn rpad_fn(args: &[Value]) -> Result<Value, FunctionError> {
     lpad_rpad(args, false)
 }
@@ -1308,6 +1330,7 @@ fn rpad_fn(args: &[Value]) -> Result<Value, FunctionError> {
 /// `split_part(S, DELIM, IDX)`: DuckDB's -- the `IDX`-th (1-based,
 /// negative from the end, 0 empty) field of `S` split by `DELIM`; an empty
 /// `DELIM` splits per character.
+#[cfg(feature = "vm-batch")]
 fn split_part(args: &[Value]) -> Result<Value, FunctionError> {
     let s = match args.first() {
         Some(Value::Text(s)) => s.clone(),

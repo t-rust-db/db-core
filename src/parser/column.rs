@@ -3723,6 +3723,36 @@ mod tests {
         assert!(parse("SELECT date_trunc(NULL, ts) FROM t").is_ok());
     }
 
+    // parser_column_check_literal_args_917197e3 (#1046): `i == 0 &&
+    // name.eq_ignore_ascii_case("date_part") && !matches!(arg.kind,
+    // Literal(Str | Null))`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_917197e3__v1_date_part_part_from_a_column_is_refused()
+    {
+        let err = parse("SELECT date_part(s, ts) FROM t").unwrap_err();
+        assert!(err.to_string().contains("quoted literal"), "{err}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_917197e3__v2_second_argument_may_be_a_column() {
+        assert!(parse("SELECT date_part('year', ts) FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_917197e3__v3_another_function_takes_a_column_first() {
+        assert!(parse("SELECT round(n, 2) FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_check_literal_args_917197e3__v4_quoted_or_null_part_is_accepted() {
+        assert!(parse("SELECT date_part('year', ts) FROM t").is_ok());
+        assert!(parse("SELECT date_part(NULL, ts) FROM t").is_ok());
+    }
+
     #[test]
     fn parse_error_span_and_display_cover_every_variant() {
         // A truncated query surfaces as `Unexpected` ("found Eof"), not

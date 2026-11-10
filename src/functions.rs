@@ -1821,6 +1821,7 @@ pub(crate) fn is_known_column_scalar(name: &str, arity: usize) -> bool {
 /// #1046): `Some` with that answer, `None` to fall back to [`call`]. The
 /// VM's `Opcode::Call` consults this before [`call`]; the row engine
 /// never does, so its answers are unchanged.
+#[cfg(feature = "vm-batch")]
 pub(crate) fn call_column_dialect(
     name: &str,
     args: &[Value],
