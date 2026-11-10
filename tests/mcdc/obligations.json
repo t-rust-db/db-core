@@ -21962,7 +21962,7 @@
   {
     "id": "engine_timestamp_output_column_units_d88deb5b",
     "file": "src/engine/timestamp.rs",
-    "line": 338,
+    "line": 339,
     "decision": "match col {\n            crate::parser::ast::ResultColumn::Expr { expr, .. } => {\n                output_timestamp_units(expr, timestamps)\n            }\n            _ => None,\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21972,7 +21972,7 @@
   {
     "id": "engine_timestamp_render_timestamp_cells_a38f22dd",
     "file": "src/engine/timestamp.rs",
-    "line": 355,
+    "line": 367,
     "decision": "match (units.get(i), &cell) {\n                (Some(Some(per_second)), Cell::Int(n)) => {\n                    crate::functions::datetime::iso8601(*n, *per_second).map_or(cell, Cell::Text)\n                }\n                _ => cell,\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -21982,7 +21982,7 @@
   {
     "id": "engine_timestamp_for_each_expr_mut_62e9cd11",
     "file": "src/engine/timestamp.rs",
-    "line": 373,
+    "line": 385,
     "decision": "let ResultColumn::Expr { expr, .. } = column",
     "conditions": 1,
     "vectors_required": 2,
@@ -21992,7 +21992,7 @@
   {
     "id": "engine_timestamp_for_each_expr_mut_22d9aa23",
     "file": "src/engine/timestamp.rs",
-    "line": 377,
+    "line": 389,
     "decision": "let Some(e) = select.where_clause.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22002,7 +22002,7 @@
   {
     "id": "engine_timestamp_for_each_expr_mut_a0797668",
     "file": "src/engine/timestamp.rs",
-    "line": 383,
+    "line": 395,
     "decision": "let Some(e) = select.having.as_mut()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22012,7 +22012,7 @@
   {
     "id": "engine_timestamp_walk_expr_mut_582635c8",
     "file": "src/engine/timestamp.rs",
-    "line": 396,
+    "line": 408,
     "decision": "match &mut expr.kind {\n        ExprKind::Binary { lhs, rhs, .. } | ExprKind::Is { lhs, rhs, .. } => {\n            walk_expr_mut(lhs, f)?;\n            walk_expr_mut(rhs, f)?;\n        }\n        ExprKind::Unary { expr: inner, .. }\n        | ExprKind::Paren(inner)\n        | ExprKind::IsNull { expr: inner, .. }\n        | ExprKind::Cast { expr: inner, .. }\n        | ExprKind::Collate { expr: inner, .. }\n        | ExprKind::InSubquery { expr: inner, .. } => walk_expr_mut(inner, f)?,\n        ExprKind::FunctionCall {\n            args: FunctionArgs::List(list),\n            ..\n        } => {\n            for e in list {\n                walk_expr_mut(e, f)?;\n            }\n        }\n        ExprKind::In {\n            expr: inner, list, ..\n        } => {\n            walk_expr_mut(inner, f)?;\n            for e in list {\n                walk_expr_mut(e, f)?;\n            }\n        }\n        ExprKind::Between {\n            expr: inner,\n            lo,\n            hi,\n            ..\n        } => {\n            walk_expr_mut(inner, f)?;\n            walk_expr_mut(lo, f)?;\n            walk_expr_mut(hi, f)?;\n        }\n        ExprKind::Like {\n            expr: inner,\n            pattern,\n            escape,\n            ..\n        } => {\n            walk_expr_mut(inner, f)?;\n            walk_expr_mut(pattern, f)?;\n            if let Some(e) = escape {\n                walk_expr_mut(e, f)?;\n            }\n        }\n        ExprKind::Case {\n            operand,\n            whens,\n            else_,\n        } => {\n            if let Some(e) = operand {\n                walk_expr_mut(e, f)?;\n            }\n            for (w, t) in whens {\n                walk_expr_mut(w, f)?;\n                walk_expr_mut(t, f)?;\n            }\n            if let Some(e) = else_ {\n                walk_expr_mut(e, f)?;\n            }\n        }\n        _ => {}\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22022,7 +22022,7 @@
   {
     "id": "engine_timestamp_walk_expr_mut_ef9b411b",
     "file": "src/engine/timestamp.rs",
-    "line": 441,
+    "line": 453,
     "decision": "let Some(e) = escape",
     "conditions": 1,
     "vectors_required": 2,
@@ -22032,7 +22032,7 @@
   {
     "id": "engine_timestamp_walk_expr_mut_cefcbf2c",
     "file": "src/engine/timestamp.rs",
-    "line": 450,
+    "line": 462,
     "decision": "let Some(e) = operand",
     "conditions": 1,
     "vectors_required": 2,
@@ -22042,7 +22042,7 @@
   {
     "id": "engine_timestamp_walk_expr_mut_56705ec3",
     "file": "src/engine/timestamp.rs",
-    "line": 457,
+    "line": 469,
     "decision": "let Some(e) = else_",
     "conditions": 1,
     "vectors_required": 2,
@@ -22052,7 +22052,7 @@
   {
     "id": "engine_timestamp_rewrite_timestamp_literals_7c10cd75",
     "file": "src/engine/timestamp.rs",
-    "line": 473,
+    "line": 485,
     "decision": "match &mut expr.kind {\n        ExprKind::Binary {\n            op:\n                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge,\n            lhs,\n            rhs,\n        } => {\n            let (lhs_units, rhs_units) = (units(lhs), units(rhs));\n            for (per_second, literal) in [(lhs_units, &mut **rhs), (rhs_units, &mut **lhs)] {\n                if let (Some(per_second), ExprKind::Literal(Literal::Str(text))) =\n                    (per_second, &literal.kind)\n                {\n                    let value = timestamp_units(text, per_second).ok_or_else(|| {\n                        EngineError::new(\n                            ErrorKind::Compile,\n                            format!(\"conversion error: '{text}' is not a timestamp\"),\n                        )\n                    })?;\n                    literal.kind = ExprKind::Literal(Literal::Integer(value));\n                    break;\n                }\n            }\n            Ok(())\n        }\n        ExprKind::Binary { lhs, rhs, .. } => {\n            rewrite_timestamp_literals(lhs, timestamps)?;\n            rewrite_timestamp_literals(rhs, timestamps)\n        }\n        ExprKind::Unary { expr: inner, .. } | ExprKind::Paren(inner) => {\n            rewrite_timestamp_literals(inner, timestamps)\n        }\n        _ => Ok(()),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22062,7 +22062,7 @@
   {
     "id": "engine_timestamp_rewrite_timestamp_literals_085f83b7",
     "file": "src/engine/timestamp.rs",
-    "line": 482,
+    "line": 494,
     "decision": "let (Some(per_second), ExprKind::Literal(Literal::Str(text))) =\n                    (per_second, &literal.kind)",
     "conditions": 1,
     "vectors_required": 2,
@@ -22072,7 +22072,7 @@
   {
     "id": "engine_timestamp_timestamp_units_93791c8e",
     "file": "src/engine/timestamp.rs",
-    "line": 512,
+    "line": 524,
     "decision": "match text.split_once('.') {\n        Some((whole, fraction)) => (whole, fraction),\n        None => (text, \"\"),\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22082,7 +22082,7 @@
   {
     "id": "engine_timestamp_timestamp_units_3ab6b21e",
     "file": "src/engine/timestamp.rs",
-    "line": 516,
+    "line": 528,
     "decision": "!fraction.chars().all(|c| c.is_ascii_digit())",
     "conditions": 1,
     "vectors_required": 2,
@@ -22092,7 +22092,7 @@
   {
     "id": "engine_timestamp_timestamp_units_9ec35f02",
     "file": "src/engine/timestamp.rs",
-    "line": 522,
+    "line": 534,
     "decision": "whole.eq_ignore_ascii_case(\"now\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -22102,7 +22102,7 @@
   {
     "id": "engine_timestamp_timestamp_units_25058f85",
     "file": "src/engine/timestamp.rs",
-    "line": 527,
+    "line": 539,
     "decision": "match parsed {\n        Ok(crate::value::Value::Integer(s)) => s,\n        _ => return None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22112,7 +22112,7 @@
   {
     "id": "engine_timestamp_timestamp_units_3e00d129",
     "file": "src/engine/timestamp.rs",
-    "line": 534,
+    "line": 546,
     "decision": "sub.len() < digits",
     "conditions": 1,
     "vectors_required": 2,
@@ -22122,7 +22122,7 @@
   {
     "id": "engine_timestamp_timestamp_units_6f400264",
     "file": "src/engine/timestamp.rs",
-    "line": 537,
+    "line": 549,
     "decision": "sub.is_empty()",
     "conditions": 1,
     "vectors_required": 2,
@@ -22132,7 +22132,7 @@
   {
     "id": "engine_timestamp_first_item_d97b0e50",
     "file": "src/engine/timestamp.rs",
-    "line": 640,
+    "line": 652,
     "decision": "match crate::parser::column::parse(sql).unwrap().columns.remove(0) {\n            ResultColumn::Expr { expr, .. } => expr,\n            other => panic!(\"expected an expression: {other:?}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22142,7 +22142,7 @@
   {
     "id": "engine_timestamp_call_name_430ac10b",
     "file": "src/engine/timestamp.rs",
-    "line": 647,
+    "line": 659,
     "decision": "match &expr.kind {\n            ExprKind::FunctionCall { name, .. } => name,\n            _ => \"\",\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -22152,7 +22152,7 @@
   {
     "id": "engine_timestamp_mcdc__engine_timestamp_date_trunc_units_8a6e38e9__v3_another_arity_is_left_alone_1c79946c",
     "file": "src/engine/timestamp.rs",
-    "line": 683,
+    "line": 695,
     "decision": "let ExprKind::FunctionCall {\n            args: FunctionArgs::List(args),\n            ..\n        } = &mut expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -22162,7 +22162,7 @@
   {
     "id": "engine_timestamp_pop_arg_1c79946c",
     "file": "src/engine/timestamp.rs",
-    "line": 704,
+    "line": 716,
     "decision": "let ExprKind::FunctionCall {\n            args: FunctionArgs::List(args),\n            ..\n        } = &mut expr.kind",
     "conditions": 1,
     "vectors_required": 2,
@@ -22172,7 +22172,7 @@
   {
     "id": "engine_timestamp_mcdc__engine_timestamp_expr_timestamp_units_4343dffd__v4_min_with_two_args_has_none_1c79946c",
     "file": "src/engine/timestamp.rs",
-    "line": 769,
+    "line": 781,
     "decision": "let ExprKind::FunctionCall {\n            args: FunctionArgs::List(args),\n            ..\n        } = &mut expr.kind",
     "conditions": 1,
     "vectors_required": 2,

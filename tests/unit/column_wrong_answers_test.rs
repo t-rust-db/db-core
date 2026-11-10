@@ -335,6 +335,40 @@ fn resolve_timestamps_rewrites_a_query_parsed_outside_the_engine() {
     assert!(resolve_timestamps(&mut not_ts, &timestamps).is_err());
 }
 
+/// The public rendering hook beside it (#1046): after
+/// `resolve_timestamps`, `output_column_units` marks the timestamp-valued
+/// output columns (a TIMESTAMP column, a `date_trunc` over one) with their
+/// units, and `render_timestamp` prints them as the engine does.
+#[test]
+fn output_column_units_and_render_timestamp_print_as_the_engine_does() {
+    use db_core::engine::column::{output_column_units, render_timestamp, resolve_timestamps};
+
+    let timestamps = [("ts".to_string(), 1_000_000)];
+    let mut select =
+        db_core::parser::parse("SELECT ts, date_trunc('hour', ts) AS h, id, upper(s) FROM t")
+            .unwrap();
+    resolve_timestamps(&mut select, &timestamps).unwrap();
+    assert_eq!(
+        output_column_units(&select, &timestamps),
+        [Some(1_000_000), Some(1_000_000), None, None]
+    );
+
+    // 2026-11-09 16:00:00 UTC, in µs and in ns; a fraction is trimmed.
+    assert_eq!(
+        render_timestamp(1_794_240_000_000_000, 1_000_000).as_deref(),
+        Some("2026-11-09 16:00:00")
+    );
+    assert_eq!(
+        render_timestamp(1_794_240_000_000_000_000, 1_000_000_000).as_deref(),
+        Some("2026-11-09 16:00:00")
+    );
+    assert_eq!(
+        render_timestamp(1_794_240_000_500_000, 1_000_000).as_deref(),
+        Some("2026-11-09 16:00:00.5")
+    );
+    assert_eq!(render_timestamp(1, 0), None);
+}
+
 /// Step 6: LIKE is case-sensitive, as in DuckDB; ILIKE is the
 /// case-insensitive form. GLOB was already case-sensitive.
 #[test]

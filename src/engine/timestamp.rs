@@ -327,11 +327,12 @@ pub(crate) fn output_timestamp_units(expr: &Expr, timestamps: &[(String, i64)]) 
 }
 
 /// Per-output-column units of `select`'s select list, for rendering
-/// timestamp-valued columns as ISO 8601 (#1046).
-pub(crate) fn output_column_units(
-    select: &Select,
-    timestamps: &[(String, i64)],
-) -> Vec<Option<i64>> {
+/// timestamp-valued columns as ISO 8601 (#1046): `Some(units per second)`
+/// for a TIMESTAMP column or a `date_trunc` result, `None` otherwise.
+/// Public for a caller that plans and prints itself (column-rs): pass the
+/// `select` after [`resolve_timestamps`] and `expand_star`, and render
+/// each `Some` column's integers with [`render_timestamp`].
+pub fn output_column_units(select: &Select, timestamps: &[(String, i64)]) -> Vec<Option<i64>> {
     select
         .columns
         .iter()
@@ -342,6 +343,17 @@ pub(crate) fn output_column_units(
             _ => None,
         })
         .collect()
+}
+
+/// `value` (`per_second` units since 1970-01-01 UTC) as DuckDB prints a
+/// TIMESTAMP, the column and stream engines' own rendering (#1046):
+/// `2026-11-09 16:00:00`, plus the fractional second with trailing zeros
+/// trimmed. `None` for `per_second <= 0` or past the civil range.
+/// Public through `engine::column` only, so the stream profile alone has
+/// no caller.
+#[cfg(feature = "engine-column")]
+pub fn render_timestamp(value: i64, per_second: i64) -> Option<String> {
+    crate::functions::datetime::iso8601(value, per_second)
 }
 
 /// One result row's cells, with a timestamp-valued column's integer
