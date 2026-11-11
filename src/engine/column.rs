@@ -38,7 +38,7 @@ use crate::vm::batch::{
 use crate::vm::column::{Bitmap, Column};
 use crate::vm::engine;
 
-use super::timestamp::{output_column_units, render_timestamp_cells, timestamp_literals};
+use super::timestamp::{render_timestamp_cells, timestamp_literals};
 
 #[cfg(all(
     feature = "ingest-read",
@@ -471,7 +471,7 @@ pub fn parquet_timestamp_columns(file: &ParquetFile<'_>) -> Vec<(String, i64)> {
     timestamp_columns(file)
 }
 
-pub use super::timestamp::resolve_timestamps;
+pub use super::timestamp::{output_column_units, render_timestamp, resolve_timestamps};
 
 /// A top-level `MAP` field of two leaves.
 fn is_map(field: &crate::storage::parquet::Field) -> bool {
