@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.239.0] - 2026-11-11
+
+### Added
+
+- `engine::column::output_column_units` and `engine::column::render_timestamp` are public, for a caller that plans and prints itself (column-rs) to print TIMESTAMP results as ISO 8601, as the engine does (#1046)
+
 ## [0.238.0] - 2026-11-10
 
 ### Added
