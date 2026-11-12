@@ -45,7 +45,7 @@ fn append(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<String> {
 fn raws(s: &Snapshot) -> (Vec<String>, Vec<(u64, u64)>) {
     let mut rows = Vec::new();
     let mut ranges = Vec::new();
-    for (entry, bytes) in s.files() {
+    for (entry, bytes) in s.files().unwrap() {
         let file = ParquetFile::open(bytes).unwrap();
         let raw = file.metadata().schema[1..]
             .iter()
@@ -344,6 +344,8 @@ fn append_fast(w: &mut TableWriter, range: std::ops::Range<usize>) {
 fn assert_covers(s: &Snapshot) {
     let mut ranges: Vec<(u64, u64)> = s
         .files()
+        .unwrap()
+        .into_iter()
         .map(|(entry, _)| (entry.lsn_lo, entry.lsn_hi))
         .collect();
     ranges.extend(s.pages().iter().map(|p| (p.lsn_lo, p.lsn_hi)));

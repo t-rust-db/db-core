@@ -324,8 +324,10 @@ pub(super) fn file_flags(
     where_clause: Option<&Expr>,
 ) -> Vec<bool> {
     snapshot
-        .files()
-        .map(|(entry, _)| {
+        .manifest()
+        .files
+        .iter()
+        .map(|entry| {
             may_match(
                 entry,
                 schema,

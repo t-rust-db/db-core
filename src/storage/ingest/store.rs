@@ -12,6 +12,7 @@ use std::io;
 use std::path::Path;
 
 use self::lease::Lease;
+use super::snapshot::HeldFile;
 use crate::storage::column::posix::PosixFile;
 use crate::storage::column::{MmapRegion, VfsFile};
 
@@ -61,6 +62,15 @@ pub trait TableStore: Send + Sync {
     /// The whole object as a read-only region. A missing object is
     /// [`io::ErrorKind::NotFound`], which readers take as "replaced, retry".
     fn map(&self, key: &str) -> io::Result<MmapRegion>;
+
+    /// The listed object `key`, of `size` bytes (the manifest's), for a
+    /// snapshot to hold while it reads it (ADR 0045). By default the whole
+    /// object, [`map`](Self::map)ped; an object store reads it by range
+    /// instead. A missing object is [`io::ErrorKind::NotFound`].
+    fn hold(&self, key: &str, size: u64) -> io::Result<HeldFile> {
+        let _ = size;
+        Ok(HeldFile::mapped(self.map(key)?))
+    }
 
     /// Atomically replaces the object with `bytes`, durably: after `Ok`, a
     /// crash leaves either the old or the new object, never a mix, and
@@ -216,6 +226,21 @@ impl TableStore for Store {
             Store::S3(s) => s.map(key),
             #[cfg(test)]
             Store::Memory(s) => s.map(key),
+        }
+    }
+
+    fn hold(&self, key: &str, size: u64) -> io::Result<HeldFile> {
+        match self {
+            Store::Local(s) => s.hold(key, size),
+            // Read by range: only the footers and the column chunks a query
+            // needs, through the store's read cache (#1052).
+            #[cfg(feature = "storage-s3")]
+            Store::S3(s) => s
+                .open_held(key, size)
+                .map(|f| HeldFile::ranged(StoreFile::S3(f))),
+            // The same path in tests, over memory.
+            #[cfg(test)]
+            Store::Memory(s) => s.open(key).map(|f| HeldFile::ranged(StoreFile::Memory(f))),
         }
     }
 

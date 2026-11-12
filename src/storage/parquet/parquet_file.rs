@@ -555,6 +555,21 @@ impl<'a> ParquetFile<'a> {
         }
     }
 
+    /// `file` opened with a footer already parsed from it (#1052): no read
+    /// at all until a column chunk is decoded.
+    #[cfg(any(feature = "storage-s3", test))]
+    #[cfg(feature = "ingest-read")]
+    pub(crate) fn with_footer_file(
+        footer: Arc<ParsedFooter>,
+        file: &'a dyn VfsFile,
+    ) -> Result<Self> {
+        let len = file.size().map_err(FileError::Io)?;
+        Ok(ParquetFile {
+            footer,
+            source: Source::File { file, len },
+        })
+    }
+
     /// The parsed footer, to open the same file again without parsing it
     /// ([`with_footer`](Self::with_footer)).
     #[cfg(feature = "ingest-read")]

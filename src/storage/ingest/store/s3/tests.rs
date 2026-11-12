@@ -38,6 +38,8 @@ struct FakeS3 {
     deny_parts: AtomicBool,
     /// A status to answer a multipart complete with instead (0: none).
     complete_status: AtomicU64,
+    /// Body bytes sent in answer to GETs of objects.
+    sent: AtomicU64,
 }
 
 /// The value of query parameter `name`, decoded.
@@ -246,8 +248,10 @@ impl Transport for FakeS3 {
                         let to: usize = to.parse().unwrap_or(bytes.len() - 1);
                         headers[1] = ("content-length", (to + 1 - from).to_string());
                         let part = bytes.get(from..=to).unwrap_or_default().to_vec();
+                        self.sent.fetch_add(part.len() as u64, Ordering::SeqCst);
                         return Ok(response(206, &headers, part));
                     }
+                    self.sent.fetch_add(bytes.len() as u64, Ordering::SeqCst);
                     Ok(response(200, &headers, bytes.clone()))
                 }
             },
@@ -909,4 +913,191 @@ fn mcdc__storage_ingest_store_s3_tests_send_394df044__v2_a_plain_put_overwrites(
 #[allow(non_snake_case)]
 fn mcdc__storage_ingest_store_s3_tests_send_394df044__v3_a_create_only_put_on_a_free_name_lands() {
     assert!(conditional_put(false, true).is_some());
+}
+
+// ---- Reading a table's files by range (#1052, ADR 0045) -----------------
+
+use crate::engine::column::table::query_snapshot;
+use crate::engine::{Cell, QueryResult};
+use crate::storage::ingest::{Ack, Snapshot, TableOptions, TableWriter};
+
+/// A table of three files on `fake` whose rows carry a wide `pad` column
+/// a filter on `k` never needs. The store keeps `cache` bytes of what
+/// queries read. Returns the store too, to look at its read cache.
+fn wide_table(
+    fake: &Arc<FakeS3>,
+    cache: u64,
+    tag: &str,
+) -> (std::path::PathBuf, S3Store, TableWriter) {
+    let mut cfg = config(CommitMode::SingleWriter);
+    cfg.read_cache_bytes = cache;
+    let s3 = S3Store::with_transport(cfg, Arc::clone(fake) as Arc<dyn Transport>).unwrap();
+    let local =
+        std::env::temp_dir().join(format!("db-core-s3-ranged-{tag}-{}", std::process::id()));
+    std::fs::remove_dir_all(&local).ok();
+    let mut w =
+        TableWriter::open_in(&local, Store::S3(s3.clone()), TableOptions::default()).unwrap();
+    let pad = "p".repeat(400);
+    for file in 0..3 {
+        for i in 0..200 {
+            let line = format!(
+                r#"{{"id":{},"k":{},"pad":"{pad}{i}"}}"#,
+                file * 200 + i,
+                i % 5
+            );
+            w.append(line.as_bytes(), Ack::Memory).unwrap();
+        }
+        w.flush_all().unwrap();
+    }
+    (local, s3, w)
+}
+
+fn count_k1(snapshot: &Snapshot) -> QueryResult {
+    query_snapshot(snapshot, "t", "SELECT count(*) FROM t WHERE k = 1").unwrap()
+}
+
+/// GETs and body bytes `fake` answered while `f` ran.
+fn reads<T>(fake: &FakeS3, f: impl FnOnce() -> T) -> (T, usize, u64) {
+    let (gets, sent) = (fake.count("GET"), fake.sent.load(Ordering::SeqCst));
+    let out = f();
+    (
+        out,
+        fake.count("GET") - gets,
+        fake.sent.load(Ordering::SeqCst) - sent,
+    )
+}
+
+#[test]
+fn a_query_reads_only_the_footers_and_the_chunks_it_needs() {
+    let fake = FakeS3::new(false);
+    let (local, _, w) = wide_table(&fake, 256 << 20, "needs");
+    let snapshot = w.snapshot().unwrap();
+    let whole: u64 = snapshot.manifest().files.iter().map(|f| f.bytes).sum();
+    let (result, gets, sent) = reads(&fake, || count_k1(&snapshot));
+    assert_eq!(result.rows, vec![vec![Cell::Int(120)]]);
+    // Per file: the footer's tail, the footer, and the `k` chunk; never
+    // the whole object.
+    assert!(gets >= 3 && gets <= 3 * 3, "{gets} GETs");
+    assert!(sent * 4 < whole, "{sent} of {whole} bytes");
+    std::fs::remove_dir_all(&local).ok();
+}
+
+#[test]
+fn a_second_query_is_answered_from_the_read_cache() {
+    let fake = FakeS3::new(false);
+    let (local, s3, w) = wide_table(&fake, 256 << 20, "again");
+    let snapshot = w.snapshot().unwrap();
+    count_k1(&snapshot);
+    assert!(s3.client.ranges.held() > 0);
+    // A later snapshot holds the same files: same footers, same chunks.
+    let later = w.snapshot().unwrap();
+    let (result, gets, sent) = reads(&fake, || count_k1(&later));
+    assert_eq!(result.rows, vec![vec![Cell::Int(120)]]);
+    assert_eq!((gets, sent), (0, 0));
+    std::fs::remove_dir_all(&local).ok();
+}
+
+#[test]
+fn without_a_read_cache_only_the_footers_are_kept() {
+    let fake = FakeS3::new(false);
+    let (local, s3, w) = wide_table(&fake, 0, "nocache");
+    let snapshot = w.snapshot().unwrap();
+    let (_, first, _) = reads(&fake, || count_k1(&snapshot));
+    let (result, again, _) = reads(&fake, || count_k1(&snapshot));
+    assert_eq!(result.rows, vec![vec![Cell::Int(120)]]);
+    assert_eq!(s3.client.ranges.held(), 0);
+    // The parsed footers stay with the held files; the chunks are read
+    // again.
+    assert!(again > 0 && again < first, "{first} then {again}");
+    std::fs::remove_dir_all(&local).ok();
+}
+
+#[test]
+fn the_read_cache_stays_within_its_budget() {
+    let fake = FakeS3::new(false);
+    let budget = 8 << 10;
+    let (local, s3, w) = wide_table(&fake, budget, "budget");
+    let snapshot = w.snapshot().unwrap();
+    let whole: u64 = snapshot.manifest().files.iter().map(|f| f.bytes).sum();
+    assert!(whole > budget * 4, "the table is larger than the budget");
+    let all = query_snapshot(&snapshot, "t", "SELECT sum(length(pad)), max(id) FROM t").unwrap();
+    assert_eq!(
+        all.rows,
+        vec![vec![
+            Cell::Int(600 * 400 + 3 * (10 + 2 * 90 + 3 * 100)),
+            Cell::Int(599)
+        ]]
+    );
+    assert!(s3.client.ranges.held() <= budget);
+    std::fs::remove_dir_all(&local).ok();
+}
+
+#[test]
+fn a_ranged_table_answers_as_a_local_one() {
+    let fake = FakeS3::new(false);
+    let (local, _, w) = wide_table(&fake, 256 << 20, "same");
+    let ranged = w.snapshot().unwrap();
+    // The same files, held whole from the local filesystem.
+    let dir = std::env::temp_dir().join(format!("db-core-s3-ranged-copy-{}", std::process::id()));
+    std::fs::remove_dir_all(&dir).ok();
+    for entry in &ranged.manifest().files {
+        let to = dir.join(&entry.path);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::write(&to, fake.objects.lock().unwrap()[&entry.path].0.clone()).unwrap();
+    }
+    ranged
+        .manifest()
+        .write_to(&super::super::LocalFs::new(&dir))
+        .unwrap();
+    let mapped = Snapshot::open(&dir).unwrap();
+    for sql in [
+        "SELECT k, count(*) AS n, min(id), max(id) FROM t GROUP BY k ORDER BY k",
+        "SELECT id, substr(pad, 398) FROM t WHERE id % 97 = 3 ORDER BY id",
+    ] {
+        assert_eq!(
+            query_snapshot(&ranged, "t", sql).unwrap().rows,
+            query_snapshot(&mapped, "t", sql).unwrap().rows,
+            "{sql}"
+        );
+    }
+    // `files()` fetches a ranged file whole, once.
+    assert_eq!(ranged.files().unwrap().len(), 3);
+    std::fs::remove_dir_all(&local).ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// storage_ingest_store_s3_read_at: `self.cached && body.len() == len` --
+// only a held file's complete reads are kept.
+fn kept_after_read(cached: bool, size: u64) -> u64 {
+    let fake = FakeS3::new(false);
+    let s = store(&fake, CommitMode::SingleWriter);
+    s.put("o", b"0123456789").unwrap();
+    let f = if cached {
+        s.open_held("o", size).unwrap()
+    } else {
+        s.open("o").unwrap()
+    };
+    let mut buf = [0u8; 4];
+    f.read_at(8, &mut buf).unwrap();
+    s.client.ranges.held()
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_read_at_aacbeb34__v1_a_held_files_complete_read_is_kept() {
+    assert_eq!(kept_after_read(true, 10), 2);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_read_at_aacbeb34__v2_a_file_read_once_is_not_kept() {
+    assert_eq!(kept_after_read(false, 10), 0);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_read_at_aacbeb34__v3_a_short_read_is_not_kept() {
+    // Held as 12 bytes, the object has 10: the range 8..12 comes back
+    // with 2, which is not the range asked for.
+    assert_eq!(kept_after_read(true, 12), 0);
 }

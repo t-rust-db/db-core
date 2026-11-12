@@ -61,7 +61,7 @@ fn line(lsn: u64) -> String {
 /// record. Returns whether it had both files and pages.
 fn check(s: &Snapshot) -> bool {
     let mut next = 1u64;
-    for (entry, bytes) in s.files() {
+    for (entry, bytes) in s.files().unwrap() {
         assert_eq!(entry.lsn_lo, next, "{s:?}");
         let file = ParquetFile::open(bytes).unwrap();
         let raw = file.metadata().schema[1..]

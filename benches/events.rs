@@ -545,7 +545,7 @@ fn query(dir: &Path, sql: &str) {
     out.flush().unwrap();
     eprintln!("elapsed_ms={:.1}", elapsed.as_secs_f64() * 1e3);
     eprintln!("files_opened={opened}");
-    eprintln!("files_total={}", snapshot.files().count());
+    eprintln!("files_total={}", snapshot.files().unwrap().len());
 }
 
 /// A build side read with and without the filter, as a join over `dir`
@@ -566,7 +566,7 @@ fn build(dir: &Path, predicate: &str) {
     println!("rows_all={}", all.num_rows);
     println!("rows_filtered={}", some.num_rows);
     println!("files_opened={opened}");
-    println!("files_total={}", snapshot.files().count());
+    println!("files_total={}", snapshot.files().unwrap().len());
     println!("all_ms={all_ms:.1}");
     println!("filtered_ms={some_ms:.1}");
 }

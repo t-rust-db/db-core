@@ -15,6 +15,7 @@
 //! ([`lease`](super::lease)); without them the writer's local lock is the
 //! only protection, which does not reach a second machine.
 
+mod cache;
 mod credentials;
 pub use credentials::CredentialSource;
 mod http;
@@ -29,6 +30,7 @@ use std::io::{self, Read};
 use std::sync::Arc;
 use std::time::Duration;
 
+use self::cache::RangeCache;
 use super::lease::{publish_once, ConditionalObjects, Lease, ManifestFence};
 use super::{check_key, TableStore};
 use crate::storage::column::{MmapRegion, VfsFile};
@@ -77,6 +79,11 @@ pub struct S3Config {
     pub multipart_threshold: u64,
     /// The size of one part (16 MiB; S3 wants at least 5 MiB, but the last).
     pub part_size: usize,
+    /// The bytes of column chunks and footers a query read that the store
+    /// keeps for the next query, least recently used out first (256 MiB;
+    /// 0 keeps none). A table's files never change, so a kept range never
+    /// goes stale (#1052, ADR 0045).
+    pub read_cache_bytes: u64,
 }
 
 impl S3Config {
@@ -98,6 +105,7 @@ impl S3Config {
             lease_ttl: Duration::from_secs(30),
             multipart_threshold: 64 << 20,
             part_size: 16 << 20,
+            read_cache_bytes: 256 << 20,
         }
     }
 }
@@ -208,6 +216,8 @@ struct Client {
     endpoint: Endpoint,
     transport: Arc<dyn Transport>,
     fence: ManifestFence,
+    /// What held files read, for the next query (#1052).
+    ranges: RangeCache,
 }
 
 impl std::fmt::Debug for Client {
@@ -562,11 +572,13 @@ impl S3Store {
     pub fn with_transport(cfg: S3Config, transport: Arc<dyn Transport>) -> io::Result<S3Store> {
         let endpoint = Endpoint::parse(&cfg.endpoint)?;
         let mode = cfg.commit;
+        let ranges = RangeCache::new(cfg.read_cache_bytes);
         let client = Arc::new(Client {
             cfg,
             endpoint,
             transport,
             fence: ManifestFence::default(),
+            ranges,
         });
         let conditional = match mode {
             CommitMode::SingleWriter => false,
@@ -592,6 +604,19 @@ impl S3Store {
     pub fn is_conditional(&self) -> bool {
         self.conditional
     }
+
+    /// The listed object `key` of `size` bytes (the manifest's), opened
+    /// for a snapshot to hold: no HEAD, and its reads go through the read
+    /// cache (#1052).
+    pub(crate) fn open_held(&self, key: &str, size: u64) -> io::Result<S3File> {
+        check_key(key)?;
+        Ok(S3File {
+            client: Arc::clone(&self.client),
+            key: key.to_string(),
+            size,
+            cached: true,
+        })
+    }
 }
 
 /// Whether the store refuses a second create-only put of the same key.
@@ -613,12 +638,25 @@ fn probe_conditional(client: &Client) -> io::Result<bool> {
     outcome
 }
 
-/// An object opened for positioned reads: one ranged GET per read.
+/// An object opened for positioned reads: one ranged GET per read, or none
+/// when a held file's range is still in the store's read cache.
 #[derive(Debug)]
 pub struct S3File {
     client: Arc<Client>,
     key: String,
     size: u64,
+    /// Whether reads go through the store's read cache: a snapshot's held
+    /// file does, a flush or a compaction reading a file once does not.
+    cached: bool,
+}
+
+/// Copies the start of `from` into `buf`; the bytes copied.
+fn copy_into(buf: &mut [u8], from: &[u8]) -> usize {
+    let n = from.len().min(buf.len());
+    if let (Some(to), Some(from)) = (buf.get_mut(..n), from.get(..n)) {
+        to.copy_from_slice(from);
+    }
+    n
 }
 
 impl VfsFile for S3File {
@@ -632,6 +670,12 @@ impl VfsFile for S3File {
         }
         let want = u64::try_from(buf.len()).unwrap_or(u64::MAX);
         let last = offset.saturating_add(want).min(self.size).saturating_sub(1);
+        let len = usize::try_from(last.saturating_sub(offset).saturating_add(1)).unwrap_or(0);
+        if self.cached {
+            if let Some(held) = self.client.ranges.get(&self.key, offset, len) {
+                return Ok(copy_into(buf, &held));
+            }
+        }
         let range = format!("bytes={offset}-{last}");
         let resp = Client::expect(
             self.client.call_retrying(
@@ -652,11 +696,13 @@ impl VfsFile for S3File {
                 .and_then(|o| resp.body.get(o..))
                 .unwrap_or_default()
         };
-        let n = body.len().min(buf.len());
-        if let (Some(to), Some(from)) = (buf.get_mut(..n), body.get(..n)) {
-            to.copy_from_slice(from);
+        let body = body.get(..len).unwrap_or(body);
+        if self.cached && body.len() == len {
+            self.client
+                .ranges
+                .insert(&self.key, offset, Arc::from(body));
         }
-        Ok(n)
+        Ok(copy_into(buf, body))
     }
 
     fn mmap(&self) -> io::Result<MmapRegion> {
@@ -681,6 +727,7 @@ impl TableStore for S3Store {
             client: Arc::clone(&self.client),
             key: key.to_string(),
             size,
+            cached: false,
         })
     }
 

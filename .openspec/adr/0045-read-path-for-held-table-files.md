@@ -4,9 +4,7 @@ Date: 2026-11-12
 
 ## Status
 
-Accepted. The footer cache is built (#1052, first part). Reading an object
-store's files by range, with a column-chunk cache under a byte budget, is
-the decided second part and is not built yet.
+Accepted, built (#1052).
 
 ## Context
 
@@ -42,13 +40,18 @@ it. `ParsedFooter` is the footer plus what is derived from it (the schema
 tree, leaf positions, max definition levels); `ParquetFile` holds it behind
 an `Arc` and borrows only the bytes. Nothing in the public API changes.
 
-**An object store's files are read by range (second part).** For a store
-that is not the local filesystem, a held file is a range-reading `VfsFile`
-over the store's object, opened with `ParquetFile::open_file`: one ranged
-GET for the footer, then one per column chunk a query loads. The size comes
-from the manifest (`FileEntry.bytes`), so no HEAD per file. Fetched chunks
-go into an LRU keyed by (path, offset) with a byte budget, an option on the
-reader (default 256 MiB). Local files stay on `mmap`.
+**An object store's files are read by range.** `TableStore::hold` gives a
+snapshot its file: by default the whole object, mapped; `Store::S3` a
+`StoreFile` opened with `ParquetFile::open_file` instead, so a query costs
+a ranged GET for the footer's tail and one for the footer (once per file
+per reader, since the footer is kept), then one per column chunk it loads.
+The size comes from the manifest (`FileEntry.bytes`), so no HEAD per file.
+What a held file reads goes into the store client's read cache, keyed by
+(object, offset, length) and evicted least recently used first under
+`S3Config::read_cache_bytes` (256 MiB; 0 keeps none). One cache per store
+client, so every reader of that store shares the budget. A file opened to
+be read once (a flush, a compaction) bypasses it, so a compaction does not
+evict what queries read. Local files stay on `mmap`.
 
 - The unit is the whole column chunk, as `column_chunk_bytes` reads it
   today. There is no page index or bloom filter yet (#590), so nothing finer
@@ -66,11 +69,19 @@ reader (default 256 MiB). Local files stay on `mmap`.
   previous commit). The gain grows with row groups × columns per file.
 - A reader holds one parsed footer per listed file. That is small next to
   the bytes it already held whole, and it goes with the file.
+- On the S3 test transport, a filtered `count(*)` over three files of a
+  wide table read 7.6 KB in 9 GETs where the whole objects are 45.8 KB in
+  3; the same query again read nothing. The request count is the cost: a
+  footer read is two GETs per file once per reader, a chunk one per column
+  per row group. Fetching the tail and the footer in one speculative read,
+  and coalescing adjacent chunks, are the next steps if it shows.
 - `snapshot_files` and `snapshot_segments*` keep their signatures: they
   already return `ParquetFile`, so a caller that plans and runs itself gets
-  the cached footers without a change. `Snapshot::files()` still returns
-  whole bytes, which a range-read file will not have; the second part adds
-  an accessor for those rather than changing it.
+  the cached footers and the ranged reads without a change.
+- `Snapshot::files()` returns `Result<Vec<..>, IngestError>`: a ranged file
+  has no whole bytes until fetched, and that fetch can fail. A caller that
+  only needs footers reads them through `snapshot_files` instead, which
+  fetches no whole object.
 - No dependency and no `unsafe` (`OnceLock` is std): the column profile
   (ADR 0000) and the wasm32 build are unchanged, and the stream profile does
   not compile `storage::ingest`.

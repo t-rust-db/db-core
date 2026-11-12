@@ -95,7 +95,7 @@ pub(super) fn append(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<
 pub(super) fn rows(w: &TableWriter) -> Vec<String> {
     let s = w.snapshot().unwrap();
     let mut rows = Vec::new();
-    for (_, bytes) in s.files() {
+    for (_, bytes) in s.files().unwrap() {
         let file = ParquetFile::open(bytes).unwrap();
         let raw = file.metadata().schema[1..]
             .iter()
@@ -171,7 +171,7 @@ fn a_flush_lands_in_the_store_and_nothing_else_is_local() {
     // A reader of the store alone sees the flushed rows.
     let snapshot = Snapshot::open_in(&f.store()).unwrap();
     assert_eq!(*snapshot.manifest(), w.manifest());
-    assert_eq!(snapshot.files().count(), 1);
+    assert_eq!(snapshot.files().unwrap().len(), 1);
 }
 
 #[test]
@@ -365,6 +365,8 @@ fn a_location_is_a_directory_unless_it_is_s3() {
 fn first_file_address(r: &StoreReader) -> usize {
     r.snapshot()
         .files()
+        .unwrap()
+        .into_iter()
         .next()
         .map_or(0, |(_, bytes)| bytes.as_ptr() as usize)
 }
@@ -377,7 +379,7 @@ fn a_store_reader_follows_the_writer_and_keeps_the_files_it_has() {
     w.flush_all().unwrap();
 
     let mut reader = StoreReader::open(f.store()).unwrap();
-    assert_eq!(reader.snapshot().files().count(), 1);
+    assert_eq!(reader.snapshot().files().unwrap().len(), 1);
     let first = first_file_address(&reader);
 
     // The writer flushes again: one refresh later the reader has both files,
@@ -385,23 +387,25 @@ fn a_store_reader_follows_the_writer_and_keeps_the_files_it_has() {
     lines.extend(append(&mut w, 4..9));
     w.flush_all().unwrap();
     assert_eq!(
-        reader.snapshot().files().count(),
+        reader.snapshot().files().unwrap().len(),
         1,
         "nothing changes until refresh"
     );
     let snapshot = reader.refresh().unwrap();
-    assert_eq!(snapshot.files().count(), 2);
+    assert_eq!(snapshot.files().unwrap().len(), 2);
     assert_eq!(*snapshot.manifest(), w.manifest());
     assert_eq!(first_file_address(&reader), first);
     let records: usize = reader
         .snapshot()
         .files()
+        .unwrap()
+        .into_iter()
         .map(|(e, _)| usize::try_from(e.rows).unwrap())
         .sum();
     assert_eq!(records, lines.len());
 
     // Nothing new: the same files again.
-    assert_eq!(reader.refresh().unwrap().files().count(), 2);
+    assert_eq!(reader.refresh().unwrap().files().unwrap().len(), 2);
 }
 
 #[test]
@@ -416,16 +420,18 @@ fn a_store_reader_lets_go_of_files_a_compaction_replaced() {
     append(&mut w, 8..9);
     w.flush().unwrap();
     let mut reader = StoreReader::open(f.store()).unwrap();
-    assert!(reader.snapshot().files().count() >= 2);
+    assert!(reader.snapshot().files().unwrap().len() >= 2);
 
     w.compact().unwrap();
     set_clock(1, 0, 61_000_000_000);
     w.compact().unwrap();
     // The hours are deleted from the store; the next manifest does not list them.
     let snapshot = reader.refresh().unwrap();
-    assert_eq!(snapshot.files().count(), 1);
+    assert_eq!(snapshot.files().unwrap().len(), 1);
     assert!(snapshot
         .files()
+        .unwrap()
+        .into_iter()
         .all(|(e, _)| e.path.starts_with("archive/")));
 }
 
@@ -566,7 +572,7 @@ fn a_table_handle_runs_on_a_store() {
     assert_eq!(table.snapshot().unwrap().manifest().flushed_lsn, 2);
     // A reader of the store alone sees the flushed rows.
     let reader = Snapshot::open_in(&f.store()).unwrap();
-    assert_eq!(reader.files().count(), 1);
+    assert_eq!(reader.files().unwrap().len(), 1);
     // The table is leased to this handle; a second one is refused.
     assert!(matches!(
         Table::open_in(&f.local, f.store(), TableOptions::default()),
@@ -580,6 +586,8 @@ fn a_table_handle_runs_on_a_store() {
 /// that share a file's bytes did not fetch it again (#1051).
 fn file_addresses(s: &Snapshot) -> Vec<(String, *const u8)> {
     s.files()
+        .unwrap()
+        .into_iter()
         .map(|(entry, bytes)| (entry.path.clone(), bytes.as_ptr()))
         .collect()
 }

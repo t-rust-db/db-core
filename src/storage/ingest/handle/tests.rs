@@ -33,7 +33,7 @@ impl Drop for TempDir {
 fn raws(table: &Table) -> Vec<String> {
     let s = table.snapshot().unwrap();
     let mut rows = Vec::new();
-    for (_, bytes) in s.files() {
+    for (_, bytes) in s.files().unwrap() {
         let file = ParquetFile::open(bytes).unwrap();
         let raw = file.metadata().schema[1..]
             .iter()
