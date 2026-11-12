@@ -575,3 +575,58 @@ fn a_table_handle_runs_on_a_store() {
     table.close().unwrap();
     assert!(table.is_closed() && clone.is_closed());
 }
+
+/// Each listed file's path and the address of its bytes: two snapshots
+/// that share a file's bytes did not fetch it again (#1051).
+fn file_addresses(s: &Snapshot) -> Vec<(String, *const u8)> {
+    s.files()
+        .map(|(entry, bytes)| (entry.path.clone(), bytes.as_ptr()))
+        .collect()
+}
+
+#[test]
+fn a_snapshot_reuses_the_files_the_last_one_fetched() {
+    let f = Fixture::new();
+    let mut w = f.open(TableOptions::default()).unwrap();
+    append(&mut w, 0..5);
+    w.flush_all().unwrap();
+    // Both held at once, so a fresh fetch could not land on the same
+    // address.
+    let first = w.snapshot().unwrap();
+    let second = w.snapshot().unwrap();
+    assert_eq!(file_addresses(&first).len(), 1);
+    assert_eq!(file_addresses(&first), file_addresses(&second));
+
+    // After a flush, the old file is the same bytes and only the new one
+    // is fetched.
+    append(&mut w, 5..10);
+    w.flush_all().unwrap();
+    let third = w.snapshot().unwrap();
+    let addresses = file_addresses(&third);
+    assert_eq!(addresses.len(), 2);
+    assert!(addresses.contains(&file_addresses(&first)[0]));
+    assert_eq!(rows(&w), sorted((0..10).map(line).collect()));
+}
+
+#[test]
+fn a_snapshot_lets_go_of_files_the_manifest_no_longer_lists() {
+    let f = Fixture::new();
+    set_clock(0, 10, 0);
+    let mut w = f.open(tiered()).unwrap();
+    append(&mut w, 0..4);
+    set_clock(0, 11, 0);
+    append(&mut w, 4..8);
+    set_clock(1, 0, 0);
+    append(&mut w, 8..9);
+    w.flush().unwrap();
+    let before = w.snapshot().unwrap();
+    assert!(file_addresses(&before).len() >= 2);
+    drop(before);
+    // The day merge replaces the hours with one archive file.
+    w.compact().unwrap();
+    let after = w.snapshot().unwrap();
+    let held: Vec<String> = w.held_files();
+    let listed: Vec<String> = w.manifest().files.iter().map(|e| e.path.clone()).collect();
+    assert_eq!(held, listed);
+    assert_eq!(file_addresses(&after).len(), listed.len());
+}

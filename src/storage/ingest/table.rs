@@ -40,7 +40,7 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 pub use super::error::IngestError;
@@ -57,6 +57,7 @@ use super::store::lease::Lease;
 use super::store::{LocalFs, Store, TableStore};
 use super::tier::Output;
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
+use crate::storage::column::MmapRegion;
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
 use crate::storage::stream::adapter::now_ns;
 use crate::storage::stream::detect::{DetectedParser, Format};
@@ -138,6 +139,10 @@ pub struct TableWriter {
     head: HeadPage,
     /// Sealed pages not yet handed to the flusher, oldest first.
     sealed: Vec<Page>,
+    /// The files the last [`snapshot`](Self::snapshot) fetched, by path,
+    /// so the next one fetches only new files (#1051): on an object store
+    /// every fetch is a GET of the whole object.
+    held: Mutex<HeldFiles>,
     last_observed: i64,
     /// The hour whose runs are in `staging/` or queued to go there.
     spilled_hour: Option<i64>,
@@ -145,6 +150,18 @@ pub struct TableWriter {
     _lease: Option<Lease>,
     #[cfg(test)]
     pub(super) crash_after: Option<u8>,
+}
+
+/// The files a [`TableWriter::snapshot`] holds on to, by path (#1051).
+#[derive(Default)]
+struct HeldFiles(Vec<(String, Arc<MmapRegion>)>);
+
+impl std::fmt::Debug for HeldFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|(path, _)| path))
+            .finish()
+    }
 }
 
 impl TableWriter {
@@ -295,6 +312,7 @@ impl TableWriter {
             options,
             head,
             sealed: Vec::new(),
+            held: Mutex::new(HeldFiles::default()),
             last_observed: i64::MIN,
             spilled_hour,
             _lease: lease,
@@ -751,7 +769,15 @@ impl TableWriter {
             .chain(self.sealed.iter().cloned())
             .chain(self.head_page())
             .collect();
-        Snapshot::new(&self.store, manifest, pages)
+        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        Snapshot::reusing(&self.store, manifest, pages, &mut held.0)
+    }
+
+    /// The paths of the files [`snapshot`](Self::snapshot) holds on to.
+    #[cfg(test)]
+    pub(super) fn held_files(&self) -> Vec<String> {
+        let held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
+        held.0.iter().map(|(path, _)| path.clone()).collect()
     }
 
     /// The table directory.
