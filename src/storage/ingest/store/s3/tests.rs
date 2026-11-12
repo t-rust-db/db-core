@@ -36,6 +36,8 @@ struct FakeS3 {
     page_size: AtomicUsize,
     /// Whether uploading a part is refused (403).
     deny_parts: AtomicBool,
+    /// A status to answer a multipart complete with instead (0: none).
+    complete_status: AtomicU64,
 }
 
 /// The value of query parameter `name`, decoded.
@@ -157,6 +159,11 @@ impl Transport for FakeS3 {
             }
             "POST" if param(query, "uploadId").is_some() => {
                 let id = param(query, "uploadId").unwrap();
+                let forced = self.complete_status.load(Ordering::SeqCst);
+                if forced > 0 {
+                    let status = u16::try_from(forced).unwrap();
+                    return Ok(response(status, &[], xml_error("Conflict")));
+                }
                 if self.conditional
                     && header("if-none-match") == Some("*")
                     && objects.contains_key(&key)
@@ -708,4 +715,195 @@ fn a_bad_uri_is_refused_with_the_reason() {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "{uri}");
         assert!(err.to_string().contains(why), "{uri}: {err}");
     }
+}
+
+// ---- MC/DC (#1047) ----------------------------------------------------
+
+// storage_ingest_store_s3_expect_52094114:
+// `(200..300).contains(&resp.status) || also.contains(&resp.status)`.
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_expect_52094114__v1_a_2xx_is_accepted() {
+    assert!(Client::expect(response(204, &[], Vec::new()), &[]).is_ok());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_expect_52094114__v2_an_expected_status_is_accepted() {
+    assert!(Client::expect(response(404, &[], Vec::new()), &[404]).is_ok());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_expect_52094114__v3_any_other_status_is_the_s3_error() {
+    let err = Client::expect(response(404, &[], xml_error("NoSuchKey")), &[]).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err}");
+}
+
+// storage_ingest_store_s3_read_at_72262def: `offset >= self.size ||
+// buf.is_empty()` -- nothing to read, so no request.
+fn gets_for(offset: u64, len: usize) -> (usize, usize) {
+    let fake = FakeS3::new(false);
+    let s = store(&fake, CommitMode::SingleWriter);
+    s.put("o", b"0123456789").unwrap();
+    let f = s.open("o").unwrap();
+    let before = fake.count("GET");
+    let mut buf = vec![0u8; len];
+    let n = f.read_at(offset, &mut buf).unwrap();
+    (n, fake.count("GET") - before)
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_read_at_72262def__v1_past_the_end_reads_nothing() {
+    assert_eq!(gets_for(10, 4), (0, 0));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_read_at_72262def__v2_an_empty_buffer_reads_nothing() {
+    assert_eq!(gets_for(0, 0), (0, 0));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_read_at_72262def__v3_a_read_in_range_is_one_get() {
+    assert_eq!(gets_for(2, 4), (4, 1));
+}
+
+// storage_ingest_store_s3_put_74835f07: `self.conditional && key ==
+// MANIFEST_FILE`. A stale writer's put is fenced only for the manifest on
+// a store with conditional puts. Each other write is a fresh store, whose
+// own fence never refuses it.
+fn stale_put_refused(conditional: bool, key: &str) -> bool {
+    let fake = FakeS3::new(conditional);
+    let a = store(&fake, CommitMode::Auto);
+    a.put(key, b"1").unwrap();
+    store(&fake, CommitMode::Auto).put(key, b"2").unwrap();
+    a.put(key, b"3").is_err()
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_put_74835f07__v1_the_manifest_on_a_conditional_store_is_fenced() {
+    assert!(stale_put_refused(true, MANIFEST_FILE));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_put_74835f07__v2_a_store_without_conditional_puts_overwrites() {
+    assert!(!stale_put_refused(false, MANIFEST_FILE));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_put_74835f07__v3_another_key_overwrites() {
+    assert!(!stale_put_refused(true, "data/x"));
+}
+
+// storage_ingest_store_s3_put_multipart_b127c6f0: `done.status == 412 ||
+// done.status == 409`, and the fake's complete
+// (storage_ingest_store_s3_tests_send_5cf86e2b): `self.conditional &&
+// if-none-match == "*" && objects.contains_key(&key)`. Called below
+// `publish`, whose size check would answer first.
+fn multipart(
+    conditional: bool,
+    exists: bool,
+    create_only: bool,
+    forced: u64,
+) -> io::Result<Vec<u8>> {
+    let fake = FakeS3::new(conditional);
+    let s = multipart_store(&fake);
+    if exists {
+        s.put("data/big", b"old").unwrap();
+    }
+    fake.complete_status.store(forced, Ordering::SeqCst);
+    let tag = format!("mcdc-{conditional}-{exists}-{create_only}-{forced}");
+    let (dir, file) = local_file(&tag, &[5u8; 23]);
+    let done = s.client.put_multipart(&file, "data/big", create_only);
+    std::fs::remove_dir_all(&dir).ok();
+    done.map(|()| s.get("data/big").unwrap().unwrap())
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_put_multipart_b127c6f0__v1_a_412_is_another_writers_object() {
+    let err = multipart(true, true, true, 0).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_put_multipart_b127c6f0__v2_a_409_is_too() {
+    let err = multipart(false, false, true, 409).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_put_multipart_b127c6f0__v3_another_status_is_checked_as_usual() {
+    assert_eq!(multipart(true, false, true, 0).unwrap(), vec![5u8; 23]);
+    let err = multipart(false, false, true, 403).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_tests_send_5cf86e2b__v1_a_taken_name_refuses_a_create_only_complete(
+) {
+    assert!(multipart(true, true, true, 0).is_err());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_tests_send_5cf86e2b__v2_a_store_without_conditional_puts_overwrites(
+) {
+    assert_eq!(multipart(false, true, true, 0).unwrap(), vec![5u8; 23]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_tests_send_5cf86e2b__v3_an_unconditional_complete_overwrites() {
+    assert_eq!(multipart(true, true, false, 0).unwrap(), vec![5u8; 23]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_tests_send_5cf86e2b__v4_a_free_name_is_created() {
+    assert_eq!(multipart(true, false, true, 0).unwrap(), vec![5u8; 23]);
+}
+
+// storage_ingest_store_s3_tests_send_394df044 (the fake's PUT on a store
+// with conditional puts): `if-none-match == "*" && exists.is_some()`.
+fn conditional_put(exists: bool, if_absent: bool) -> Option<String> {
+    let fake = FakeS3::new(true);
+    let s = store(&fake, CommitMode::Auto);
+    if exists {
+        s.put("data/x", b"old").unwrap();
+    }
+    if if_absent {
+        s.client.put_if_absent("data/x", b"new").unwrap()
+    } else {
+        s.put("data/x", b"new").unwrap();
+        Some(String::new())
+    }
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_tests_send_394df044__v1_a_create_only_put_on_a_taken_name_is_refused(
+) {
+    assert_eq!(conditional_put(true, true), None);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_tests_send_394df044__v2_a_plain_put_overwrites() {
+    assert!(conditional_put(true, false).is_some());
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_tests_send_394df044__v3_a_create_only_put_on_a_free_name_lands() {
+    assert!(conditional_put(false, true).is_some());
 }
