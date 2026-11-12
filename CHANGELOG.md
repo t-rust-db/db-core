@@ -4,6 +4,18 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.240.0] - 2026-11-12
+
+### Added
+
+- A table on an object store (S3) is read by range: a query reads each file's footer once and then only the column chunks it needs, instead of downloading every object whole; what it read is kept for the next query under `S3Config::read_cache_bytes` (default 256 MiB, least recently used out first) (#1052)
+- A table reader parses each Parquet file's footer once and keeps it while it holds the file, instead of on every query: 6.1 → 2.5 ms per query on a local table of 300 files (#1052)
+- New `TableStore::hold` (default: the mapped object) and `HeldFile` (#1052)
+
+### Changed
+
+- **Breaking:** `Snapshot::files()` returns `Result<Vec<(&FileEntry, &[u8])>, IngestError>`; a range-read file is fetched whole on first call. To read only footers, use `engine::column::snapshot_files` (#1052)
+
 ## [0.239.1] - 2026-11-12
 
 ### Fixed
