@@ -818,7 +818,10 @@ fn multipart(
         s.put("data/big", b"old").unwrap();
     }
     fake.complete_status.store(forced, Ordering::SeqCst);
-    let tag = format!("mcdc-{conditional}-{exists}-{create_only}-{forced}");
+    // Unique per call: two tests make the same call at once, and each
+    // removes its directory when done.
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let tag = format!("mcdc-{}", NEXT.fetch_add(1, Ordering::Relaxed));
     let (dir, file) = local_file(&tag, &[5u8; 23]);
     let done = s.client.put_multipart(&file, "data/big", create_only);
     std::fs::remove_dir_all(&dir).ok();
