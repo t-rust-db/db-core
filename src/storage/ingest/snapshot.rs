@@ -126,14 +126,31 @@ impl Snapshot {
         manifest: Manifest,
         pages: Vec<Page>,
     ) -> Result<Snapshot, IngestError> {
-        let files = manifest
-            .files
-            .iter()
-            .map(|f| Ok(Arc::new(store.map(&f.path)?)))
-            .collect::<io::Result<Vec<_>>>()?;
+        Snapshot::reusing(store, manifest, pages, &mut Vec::new())
+    }
+
+    /// As [`new`](Self::new), but a file already in `held` (by path) is
+    /// not fetched again (#1051): a listed file never changes. `held` is
+    /// left holding exactly `manifest`'s files, so one the manifest no
+    /// longer lists is let go.
+    pub(crate) fn reusing(
+        store: &impl TableStore,
+        manifest: Manifest,
+        pages: Vec<Page>,
+        held: &mut Vec<(String, Arc<MmapRegion>)>,
+    ) -> Result<Snapshot, IngestError> {
+        let mut mapped = Vec::with_capacity(manifest.files.len());
+        for entry in &manifest.files {
+            let region = match held.iter().find(|(path, _)| *path == entry.path) {
+                Some((_, region)) => Arc::clone(region),
+                None => Arc::new(store.map(&entry.path)?),
+            };
+            mapped.push((entry.path.clone(), region));
+        }
+        *held = mapped;
         Ok(Snapshot {
+            files: held.iter().map(|(_, r)| Arc::clone(r)).collect(),
             manifest,
-            files,
             pages,
             schema: None,
         })

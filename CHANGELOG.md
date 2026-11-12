@@ -4,6 +4,12 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.239.1] - 2026-11-12
+
+### Fixed
+
+- A table's snapshot (and `Table::query`) no longer fetches every Parquet file again on each call: files already fetched are reused by path, so on an object store a query issues a GET only for files that are new since the last one (#1051)
+
 ## [0.239.0] - 2026-11-11
 
 ### Added
