@@ -312,4 +312,129 @@ mod tests {
         assert!(store.delete("x").is_err());
         assert_eq!(store.get("x").unwrap().as_deref(), Some(&b"1"[..]));
     }
+
+    /// Whether a put by client A is refused after another client replaced
+    /// `key` since A's `touch` of it: the manifest fence (#1047). Each other
+    /// write is a fresh client, whose own fence never refuses it.
+    fn stale_put_refused(store: MemoryStore, key: &str, touch: impl Fn(&MemoryStore)) -> bool {
+        let a = store.client();
+        store.client().put(key, b"1").unwrap();
+        touch(&a);
+        store.client().put(key, b"2").unwrap();
+        a.put(key, b"3").is_err()
+    }
+
+    fn put(s: &MemoryStore) {
+        s.put(MANIFEST_FILE, b"0").unwrap();
+        s.put("data/x", b"0").unwrap();
+    }
+
+    fn get(s: &MemoryStore) {
+        s.get(MANIFEST_FILE).unwrap();
+        s.get("data/x").unwrap();
+    }
+
+    fn get_versioned(s: &MemoryStore) {
+        s.get_versioned(MANIFEST_FILE).unwrap();
+        s.get_versioned("data/x").unwrap();
+    }
+
+    // storage_ingest_store_memory_get_ec132490 and
+    // storage_ingest_store_memory_put_ec132490 (#1047):
+    // `self.shared.conditional && key == MANIFEST_FILE`. A read of the
+    // manifest on a conditional store arms the fence, and a put of it
+    // checks the fence.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_get_ec132490__v1_a_conditional_manifest_read_arms_the_fence(
+    ) {
+        assert!(stale_put_refused(
+            MemoryStore::conditional(),
+            MANIFEST_FILE,
+            get
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_get_ec132490__v2_a_plain_store_has_no_fence() {
+        assert!(!stale_put_refused(
+            MemoryStore::default(),
+            MANIFEST_FILE,
+            get
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_get_ec132490__v3_another_key_has_no_fence() {
+        assert!(!stale_put_refused(
+            MemoryStore::conditional(),
+            "data/x",
+            get
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_put_ec132490__v1_a_conditional_manifest_put_is_fenced() {
+        assert!(stale_put_refused(
+            MemoryStore::conditional(),
+            MANIFEST_FILE,
+            put
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_put_ec132490__v2_a_plain_store_overwrites() {
+        assert!(!stale_put_refused(
+            MemoryStore::default(),
+            MANIFEST_FILE,
+            put
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_put_ec132490__v3_another_key_overwrites() {
+        assert!(!stale_put_refused(
+            MemoryStore::conditional(),
+            "data/x",
+            put
+        ));
+    }
+
+    // storage_ingest_store_memory_get_versioned_6416aed2 (#1047):
+    // `key == MANIFEST_FILE && self.shared.conditional`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_get_versioned_6416aed2__v1_the_manifest_on_a_conditional_store_arms_the_fence(
+    ) {
+        assert!(stale_put_refused(
+            MemoryStore::conditional(),
+            MANIFEST_FILE,
+            get_versioned
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_get_versioned_6416aed2__v2_another_key_does_not() {
+        assert!(!stale_put_refused(
+            MemoryStore::conditional(),
+            "data/x",
+            get_versioned
+        ));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_memory_get_versioned_6416aed2__v3_a_plain_store_does_not() {
+        assert!(!stale_put_refused(
+            MemoryStore::default(),
+            MANIFEST_FILE,
+            get_versioned
+        ));
+    }
 }

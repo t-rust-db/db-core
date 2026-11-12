@@ -756,4 +756,40 @@ mod tests {
             Ok(r)
         }
     }
+
+    // storage_ingest_store_s3_credentials_from_ini_1ce1a301 (#1047):
+    // `line.is_empty() || line.starts_with('#') || line.starts_with(';')`.
+    // A skipped line between the header and the keys changes nothing; a
+    // line that is not skipped is read.
+    fn key_after(line: &str) -> String {
+        let ini = format!("[p]\n{line}\naws_access_key_id = AK\naws_secret_access_key = s\n");
+        Credentials::from_ini(&ini, "p").unwrap().access_key
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_credentials_from_ini_1ce1a301__v1_a_blank_line_is_skipped() {
+        assert_eq!(key_after("   "), "AK");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_credentials_from_ini_1ce1a301__v2_a_hash_comment_is_skipped() {
+        assert_eq!(key_after("# aws_access_key_id = NOT"), "AK");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_credentials_from_ini_1ce1a301__v3_a_semicolon_comment_is_skipped(
+    ) {
+        assert_eq!(key_after("; [other]"), "AK");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_credentials_from_ini_1ce1a301__v4_any_other_line_is_read() {
+        // A section header that is not skipped leaves the profile.
+        let ini = "[p]\n[other]\naws_access_key_id = AK\naws_secret_access_key = s\n";
+        assert!(Credentials::from_ini(ini, "p").is_none());
+    }
 }

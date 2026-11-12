@@ -425,4 +425,84 @@ mod tests {
             assert!(Endpoint::parse(bad).is_err(), "{bad}");
         }
     }
+
+    // storage_ingest_store_s3_http_parse_27435b4f (#1047):
+    // `authority.is_empty() || authority.contains('/')`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_27435b4f__v1_no_authority_is_refused() {
+        assert!(Endpoint::parse("http://").is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_27435b4f__v2_a_path_is_refused() {
+        assert!(Endpoint::parse("http://host/bucket").is_err());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_27435b4f__v3_a_bare_authority_is_accepted() {
+        assert_eq!(Endpoint::parse("http://host/").unwrap().host, "host");
+    }
+
+    // storage_ingest_store_s3_http_parse_babafa0f (#1047):
+    // `!host.ends_with(']') || host.starts_with('[')` -- the last `:` ends
+    // the host unless it is inside an IPv6 literal's brackets.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_babafa0f__v1_a_name_takes_the_port() {
+        let e = Endpoint::parse("http://host:9000").unwrap();
+        assert_eq!((e.host.as_str(), e.port), ("host", 9000));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_babafa0f__v2_a_bracketed_literal_takes_the_port() {
+        let e = Endpoint::parse("http://[::1]:9000").unwrap();
+        assert_eq!((e.host.as_str(), e.port), ("[::1]", 9000));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_babafa0f__v3_a_trailing_bracket_without_its_opener_takes_no_port(
+    ) {
+        // The left of the last `:` ends with `]` but has no `[`: not a
+        // bracketed literal, so the whole authority is the host.
+        let e = Endpoint::parse("http://x]:1").unwrap();
+        assert_eq!((e.host.as_str(), e.port), ("x]:1", 80));
+    }
+
+    // storage_ingest_store_s3_http_parse_response_36fac4a0 (#1047):
+    // `method == "HEAD" || status == 204 || status == 304` -- no body.
+    fn body(raw: &[u8], method: &str) -> Vec<u8> {
+        parse_response(raw, method).unwrap().body
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_response_36fac4a0__v1_a_head_has_no_body() {
+        assert!(body(b"HTTP/1.1 200 OK\r\ncontent-length: 5\r\n\r\n", "HEAD").is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_response_36fac4a0__v2_a_204_has_no_body() {
+        assert!(body(b"HTTP/1.1 204 No Content\r\n\r\nleftover", "DELETE").is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_response_36fac4a0__v3_a_304_has_no_body() {
+        assert!(body(b"HTTP/1.1 304 Not Modified\r\n\r\nleftover", "GET").is_empty());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_http_parse_response_36fac4a0__v4_a_get_reads_its_body() {
+        assert_eq!(
+            body(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok", "GET"),
+            b"ok"
+        );
+    }
 }

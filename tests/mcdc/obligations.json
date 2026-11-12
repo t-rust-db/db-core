@@ -43062,7 +43062,7 @@
   {
     "id": "storage_ingest_store_s3_tests_percent_decode_5eae6dca",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 53,
+    "line": 55,
     "decision": "let Some(&b) = bytes.get(i)",
     "conditions": 1,
     "vectors_required": 2,
@@ -43072,7 +43072,7 @@
   {
     "id": "storage_ingest_store_s3_tests_percent_decode_0cf82de4",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 57,
+    "line": 59,
     "decision": "match (b, hex.and_then(|h| u8::from_str_radix(h, 16).ok())) {\n            (b'%', Some(v)) => {\n                out.push(v);\n                i += 3;\n            }\n            _ => {\n                out.push(b);\n                i += 1;\n            }\n        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43082,7 +43082,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_d5077a61",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 115,
+    "line": 117,
     "decision": "self.flaky.load(Ordering::SeqCst) > 0",
     "conditions": 1,
     "vectors_required": 2,
@@ -43092,7 +43092,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_88fd836f",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 144,
+    "line": 146,
     "decision": "key == \"forbidden\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -43100,10 +43100,10 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_ingest_store_s3_tests_send_a82b54f8",
+    "id": "storage_ingest_store_s3_tests_send_3783a246",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 148,
-    "decision": "match req.method.as_str() {\n            \"POST\" if query.starts_with(\"uploads\") => {\n                let id = format!(\"u{}\", self.next_upload.fetch_add(1, Ordering::SeqCst));\n                self.uploads\n                    .lock()\n                    .unwrap()\n                    .insert(id.clone(), (key, BTreeMap::new()));\n                let body = format!(\"<InitiateMultipartUploadResult><UploadId>{id}</UploadId></InitiateMultipartUploadResult>\");\n                Ok(response(200, &[], body.into_bytes()))\n            }\n            \"POST\" if param(query, \"uploadId\").is_some() => {\n                let id = param(query, \"uploadId\").unwrap();\n                if self.conditional\n                    && header(\"if-none-match\") == Some(\"*\")\n                    && objects.contains_key(&key)\n                {\n                    return Ok(response(412, &[], xml_error(\"PreconditionFailed\")));\n                }\n                let (_, parts) = self.uploads.lock().unwrap().remove(&id).unwrap();\n                let whole: Vec<u8> = parts.into_values().flatten().collect();\n                let etag = self.etag();\n                objects.insert(key, (whole, etag));\n                Ok(response(\n                    200,\n                    &[],\n                    b\"<CompleteMultipartUploadResult/>\".to_vec(),\n                ))\n            }\n            \"PUT\" if param(query, \"partNumber\").is_some() => {\n                if self.deny_parts.load(Ordering::SeqCst) {\n                    return Ok(response(403, &[], xml_error(\"AccessDenied\")));\n                }\n                let number: usize = param(query, \"partNumber\").unwrap().parse().unwrap();\n                let id = param(query, \"uploadId\").unwrap();\n                self.uploads\n                    .lock()\n                    .unwrap()\n                    .get_mut(&id)\n                    .unwrap()\n                    .1\n                    .insert(number, req.body.clone());\n                Ok(response(\n                    200,\n                    &[(\"etag\", format!(\"\\\"p{number}\\\"\"))],\n                    Vec::new(),\n                ))\n            }\n            \"DELETE\" if param(query, \"uploadId\").is_some() => {\n                self.uploads\n                    .lock()\n                    .unwrap()\n                    .remove(&param(query, \"uploadId\").unwrap());\n                Ok(response(204, &[], Vec::new()))\n            }\n            \"GET\" if query.contains(\"list-type=2\") => {\n                let prefix = param(query, \"prefix\").unwrap_or_default();\n                let after = param(query, \"continuation-token\");\n                let page = self.page_size.load(Ordering::SeqCst);\n                let mut keys: Vec<&String> = objects\n                    .keys()\n                    .filter(|k| k.starts_with(&prefix) && after.as_ref().is_none_or(|a| *k > a))\n                    .collect();\n                let truncated = page > 0 && keys.len() > page;\n                if truncated {\n                    keys.truncate(page);\n                }\n                let mut body = String::from(\"<ListBucketResult>\");\n                for k in &keys {\n                    body.push_str(&format!(\"<Contents><Key>{k}</Key></Contents>\"));\n                }\n                if let (true, Some(last)) = (truncated, keys.last()) {\n                    body.push_str(&format!(\"<IsTruncated>true</IsTruncated><NextContinuationToken>{last}</NextContinuationToken>\"));\n                } else {\n                    body.push_str(\"<IsTruncated>false</IsTruncated>\");\n                }\n                body.push_str(\"</ListBucketResult>\");\n                Ok(response(200, &[], body.into_bytes()))\n            }\n            \"GET\" | \"HEAD\" => match objects.get(&key) {\n                None => Ok(response(404, &[], xml_error(\"NoSuchKey\"))),\n                Some((bytes, etag)) => {\n                    let mut headers = vec![\n                        (\"etag\", format!(\"\\\"{etag}\\\"\")),\n                        (\"content-length\", bytes.len().to_string()),\n                    ];\n                    if req.method == \"HEAD\" {\n                        return Ok(response(200, &headers, Vec::new()));\n                    }\n                    if let Some(range) = header(\"range\").and_then(|r| r.strip_prefix(\"bytes=\")) {\n                        let (from, to) = range.split_once('-').unwrap_or_default();\n                        let from: usize = from.parse().unwrap_or(0);\n                        let to: usize = to.parse().unwrap_or(bytes.len() - 1);\n                        headers[1] = (\"content-length\", (to + 1 - from).to_string());\n                        let part = bytes.get(from..=to).unwrap_or_default().to_vec();\n                        return Ok(response(206, &headers, part));\n                    }\n                    Ok(response(200, &headers, bytes.clone()))\n                }\n            },\n            \"PUT\" => {\n                if self.conditional {\n                    let exists = objects.get(&key);\n                    if header(\"if-none-match\") == Some(\"*\") && exists.is_some() {\n                        return Ok(response(412, &[], xml_error(\"PreconditionFailed\")));\n                    }\n                    if let Some(want) = header(\"if-match\") {\n                        match exists {\n                            None => return Ok(response(404, &[], xml_error(\"NoSuchKey\"))),\n                            Some((_, etag)) if format!(\"\\\"{etag}\\\"\") != want => {\n                                return Ok(response(412, &[], xml_error(\"PreconditionFailed\")))\n                            }\n                            Some(_) => {}\n                        }\n                    }\n                }\n                let etag = self.etag();\n                objects.insert(key, (req.body.clone(), etag));\n                Ok(response(\n                    200,\n                    &[(\"etag\", format!(\"\\\"{etag}\\\"\"))],\n                    Vec::new(),\n                ))\n            }\n            \"DELETE\" => {\n                objects.remove(&key);\n                Ok(response(204, &[], Vec::new()))\n            }\n            other => panic!(\"the fake does not speak {other}\"),\n        }",
+    "line": 150,
+    "decision": "match req.method.as_str() {\n            \"POST\" if query.starts_with(\"uploads\") => {\n                let id = format!(\"u{}\", self.next_upload.fetch_add(1, Ordering::SeqCst));\n                self.uploads\n                    .lock()\n                    .unwrap()\n                    .insert(id.clone(), (key, BTreeMap::new()));\n                let body = format!(\"<InitiateMultipartUploadResult><UploadId>{id}</UploadId></InitiateMultipartUploadResult>\");\n                Ok(response(200, &[], body.into_bytes()))\n            }\n            \"POST\" if param(query, \"uploadId\").is_some() => {\n                let id = param(query, \"uploadId\").unwrap();\n                let forced = self.complete_status.load(Ordering::SeqCst);\n                if forced > 0 {\n                    let status = u16::try_from(forced).unwrap();\n                    return Ok(response(status, &[], xml_error(\"Conflict\")));\n                }\n                if self.conditional\n                    && header(\"if-none-match\") == Some(\"*\")\n                    && objects.contains_key(&key)\n                {\n                    return Ok(response(412, &[], xml_error(\"PreconditionFailed\")));\n                }\n                let (_, parts) = self.uploads.lock().unwrap().remove(&id).unwrap();\n                let whole: Vec<u8> = parts.into_values().flatten().collect();\n                let etag = self.etag();\n                objects.insert(key, (whole, etag));\n                Ok(response(\n                    200,\n                    &[],\n                    b\"<CompleteMultipartUploadResult/>\".to_vec(),\n                ))\n            }\n            \"PUT\" if param(query, \"partNumber\").is_some() => {\n                if self.deny_parts.load(Ordering::SeqCst) {\n                    return Ok(response(403, &[], xml_error(\"AccessDenied\")));\n                }\n                let number: usize = param(query, \"partNumber\").unwrap().parse().unwrap();\n                let id = param(query, \"uploadId\").unwrap();\n                self.uploads\n                    .lock()\n                    .unwrap()\n                    .get_mut(&id)\n                    .unwrap()\n                    .1\n                    .insert(number, req.body.clone());\n                Ok(response(\n                    200,\n                    &[(\"etag\", format!(\"\\\"p{number}\\\"\"))],\n                    Vec::new(),\n                ))\n            }\n            \"DELETE\" if param(query, \"uploadId\").is_some() => {\n                self.uploads\n                    .lock()\n                    .unwrap()\n                    .remove(&param(query, \"uploadId\").unwrap());\n                Ok(response(204, &[], Vec::new()))\n            }\n            \"GET\" if query.contains(\"list-type=2\") => {\n                let prefix = param(query, \"prefix\").unwrap_or_default();\n                let after = param(query, \"continuation-token\");\n                let page = self.page_size.load(Ordering::SeqCst);\n                let mut keys: Vec<&String> = objects\n                    .keys()\n                    .filter(|k| k.starts_with(&prefix) && after.as_ref().is_none_or(|a| *k > a))\n                    .collect();\n                let truncated = page > 0 && keys.len() > page;\n                if truncated {\n                    keys.truncate(page);\n                }\n                let mut body = String::from(\"<ListBucketResult>\");\n                for k in &keys {\n                    body.push_str(&format!(\"<Contents><Key>{k}</Key></Contents>\"));\n                }\n                if let (true, Some(last)) = (truncated, keys.last()) {\n                    body.push_str(&format!(\"<IsTruncated>true</IsTruncated><NextContinuationToken>{last}</NextContinuationToken>\"));\n                } else {\n                    body.push_str(\"<IsTruncated>false</IsTruncated>\");\n                }\n                body.push_str(\"</ListBucketResult>\");\n                Ok(response(200, &[], body.into_bytes()))\n            }\n            \"GET\" | \"HEAD\" => match objects.get(&key) {\n                None => Ok(response(404, &[], xml_error(\"NoSuchKey\"))),\n                Some((bytes, etag)) => {\n                    let mut headers = vec![\n                        (\"etag\", format!(\"\\\"{etag}\\\"\")),\n                        (\"content-length\", bytes.len().to_string()),\n                    ];\n                    if req.method == \"HEAD\" {\n                        return Ok(response(200, &headers, Vec::new()));\n                    }\n                    if let Some(range) = header(\"range\").and_then(|r| r.strip_prefix(\"bytes=\")) {\n                        let (from, to) = range.split_once('-').unwrap_or_default();\n                        let from: usize = from.parse().unwrap_or(0);\n                        let to: usize = to.parse().unwrap_or(bytes.len() - 1);\n                        headers[1] = (\"content-length\", (to + 1 - from).to_string());\n                        let part = bytes.get(from..=to).unwrap_or_default().to_vec();\n                        return Ok(response(206, &headers, part));\n                    }\n                    Ok(response(200, &headers, bytes.clone()))\n                }\n            },\n            \"PUT\" => {\n                if self.conditional {\n                    let exists = objects.get(&key);\n                    if header(\"if-none-match\") == Some(\"*\") && exists.is_some() {\n                        return Ok(response(412, &[], xml_error(\"PreconditionFailed\")));\n                    }\n                    if let Some(want) = header(\"if-match\") {\n                        match exists {\n                            None => return Ok(response(404, &[], xml_error(\"NoSuchKey\"))),\n                            Some((_, etag)) if format!(\"\\\"{etag}\\\"\") != want => {\n                                return Ok(response(412, &[], xml_error(\"PreconditionFailed\")))\n                            }\n                            Some(_) => {}\n                        }\n                    }\n                }\n                let etag = self.etag();\n                objects.insert(key, (req.body.clone(), etag));\n                Ok(response(\n                    200,\n                    &[(\"etag\", format!(\"\\\"{etag}\\\"\"))],\n                    Vec::new(),\n                ))\n            }\n            \"DELETE\" => {\n                objects.remove(&key);\n                Ok(response(204, &[], Vec::new()))\n            }\n            other => panic!(\"the fake does not speak {other}\"),\n        }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
@@ -43112,7 +43112,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_e5c9685b",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 149,
+    "line": 151,
     "decision": "query.starts_with(\"uploads\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -43122,7 +43122,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_00f3f429",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 158,
+    "line": 160,
     "decision": "param(query, \"uploadId\").is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -43132,7 +43132,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_eefc2e74",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 176,
+    "line": 183,
     "decision": "param(query, \"partNumber\").is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -43142,7 +43142,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_00f3f429_2",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 195,
+    "line": 202,
     "decision": "param(query, \"uploadId\").is_some()",
     "conditions": 1,
     "vectors_required": 2,
@@ -43152,8 +43152,18 @@
   {
     "id": "storage_ingest_store_s3_tests_send_5b2d05f7",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 202,
+    "line": 209,
     "decision": "query.contains(\"list-type=2\")",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_tests_send_767abccc",
+    "file": "src/storage/ingest/store/s3/tests.rs",
+    "line": 163,
+    "decision": "forced > 0",
     "conditions": 1,
     "vectors_required": 2,
     "compiler_void": false,
@@ -43162,7 +43172,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_5cf86e2b",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 160,
+    "line": 167,
     "decision": "self.conditional\n                    && header(\"if-none-match\") == Some(\"*\")\n                    && objects.contains_key(&key)",
     "conditions": 3,
     "vectors_required": 4,
@@ -43172,7 +43182,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_c961730a",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 177,
+    "line": 184,
     "decision": "self.deny_parts.load(Ordering::SeqCst)",
     "conditions": 1,
     "vectors_required": 2,
@@ -43182,7 +43192,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_af411b45",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 211,
+    "line": 218,
     "decision": "truncated",
     "conditions": 1,
     "vectors_required": 2,
@@ -43192,7 +43202,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_e22ed786",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 218,
+    "line": 225,
     "decision": "let (true, Some(last)) = (truncated, keys.last())",
     "conditions": 1,
     "vectors_required": 2,
@@ -43202,7 +43212,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_c8f1826f",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 226,
+    "line": 233,
     "decision": "match objects.get(&key) {\n                None => Ok(response(404, &[], xml_error(\"NoSuchKey\"))),\n                Some((bytes, etag)) => {\n                    let mut headers = vec![\n                        (\"etag\", format!(\"\\\"{etag}\\\"\")),\n                        (\"content-length\", bytes.len().to_string()),\n                    ];\n                    if req.method == \"HEAD\" {\n                        return Ok(response(200, &headers, Vec::new()));\n                    }\n                    if let Some(range) = header(\"range\").and_then(|r| r.strip_prefix(\"bytes=\")) {\n                        let (from, to) = range.split_once('-').unwrap_or_default();\n                        let from: usize = from.parse().unwrap_or(0);\n                        let to: usize = to.parse().unwrap_or(bytes.len() - 1);\n                        headers[1] = (\"content-length\", (to + 1 - from).to_string());\n                        let part = bytes.get(from..=to).unwrap_or_default().to_vec();\n                        return Ok(response(206, &headers, part));\n                    }\n                    Ok(response(200, &headers, bytes.clone()))\n                }\n            }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43212,7 +43222,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_690b6708",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 233,
+    "line": 240,
     "decision": "req.method == \"HEAD\"",
     "conditions": 1,
     "vectors_required": 2,
@@ -43222,7 +43232,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_30830c6e",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 236,
+    "line": 243,
     "decision": "let Some(range) = header(\"range\").and_then(|r| r.strip_prefix(\"bytes=\"))",
     "conditions": 1,
     "vectors_required": 2,
@@ -43232,7 +43242,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_9fba92ad",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 248,
+    "line": 255,
     "decision": "self.conditional",
     "conditions": 1,
     "vectors_required": 2,
@@ -43242,7 +43252,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_394df044",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 250,
+    "line": 257,
     "decision": "header(\"if-none-match\") == Some(\"*\") && exists.is_some()",
     "conditions": 2,
     "vectors_required": 3,
@@ -43252,7 +43262,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_3f875acd",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 253,
+    "line": 260,
     "decision": "let Some(want) = header(\"if-match\")",
     "conditions": 1,
     "vectors_required": 2,
@@ -43262,7 +43272,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_3283f4e4",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 254,
+    "line": 261,
     "decision": "match exists {\n                            None => return Ok(response(404, &[], xml_error(\"NoSuchKey\"))),\n                            Some((_, etag)) if format!(\"\\\"{etag}\\\"\") != want => {\n                                return Ok(response(412, &[], xml_error(\"PreconditionFailed\")))\n                            }\n                            Some(_) => {}\n                        }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43272,7 +43282,7 @@
   {
     "id": "storage_ingest_store_s3_tests_send_81dd470d",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 256,
+    "line": 263,
     "decision": "format!(\"\\\"{etag}\\\"\") != want",
     "conditions": 1,
     "vectors_required": 2,
@@ -43282,7 +43292,7 @@
   {
     "id": "storage_ingest_store_s3_tests_every_request_is_signed_with_the_sources_current_credentials_c2f41756",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 353,
+    "line": 360,
     "decision": "match name {\n        \"AWS_ACCESS_KEY_ID\" => Some(\"AKTEST\".to_string()),\n        \"AWS_SECRET_ACCESS_KEY\" => Some(\"sk\".to_string()),\n        \"AWS_SESSION_TOKEN\" => Some(\"session\".to_string()),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43292,7 +43302,7 @@
   {
     "id": "storage_ingest_store_s3_tests_what_a_uri_leaves_out_comes_from_the_environment_or_is_aws_04f66e49",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 664,
+    "line": 671,
     "decision": "match name {\n        \"AWS_DEFAULT_REGION\" => Some(\"eu-west-1\".to_string()),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
@@ -43302,12 +43312,42 @@
   {
     "id": "storage_ingest_store_s3_tests_what_a_uri_leaves_out_comes_from_the_environment_or_is_aws_dccc9235",
     "file": "src/storage/ingest/store/s3/tests.rs",
-    "line": 672,
+    "line": 679,
     "decision": "match name {\n        \"AWS_REGION\" => Some(\"garage\".to_string()),\n        \"AWS_DEFAULT_REGION\" => Some(\"eu-west-1\".to_string()),\n        \"AWS_ENDPOINT_URL\" => Some(\"http://localhost:3900\".to_string()),\n        _ => None,\n    }",
     "conditions": 0,
     "vectors_required": 0,
     "compiler_void": true,
     "wildcard_risk": true
+  },
+  {
+    "id": "storage_ingest_store_s3_tests_multipart_fcd40ece",
+    "file": "src/storage/ingest/store/s3/tests.rs",
+    "line": 817,
+    "decision": "exists",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_tests_conditional_put_fcd40ece",
+    "file": "src/storage/ingest/store/s3/tests.rs",
+    "line": 881,
+    "decision": "exists",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
+  },
+  {
+    "id": "storage_ingest_store_s3_tests_conditional_put_68a1043c",
+    "file": "src/storage/ingest/store/s3/tests.rs",
+    "line": 884,
+    "decision": "if_absent",
+    "conditions": 1,
+    "vectors_required": 2,
+    "compiler_void": false,
+    "wildcard_risk": false
   },
   {
     "id": "storage_ingest_store_s3_xml_all_bd0142e1",
