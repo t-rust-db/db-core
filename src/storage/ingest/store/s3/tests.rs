@@ -977,7 +977,7 @@ fn a_query_reads_only_the_footers_and_the_chunks_it_needs() {
     assert_eq!(result.rows, vec![vec![Cell::Int(120)]]);
     // Per file: the footer's tail, the footer, and the `k` chunk; never
     // the whole object.
-    assert!(gets >= 3 && gets <= 3 * 3, "{gets} GETs");
+    assert!((3..=3 * 3).contains(&gets), "{gets} GETs");
     assert!(sent * 4 < whole, "{sent} of {whole} bytes");
     std::fs::remove_dir_all(&local).ok();
 }
