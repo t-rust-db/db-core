@@ -288,4 +288,31 @@ mod tests {
         let text = format!("{:?}", creds());
         assert!(!text.contains("wJalr"), "{text}");
     }
+
+    // storage_ingest_store_s3_sigv4_uri_encode_c8f8ce7d (#1047):
+    // `plain || (keep_slash && b == b'/')`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_sigv4_uri_encode_c8f8ce7d__v1_an_unreserved_byte_stays() {
+        assert_eq!(uri_encode("a", false), "a");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_sigv4_uri_encode_c8f8ce7d__v2_a_path_keeps_its_slash() {
+        assert_eq!(uri_encode("/", true), "/");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_sigv4_uri_encode_c8f8ce7d__v3_a_value_encodes_its_slash() {
+        assert_eq!(uri_encode("/", false), "%2F");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_s3_sigv4_uri_encode_c8f8ce7d__v4_another_byte_is_encoded_even_in_a_path(
+    ) {
+        assert_eq!(uri_encode(" ", true), "%20");
+    }
 }

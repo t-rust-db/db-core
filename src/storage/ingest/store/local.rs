@@ -237,4 +237,73 @@ mod tests {
         }
         fs::remove_dir_all(s.root()).unwrap();
     }
+
+    // storage_ingest_store_local_prune_d25cb504 (#1047):
+    // `entry.file_type()?.is_dir() && prune(&entry.path(), true)?`.
+    fn pruned(name: &str, setup: impl Fn(&Path)) -> (bool, std::path::PathBuf) {
+        let s = temp(name);
+        let dir = s.root().join("top");
+        fs::create_dir_all(&dir).unwrap();
+        setup(&dir);
+        (prune(&dir, false).unwrap(), dir)
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_local_prune_d25cb504__v1_an_empty_subdirectory_is_removed() {
+        let (empty, dir) = pruned("p1", |d| fs::create_dir(d.join("sub")).unwrap());
+        assert!(empty);
+        assert!(!dir.join("sub").exists());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_local_prune_d25cb504__v2_a_file_keeps_the_directory() {
+        let (empty, dir) = pruned("p2", |d| fs::write(d.join("f"), b"").unwrap());
+        assert!(!empty);
+        assert!(dir.join("f").exists());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_local_prune_d25cb504__v3_a_subdirectory_with_a_file_is_kept() {
+        let (empty, dir) = pruned("p3", |d| {
+            fs::create_dir(d.join("sub")).unwrap();
+            fs::write(d.join("sub/f"), b"").unwrap();
+        });
+        assert!(!empty);
+        assert!(dir.join("sub/f").exists());
+    }
+
+    // storage_ingest_store_local_prune_9d0a6352 (#1047): `empty && remove_self`.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_local_prune_9d0a6352__v1_an_empty_directory_removes_itself() {
+        let s = temp("p4");
+        let dir = s.root().join("gone");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(prune(&dir, true).unwrap());
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_local_prune_9d0a6352__v2_a_directory_with_a_file_stays() {
+        let s = temp("p5");
+        let dir = s.root().join("kept");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("f"), b"").unwrap();
+        assert!(!prune(&dir, true).unwrap());
+        assert!(dir.exists());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__storage_ingest_store_local_prune_9d0a6352__v3_the_top_directory_is_not_removed() {
+        let s = temp("p6");
+        let dir = s.root().join("top");
+        fs::create_dir_all(&dir).unwrap();
+        assert!(prune(&dir, false).unwrap());
+        assert!(dir.exists());
+    }
 }

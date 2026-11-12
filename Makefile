@@ -133,9 +133,12 @@ test-mcdc: mcdc-obligations ## MC/DC dashboard for all of src/; fails if any mul
 	# `harvest` shells out to a bare `cargo test` (no filter flag), which
 	# runs the whole suite plus doctests (~70s). It only reads `mcdc__`
 	# tests, so a PATH shim narrows that one invocation to them (~3s once
-	# built); every other cargo call passes through untouched.
+	# built); every other cargo call passes through untouched. It also
+	# adds `storage-s3`, the one feature left out of `default` (so the wasm
+	# and no-thread builds stay untouched): without it the S3 client's
+	# tagged tests never compile here (#1047).
 	@mkdir -p target/mcdc-shim
-	@printf '#!/bin/sh\nif [ "$$1" = test ] && [ $$# -eq 1 ]; then exec "%s" test --tests -- mcdc__; fi\nexec "%s" "$$@"\n' \
+	@printf '#!/bin/sh\nif [ "$$1" = test ] && [ $$# -eq 1 ]; then exec "%s" test --tests --features storage-s3 -- mcdc__; fi\nexec "%s" "$$@"\n' \
 		"$$(command -v cargo)" "$$(command -v cargo)" > target/mcdc-shim/cargo
 	@chmod +x target/mcdc-shim/cargo
 	PATH="$(CURDIR)/target/mcdc-shim:$$PATH" cargo-mvl-mcdc harvest --obligations=tests/mcdc/obligations.json --run-dir=. 2>/dev/null \
