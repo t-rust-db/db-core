@@ -431,8 +431,17 @@ fn is_flat_schema(schema: &[footer::SchemaElement]) -> bool {
 /// file bytes. Get the bytes via `crate::storage::column::vfs::Vfs::open(..)?.mmap()?`
 /// (which derefs to `&[u8]`), or any other `&[u8]` source.
 pub struct ParquetFile<'a> {
-    metadata: FileMetaData,
+    footer: Arc<ParsedFooter>,
     source: Source<'a>,
+}
+
+/// A file's decoded footer and what is derived from it: parsed once and
+/// shared by every [`ParquetFile`] opened over the same file with
+/// [`ParquetFile::with_footer`] (#1052), so a reader that keeps a file
+/// does not parse its footer again per query.
+#[derive(Debug)]
+pub(crate) struct ParsedFooter {
+    metadata: FileMetaData,
     schema_tree: SchemaNode,
     is_flat: bool,
     /// Leaf (column chunk) `i`'s index in `metadata.schema`. For a flat
@@ -523,21 +532,42 @@ impl<'a> ParquetFile<'a> {
             .iter()
             .map(|l| l.max_def_level)
             .collect();
-        ParquetFile {
+        let footer = ParsedFooter {
             metadata,
-            source,
             schema_tree,
             is_flat,
             leaf_elements,
             leaf_max_def,
+        };
+        ParquetFile {
+            footer: Arc::new(footer),
+            source,
         }
+    }
+
+    /// `data` (the whole file) opened with a footer already parsed from
+    /// it, by [`footer`](Self::footer) of an earlier open (#1052).
+    #[cfg(feature = "ingest-read")]
+    pub(crate) fn with_footer(footer: Arc<ParsedFooter>, data: &'a [u8]) -> Self {
+        ParquetFile {
+            footer,
+            source: Source::Bytes(data),
+        }
+    }
+
+    /// The parsed footer, to open the same file again without parsing it
+    /// ([`with_footer`](Self::with_footer)).
+    #[cfg(feature = "ingest-read")]
+    pub(crate) fn footer(&self) -> &Arc<ParsedFooter> {
+        &self.footer
     }
 
     /// The schema element of leaf (column chunk) `column_index`.
     pub fn leaf_element(&self, column_index: usize) -> Option<&footer::SchemaElement> {
-        self.metadata
+        self.footer
+            .metadata
             .schema
-            .get(*self.leaf_elements.get(column_index)?)
+            .get(*self.footer.leaf_elements.get(column_index)?)
     }
 
     /// The top-level fields, in schema order, each with the leaves it is
@@ -545,7 +575,8 @@ impl<'a> ParquetFile<'a> {
     /// so a field after a group does not start at its element's position.
     pub fn fields(&self) -> Vec<Field> {
         let mut next = 0usize;
-        self.schema_tree
+        self.footer
+            .schema_tree
             .children
             .iter()
             .map(|child| {
@@ -566,7 +597,7 @@ impl<'a> ParquetFile<'a> {
     /// column at the top level (no structs, lists, or maps). Only flat
     /// schemas are safe to read with the per-type `read_*_column` methods.
     pub fn is_flat(&self) -> bool {
-        self.is_flat
+        self.footer.is_flat
     }
 
     /// Reconstruct one top-level field (by name) of one row group into
@@ -581,6 +612,7 @@ impl<'a> ParquetFile<'a> {
             .row_group(row_group_index)
             .ok_or(FileError::ColumnIndexOutOfRange(row_group_index))?;
         if !self
+            .footer
             .schema_tree
             .children
             .iter()
@@ -590,12 +622,13 @@ impl<'a> ParquetFile<'a> {
         }
 
         let mut leaf_data: LeafData = HashMap::new();
-        let leaves = self.schema_tree.leaves();
-        let paths =
-            schema_tree::leaf_paths(&self.schema_tree).ok_or(FileError::InvalidMetadata {
+        let leaves = self.footer.schema_tree.leaves();
+        let paths = schema_tree::leaf_paths(&self.footer.schema_tree).ok_or(
+            FileError::InvalidMetadata {
                 field: "schema (leaf paths too long)",
                 value: i64::try_from(leaves.len()).unwrap_or(i64::MAX),
-            })?;
+            },
+        )?;
         for (column_index, (leaf, path)) in leaves.iter().zip(paths.iter()).enumerate() {
             let entries = row_group.read_leaf_entries(column_index, leaf)?;
             leaf_data.insert(path.clone(), entries);
@@ -606,7 +639,8 @@ impl<'a> ParquetFile<'a> {
                 field: "row_group.num_rows",
                 value: row_group.num_rows(),
             })?;
-        let mut columns = nested::reconstruct_row_group(&self.schema_tree, num_rows, &leaf_data)?;
+        let mut columns =
+            nested::reconstruct_row_group(&self.footer.schema_tree, num_rows, &leaf_data)?;
         let idx = columns
             .iter()
             .position(|(name, _)| name == field_name)
@@ -616,23 +650,23 @@ impl<'a> ParquetFile<'a> {
 
     /// The parsed footer.
     pub fn metadata(&self) -> &FileMetaData {
-        &self.metadata
+        &self.footer.metadata
     }
 
     /// Total row count, as the footer states it.
     pub fn num_rows(&self) -> i64 {
-        self.metadata.num_rows
+        self.footer.metadata.num_rows
     }
 
     /// Number of row groups.
     pub fn num_row_groups(&self) -> usize {
-        self.metadata.row_groups.len()
+        self.footer.metadata.row_groups.len()
     }
 
     /// Get a reader for one row group by index. Lazy: this only borrows
     /// metadata already parsed into memory — no page data is read.
     pub fn row_group(&self, index: usize) -> Option<RowGroupReader<'a, '_>> {
-        let row_group = self.metadata.row_groups.get(index)?;
+        let row_group = self.footer.metadata.row_groups.get(index)?;
         Some(RowGroupReader {
             file: self,
             row_group,
@@ -651,7 +685,11 @@ impl<'a> ParquetFile<'a> {
     /// repeated node on its path (for a top-level leaf, `OPTIONAL` -> 1,
     /// `REQUIRED` -> 0).
     fn max_definition_level(&self, column_index: usize) -> u32 {
-        self.leaf_max_def.get(column_index).copied().unwrap_or(0)
+        self.footer
+            .leaf_max_def
+            .get(column_index)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Fixed byte width for a `FIXED_LEN_BYTE_ARRAY` leaf column. Zero is
@@ -1303,7 +1341,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// the field's two leaves.
     pub fn read_map_utf8_column(&self, field: &Field) -> Result<Vec<Option<MapEntries>>> {
         let not_a_map = || FileError::NotAStringMap(field.name.clone());
-        let leaves = self.file.schema_tree.leaves();
+        let leaves = self.file.footer.schema_tree.leaves();
         let (start, end) = (field.leaves.start, field.leaves.end);
         let (Some(key), Some(value)) = (leaves.get(start), leaves.get(start.saturating_add(1)))
         else {
@@ -1357,7 +1395,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     fn list_utf8_leaf(&self, field: &Field) -> Result<(usize, &SchemaNode)> {
         let not_a_list = || FileError::NotAStringList(field.name.clone());
         let start = field.leaves.start;
-        let leaves = self.file.schema_tree.leaves();
+        let leaves = self.file.footer.schema_tree.leaves();
         let Some(leaf) = leaves.get(start).copied() else {
             return Err(not_a_list());
         };

@@ -1217,7 +1217,7 @@ impl Segment for SnapshotSegment<'_, '_> {
 pub fn snapshot_files(
     snapshot: &crate::storage::ingest::Snapshot,
 ) -> Result<Vec<ParquetFile<'_>>, EngineError> {
-    open_files(snapshot.files())
+    open_files(snapshot.held_files())
 }
 
 /// The files of `snapshot` that `filter` may match a row of, oldest first,
@@ -1230,7 +1230,7 @@ pub fn snapshot_files_where<'s>(
     let keep = table::file_flags(snapshot, filter.schema(), Some(filter.expr()));
     open_files(
         snapshot
-            .files()
+            .held_files()
             .zip(keep)
             .filter(|(_, keep)| *keep)
             .map(|(file, _)| file),
@@ -1239,11 +1239,16 @@ pub fn snapshot_files_where<'s>(
 
 #[cfg(feature = "ingest-read")]
 fn open_files<'s>(
-    files: impl Iterator<Item = (&'s crate::storage::ingest::FileEntry, &'s [u8])>,
+    files: impl Iterator<
+        Item = (
+            &'s crate::storage::ingest::FileEntry,
+            &'s crate::storage::ingest::snapshot::HeldFile,
+        ),
+    >,
 ) -> Result<Vec<ParquetFile<'s>>, EngineError> {
     files
-        .map(|(entry, bytes)| {
-            ParquetFile::open(bytes)
+        .map(|(entry, held)| {
+            held.parquet()
                 .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", entry.path)))
         })
         .collect()

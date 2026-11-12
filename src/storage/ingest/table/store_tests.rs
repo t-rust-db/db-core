@@ -630,3 +630,46 @@ fn a_snapshot_lets_go_of_files_the_manifest_no_longer_lists() {
     assert_eq!(held, listed);
     assert_eq!(file_addresses(&after).len(), listed.len());
 }
+
+#[test]
+fn a_held_file_parses_its_footer_once_across_snapshots() {
+    let f = Fixture::new();
+    let mut w = f.open(TableOptions::default()).unwrap();
+    append(&mut w, 0..5);
+    w.flush_all().unwrap();
+    let footer = |s: &Snapshot| {
+        let (_, held) = s.held_files().next().unwrap();
+        Arc::clone(held.parquet().unwrap().footer())
+    };
+    let first = w.snapshot().unwrap();
+    let second = w.snapshot().unwrap();
+    // The second open of the same file shares the first one's footer.
+    assert!(Arc::ptr_eq(&footer(&first), &footer(&second)));
+    // And answers the same.
+    let file_rows = |s: &Snapshot| {
+        let (_, held) = s.held_files().next().unwrap();
+        held.parquet().unwrap().num_rows()
+    };
+    assert_eq!(file_rows(&first), 5);
+    assert_eq!(file_rows(&second), 5);
+    assert_eq!(rows(&w), sorted((0..5).map(line).collect()));
+}
+
+#[test]
+fn a_store_reader_keeps_a_files_parsed_footer_across_refreshes() {
+    let f = Fixture::new();
+    let mut w = f.open(TableOptions::default()).unwrap();
+    append(&mut w, 0..5);
+    w.flush_all().unwrap();
+    let mut reader = StoreReader::open(f.store()).unwrap();
+    let footer = |s: &Snapshot| {
+        let (_, held) = s.held_files().next().unwrap();
+        Arc::clone(held.parquet().unwrap().footer())
+    };
+    let before = footer(reader.snapshot());
+    append(&mut w, 5..10);
+    w.flush_all().unwrap();
+    let after = reader.refresh().unwrap();
+    assert_eq!(after.held_files().count(), 2);
+    assert!(Arc::ptr_eq(&before, &footer(after)));
+}

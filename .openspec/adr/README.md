@@ -79,3 +79,4 @@ Row storage (`storage::row`), moved from sqlite-rs's `.openspec/adr/` (#575); ea
 - [0042](0042-macos-plain-fsync-not-fullfsync.md) — On macOS, `Vfs::sync` calls plain `fsync(2)`, not `std`'s `F_FULLFSYNC`
 - [0043](0043-attached-databases.md) — Several SQLite files per connection: named cross-mode files and row-engine `ATTACH`
 - [0044](0044-s3-object-store-for-tables.md) — An object store (S3) for striped tables: `Store`, local WAL, conditional-put fencing and a lease, no TLS in db-core
+- [0045](0045-read-path-for-held-table-files.md) — The read path for a table's files: a held file keeps its parsed footer; an object store's files are read by range with a column-chunk cache under a byte budget

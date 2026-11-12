@@ -6,6 +6,7 @@ use crate::storage::ingest::{
     Ack, Layout, RecordValue, SessionKey, TableOptions, TableWriter, TierOptions,
 };
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
+use crate::storage::ParquetFile;
 use crate::test_rng::Rng;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -855,7 +856,7 @@ fn errors() {
 }
 
 #[test]
-fn a_corrupt_file_is_an_open_error() {
+fn a_corrupt_file_is_an_error_whether_or_not_its_footer_was_parsed() {
     let t = TempTable::new();
     let mut w = t.writer();
     append(&mut w, &[r#"{"n":1}"#]);
@@ -869,17 +870,20 @@ fn a_corrupt_file_is_an_open_error() {
             .kind,
         ErrorKind::Open
     );
+    // The engine parsed this file's footer at open, before it changed, and
+    // keeps it (#1052): a listed file never changes, so one that did fails
+    // when its chunk is decoded, still an error and not an answer.
     assert_eq!(
         engine.run_query("SELECT n FROM logs").unwrap_err().kind,
-        ErrorKind::Open
+        ErrorKind::Execute
     );
     assert_eq!(
         engine.stats(),
         FileStats::Batch {
-            row_groups: 0,
+            row_groups: 1,
             rows: 1
         },
-        "an unreadable file has no row groups to count"
+        "counted from the footer the engine parsed before the file changed"
     );
 }
 
