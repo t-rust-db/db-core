@@ -186,7 +186,7 @@ fn all_rows(w: &TableWriter) -> Vec<String> {
             rows.push(render_row(&row));
         }
     };
-    for (_, bytes) in s.files() {
+    for (_, bytes) in s.files().unwrap() {
         let file = ParquetFile::open(bytes).unwrap();
         for rg in file.row_groups() {
             let columns: Vec<ColumnValues> = schema
@@ -636,7 +636,7 @@ fn notes(w: &TableWriter) -> Vec<Option<String>> {
         };
         out.extend(v.iter().cloned());
     }
-    for (_, bytes) in s.files() {
+    for (_, bytes) in s.files().unwrap() {
         let file = ParquetFile::open(bytes).unwrap();
         let fields = file.fields();
         let field = fields.iter().find(|f| f.name == "note");

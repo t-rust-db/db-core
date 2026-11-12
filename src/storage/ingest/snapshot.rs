@@ -24,7 +24,7 @@
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use super::error::IngestError;
@@ -33,15 +33,122 @@ use super::manifest::{FileEntry, Manifest};
 use super::page::{decode_record, HeadPage, Page, PageBody};
 use super::record::{check_row, decode_row, pad_row};
 use super::recover::{read_from, read_tail, WalPos};
+#[cfg(any(feature = "storage-s3", test))]
+use super::store::StoreFile;
 use super::store::{LocalFs, Store, TableStore};
 use super::wal::{Record, WAL_DIR};
 use crate::storage::column::MmapRegion;
+#[cfg(any(feature = "storage-s3", test))]
+use crate::storage::column::VfsFile;
 use crate::storage::parquet::footer::PhysicalType;
+use crate::storage::parquet::parquet_file::ParsedFooter;
 use crate::storage::parquet::schema::{ColumnSpec, ColumnType, DecimalStorage};
+use crate::storage::parquet::FileError;
 use crate::storage::parquet::ParquetFile;
 use crate::storage::stream::detect::{DetectedParser, Format};
 use crate::storage::stream::{Source, SourceKind};
 use crate::vm::batch::Value;
+
+/// A flushed file a snapshot holds, and its footer once some query has
+/// parsed it (#1052, ADR 0045). A listed file never changes, so a reader
+/// that keeps the file across snapshots keeps its parsed footer too. A
+/// local file is mapped whole; an object store's is read by range, one
+/// column chunk at a time, through the store's read cache.
+pub struct HeldFile {
+    body: Body,
+    footer: OnceLock<Arc<ParsedFooter>>,
+}
+
+enum Body {
+    /// The whole file, mapped or in memory.
+    Mapped(MmapRegion),
+    /// An object read by range; its whole bytes are fetched only if some
+    /// caller asks for them ([`HeldFile::bytes`]).
+    #[cfg(any(feature = "storage-s3", test))]
+    Ranged {
+        file: StoreFile,
+        whole: OnceLock<MmapRegion>,
+    },
+}
+
+impl fmt::Debug for HeldFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let kind = match &self.body {
+            Body::Mapped(_) => "mapped",
+            #[cfg(any(feature = "storage-s3", test))]
+            Body::Ranged { .. } => "ranged",
+        };
+        f.debug_struct("HeldFile")
+            .field("body", &kind)
+            .field("footer_parsed", &self.footer.get().is_some())
+            .finish()
+    }
+}
+
+impl HeldFile {
+    /// A file held whole.
+    pub(crate) fn mapped(region: MmapRegion) -> HeldFile {
+        HeldFile {
+            body: Body::Mapped(region),
+            footer: OnceLock::new(),
+        }
+    }
+
+    /// An object read by range.
+    #[cfg(any(feature = "storage-s3", test))]
+    pub(crate) fn ranged(file: StoreFile) -> HeldFile {
+        HeldFile {
+            body: Body::Ranged {
+                file,
+                whole: OnceLock::new(),
+            },
+            footer: OnceLock::new(),
+        }
+    }
+
+    /// The whole file. An object read by range is fetched whole the first
+    /// time (one GET), and kept.
+    pub(crate) fn bytes(&self) -> io::Result<&[u8]> {
+        match &self.body {
+            Body::Mapped(region) => Ok(region),
+            #[cfg(any(feature = "storage-s3", test))]
+            Body::Ranged { file, whole } => {
+                if let Some(region) = whole.get() {
+                    return Ok(region);
+                }
+                let region = file.mmap()?;
+                Ok(whole.get_or_init(|| region))
+            }
+        }
+    }
+
+    /// The file opened, parsing its footer only the first time. An object
+    /// read by range reads its footer then, and a column chunk only when
+    /// one is decoded.
+    pub(crate) fn parquet(&self) -> Result<ParquetFile<'_>, FileError> {
+        match &self.body {
+            Body::Mapped(region) => {
+                if let Some(footer) = self.footer.get() {
+                    return Ok(ParquetFile::with_footer(Arc::clone(footer), region));
+                }
+                let file = ParquetFile::open(region)?;
+                // Two threads may both parse it first: the first footer
+                // stored is kept, and either is the same.
+                let footer = self.footer.get_or_init(|| Arc::clone(file.footer()));
+                Ok(ParquetFile::with_footer(Arc::clone(footer), region))
+            }
+            #[cfg(any(feature = "storage-s3", test))]
+            Body::Ranged { file, .. } => {
+                if let Some(footer) = self.footer.get() {
+                    return ParquetFile::with_footer_file(Arc::clone(footer), file);
+                }
+                let opened = ParquetFile::open_file(file)?;
+                let footer = self.footer.get_or_init(|| Arc::clone(opened.footer()));
+                ParquetFile::with_footer_file(Arc::clone(footer), file)
+            }
+        }
+    }
+}
 
 /// How often [`Snapshot::open`] re-reads after a flush moved on.
 const ATTEMPTS: u32 = 20;
@@ -50,7 +157,7 @@ const ATTEMPTS: u32 = 20;
 pub struct Snapshot {
     manifest: Manifest,
     /// One per `manifest.files`, same order.
-    files: Vec<Arc<MmapRegion>>,
+    files: Vec<Arc<HeldFile>>,
     pages: Vec<Page>,
     /// The schema, when a reader has kept it up to date (#593): `schema`
     /// then costs nothing.
@@ -137,13 +244,13 @@ impl Snapshot {
         store: &impl TableStore,
         manifest: Manifest,
         pages: Vec<Page>,
-        held: &mut Vec<(String, Arc<MmapRegion>)>,
+        held: &mut Vec<(String, Arc<HeldFile>)>,
     ) -> Result<Snapshot, IngestError> {
         let mut mapped = Vec::with_capacity(manifest.files.len());
         for entry in &manifest.files {
             let region = match held.iter().find(|(path, _)| *path == entry.path) {
                 Some((_, region)) => Arc::clone(region),
-                None => Arc::new(store.map(&entry.path)?),
+                None => Arc::new(store.hold(&entry.path, entry.bytes)?),
             };
             mapped.push((entry.path.clone(), region));
         }
@@ -161,12 +268,27 @@ impl Snapshot {
         &self.manifest
     }
 
-    /// Each flushed file with its bytes, oldest first.
-    pub fn files(&self) -> impl Iterator<Item = (&FileEntry, &[u8])> {
+    /// Each flushed file with its whole bytes, oldest first. A file read
+    /// by range (an object store's) is fetched whole for this, once, and
+    /// kept; a fetch that fails is the error (#1052). To read a file's
+    /// footer or columns, `engine::column::snapshot_files` fetches only
+    /// what it reads.
+    pub fn files(&self) -> Result<Vec<(&FileEntry, &[u8])>, IngestError> {
         self.manifest
             .files
             .iter()
-            .zip(self.files.iter().map(|m| &***m))
+            .zip(&self.files)
+            .map(|(entry, held)| Ok((entry, held.bytes()?)))
+            .collect()
+    }
+
+    /// Each flushed file as held, oldest first: [`HeldFile::parquet`]
+    /// opens it without parsing its footer again (#1052).
+    pub(crate) fn held_files(&self) -> impl Iterator<Item = (&FileEntry, &HeldFile)> {
+        self.manifest
+            .files
+            .iter()
+            .zip(self.files.iter().map(|f| &**f))
     }
 
     /// The table's line format.
@@ -215,8 +337,9 @@ impl Snapshot {
     /// footer and every page.
     fn compute_schema(&self) -> Result<Vec<ColumnSpec>, IngestError> {
         let mut specs = predefined_specs();
-        for (entry, bytes) in self.files() {
-            let file = ParquetFile::open(bytes)
+        for (entry, held) in self.held_files() {
+            let file = held
+                .parquet()
                 .map_err(|e| IngestError::Corrupt(format!("{}: {e}", entry.path)))?;
             for element in file.metadata().schema.iter().skip(1) {
                 if let Some(t) = element.physical_type.and_then(column_type) {
@@ -413,7 +536,7 @@ pub struct TableReader {
     /// The LSN after the last record parsed.
     next_lsn: u64,
     /// Mapped files by path, kept while the manifest lists them.
-    mapped: Vec<(String, Arc<MmapRegion>)>,
+    mapped: Vec<(String, Arc<HeldFile>)>,
     snapshot: Snapshot,
     stats: ReaderStats,
     /// A lines table's schema as of the last refresh.
@@ -589,7 +712,7 @@ impl TableReader {
         for entry in &self.manifest.files {
             let region = match self.mapped.iter().find(|(path, _)| *path == entry.path) {
                 Some((_, region)) => Arc::clone(region),
-                None => Arc::new(store.map(&entry.path)?),
+                None => Arc::new(store.hold(&entry.path, entry.bytes)?),
             };
             mapped.push((entry.path.clone(), region));
         }
@@ -653,7 +776,7 @@ impl TableReader {
 pub struct StoreReader {
     store: Store,
     /// Mapped files by key, kept while the manifest lists them.
-    mapped: Vec<(String, Arc<MmapRegion>)>,
+    mapped: Vec<(String, Arc<HeldFile>)>,
     snapshot: Snapshot,
 }
 
@@ -706,8 +829,8 @@ impl StoreReader {
                 let kept = self.mapped.iter().find(|(key, _)| *key == entry.path);
                 let region = match kept {
                     Some((_, region)) => Arc::clone(region),
-                    None => match self.store.map(&entry.path) {
-                        Ok(region) => Arc::new(region),
+                    None => match self.store.hold(&entry.path, entry.bytes) {
+                        Ok(held) => Arc::new(held),
                         // A newer manifest no longer lists it.
                         Err(e) if e.kind() == io::ErrorKind::NotFound => {
                             missing = true;

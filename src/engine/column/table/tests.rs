@@ -6,6 +6,7 @@ use crate::storage::ingest::{
     Ack, Layout, RecordValue, SessionKey, TableOptions, TableWriter, TierOptions,
 };
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
+use crate::storage::ParquetFile;
 use crate::test_rng::Rng;
 use std::fs;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -855,7 +856,7 @@ fn errors() {
 }
 
 #[test]
-fn a_corrupt_file_is_an_open_error() {
+fn a_corrupt_file_is_an_error_whether_or_not_its_footer_was_parsed() {
     let t = TempTable::new();
     let mut w = t.writer();
     append(&mut w, &[r#"{"n":1}"#]);
@@ -869,17 +870,20 @@ fn a_corrupt_file_is_an_open_error() {
             .kind,
         ErrorKind::Open
     );
+    // The engine parsed this file's footer at open, before it changed, and
+    // keeps it (#1052): a listed file never changes, so one that did fails
+    // when its chunk is decoded, still an error and not an answer.
     assert_eq!(
         engine.run_query("SELECT n FROM logs").unwrap_err().kind,
-        ErrorKind::Open
+        ErrorKind::Execute
     );
     assert_eq!(
         engine.stats(),
         FileStats::Batch {
-            row_groups: 0,
+            row_groups: 1,
             rows: 1
         },
-        "an unreadable file has no row groups to count"
+        "counted from the footer the engine parsed before the file changed"
     );
 }
 
@@ -1064,7 +1068,7 @@ fn read_snapshot_gives_the_whole_table_with_the_tables_types() {
     w.flush_all().unwrap();
     append(&mut w, &[r#"{"k":"d","n":4}"#]);
     let snapshot = w.snapshot().unwrap();
-    assert_eq!(snapshot.files().count(), 2);
+    assert_eq!(snapshot.files().unwrap().len(), 2);
     assert_eq!(snapshot.pages().len(), 1);
 
     let columns = ["logs.k".to_string(), "n".to_string(), "m".to_string()];
@@ -1128,7 +1132,7 @@ fn read_snapshot_gives_list_columns_from_files_and_pages() {
         }
     }
     let snapshot = w.snapshot().unwrap();
-    assert_eq!(snapshot.files().count(), 1);
+    assert_eq!(snapshot.files().unwrap().len(), 1);
     assert_eq!(snapshot.pages().len(), 1);
     let batch = read_snapshot(&snapshot, &["labels".to_string()]).unwrap();
     let item = |v: &str| Some(std::sync::Arc::<str>::from(v));
@@ -1259,12 +1263,14 @@ fn a_sort_key_filter_opens_only_the_files_whose_range_matches() {
     let hours: &[&[&str]] = &[&["a", "b"], &["c", "d"], &["a"], &["x", "y"]];
     let w = hours_of_kinds(&t, hours, WriterOptions::default());
     let snapshot = w.snapshot().unwrap();
-    assert_eq!(snapshot.files().count(), 4);
+    assert_eq!(snapshot.files().unwrap().len(), 4);
     let schema = snapshot.schema().unwrap();
     let opened = |sql: &str| {
         let select = crate::parser::parse(sql).unwrap();
         snapshot
             .files()
+            .unwrap()
+            .into_iter()
             .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
             .count()
     };
@@ -1284,6 +1290,8 @@ fn a_sort_key_filter_opens_only_the_files_whose_range_matches() {
         let select = crate::parser::column::parse(sql).unwrap();
         snapshot
             .files()
+            .unwrap()
+            .into_iter()
             .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
             .count()
     };
@@ -1549,13 +1557,15 @@ fn a_session_key_filter_opens_only_the_files_its_arrival_window_can_hold() {
         }),
     );
     let snapshot = w.snapshot().unwrap();
-    assert_eq!(snapshot.files().count(), 4);
+    assert_eq!(snapshot.files().unwrap().len(), 4);
     let schema = snapshot.schema().unwrap();
     let key = snapshot.manifest().session_key.clone();
     assert!(key.is_some(), "readers get the option from the manifest");
     let opened = |select: Select| {
         snapshot
             .files()
+            .unwrap()
+            .into_iter()
             .filter(|(entry, _)| {
                 may_match(entry, &schema, key.as_ref(), select.where_clause.as_ref())
             })
@@ -1610,6 +1620,8 @@ fn without_a_session_key_option_no_file_is_skipped_on_the_key() {
     .unwrap();
     let opened = snapshot
         .files()
+        .unwrap()
+        .into_iter()
         .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
         .count();
     assert_eq!(opened, 4);
@@ -1659,12 +1671,14 @@ fn a_stat_column_prunes_files_by_its_exact_range() {
     let t = TempTable::new();
     let w = stats_by_hour(&t, &["sid"]);
     let snapshot = w.snapshot().unwrap();
-    assert_eq!(snapshot.files().count(), 4);
+    assert_eq!(snapshot.files().unwrap().len(), 4);
     let schema = snapshot.schema().unwrap();
     let opened = |filter: &str| {
         let select = crate::parser::parse(&format!("SELECT n FROM t WHERE {filter}")).unwrap();
         snapshot
             .files()
+            .unwrap()
+            .into_iter()
             .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
             .count()
     };
@@ -1691,6 +1705,8 @@ fn without_stat_columns_a_non_sort_column_prunes_nothing() {
     let select = crate::parser::parse("SELECT n FROM t WHERE sid = 200").unwrap();
     let opened = snapshot
         .files()
+        .unwrap()
+        .into_iter()
         .filter(|(entry, _)| may_match(entry, &schema, None, select.where_clause.as_ref()))
         .count();
     assert_eq!(opened, 4);

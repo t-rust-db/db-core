@@ -4340,6 +4340,9 @@ pub fn db_core::storage::ingest::record::RowPage::fmt(&self, &mut core::fmt::For
 pub fn db_core::storage::ingest::record::type_from_name(&str) -> core::option::Option<db_core::storage::parquet::schema::ColumnType>
 pub fn db_core::storage::ingest::record::type_name(db_core::storage::parquet::schema::ColumnType) -> alloc::string::String
 pub mod db_core::storage::ingest::snapshot
+pub struct db_core::storage::ingest::snapshot::HeldFile
+impl core::fmt::Debug for db_core::storage::ingest::snapshot::HeldFile
+pub fn db_core::storage::ingest::snapshot::HeldFile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct db_core::storage::ingest::snapshot::ReaderStats
 pub db_core::storage::ingest::snapshot::ReaderStats::rebuilds: u64
 pub db_core::storage::ingest::snapshot::ReaderStats::records_parsed: u64
@@ -4357,7 +4360,7 @@ impl core::marker::Copy for db_core::storage::ingest::snapshot::ReaderStats
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::snapshot::ReaderStats
 pub struct db_core::storage::ingest::snapshot::Snapshot
 impl db_core::storage::ingest::snapshot::Snapshot
-pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
+pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> core::result::Result<alloc::vec::Vec<(&db_core::storage::ingest::manifest::FileEntry, &[u8])>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::snapshot::Snapshot::last_lsn(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
@@ -4507,6 +4510,7 @@ pub db_core::storage::ingest::store::s3::S3Config::multipart_threshold: u64
 pub db_core::storage::ingest::store::s3::S3Config::part_size: usize
 pub db_core::storage::ingest::store::s3::S3Config::path_style: bool
 pub db_core::storage::ingest::store::s3::S3Config::prefix: alloc::string::String
+pub db_core::storage::ingest::store::s3::S3Config::read_cache_bytes: u64
 pub db_core::storage::ingest::store::s3::S3Config::region: alloc::string::String
 impl db_core::storage::ingest::store::s3::S3Config
 pub fn db_core::storage::ingest::store::s3::S3Config::from_uri(&str, impl core::convert::Into<db_core::storage::ingest::store::s3::CredentialSource>) -> core::io::error::Result<db_core::storage::ingest::store::s3::S3Config>
@@ -4538,6 +4542,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::s
 pub type db_core::storage::ingest::store::s3::S3Store::File = db_core::storage::ingest::store::s3::S3File
 pub fn db_core::storage::ingest::store::s3::S3Store::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::s3::S3Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::s3::S3Store::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::store::s3::S3Store::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::store::s3::S3Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::s3::S3Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -4564,6 +4569,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::s
 pub type db_core::storage::ingest::store::Store::File = db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::Store::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::Store::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::store::Store::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::store::Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -4590,6 +4596,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::L
 pub type db_core::storage::ingest::LocalFs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::LocalFs::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::LocalFs::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -4601,6 +4608,7 @@ pub trait db_core::storage::ingest::store::TableStore: core::marker::Send + core
 pub type db_core::storage::ingest::store::TableStore::File: db_core::storage::column::vfs::VfsFile
 pub fn db_core::storage::ingest::store::TableStore::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::TableStore::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::TableStore::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::store::TableStore::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::store::TableStore::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::TableStore::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -4612,6 +4620,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::L
 pub type db_core::storage::ingest::LocalFs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::LocalFs::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::LocalFs::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -4623,6 +4632,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::s
 pub type db_core::storage::ingest::store::Store::File = db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::Store::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::Store::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::store::Store::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::store::Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -4634,6 +4644,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::s
 pub type db_core::storage::ingest::store::s3::S3Store::File = db_core::storage::ingest::store::s3::S3File
 pub fn db_core::storage::ingest::store::s3::S3Store::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::s3::S3Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::s3::S3Store::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::store::s3::S3Store::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::store::s3::S3Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::s3::S3Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -4966,6 +4977,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::s
 pub type db_core::storage::ingest::store::Store::File = db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::Store::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::Store::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::store::Store::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::store::Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -5059,6 +5071,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::L
 pub type db_core::storage::ingest::LocalFs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::LocalFs::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::LocalFs::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -5150,7 +5163,7 @@ pub fn db_core::storage::ingest::layout::SessionKey::fmt(&self, &mut core::fmt::
 impl core::marker::StructuralPartialEq for db_core::storage::ingest::layout::SessionKey
 pub struct db_core::storage::ingest::Snapshot
 impl db_core::storage::ingest::snapshot::Snapshot
-pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&db_core::storage::ingest::manifest::FileEntry, &[u8])>
+pub fn db_core::storage::ingest::snapshot::Snapshot::files(&self) -> core::result::Result<alloc::vec::Vec<(&db_core::storage::ingest::manifest::FileEntry, &[u8])>, db_core::storage::ingest::error::IngestError>
 pub fn db_core::storage::ingest::snapshot::Snapshot::last_lsn(&self) -> u64
 pub fn db_core::storage::ingest::snapshot::Snapshot::manifest(&self) -> &db_core::storage::ingest::manifest::Manifest
 pub fn db_core::storage::ingest::snapshot::Snapshot::open(&std::path::Path) -> core::result::Result<db_core::storage::ingest::snapshot::Snapshot, db_core::storage::ingest::error::IngestError>
@@ -5312,6 +5325,7 @@ pub trait db_core::storage::ingest::TableStore: core::marker::Send + core::marke
 pub type db_core::storage::ingest::TableStore::File: db_core::storage::column::vfs::VfsFile
 pub fn db_core::storage::ingest::TableStore::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::TableStore::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::TableStore::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::TableStore::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::TableStore::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::TableStore::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -5323,6 +5337,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::L
 pub type db_core::storage::ingest::LocalFs::File = db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::ingest::LocalFs::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::LocalFs::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::LocalFs::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::LocalFs::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::LocalFs::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::LocalFs::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -5334,6 +5349,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::s
 pub type db_core::storage::ingest::store::Store::File = db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::Store::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::Store::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::store::Store::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::store::Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
@@ -5345,6 +5361,7 @@ impl db_core::storage::ingest::store::TableStore for db_core::storage::ingest::s
 pub type db_core::storage::ingest::store::s3::S3Store::File = db_core::storage::ingest::store::s3::S3File
 pub fn db_core::storage::ingest::store::s3::S3Store::delete(&self, &str) -> core::io::error::Result<()>
 pub fn db_core::storage::ingest::store::s3::S3Store::get(&self, &str) -> core::io::error::Result<core::option::Option<alloc::vec::Vec<u8>>>
+pub fn db_core::storage::ingest::store::s3::S3Store::hold(&self, &str, u64) -> core::io::error::Result<db_core::storage::ingest::snapshot::HeldFile>
 pub fn db_core::storage::ingest::store::s3::S3Store::lease(&self, &str) -> core::io::error::Result<core::option::Option<db_core::storage::ingest::store::lease::Lease>>
 pub fn db_core::storage::ingest::store::s3::S3Store::list(&self, &str) -> core::io::error::Result<alloc::vec::Vec<alloc::string::String>>
 pub fn db_core::storage::ingest::store::s3::S3Store::map(&self, &str) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>

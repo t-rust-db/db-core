@@ -206,11 +206,17 @@ fn s3_garage_opens_by_uri_and_a_reader_follows_the_writer() {
     w.flush_all().unwrap();
 
     let mut reader = StoreReader::open(Store::at(&uri).unwrap()).unwrap();
-    assert_eq!(reader.snapshot().files().count(), 1);
+    assert_eq!(reader.snapshot().files().unwrap().len(), 1);
     lines.extend(append(&mut w, 5..12));
     w.flush_all().unwrap();
-    assert_eq!(reader.refresh().unwrap().files().count(), 2);
-    let rows_in_files: u64 = reader.snapshot().files().map(|(e, _)| e.rows).sum();
+    assert_eq!(reader.refresh().unwrap().files().unwrap().len(), 2);
+    let rows_in_files: u64 = reader
+        .snapshot()
+        .files()
+        .unwrap()
+        .into_iter()
+        .map(|(e, _)| e.rows)
+        .sum();
     assert_eq!(rows_in_files, lines.len() as u64);
 
     // A path is refused by `open`, not turned into a directory named "s3:".

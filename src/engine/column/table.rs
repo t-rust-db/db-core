@@ -24,9 +24,9 @@ use std::sync::Arc;
 use super::{
     engine, leaf_columns, opcode_sections, parse_select, plan_err, plan_rows, planner, prune,
     query_result, single_statement, table_row_groups, timestamp_literals, type_name, ColumnInfo,
-    Engine, EngineError, ErrorKind, FileStats, Leaf, Mode, OpcodeSection, ParquetFile, PlanRow,
-    Program, QueryResult, RowGroupSegment, Segment, Select, TableInfo, TableSegment, TableStats,
-    Value, VmError,
+    Engine, EngineError, ErrorKind, FileStats, Leaf, Mode, OpcodeSection, PlanRow, Program,
+    QueryResult, RowGroupSegment, Segment, Select, TableInfo, TableSegment, TableStats, Value,
+    VmError,
 };
 use crate::parser::ast::{Expr, Literal};
 use crate::storage::ingest::manifest::column_bounds;
@@ -263,12 +263,13 @@ pub fn query_snapshot(
     let requests = resolve(&schema, &program.columns_to_load(), &[])?;
     let keep = file_flags(snapshot, &schema, select.where_clause.as_ref());
     let files = snapshot
-        .files()
+        .held_files()
         .zip(keep)
         .filter(|(_, keep)| *keep)
         .map(|(file, _)| file)
-        .map(|(entry, bytes)| {
-            ParquetFile::open(bytes).map_err(|e| open_error(format!("{}: {e}", entry.path)))
+        .map(|(entry, held)| {
+            held.parquet()
+                .map_err(|e| open_error(format!("{}: {e}", entry.path)))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut segments: Vec<TableSegment<'_, '_>> = files
@@ -323,8 +324,10 @@ pub(super) fn file_flags(
     where_clause: Option<&Expr>,
 ) -> Vec<bool> {
     snapshot
-        .files()
-        .map(|(entry, _)| {
+        .manifest()
+        .files
+        .iter()
+        .map(|entry| {
             may_match(
                 entry,
                 schema,
@@ -828,8 +831,8 @@ impl TableEngine {
     ))]
     pub(crate) fn archive_row_groups(&self) -> usize {
         self.snapshot()
-            .files()
-            .filter_map(|(_, bytes)| ParquetFile::open(bytes).ok())
+            .held_files()
+            .filter_map(|(_, held)| held.parquet().ok())
             .map(|f| f.num_row_groups())
             .sum()
     }
@@ -872,8 +875,8 @@ impl TableEngine {
     fn segment_count(&self) -> usize {
         let row_groups: usize = self
             .snapshot()
-            .files()
-            .filter_map(|(_, bytes)| ParquetFile::open(bytes).ok())
+            .held_files()
+            .filter_map(|(_, held)| held.parquet().ok())
             .map(|f| f.num_row_groups())
             .sum();
         row_groups.saturating_add(self.snapshot().pages().len())

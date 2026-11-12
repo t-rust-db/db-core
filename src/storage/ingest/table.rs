@@ -52,12 +52,11 @@ use super::record::{
     check_row, decode_row, encode_row, extends_schema, invalid_schema, join_repeated_keys, pad_row,
     RecordValue,
 };
-use super::snapshot::Snapshot;
+use super::snapshot::{HeldFile, Snapshot};
 use super::store::lease::Lease;
 use super::store::{LocalFs, Store, TableStore};
 use super::tier::Output;
 use super::wal::{Ack, Wal, WalError, WalOptions, Watermarks};
-use crate::storage::column::MmapRegion;
 use crate::storage::parquet::writer::{ColumnSpec, ColumnType, WriterOptions};
 use crate::storage::stream::adapter::now_ns;
 use crate::storage::stream::detect::{DetectedParser, Format};
@@ -154,7 +153,7 @@ pub struct TableWriter {
 
 /// The files a [`TableWriter::snapshot`] holds on to, by path (#1051).
 #[derive(Default)]
-struct HeldFiles(Vec<(String, Arc<MmapRegion>)>);
+struct HeldFiles(Vec<(String, Arc<HeldFile>)>);
 
 impl std::fmt::Debug for HeldFiles {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

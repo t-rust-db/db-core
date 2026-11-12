@@ -83,7 +83,7 @@ fn append(w: &mut TableWriter, range: std::ops::Range<usize>) -> Vec<String> {
 fn all_rows(w: &TableWriter) -> Vec<String> {
     let s = w.snapshot().unwrap();
     let mut rows = Vec::new();
-    for (_, bytes) in s.files() {
+    for (_, bytes) in s.files().unwrap() {
         let file = ParquetFile::open(bytes).unwrap();
         let raw = file.metadata().schema[1..]
             .iter()
