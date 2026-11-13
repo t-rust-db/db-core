@@ -83,8 +83,10 @@ by listing the area prefixes and removing what the manifest does not list.
   reader is a `StoreReader`, so queries see the flushed files and keep no
   WAL-tail statistics. `TableReader` itself, the incremental reader of a
   local directory's WAL tail, stays local.
-- Reading a remote table fetches whole objects for `mmap` and ranged GETs for
-  `read_at`; a reader of many small files pays one request per read.
+- A query reads a remote table's files by range: each footer once per
+  reader, then the column chunks it loads, through a read cache under a byte
+  budget (ADR 0045, #1052). A reader of many small files pays a request per
+  footer and per chunk.
 - A reader's retry when a file vanished is a 1 ms sleep, tuned for a local
   disk; a remote store would want a longer backoff.
 - Verification against AWS S3 itself waits on a TLS transport. Garage is
