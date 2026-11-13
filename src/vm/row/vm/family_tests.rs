@@ -382,3 +382,47 @@ fn an_update_through_delete_and_insert_refuses_a_bad_record_or_insert() {
         }
     }
 }
+
+/// The value family's register errors: every write to a register before
+/// the file's start, every count past what a register file can hold, and
+/// every range that would run past `i32::MAX`.
+#[test]
+fn value_opcodes_refuse_registers_out_of_range() {
+    let out_of_range = |r: Result<Step, ExecError>| {
+        matches!(
+            r,
+            Err(ExecError::RegisterOutOfRange { .. }
+                | ExecError::RegisterRangeTooLarge { .. }
+                | ExecError::MalformedInstruction { .. })
+        )
+    };
+    let mut vm = Vm::new();
+    for i in [
+        instr(Opcode::Integer, 1, -1, 0),
+        with_p4(Opcode::Int64, 0, -1, 0, P4::Int(7)),
+        with_p4(Opcode::Real, 0, -1, 0, P4::Real(1.5)),
+        with_p4(Opcode::Blob, 0, -1, 0, P4::Blob(vec![1])),
+        instr(Opcode::Null, 0, -1, 0),
+        with_p4(Opcode::String8, 0, -1, 0, P4::Str("x".into())),
+        // A `Variable` at index 0, and one whose target is out of range.
+        instr(Opcode::Variable, 0, 1, 0),
+        instr(Opcode::Variable, 1, -1, 0),
+        // A `Copy` from or to a bad register, of a negative extra count, or
+        // whose range runs past `i32::MAX`.
+        instr(Opcode::Copy, -1, 1, 0),
+        instr(Opcode::Copy, 1, -1, 0),
+        instr(Opcode::Copy, 1, 2, -1),
+        instr(Opcode::Copy, i32::MAX, 1, 1),
+        // A record or row of a negative count, from a bad register, written
+        // to one, or running past `i32::MAX`.
+        instr(Opcode::MakeRecord, 0, -1, 5),
+        instr(Opcode::MakeRecord, -1, 1, 5),
+        instr(Opcode::MakeRecord, i32::MAX, 2, 5),
+        instr(Opcode::MakeRecord, 0, 1, -1),
+        instr(Opcode::ResultRow, 0, -1, 0),
+        instr(Opcode::ResultRow, -1, 1, 0),
+        instr(Opcode::ResultRow, i32::MAX, 2, 0),
+    ] {
+        assert!(out_of_range(step_value(&mut vm, &i)), "{i:?}");
+    }
+}

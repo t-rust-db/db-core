@@ -56840,16 +56840,6 @@
     "wildcard_risk": false
   },
   {
-    "id": "storage_row_vfs_test_lock_probe_helper_path_cd1b2d06",
-    "file": "src/storage/row/vfs/test_lock_probe.rs",
-    "line": 26,
-    "decision": "deps_dir.file_name().and_then(|n| n.to_str()) == Some(\"deps\")",
-    "conditions": 1,
-    "vectors_required": 2,
-    "compiler_void": false,
-    "wildcard_risk": false
-  },
-  {
     "id": "storage_row_vfs_unix_stat_fed9b3b2",
     "file": "src/storage/row/vfs/unix.rs",
     "line": 41,
