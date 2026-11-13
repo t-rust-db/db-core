@@ -1280,12 +1280,15 @@ fn validate_expr(expr: &mut AstExpr, allow_agg: bool) -> Result<()> {
             expr: inner,
             type_name,
         } => {
+            // The type's first word, before any size (`VARCHAR(10)`, as
+            // DuckDB ignores it) or second word (`DOUBLE PRECISION`).
             let head = type_name
-                .split_whitespace()
+                .split(|c: char| c.is_whitespace() || c == '(')
                 .next()
                 .unwrap_or_default()
                 .to_ascii_uppercase();
-            if matches!(head.as_str(), "VARCHAR" | "TEXT" | "DATE") {
+            // #948: and the casts the VM answers by DuckDB's rules.
+            if head == "DATE" || crate::functions::column_cast_fn(&head).is_some() {
                 validate_expr(inner, allow_agg)
             } else {
                 Err(unsupported(
@@ -1952,10 +1955,12 @@ mod tests {
         ] {
             assert!(parse(sql).is_ok(), "{sql}");
         }
-        // A non-literal date_part part, and other CAST types, stay refused.
+        // A non-literal date_part part, and a CAST to a type the column
+        // dialect does not cast to (#948 added VARCHAR, INTEGER, BIGINT and
+        // DOUBLE), stay refused.
         assert!(parse("SELECT date_part(s, ts) FROM t").is_err());
-        assert!(parse("SELECT CAST(f AS INTEGER) FROM t").is_err());
-        assert!(parse("SELECT n::DOUBLE FROM t").is_err());
+        assert!(parse("SELECT CAST(f AS REAL) FROM t").is_err());
+        assert!(parse("SELECT n::REAL FROM t").is_err());
         // Math and the sqlite3-only date functions stay off (#1021).
         assert!(parse("SELECT floor(f) FROM t").is_err());
         assert!(parse("SELECT julianday(ts) FROM t").is_err());
@@ -3680,7 +3685,7 @@ mod tests {
         // outcome, the walk is the point.
         for sql in [
             "SELECT o.id FROM orders o WHERE o.name LIKE o.p ESCAPE '\\'",
-            "SELECT CAST(o.a AS INTEGER) FROM orders o",
+            "SELECT CAST(o.a AS REAL) FROM orders o",
             "SELECT o.id FROM orders o WHERE o.a COLLATE NOCASE = 'x'",
             "SELECT o.id FROM orders o WHERE o.a IS o.b",
         ] {
@@ -3751,6 +3756,48 @@ mod tests {
     fn mcdc__parser_column_check_literal_args_917197e3__v4_quoted_or_null_part_is_accepted() {
         assert!(parse("SELECT date_part('year', ts) FROM t").is_ok());
         assert!(parse("SELECT date_part(NULL, ts) FROM t").is_ok());
+    }
+
+    // parser_column_validate_expr_6ce40909 (#948): `head == "DATE" ||
+    // column_cast_fn(&head).is_some()` -- the casts the column dialect takes.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_expr_6ce40909__v1_a_date_cast_is_taken() {
+        assert!(parse("SELECT CAST(ts AS DATE) FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_expr_6ce40909__v2_a_number_cast_is_taken() {
+        assert!(parse("SELECT CAST(s AS BIGINT), s::DOUBLE FROM t").is_ok());
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_column_validate_expr_6ce40909__v3_another_type_is_refused() {
+        let err = parse("SELECT CAST(s AS REAL) FROM t").unwrap_err();
+        assert!(err.to_string().contains("CAST AS REAL"), "{err}");
+    }
+
+    /// #948: `x::TYPE` takes one word (and a size), so a word after it is
+    /// an alias; it binds tighter than an operator, as in DuckDB.
+    #[test]
+    fn a_postfix_cast_takes_one_type_word() {
+        let select = parse("SELECT s::DOUBLE d, -s::INT, s::VARCHAR(10) FROM t").unwrap();
+        assert_eq!(select.columns.len(), 3);
+        let kind = |i: usize| match &select.columns[i] {
+            ResultColumn::Expr { expr, alias } => (expr.kind.clone(), alias.clone()),
+            other => panic!("{other:?}"),
+        };
+        assert!(
+            matches!(&kind(0), (ExprKind::Cast { type_name, .. }, Some(a)) if type_name == "DOUBLE" && a == "d")
+        );
+        assert!(
+            matches!(&kind(1).0, ExprKind::Unary { expr, .. } if matches!(expr.kind, ExprKind::Cast { .. }))
+        );
+        assert!(
+            matches!(&kind(2).0, ExprKind::Cast { type_name, .. } if type_name == "VARCHAR(10)")
+        );
     }
 
     #[test]

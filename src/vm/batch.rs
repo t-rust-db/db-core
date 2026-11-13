@@ -13,6 +13,8 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
+mod cast;
+
 use super::hll::Hll;
 use super::int_key_table::{murmur_finalize, slot_seed, HashGroupTable, IntKeyTable};
 use crate::value::len_to_i64;
@@ -6806,6 +6808,15 @@ impl Vm {
                     // no list, so it is answered here, before conversion.
                     let length_list = name.eq_ignore_ascii_case("length") && arg_regs.len() == 1;
                     for row in 0..num_rows {
+                        // #948: a cast, on the batch value: the scalar
+                        // conversion below would lose a DECIMAL's scale
+                        // and a BOOLEAN's type.
+                        if let Some(cast) = cast::cast(name, &arg_regs, row) {
+                            result.push(
+                                cast.map_err(|message| VmError::Function { opcode, message })?,
+                            );
+                            continue;
+                        }
                         // #1016/#1017: `abs`/`round` keep a decimal or
                         // integer argument's type; the row functions
                         // would answer in `f64`.
@@ -9015,6 +9026,15 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Ok(Value::Null);
     }
+    // #948: a BLOB is no number. Arithmetic on one, or comparing one with
+    // a number or a boolean, is DuckDB's binder error -- it used to be a
+    // NULL or "no match", a silent wrong answer.
+    if let Some(message) = blob_misuse(op, a, b) {
+        return Err(VmError::Function {
+            opcode: "Map",
+            message,
+        });
+    }
     // A string compared with a number or a boolean is converted to that
     // type first, as DuckDB does (#679): `id = '5'` matches row 5 instead
     // of never matching, and `id = 'abc'` is an error.
@@ -9225,6 +9245,55 @@ fn converts_from_str(v: &Value) -> bool {
         v,
         Value::Int(_) | Value::Float(_) | Value::Decimal { .. } | Value::Bool(_)
     )
+}
+
+/// DuckDB's binder error for `op` over `a` and `b` when a BLOB is used as a
+/// number (#948): an arithmetic operand, a negated value, or one side of a
+/// comparison whose other side is a number or a boolean. `None` otherwise:
+/// two BLOBs compare bytewise, and a BLOB with text as before.
+fn blob_misuse(op: MapOp, a: &Value, b: &Value) -> Option<String> {
+    let is_blob = |v: &Value| matches!(v, Value::Blob(_));
+    let symbol = match op {
+        MapOp::Add => "+",
+        MapOp::Sub => "-",
+        MapOp::Mul => "*",
+        MapOp::Div => "/",
+        MapOp::IntDiv => "//",
+        MapOp::Mod => "%",
+        MapOp::Neg if is_blob(a) => {
+            return Some(
+                "Binder Error: No function matches the given name and argument types \
+                 '-(BLOB)'. You might need to add explicit type casts."
+                    .to_string(),
+            )
+        }
+        MapOp::Eq | MapOp::Ne | MapOp::Lt | MapOp::Le | MapOp::Gt | MapOp::Ge => {
+            // The side that is not the BLOB.
+            let other = match (is_blob(a), is_blob(b)) {
+                (true, false) => b,
+                (false, true) => a,
+                _ => return None,
+            };
+            if !converts_from_str(other) {
+                return None;
+            }
+            return Some(format!(
+                "Binder Error: Cannot compare values of type BLOB and type {} - an explicit \
+                 cast is required",
+                cast::type_name(other)
+            ));
+        }
+        _ => return None,
+    };
+    if !(is_blob(a) || is_blob(b)) {
+        return None;
+    }
+    Some(format!(
+        "Binder Error: No function matches the given name and argument types \
+         '{symbol}({}, {})'. You might need to add explicit type casts.",
+        cast::type_name(a),
+        cast::type_name(b)
+    ))
 }
 
 /// `s` converted to the type of `like` for a comparison with it (#679):
@@ -9624,6 +9693,39 @@ mod tests {
             exact_abs_round("round", &[&col, &digits], 0),
             Some(dec(13, 1))
         );
+    }
+
+    /// #948: a BLOB as a number is DuckDB's binder error; two BLOBs and a
+    /// BLOB with text still compare, and a NULL still propagates.
+    #[test]
+    fn a_blob_used_as_a_number_is_an_error() {
+        let b = Value::Blob(Arc::from(&b"10"[..]));
+        let n = Value::Int(2);
+        let err = |op, a: &Value, b: &Value| match apply_map_op(op, a, b) {
+            Err(VmError::Function { message, .. }) => message,
+            other => panic!("{other:?}"),
+        };
+        assert!(err(MapOp::Mul, &b, &n).contains("'*(BLOB, BIGINT)'"));
+        assert!(err(MapOp::Add, &b, &b).contains("'+(BLOB, BLOB)'"));
+        assert!(err(MapOp::IntDiv, &n, &b).contains("'//(BIGINT, BLOB)'"));
+        assert!(err(MapOp::Neg, &b, &n).contains("'-(BLOB)'"));
+        assert!(
+            err(MapOp::Gt, &b, &n).contains("Cannot compare values of type BLOB and type BIGINT")
+        );
+        assert!(err(MapOp::Eq, &Value::Float(1.0), &b).contains("type DOUBLE"));
+        assert!(err(MapOp::Ne, &b, &Value::Bool(true)).contains("type BOOLEAN"));
+        assert_eq!(apply_map_op(MapOp::Eq, &b, &b).unwrap(), Value::Bool(true));
+        assert_eq!(
+            apply_map_op(MapOp::Eq, &b, &Value::Str(Cow::Borrowed("x"))).unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            apply_map_op(MapOp::Mul, &b, &Value::Null).unwrap(),
+            Value::Null
+        );
+        assert_eq!(blob_misuse(MapOp::Concat, &b, &n), None);
+        assert_eq!(blob_misuse(MapOp::Neg, &n, &b), None);
+        assert_eq!(blob_misuse(MapOp::Mul, &n, &n), None);
     }
 
     // vm_batch_round_to_tens_51a53006 (#1027): `!name == "round" ||

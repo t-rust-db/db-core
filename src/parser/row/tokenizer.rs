@@ -90,6 +90,10 @@ pub enum TokenKind {
     LBracket,
     /// `]` closing a subscript.
     RBracket,
+    /// `::`, the cast operator, in the column dialect only
+    /// ([`Tokenizer::tokenize_with_subscripts`], #948); in sqlite3's a `:`
+    /// starts a named parameter.
+    DoubleColon,
     /// `ILIKE`, case-insensitive `LIKE`: a word only in the column dialect
     /// ([`Tokenizer::tokenize_with_subscripts`], #679), where it is
     /// DuckDB's operator; in sqlite3's dialect it stays an identifier.
@@ -962,6 +966,11 @@ impl Tokenizer {
             '[' => self.scan_quoted_identifier(src, '[', ']'),
             '`' => self.scan_quoted_identifier(src, '`', '`'),
             '?' => self.scan_param_question(src),
+            ':' if self.subscripts && self.peek_at(src, 1) == Some(':') => {
+                self.bump(src);
+                self.bump(src);
+                TokenKind::DoubleColon
+            }
             ':' => self.scan_param_named(src, ':'),
             '@' => self.scan_param_named(src, '@'),
             '$' => self.scan_param_named(src, '$'),
@@ -2150,6 +2159,41 @@ mod mcdc_subscript_vectors {
         assert_eq!(
             first_kind(Tokenizer::tokenize_with_subscripts("EXTRACT")),
             TokenKind::Extract
+        );
+    }
+
+    // parser_row_tokenizer_next_token_6cec4f78 (#948): `self.subscripts &&
+    // next is ':'` -- `::` is the cast operator in the column dialect only.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_6cec4f78__v1_column_dialect_reads_a_cast() {
+        let kinds: Vec<TokenKind> = Tokenizer::tokenize_with_subscripts("a::INT")
+            .into_iter()
+            .map(|t| t.kind)
+            .collect();
+        assert_eq!(kinds.get(1), Some(&TokenKind::DoubleColon));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_6cec4f78__v2_sqlite_dialect_has_no_cast_operator() {
+        let kinds: Vec<TokenKind> = Tokenizer::tokenize("a::INT")
+            .into_iter()
+            .map(|t| t.kind)
+            .collect();
+        assert!(!kinds.contains(&TokenKind::DoubleColon), "{kinds:?}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_6cec4f78__v3_one_colon_is_still_a_parameter() {
+        let kinds: Vec<TokenKind> = Tokenizer::tokenize_with_subscripts(":name")
+            .into_iter()
+            .map(|t| t.kind)
+            .collect();
+        assert!(
+            matches!(kinds.first(), Some(TokenKind::Param(_))),
+            "{kinds:?}"
         );
     }
 }

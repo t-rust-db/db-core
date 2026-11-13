@@ -2516,6 +2516,7 @@ pub db_core::parser::row::tokenizer::TokenKind::Blob(alloc::boxed::Box<alloc::ve
 pub db_core::parser::row::tokenizer::TokenKind::Comma
 pub db_core::parser::row::tokenizer::TokenKind::Concat
 pub db_core::parser::row::tokenizer::TokenKind::Dot
+pub db_core::parser::row::tokenizer::TokenKind::DoubleColon
 pub db_core::parser::row::tokenizer::TokenKind::Eof
 pub db_core::parser::row::tokenizer::TokenKind::Eq
 pub db_core::parser::row::tokenizer::TokenKind::Error(alloc::string::String)

@@ -959,6 +959,7 @@ pub(super) fn lookup_column(name: &str, arity: usize) -> Option<ScalarFn> {
         ("lpad", 2 | 3) => lpad_fn,
         ("rpad", 2 | 3) => rpad_fn,
         ("split_part", 3) => split_part,
+        ("decode", 1) => decode_blob,
         _ => return None,
     })
 }
@@ -1196,6 +1197,29 @@ fn starts_with(args: &[Value]) -> Result<Value, FunctionError> {
         }
         _ => Value::Null,
     })
+}
+
+/// `decode(B)` (#948): DuckDB's -- a BLOB's bytes as text, an error if
+/// they are not UTF-8 (unlike `CAST(B AS VARCHAR)`, which escapes them).
+/// A VARCHAR is itself (DuckDB casts it to a BLOB and back); NULL is NULL.
+#[cfg(feature = "vm-batch")]
+fn decode_blob(args: &[Value]) -> Result<Value, FunctionError> {
+    match args.first() {
+        Some(Value::Null) | None => Ok(Value::Null),
+        Some(Value::Text(s)) => Ok(Value::Text(s.clone())),
+        Some(Value::Blob(b)) => std::str::from_utf8(b)
+            .map(|s| Value::Text(s.into()))
+            .map_err(|_| {
+                FunctionError::Sql(
+                    "Conversion Error: Failure in decode: could not convert blob to UTF8 \
+                     string, the blob contained invalid UTF8 characters"
+                        .into(),
+                )
+            }),
+        Some(_) => Err(FunctionError::Sql(
+            "no function matches decode(<non-blob>): decode takes a BLOB".into(),
+        )),
+    }
 }
 
 /// `contains(S, SUB)`: DuckDB's substring test; NULL if either is.
@@ -1882,5 +1906,24 @@ mod tests {
         assert_eq!(c("split_part", &[t("abc"), t(""), n(1)]), t("a"));
         assert_eq!(c("split_part", &[t("a,b,c"), t(";"), n(1)]), t("a,b,c"));
         assert_eq!(c("split_part", &[Value::Null, t(","), n(1)]), Value::Null);
+    }
+
+    /// #948: `decode(blob)` is its text; bytes that are not UTF-8 are
+    /// DuckDB's error, not an escape (that is CAST's).
+    #[test]
+    fn decode_reads_a_blob_as_utf8_text() {
+        let blob = |b: &[u8]| Value::Blob(b.to_vec().into());
+        assert_eq!(c("decode", &[blob(b"AB")]), Value::Text("AB".into()));
+        assert_eq!(
+            c("decode", &[blob("é".as_bytes())]),
+            Value::Text("é".into())
+        );
+        assert_eq!(
+            c("decode", &[Value::Text("x".into())]),
+            Value::Text("x".into())
+        );
+        assert_eq!(c("decode", &[Value::Null]), Value::Null);
+        assert!(err("decode", &[blob(&[0xff, 0x41])]).contains("Failure in decode"));
+        assert!(err("decode", &[Value::Integer(1)]).contains("decode takes a BLOB"));
     }
 }

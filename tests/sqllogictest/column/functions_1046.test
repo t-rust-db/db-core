@@ -1241,5 +1241,5 @@ SELECT strftime('%Y', ts) FROM strtime
 statement error
 SELECT upper(n) FROM typed_nulls
 
-statement error
-SELECT CAST(n AS VARCHAR) FROM typed_nulls
+# CAST of a non-TIMESTAMP to VARCHAR is answered since #948
+# (blob_cast_948.test); of a DOUBLE it stays refused (errors_1014.test).

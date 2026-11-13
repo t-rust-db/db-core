@@ -3084,9 +3084,34 @@ impl Parser {
     /// subscript mode). `m['k']` is DuckDB's `map_extract_value(m, 'k')`
     /// and parses as that call, so no expression walker sees a new form.
     fn postfix_expr(&mut self) -> PResult<Expr> {
-        let mut expr = self.primary_expr()?;
+        let expr = self.primary_expr()?;
+        if matches!(
+            self.peek().kind,
+            TokenKind::LBracket | TokenKind::DoubleColon
+        ) {
+            self.postfix_chain(expr)
+        } else {
+            Ok(expr)
+        }
+    }
+
+    /// The subscripts and casts after `expr` (#621, #948). Out of line so
+    /// [`Self::postfix_expr`]'s frame, which every nesting level holds,
+    /// stays the primary expression's.
+    #[inline(never)]
+    fn postfix_chain(&mut self, mut expr: Expr) -> PResult<Expr> {
         let mut height = 0;
-        while matches!(self.peek().kind, TokenKind::LBracket) {
+        while matches!(
+            self.peek().kind,
+            TokenKind::LBracket | TokenKind::DoubleColon
+        ) {
+            // #948: `expr::TYPE` (column dialect) is `CAST(expr AS TYPE)`,
+            // binding tighter than any operator, as in DuckDB.
+            if matches!(self.peek().kind, TokenKind::DoubleColon) {
+                expr = self.postfix_cast(expr)?;
+                self.cap_chain(&mut expr, &mut height);
+                continue;
+            }
             self.advance_span();
             let index = self.expr()?;
             let end = self.expect_punct(TokenKind::RBracket, "']' to close the subscript")?;
@@ -3107,16 +3132,6 @@ impl Parser {
         Ok(expr)
     }
 
-    // db-core#531: matches on `&self.peek().kind` (a borrow) instead of
-    // `self.peek().clone()` up front, so the common Copy-only atoms
-    // (numeric/boolean/NULL literals, parens, keywords) never pay for a
-    // clone of a token they don't own any heap data from. `String`/
-    // `Blob`/`Param`/`Identifier` still clone their one heap-owning
-    // field -- exactly the cost `self.peek().clone()` paid for them
-    // before, no more -- because `try_tuple_in_subquery` (an outer,
-    // speculative caller) can rewind `self.pos` back over this token on
-    // a failed parse, so `self.tokens[pos]`'s payload must stay intact
-    // for a retry; moving it out in place would corrupt that retry.
     /// The float literal at the cursor, with its source text (#1027).
     /// Out of line so [`Self::primary_expr`]'s frame, which every nesting
     /// level holds, does not grow by the text.
@@ -3137,6 +3152,16 @@ impl Parser {
         })
     }
 
+    // db-core#531: matches on `&self.peek().kind` (a borrow) instead of
+    // `self.peek().clone()` up front, so the common Copy-only atoms
+    // (numeric/boolean/NULL literals, parens, keywords) never pay for a
+    // clone of a token they don't own any heap data from. `String`/
+    // `Blob`/`Param`/`Identifier` still clone their one heap-owning
+    // field -- exactly the cost `self.peek().clone()` paid for them
+    // before, no more -- because `try_tuple_in_subquery` (an outer,
+    // speculative caller) can rewind `self.pos` back over this token on
+    // a failed parse, so `self.tokens[pos]`'s payload must stay intact
+    // for a retry; moving it out in place would corrupt that retry.
     fn primary_expr(&mut self) -> PResult<Expr> {
         match &self.peek().kind {
             TokenKind::Integer(v) => {
@@ -3564,6 +3589,43 @@ impl Parser {
             name.push(')');
         }
         Ok(name)
+    }
+
+    /// `expr` cast by the `::TYPE` at the cursor (#948). Out of line so
+    /// [`Self::postfix_expr`]'s frame, which every nesting level holds,
+    /// does not grow by it.
+    #[inline(never)]
+    fn postfix_cast(&mut self, expr: Expr) -> PResult<Expr> {
+        self.advance_span();
+        let (type_name, end) = self.postfix_type_name()?;
+        let span = join_span(expr.span, end);
+        Ok(Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(expr),
+                type_name,
+            },
+            span,
+        })
+    }
+
+    /// The type after `::` (#948): one word and an optional size, so that
+    /// in `x::DOUBLE d` the `d` stays an alias (a `CAST`'s type may run to
+    /// several words, as `DOUBLE PRECISION`).
+    fn postfix_type_name(&mut self) -> PResult<(String, Span)> {
+        let (mut name, mut end) = self.identifier()?;
+        if self.eat_punct(&TokenKind::LParen) {
+            let n1 = self.number_literal()?;
+            name.push('(');
+            name.push_str(&n1);
+            if self.eat_punct(&TokenKind::Comma) {
+                let n2 = self.number_literal()?;
+                name.push_str(", ");
+                name.push_str(&n2);
+            }
+            end = self.expect_punct(TokenKind::RParen, "')' to close type size")?;
+            name.push(')');
+        }
+        Ok((name, end))
     }
 
     fn number_literal(&mut self) -> PResult<String> {

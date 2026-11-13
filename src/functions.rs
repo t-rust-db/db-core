@@ -1765,6 +1765,31 @@ pub(crate) fn is_numeric_scalar(name: &str, arity: usize) -> bool {
         .any(|(f, n)| f.eq_ignore_ascii_case(name) && *n == arity)
 }
 
+/// #948: `CAST(x AS <type>)` in the column dialect is rewritten to one of
+/// these calls (a TIMESTAMP's casts are #1046's own), which the batch VM
+/// answers on the value with DuckDB's rules (`vm::batch::cast`).
+#[cfg(any(feature = "parser-column", feature = "vm-batch"))]
+pub(crate) const CAST_VARCHAR_FN: &str = "__cast_varchar";
+#[cfg(any(feature = "parser-column", feature = "vm-batch"))]
+pub(crate) const CAST_INTEGER_FN: &str = "__cast_integer";
+#[cfg(any(feature = "parser-column", feature = "vm-batch"))]
+pub(crate) const CAST_BIGINT_FN: &str = "__cast_bigint";
+#[cfg(any(feature = "parser-column", feature = "vm-batch"))]
+pub(crate) const CAST_DOUBLE_FN: &str = "__cast_double";
+
+/// The `__cast_*` call for the SQL type name `head` (its first word,
+/// uppercase), if the column dialect casts to it (#948).
+#[cfg(feature = "parser-column")]
+pub(crate) fn column_cast_fn(head: &str) -> Option<&'static str> {
+    Some(match head {
+        "VARCHAR" | "TEXT" | "STRING" => CAST_VARCHAR_FN,
+        "INTEGER" | "INT" | "INT4" | "INT32" => CAST_INTEGER_FN,
+        "BIGINT" | "INT8" | "INT64" | "LONG" => CAST_BIGINT_FN,
+        "DOUBLE" | "FLOAT8" => CAST_DOUBLE_FN,
+        _ => return None,
+    })
+}
+
 /// The scalar functions the column dialect's two allow-lists
 /// (`parser::column::is_known_scalar_function` and
 /// `codegen::batch::is_known_scalar_function`) accept, by name and arity,
@@ -1798,6 +1823,9 @@ pub(crate) fn is_known_column_scalar(name: &str, arity: usize) -> bool {
         "strftime" => arity == 2,
         "__strftime" => arity == 3,
         "__timestamp_text" | "__timestamp_date" => arity == 2,
+        // #948: the casts the engine rewrites to, and `decode(blob)`.
+        "__cast_varchar" | "__cast_integer" | "__cast_bigint" | "__cast_double" => arity == 1,
+        "decode" => arity == 1,
         // #1046: the string family. `concat`/`concat_ws` take any type
         // (DuckDB's are variadic ANY); the rest take VARCHAR.
         "length" | "upper" | "lower" => arity == 1,

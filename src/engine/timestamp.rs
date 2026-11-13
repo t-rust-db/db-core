@@ -278,22 +278,52 @@ fn cast_units(expr: &mut Expr, timestamps: &[(String, i64)]) -> Result<(), Engin
     else {
         return Ok(());
     };
+    // The type's first word, before any size (`VARCHAR(10)`, as DuckDB
+    // ignores it) or second word (`DOUBLE PRECISION`).
     let head = type_name
-        .split_whitespace()
+        .split(|c: char| c.is_whitespace() || c == '(')
         .next()
         .unwrap_or_default()
         .to_ascii_uppercase();
-    let fn_name = match head.as_str() {
-        "VARCHAR" | "TEXT" => TIMESTAMP_TEXT_FN,
-        "DATE" => TIMESTAMP_DATE_FN,
-        _ => return Ok(()),
+    let Some(per_second) = expr_timestamp_units(inner, timestamps) else {
+        // #948: any other value casts by DuckDB's rules in the VM; DATE
+        // only from a TIMESTAMP.
+        let Some(cast) = crate::functions::column_cast_fn(&head) else {
+            return Err(EngineError::new(
+                ErrorKind::Compile,
+                format!(
+                    "CAST(x AS {head}) is only supported over a TIMESTAMP column; x is not one"
+                ),
+            ));
+        };
+        let inner = std::mem::replace(
+            &mut **inner,
+            Expr {
+                kind: ExprKind::Literal(Literal::Null),
+                span,
+            },
+        );
+        *expr = Expr {
+            kind: ExprKind::FunctionCall {
+                name: cast.to_string(),
+                distinct: false,
+                args: FunctionArgs::List(vec![inner]),
+                tail: None,
+            },
+            span,
+        };
+        return Ok(());
     };
-    let per_second = expr_timestamp_units(inner, timestamps).ok_or_else(|| {
-        EngineError::new(
-            ErrorKind::Compile,
-            format!("CAST(x AS {head}) is only supported over a TIMESTAMP column; x is not one"),
-        )
-    })?;
+    let fn_name = match head.as_str() {
+        "VARCHAR" | "TEXT" | "STRING" => TIMESTAMP_TEXT_FN,
+        "DATE" => TIMESTAMP_DATE_FN,
+        _ => {
+            return Err(EngineError::new(
+                ErrorKind::Compile,
+                format!("CAST(TIMESTAMP AS {head}) is not supported"),
+            ))
+        }
+    };
     let inner = std::mem::replace(
         &mut **inner,
         Expr {

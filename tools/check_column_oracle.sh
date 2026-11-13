@@ -219,6 +219,22 @@ TYPED_NULLS_QUERIES=(
   "SELECT id, n * 1.5e2, d + 1e-1 FROM __TABLE__ ORDER BY id|SELECT id, (n * 1.5e2)::DECIMAL(18,2), (d + 1e-1)::DECIMAL(18,2) FROM __TABLE__ ORDER BY id"
 )
 
+# #948: a BLOB in arithmetic or compared with a number is an error (both
+# sides refuse, so both print nothing on stdout and the pair agrees);
+# CAST / `::` to VARCHAR, INTEGER, BIGINT and DOUBLE, and decode(blob),
+# over `blob_text` (a BLOB of numeric text, BLOBs that are not all UTF-8,
+# VARCHAR numbers in DuckDB's cast forms, NULLs).
+BLOB_TEXT=tests/fixtures/parquet/blob_text.parquet
+BLOB_TEXT_QUERIES=(
+  "SELECT id, CAST(raw AS VARCHAR), raw::VARCHAR, decode(raw) FROM __TABLE__ ORDER BY id|SELECT id, CAST(raw AS VARCHAR), raw::VARCHAR, decode(raw) FROM __TABLE__ ORDER BY id"
+  "SELECT id, CAST(bin AS VARCHAR) FROM __TABLE__ WHERE id <> 7 ORDER BY id|SELECT id, CAST(bin AS VARCHAR) FROM __TABLE__ WHERE id <> 7 ORDER BY id"
+  "SELECT id, CAST(txt AS INTEGER), CAST(txt AS BIGINT), txt::INT FROM __TABLE__ ORDER BY id|SELECT id, CAST(txt AS INTEGER), CAST(txt AS BIGINT), txt::INT FROM __TABLE__ ORDER BY id"
+  "SELECT id, CAST(txt AS DOUBLE) FROM __TABLE__ WHERE id <> 6 ORDER BY id|SELECT id, CAST(txt AS DOUBLE)::DECIMAL(18,2) FROM __TABLE__ WHERE id <> 6 ORDER BY id"
+  "SELECT sum(CAST(txt AS INTEGER)), sum(raw::VARCHAR::INTEGER), sum(CAST(CAST(raw AS VARCHAR) AS BIGINT)) FROM __TABLE__|SELECT sum(CAST(txt AS INTEGER)), sum(raw::VARCHAR::INTEGER), sum(CAST(CAST(raw AS VARCHAR) AS BIGINT)) FROM __TABLE__"
+  "SELECT raw::VARCHAR::INT % 3 AS r, count(*) FROM __TABLE__ GROUP BY r ORDER BY r|SELECT raw::VARCHAR::INT % 3 AS r, count(*) FROM __TABLE__ GROUP BY r ORDER BY r"
+  "SELECT count(*) FROM __TABLE__ WHERE raw = raw|SELECT count(*) FROM __TABLE__ WHERE raw = raw"
+)
+
 cargo build --release --example column_oracle -q
 
 fail=0
@@ -257,14 +273,16 @@ for q in "${NULL_TYPES_QUERIES[@]}"; do
   fi
 done
 
-for fixture in "$STRTIME" "$TS_EDGES" "$TYPED_NULLS"; do
+for fixture in "$STRTIME" "$TS_EDGES" "$TYPED_NULLS" "$BLOB_TEXT"; do
   table="$(basename "$fixture" .parquet)"
   if [[ "$fixture" == "$STRTIME" ]]; then
     pairs=("${STRTIME_QUERIES[@]}")
   elif [[ "$fixture" == "$TS_EDGES" ]]; then
     pairs=("${TS_EDGES_QUERIES[@]}")
-  else
+  elif [[ "$fixture" == "$TYPED_NULLS" ]]; then
     pairs=("${TYPED_NULLS_QUERIES[@]}")
+  else
+    pairs=("${BLOB_TEXT_QUERIES[@]}")
   fi
   for pair in "${pairs[@]}"; do
     db_core_q="${pair%%|*}"
