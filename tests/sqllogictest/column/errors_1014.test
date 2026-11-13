@@ -5,15 +5,11 @@
 # and delete the pin, rather than silently start answering.
 # The wider list of rejected functions and forms is #1021.
 
-# CAST
+# CAST: casts to VARCHAR, INTEGER, BIGINT and DOUBLE are answered since
+# #948 (blob_cast_948.test). A DOUBLE to VARCHAR is still refused: DuckDB
+# prints a double in a format of its own (`100.0`, `1e+20`).
 statement error
-SELECT CAST(n AS VARCHAR) FROM typed_nulls
-
-statement error
-SELECT CAST(f AS INTEGER) FROM typed_nulls
-
-statement error
-SELECT n::DOUBLE FROM typed_nulls
+SELECT CAST(f AS VARCHAR) FROM typed_nulls
 
 # CTE
 statement error

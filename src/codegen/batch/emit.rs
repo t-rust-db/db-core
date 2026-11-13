@@ -906,7 +906,7 @@ fn render_binary_op(op: AstBinOp) -> &'static str {
 fn render_literal(lit: &AstLiteral) -> String {
     match lit {
         AstLiteral::Integer(v) => format!("Literal::Integer({v})"),
-        AstLiteral::Float(v) => format!("Literal::Float({v:?})"),
+        AstLiteral::Float(v, _) => format!("Literal::Float({v:?}, None)"),
         AstLiteral::Str(v) => format!("Literal::Str({}.to_string())", rust_str_literal(v)),
         AstLiteral::Blob(bytes) => format!(
             "Literal::Blob(vec![{}])",

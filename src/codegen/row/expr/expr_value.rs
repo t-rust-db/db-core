@@ -178,7 +178,7 @@ fn literal_instruction(lit: &Literal, r: i32) -> Result<Option<Instruction>, Cod
         Literal::Str(s) => Instruction::with_p4(Opcode::String8, 0, r, 0, P4::Str(s.clone())),
         // #142: a real literal loads as an actual `Value::Real` via the
         // harvested `Real` opcode (the #138 text-coercion bug).
-        Literal::Float(f) => Instruction::with_p4(Opcode::Real, 0, r, 0, P4::Real(*f)),
+        Literal::Float(f, _) => Instruction::with_p4(Opcode::Real, 0, r, 0, P4::Real(*f)),
         // #142: a blob literal loads as an actual `Value::Blob` via the
         // harvested `Blob` opcode.
         Literal::Blob(bytes) => {
@@ -772,7 +772,7 @@ fn emit_branch_into(
                 P4::Str(s.clone()),
             ));
         }
-        ExprKind::Literal(Literal::Float(f)) => {
+        ExprKind::Literal(Literal::Float(f, _)) => {
             em.emit(Instruction::with_p4(Opcode::Real, 0, dest, 0, P4::Real(*f)));
         }
         ExprKind::Literal(Literal::Blob(bytes)) => {

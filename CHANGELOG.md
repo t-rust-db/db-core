@@ -4,6 +4,19 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.240.1] - 2026-11-13
+
+### Fixed
+
+- Column engine: `round(x, n)` with a negative `n` rounds to tens, hundreds, ... as DuckDB does, instead of returning `x` unrounded; rounding past BIGINT is an error (#1027)
+- Column engine: a decimal literal keeps the scale it is written with (`1.50` is DECIMAL(3,2), `2.0` DECIMAL(2,1)); a literal with an exponent is a DOUBLE (#1027)
+- Column engine: a BLOB in arithmetic, negated, or compared with a number or boolean is an error, as in DuckDB, instead of NULL or no rows (#948)
+- Column engine: `CAST(x AS VARCHAR|TEXT|INTEGER|BIGINT|DOUBLE)`, `expr::TYPE` and `decode(blob)` with DuckDB's conversion rules (#948)
+
+### Changed
+
+- **Breaking:** `parser::ast::Literal::Float` and `parser::row::tokenizer::TokenKind::Float` carry the literal's source text; new `TokenKind::DoubleColon` (#1027, #948)
+
 ## [0.240.0] - 2026-11-12
 
 ### Added

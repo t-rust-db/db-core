@@ -1074,10 +1074,10 @@ impl Parser {
                     span: tok.span,
                 })
             }
-            TokenKind::Float(v) => {
+            TokenKind::Float(v, text) => {
                 self.advance();
                 Ok(Expr {
-                    kind: ExprKind::Literal(Literal::Float(v)),
+                    kind: ExprKind::Literal(Literal::Float(v, Some(text))),
                     span: tok.span,
                 })
             }
@@ -3058,7 +3058,7 @@ impl Parser {
                 // `-9223372036854775808` as an INTEGER literal, not a
                 // REAL (spike #59 finding).
                 if matches!(op, UnaryOp::Minus) {
-                    if let ExprKind::Literal(Literal::Float(f)) = inner.kind {
+                    if let ExprKind::Literal(Literal::Float(f, _)) = inner.kind {
                         if f == 9_223_372_036_854_775_808.0 {
                             return Ok(Expr {
                                 kind: ExprKind::Literal(Literal::Integer(i64::MIN)),
@@ -3084,9 +3084,34 @@ impl Parser {
     /// subscript mode). `m['k']` is DuckDB's `map_extract_value(m, 'k')`
     /// and parses as that call, so no expression walker sees a new form.
     fn postfix_expr(&mut self) -> PResult<Expr> {
-        let mut expr = self.primary_expr()?;
+        let expr = self.primary_expr()?;
+        if matches!(
+            self.peek().kind,
+            TokenKind::LBracket | TokenKind::DoubleColon
+        ) {
+            self.postfix_chain(expr)
+        } else {
+            Ok(expr)
+        }
+    }
+
+    /// The subscripts and casts after `expr` (#621, #948). Out of line so
+    /// [`Self::postfix_expr`]'s frame, which every nesting level holds,
+    /// stays the primary expression's.
+    #[inline(never)]
+    fn postfix_chain(&mut self, mut expr: Expr) -> PResult<Expr> {
         let mut height = 0;
-        while matches!(self.peek().kind, TokenKind::LBracket) {
+        while matches!(
+            self.peek().kind,
+            TokenKind::LBracket | TokenKind::DoubleColon
+        ) {
+            // #948: `expr::TYPE` (column dialect) is `CAST(expr AS TYPE)`,
+            // binding tighter than any operator, as in DuckDB.
+            if matches!(self.peek().kind, TokenKind::DoubleColon) {
+                expr = self.postfix_cast(expr)?;
+                self.cap_chain(&mut expr, &mut height);
+                continue;
+            }
             self.advance_span();
             let index = self.expr()?;
             let end = self.expect_punct(TokenKind::RBracket, "']' to close the subscript")?;
@@ -3105,6 +3130,26 @@ impl Parser {
             self.cap_chain(&mut expr, &mut height);
         }
         Ok(expr)
+    }
+
+    /// The float literal at the cursor, with its source text (#1027).
+    /// Out of line so [`Self::primary_expr`]'s frame, which every nesting
+    /// level holds, does not grow by the text.
+    #[inline(never)]
+    fn float_literal(&mut self) -> PResult<Expr> {
+        let tok = self.peek();
+        let TokenKind::Float(v, text) = &tok.kind else {
+            return Err(ParseFail::Invalid {
+                message: format!("expected a float literal, found {:?}", tok.kind),
+                span: tok.span,
+            });
+        };
+        let (v, text) = (*v, Some(text.clone()));
+        let span = self.advance_span();
+        Ok(Expr {
+            kind: ExprKind::Literal(Literal::Float(v, text)),
+            span,
+        })
     }
 
     // db-core#531: matches on `&self.peek().kind` (a borrow) instead of
@@ -3127,14 +3172,7 @@ impl Parser {
                     span,
                 })
             }
-            TokenKind::Float(v) => {
-                let v = *v;
-                let span = self.advance_span();
-                Ok(Expr {
-                    kind: ExprKind::Literal(Literal::Float(v)),
-                    span,
-                })
-            }
+            TokenKind::Float(..) => self.float_literal(),
             TokenKind::String(s) => {
                 let s = s.clone();
                 let span = self.advance_span();
@@ -3551,6 +3589,43 @@ impl Parser {
             name.push(')');
         }
         Ok(name)
+    }
+
+    /// `expr` cast by the `::TYPE` at the cursor (#948). Out of line so
+    /// [`Self::postfix_expr`]'s frame, which every nesting level holds,
+    /// does not grow by it.
+    #[inline(never)]
+    fn postfix_cast(&mut self, expr: Expr) -> PResult<Expr> {
+        self.advance_span();
+        let (type_name, end) = self.postfix_type_name()?;
+        let span = join_span(expr.span, end);
+        Ok(Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(expr),
+                type_name,
+            },
+            span,
+        })
+    }
+
+    /// The type after `::` (#948): one word and an optional size, so that
+    /// in `x::DOUBLE d` the `d` stays an alias (a `CAST`'s type may run to
+    /// several words, as `DOUBLE PRECISION`).
+    fn postfix_type_name(&mut self) -> PResult<(String, Span)> {
+        let (mut name, mut end) = self.identifier()?;
+        if self.eat_punct(&TokenKind::LParen) {
+            let n1 = self.number_literal()?;
+            name.push('(');
+            name.push_str(&n1);
+            if self.eat_punct(&TokenKind::Comma) {
+                let n2 = self.number_literal()?;
+                name.push_str(", ");
+                name.push_str(&n2);
+            }
+            end = self.expect_punct(TokenKind::RParen, "')' to close type size")?;
+            name.push(')');
+        }
+        Ok((name, end))
     }
 
     fn number_literal(&mut self) -> PResult<String> {
@@ -4713,7 +4788,7 @@ mod tests {
         assert!(matches!(int.kind, ExprKind::Literal(Literal::Integer(42))));
 
         let float = parser("1.5").primary_expr().unwrap();
-        assert!(matches!(float.kind, ExprKind::Literal(Literal::Float(v)) if v == 1.5));
+        assert!(matches!(float.kind, ExprKind::Literal(Literal::Float(v, _)) if v == 1.5));
 
         let s = parser("'hi'").primary_expr().unwrap();
         assert!(matches!(s.kind, ExprKind::Literal(Literal::Str(ref v)) if v == "hi"));

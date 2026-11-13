@@ -13,6 +13,8 @@
 //! (`Vec<Value>`, one entry per row). Opcodes operate on whole registers at
 //! once rather than row-by-row.
 
+mod cast;
+
 use super::hll::Hll;
 use super::int_key_table::{murmur_finalize, slot_seed, HashGroupTable, IntKeyTable};
 use crate::value::len_to_i64;
@@ -1353,6 +1355,70 @@ fn exact_abs_round(name: &str, args: &[&[Value]], row: usize) -> Option<Value> {
         Value::Int(_) if is_round && digits >= 0 => Some(x.clone()),
         _ => None,
     }
+}
+
+/// `round(integer, n)` and `round(double, n)` with `n < 0`, for one row, as
+/// DuckDB gives them (#1027): rounded to tens, hundreds, ... half away from
+/// zero, in the argument's type. The row function is sqlite3's, which takes
+/// a negative `n` as 0 and so returned the value unrounded. `None` for any
+/// other call; an integer rounded past BIGINT is DuckDB's error.
+fn round_to_tens(
+    name: &str,
+    args: &[&[Value]],
+    row: usize,
+) -> Option<std::result::Result<Value, String>> {
+    if !name.eq_ignore_ascii_case("round") || args.len() != 2 {
+        return None;
+    }
+    let places = match args.get(1)?.get(row)? {
+        Value::Int(n) if *n < 0 => n.unsigned_abs(),
+        _ => return None,
+    };
+    match args.first()?.get(row)? {
+        Value::Int(n) => Some(round_int_to_tens(*n, places)),
+        Value::Float(f) => Some(Ok(Value::Float(round_float_to_tens(*f, places)))),
+        _ => None,
+    }
+}
+
+/// `n` rounded half away from zero to a multiple of `10^places`.
+fn round_int_to_tens(n: i64, places: u64) -> std::result::Result<Value, String> {
+    let overflow = || "Out of Range Error: Overflow in ROUND of integer".to_string();
+    // Past 10^38 the power leaves i128; every BIGINT is under half of it.
+    let Some(p) = u32::try_from(places)
+        .ok()
+        .and_then(|e| 10i128.checked_pow(e))
+    else {
+        return Ok(Value::Int(0));
+    };
+    let n = i128::from(n);
+    let (q, r) = (
+        n.checked_div(p).ok_or_else(overflow)?,
+        n.checked_rem(p).ok_or_else(overflow)?,
+    );
+    let half_or_more = r
+        .checked_abs()
+        .and_then(|r| r.checked_mul(2))
+        .is_none_or(|r2| r2 >= p);
+    let q = if half_or_more {
+        q.checked_add(n.signum()).ok_or_else(overflow)?
+    } else {
+        q
+    };
+    let rounded = q.checked_mul(p).ok_or_else(overflow)?;
+    i64::try_from(rounded)
+        .map(Value::Int)
+        .map_err(|_| overflow())
+}
+
+/// `f` rounded half away from zero to a multiple of `10^places`; a power
+/// past `f64` (`10^309`) leaves every finite double under half of it.
+fn round_float_to_tens(f: f64, places: u64) -> f64 {
+    let p = 10f64.powi(i32::try_from(places).unwrap_or(i32::MAX));
+    if !p.is_finite() {
+        return if f.is_finite() { 0.0 } else { f };
+    }
+    (f / p).round() * p
 }
 
 /// [`crate::value::Value`] -> [`Value`], the reverse of
@@ -6742,11 +6808,27 @@ impl Vm {
                     // no list, so it is answered here, before conversion.
                     let length_list = name.eq_ignore_ascii_case("length") && arg_regs.len() == 1;
                     for row in 0..num_rows {
+                        // #948: a cast, on the batch value: the scalar
+                        // conversion below would lose a DECIMAL's scale
+                        // and a BOOLEAN's type.
+                        if let Some(cast) = cast::cast(name, &arg_regs, row) {
+                            result.push(
+                                cast.map_err(|message| VmError::Function { opcode, message })?,
+                            );
+                            continue;
+                        }
                         // #1016/#1017: `abs`/`round` keep a decimal or
                         // integer argument's type; the row functions
                         // would answer in `f64`.
                         if let Some(exact) = exact_abs_round(name, &arg_regs, row) {
                             result.push(exact);
+                            continue;
+                        }
+                        // #1027: `round(x, n)` with `n < 0` rounds to tens.
+                        if let Some(rounded) = round_to_tens(name, &arg_regs, row) {
+                            result.push(
+                                rounded.map_err(|message| VmError::Function { opcode, message })?,
+                            );
                             continue;
                         }
                         if length_list {
@@ -8944,6 +9026,15 @@ pub(crate) fn apply_map_op(op: MapOp, a: &Value, b: &Value) -> Result<Value> {
     if matches!(a, Value::Null) || matches!(b, Value::Null) {
         return Ok(Value::Null);
     }
+    // #948: a BLOB is no number. Arithmetic on one, or comparing one with
+    // a number or a boolean, is DuckDB's binder error -- it used to be a
+    // NULL or "no match", a silent wrong answer.
+    if let Some(message) = blob_misuse(op, a, b) {
+        return Err(VmError::Function {
+            opcode: "Map",
+            message,
+        });
+    }
     // A string compared with a number or a boolean is converted to that
     // type first, as DuckDB does (#679): `id = '5'` matches row 5 instead
     // of never matching, and `id = 'abc'` is an error.
@@ -9154,6 +9245,55 @@ fn converts_from_str(v: &Value) -> bool {
         v,
         Value::Int(_) | Value::Float(_) | Value::Decimal { .. } | Value::Bool(_)
     )
+}
+
+/// DuckDB's binder error for `op` over `a` and `b` when a BLOB is used as a
+/// number (#948): an arithmetic operand, a negated value, or one side of a
+/// comparison whose other side is a number or a boolean. `None` otherwise:
+/// two BLOBs compare bytewise, and a BLOB with text as before.
+fn blob_misuse(op: MapOp, a: &Value, b: &Value) -> Option<String> {
+    let is_blob = |v: &Value| matches!(v, Value::Blob(_));
+    let symbol = match op {
+        MapOp::Add => "+",
+        MapOp::Sub => "-",
+        MapOp::Mul => "*",
+        MapOp::Div => "/",
+        MapOp::IntDiv => "//",
+        MapOp::Mod => "%",
+        MapOp::Neg if is_blob(a) => {
+            return Some(
+                "Binder Error: No function matches the given name and argument types \
+                 '-(BLOB)'. You might need to add explicit type casts."
+                    .to_string(),
+            )
+        }
+        MapOp::Eq | MapOp::Ne | MapOp::Lt | MapOp::Le | MapOp::Gt | MapOp::Ge => {
+            // The side that is not the BLOB.
+            let other = match (is_blob(a), is_blob(b)) {
+                (true, false) => b,
+                (false, true) => a,
+                _ => return None,
+            };
+            if !converts_from_str(other) {
+                return None;
+            }
+            return Some(format!(
+                "Binder Error: Cannot compare values of type BLOB and type {} - an explicit \
+                 cast is required",
+                cast::type_name(other)
+            ));
+        }
+        _ => return None,
+    };
+    if !(is_blob(a) || is_blob(b)) {
+        return None;
+    }
+    Some(format!(
+        "Binder Error: No function matches the given name and argument types \
+         '{symbol}({}, {})'. You might need to add explicit type casts.",
+        cast::type_name(a),
+        cast::type_name(b)
+    ))
 }
 
 /// `s` converted to the type of `like` for a comparison with it (#679):
@@ -9552,6 +9692,122 @@ mod tests {
         assert_eq!(
             exact_abs_round("round", &[&col, &digits], 0),
             Some(dec(13, 1))
+        );
+    }
+
+    /// #948: a BLOB as a number is DuckDB's binder error; two BLOBs and a
+    /// BLOB with text still compare, and a NULL still propagates.
+    #[test]
+    fn a_blob_used_as_a_number_is_an_error() {
+        let b = Value::Blob(Arc::from(&b"10"[..]));
+        let n = Value::Int(2);
+        let err = |op, a: &Value, b: &Value| match apply_map_op(op, a, b) {
+            Err(VmError::Function { message, .. }) => message,
+            other => panic!("{other:?}"),
+        };
+        assert!(err(MapOp::Mul, &b, &n).contains("'*(BLOB, BIGINT)'"));
+        assert!(err(MapOp::Add, &b, &b).contains("'+(BLOB, BLOB)'"));
+        assert!(err(MapOp::IntDiv, &n, &b).contains("'//(BIGINT, BLOB)'"));
+        assert!(err(MapOp::Neg, &b, &n).contains("'-(BLOB)'"));
+        assert!(
+            err(MapOp::Gt, &b, &n).contains("Cannot compare values of type BLOB and type BIGINT")
+        );
+        assert!(err(MapOp::Eq, &Value::Float(1.0), &b).contains("type DOUBLE"));
+        assert!(err(MapOp::Ne, &b, &Value::Bool(true)).contains("type BOOLEAN"));
+        assert_eq!(apply_map_op(MapOp::Eq, &b, &b).unwrap(), Value::Bool(true));
+        assert_eq!(
+            apply_map_op(MapOp::Eq, &b, &Value::Str(Cow::Borrowed("x"))).unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            apply_map_op(MapOp::Mul, &b, &Value::Null).unwrap(),
+            Value::Null
+        );
+        assert_eq!(blob_misuse(MapOp::Concat, &b, &n), None);
+        assert_eq!(blob_misuse(MapOp::Neg, &n, &b), None);
+        assert_eq!(blob_misuse(MapOp::Mul, &n, &n), None);
+    }
+
+    // vm_batch_round_to_tens_51a53006 (#1027): `!name == "round" ||
+    // args.len() != 2` -- only `round(x, n)` rounds to tens.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_round_to_tens_51a53006__v1_another_function_is_not_rounded() {
+        let (col, digits) = ([Value::Int(7)], [Value::Int(-1)]);
+        assert_eq!(round_to_tens("abs", &[&col, &digits], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_round_to_tens_51a53006__v2_round_without_digits_is_not() {
+        let col = [Value::Int(7)];
+        assert_eq!(round_to_tens("round", &[&col], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_round_to_tens_51a53006__v3_round_with_digits_is() {
+        let (col, digits) = ([Value::Int(7)], [Value::Int(-1)]);
+        assert_eq!(
+            round_to_tens("ROUND", &[&col, &digits], 0),
+            Some(Ok(Value::Int(10)))
+        );
+    }
+
+    /// #1027: DuckDB's `round(bigint, n < 0)`: half away from zero, a
+    /// BIGINT still, 0 once the power passes every BIGINT, and an error
+    /// when the rounded value leaves BIGINT.
+    #[test]
+    fn round_int_to_tens_rounds_half_away_from_zero_in_bigint() {
+        let r = |n: i64, places: u64| round_int_to_tens(n, places);
+        assert_eq!(r(7, 1), Ok(Value::Int(10)));
+        assert_eq!(r(15, 1), Ok(Value::Int(20)));
+        assert_eq!(r(14, 1), Ok(Value::Int(10)));
+        assert_eq!(r(-15, 1), Ok(Value::Int(-20)));
+        assert_eq!(r(-14, 1), Ok(Value::Int(-10)));
+        assert_eq!(r(0, 25), Ok(Value::Int(0)));
+        assert_eq!(r(7, 100), Ok(Value::Int(0)));
+        assert_eq!(r(4_999_999_999_999_999_999, 19), Ok(Value::Int(0)));
+        assert_eq!(r(i64::MAX, 18), Ok(Value::Int(9_000_000_000_000_000_000)));
+        assert_eq!(r(-i64::MAX, 18), Ok(Value::Int(-9_000_000_000_000_000_000)));
+        let overflow = Err("Out of Range Error: Overflow in ROUND of integer".to_string());
+        assert_eq!(r(i64::MAX, 1), overflow);
+        assert_eq!(r(5_000_000_000_000_000_000, 19), overflow);
+        assert_eq!(r(i64::MIN, 1), overflow);
+    }
+
+    /// #1027: `round(double, n < 0)`, and a power past `f64` rounds every
+    /// finite double to 0.
+    #[test]
+    fn round_float_to_tens_rounds_half_away_from_zero() {
+        assert_eq!(round_float_to_tens(15.0, 1), 20.0);
+        assert_eq!(round_float_to_tens(-15.0, 1), -20.0);
+        assert_eq!(round_float_to_tens(1234.5678, 2), 1200.0);
+        assert_eq!(round_float_to_tens(7.0, 400), 0.0);
+        assert!(round_float_to_tens(f64::NAN, 400).is_nan());
+        assert_eq!(round_float_to_tens(f64::INFINITY, 1), f64::INFINITY);
+    }
+
+    /// #1027: only a negative digit count of an integer or a double takes
+    /// this path; a decimal's is `exact_abs_round`'s.
+    #[test]
+    fn round_to_tens_takes_only_negative_digits_of_an_integer_or_a_double() {
+        let digits = [Value::Int(-1)];
+        let positive = [Value::Int(1)];
+        let int = [Value::Int(15)];
+        let float = [Value::Float(15.0)];
+        assert_eq!(
+            round_to_tens("round", &[&float, &digits], 0),
+            Some(Ok(Value::Float(20.0)))
+        );
+        assert_eq!(round_to_tens("round", &[&int, &positive], 0), None);
+        assert_eq!(
+            round_to_tens("round", &[&[dec(125, 2)][..], &digits], 0),
+            None
+        );
+        assert_eq!(
+            round_to_tens("round", &[&[Value::Null][..], &digits], 0),
+            None
         );
     }
 

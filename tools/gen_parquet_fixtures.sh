@@ -124,6 +124,23 @@ duckdb -c "COPY (SELECT
   FROM range(0, 5000) t(i) ORDER BY id)
   TO '$DIR/blobs.parquet' (FORMAT PARQUET, COMPRESSION 'snappy', ROW_GROUP_SIZE 2048);"
 
+# #948: a BLOB holding numeric text (`raw`, as a pipeline writing BINARY
+# without the UTF8 annotation leaves it), BLOBs that are not all UTF-8 or
+# printable (`bin`: invalid UTF-8, a backslash, a control byte, empty, 'é'),
+# and VARCHAR numbers in the forms DuckDB's integer cast reads (`txt`); NULL
+# on id 5.
+duckdb -c "COPY (SELECT * FROM (VALUES
+    (1, '10'::BLOB, '\\xFFA'::BLOB, '10'),
+    (2, '20'::BLOB, '\\xC3\\xA9'::BLOB, ' 20 '),
+    (3, '30'::BLOB, '\\x5C\\x00'::BLOB, '2.5'),
+    (4, '40'::BLOB, 'AB'::BLOB, '-2.5'),
+    (5, NULL, NULL, NULL),
+    (6, '-7'::BLOB, ''::BLOB, '0x10'),
+    (7, '1000'::BLOB, '\\x0A'::BLOB, '1_000'),
+    (8, '5'::BLOB, 'Z'::BLOB, '1e2')
+  ) t(id, raw, bin, txt))
+  TO '$DIR/blob_text.parquet' (FORMAT PARQUET, COMPRESSION 'snappy');"
+
 # Legacy INT96 timestamps, as Spark/Impala and pyarrow's
 # use_deprecated_int96_timestamps write them (DuckDB cannot write INT96):
 # an id to filter on (two-phase load), a repeated value (pyarrow's default
@@ -149,4 +166,4 @@ table = pa.table({
 pq.write_table(table, sys.argv[1], use_deprecated_int96_timestamps=True, compression="snappy")
 PY
 
-echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet, $DIR/big_ints.parquet, $DIR/blobs.parquet, $DIR/int96_events.parquet"
+echo "generated $DIR/production_snappy.parquet, $DIR/production_uncompressed.parquet, $DIR/nested_map.parquet, $DIR/nested_shapes.parquet, $DIR/events.parquet, $DIR/delimited.parquet, $DIR/ranked_events.parquet, $DIR/null_types.parquet, $DIR/typed_nulls.parquet, $DIR/big_ints.parquet, $DIR/blobs.parquet, $DIR/blob_text.parquet, $DIR/int96_events.parquet"

@@ -53,8 +53,8 @@ pub enum TokenKind {
     // Literals
     /// Integer literal.
     Integer(i64),
-    /// Floating-point literal.
-    Float(f64),
+    /// Floating-point literal and its source text (#1027).
+    Float(f64, Box<str>),
     /// String literal (quotes stripped, escapes resolved).
     String(String),
     /// `X'...'` blob literal, decoded to raw bytes.
@@ -90,6 +90,10 @@ pub enum TokenKind {
     LBracket,
     /// `]` closing a subscript.
     RBracket,
+    /// `::`, the cast operator, in the column dialect only
+    /// ([`Tokenizer::tokenize_with_subscripts`], #948); in sqlite3's a `:`
+    /// starts a named parameter.
+    DoubleColon,
     /// `ILIKE`, case-insensitive `LIKE`: a word only in the column dialect
     /// ([`Tokenizer::tokenize_with_subscripts`], #679), where it is
     /// DuckDB's operator; in sqlite3's dialect it stays an identifier.
@@ -962,6 +966,11 @@ impl Tokenizer {
             '[' => self.scan_quoted_identifier(src, '[', ']'),
             '`' => self.scan_quoted_identifier(src, '`', '`'),
             '?' => self.scan_param_question(src),
+            ':' if self.subscripts && self.peek_at(src, 1) == Some(':') => {
+                self.bump(src);
+                self.bump(src);
+                TokenKind::DoubleColon
+            }
             ':' => self.scan_param_named(src, ':'),
             '@' => self.scan_param_named(src, '@'),
             '$' => self.scan_param_named(src, '$'),
@@ -1232,14 +1241,14 @@ impl Tokenizer {
         let text = src.get(start..self.pos).unwrap_or("");
         if is_float {
             match text.parse::<f64>() {
-                Ok(f) => TokenKind::Float(f),
+                Ok(f) => TokenKind::Float(f, text.into()),
                 Err(e) => TokenKind::Error(format!("invalid float literal {text:?}: {e}")),
             }
         } else {
             match text.parse::<i64>() {
                 Ok(n) => TokenKind::Integer(n),
                 Err(_) => match text.parse::<f64>() {
-                    Ok(f) => TokenKind::Float(f),
+                    Ok(f) => TokenKind::Float(f, text.into()),
                     Err(e) => TokenKind::Error(format!("invalid integer literal {text:?}: {e}")),
                 },
             }
@@ -1634,12 +1643,21 @@ mod tests {
 
     #[test]
     fn test_float_forms() {
-        assert_eq!(kinds("1e5"), vec![TokenKind::Float(1e5), TokenKind::Eof]);
-        assert_eq!(kinds(".5"), vec![TokenKind::Float(0.5), TokenKind::Eof]);
-        assert_eq!(kinds("1."), vec![TokenKind::Float(1.0), TokenKind::Eof]);
+        assert_eq!(
+            kinds("1e5"),
+            vec![TokenKind::Float(1e5, "1e5".into()), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds(".5"),
+            vec![TokenKind::Float(0.5, ".5".into()), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("1."),
+            vec![TokenKind::Float(1.0, "1.".into()), TokenKind::Eof]
+        );
         assert_eq!(
             kinds("1.5e-3"),
-            vec![TokenKind::Float(1.5e-3), TokenKind::Eof]
+            vec![TokenKind::Float(1.5e-3, "1.5e-3".into()), TokenKind::Eof]
         );
     }
 
@@ -2141,6 +2159,41 @@ mod mcdc_subscript_vectors {
         assert_eq!(
             first_kind(Tokenizer::tokenize_with_subscripts("EXTRACT")),
             TokenKind::Extract
+        );
+    }
+
+    // parser_row_tokenizer_next_token_6cec4f78 (#948): `self.subscripts &&
+    // next is ':'` -- `::` is the cast operator in the column dialect only.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_6cec4f78__v1_column_dialect_reads_a_cast() {
+        let kinds: Vec<TokenKind> = Tokenizer::tokenize_with_subscripts("a::INT")
+            .into_iter()
+            .map(|t| t.kind)
+            .collect();
+        assert_eq!(kinds.get(1), Some(&TokenKind::DoubleColon));
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_6cec4f78__v2_sqlite_dialect_has_no_cast_operator() {
+        let kinds: Vec<TokenKind> = Tokenizer::tokenize("a::INT")
+            .into_iter()
+            .map(|t| t.kind)
+            .collect();
+        assert!(!kinds.contains(&TokenKind::DoubleColon), "{kinds:?}");
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__parser_row_tokenizer_next_token_6cec4f78__v3_one_colon_is_still_a_parameter() {
+        let kinds: Vec<TokenKind> = Tokenizer::tokenize_with_subscripts(":name")
+            .into_iter()
+            .map(|t| t.kind)
+            .collect();
+        assert!(
+            matches!(kinds.first(), Some(TokenKind::Param(_))),
+            "{kinds:?}"
         );
     }
 }

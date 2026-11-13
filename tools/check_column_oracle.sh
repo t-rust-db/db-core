@@ -205,6 +205,36 @@ TS_EDGES_QUERIES=(
   "SELECT date_trunc('month', ts) AS m, count(*) FROM __TABLE__ GROUP BY m ORDER BY m|SELECT date_trunc('month', ts) AS m, count(*) FROM __TABLE__ GROUP BY m ORDER BY m"
 )
 
+# #1027: round with negative digits (rounded to tens, in the argument's
+# type) and decimal literals typed from their text (`1.50` is
+# DECIMAL(3,2), `2.0` DECIMAL(2,1); an exponent literal is a DOUBLE), over
+# `typed_nulls` (an INTEGER, a DOUBLE and a DECIMAL(9,2), with NULLs).
+TYPED_NULLS=tests/fixtures/parquet/typed_nulls.parquet
+TYPED_NULLS_QUERIES=(
+  "SELECT id, round(n, -1), round(n, -2), round(n * 1000, -3), round(n, -25) FROM __TABLE__ ORDER BY id|SELECT id, round(n, -1), round(n, -2), round(n * 1000, -3), round(n, -25) FROM __TABLE__ ORDER BY id"
+  "SELECT id, round(f, -1), round(f, -400) FROM __TABLE__ ORDER BY id|SELECT id, round(f, -1)::DECIMAL(18,2), round(f, -400)::DECIMAL(18,2) FROM __TABLE__ ORDER BY id"
+  "SELECT id, round(d, -1), round(d, 1) FROM __TABLE__ ORDER BY id|SELECT id, round(d, -1), round(d, 1) FROM __TABLE__ ORDER BY id"
+  "SELECT sum(round(n, -1)), min(round(n, -2)), max(round(n, -2)) FROM __TABLE__|SELECT sum(round(n, -1)), min(round(n, -2)), max(round(n, -2)) FROM __TABLE__"
+  "SELECT id, d * 2.0, d * 1.50, n * 1.50, d - 1.250, d + .5, n * 1. FROM __TABLE__ ORDER BY id|SELECT id, d * 2.0, d * 1.50, n * 1.50, d - 1.250, d + .5, n * 1. FROM __TABLE__ ORDER BY id"
+  "SELECT id, n * 1.5e2, d + 1e-1 FROM __TABLE__ ORDER BY id|SELECT id, (n * 1.5e2)::DECIMAL(18,2), (d + 1e-1)::DECIMAL(18,2) FROM __TABLE__ ORDER BY id"
+)
+
+# #948: a BLOB in arithmetic or compared with a number is an error (both
+# sides refuse, so both print nothing on stdout and the pair agrees);
+# CAST / `::` to VARCHAR, INTEGER, BIGINT and DOUBLE, and decode(blob),
+# over `blob_text` (a BLOB of numeric text, BLOBs that are not all UTF-8,
+# VARCHAR numbers in DuckDB's cast forms, NULLs).
+BLOB_TEXT=tests/fixtures/parquet/blob_text.parquet
+BLOB_TEXT_QUERIES=(
+  "SELECT id, CAST(raw AS VARCHAR), raw::VARCHAR, decode(raw) FROM __TABLE__ ORDER BY id|SELECT id, CAST(raw AS VARCHAR), raw::VARCHAR, decode(raw) FROM __TABLE__ ORDER BY id"
+  "SELECT id, CAST(bin AS VARCHAR) FROM __TABLE__ WHERE id <> 7 ORDER BY id|SELECT id, CAST(bin AS VARCHAR) FROM __TABLE__ WHERE id <> 7 ORDER BY id"
+  "SELECT id, CAST(txt AS INTEGER), CAST(txt AS BIGINT), txt::INT FROM __TABLE__ ORDER BY id|SELECT id, CAST(txt AS INTEGER), CAST(txt AS BIGINT), txt::INT FROM __TABLE__ ORDER BY id"
+  "SELECT id, CAST(txt AS DOUBLE) FROM __TABLE__ WHERE id <> 6 ORDER BY id|SELECT id, CAST(txt AS DOUBLE)::DECIMAL(18,2) FROM __TABLE__ WHERE id <> 6 ORDER BY id"
+  "SELECT sum(CAST(txt AS INTEGER)), sum(raw::VARCHAR::INTEGER), sum(CAST(CAST(raw AS VARCHAR) AS BIGINT)) FROM __TABLE__|SELECT sum(CAST(txt AS INTEGER)), sum(raw::VARCHAR::INTEGER), sum(CAST(CAST(raw AS VARCHAR) AS BIGINT)) FROM __TABLE__"
+  "SELECT raw::VARCHAR::INT % 3 AS r, count(*) FROM __TABLE__ GROUP BY r ORDER BY r|SELECT raw::VARCHAR::INT % 3 AS r, count(*) FROM __TABLE__ GROUP BY r ORDER BY r"
+  "SELECT count(*) FROM __TABLE__ WHERE raw = raw|SELECT count(*) FROM __TABLE__ WHERE raw = raw"
+)
+
 cargo build --release --example column_oracle -q
 
 fail=0
@@ -243,12 +273,16 @@ for q in "${NULL_TYPES_QUERIES[@]}"; do
   fi
 done
 
-for fixture in "$STRTIME" "$TS_EDGES"; do
+for fixture in "$STRTIME" "$TS_EDGES" "$TYPED_NULLS" "$BLOB_TEXT"; do
   table="$(basename "$fixture" .parquet)"
   if [[ "$fixture" == "$STRTIME" ]]; then
     pairs=("${STRTIME_QUERIES[@]}")
-  else
+  elif [[ "$fixture" == "$TS_EDGES" ]]; then
     pairs=("${TS_EDGES_QUERIES[@]}")
+  elif [[ "$fixture" == "$TYPED_NULLS" ]]; then
+    pairs=("${TYPED_NULLS_QUERIES[@]}")
+  else
+    pairs=("${BLOB_TEXT_QUERIES[@]}")
   fi
   for pair in "${pairs[@]}"; do
     db_core_q="${pair%%|*}"

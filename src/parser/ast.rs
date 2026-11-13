@@ -746,8 +746,10 @@ pub enum FunctionArgs {
 pub enum Literal {
     /// An integer literal.
     Integer(i64),
-    /// A floating-point literal.
-    Float(f64),
+    /// A floating-point literal, with its source text when it came from
+    /// SQL: the column dialect types `1.50` as `DECIMAL(3,2)` from it, as
+    /// DuckDB does (#1027); the value alone has lost the trailing zero.
+    Float(f64, Option<Box<str>>),
     /// A string literal.
     Str(String),
     /// A blob literal (`x'...'`).

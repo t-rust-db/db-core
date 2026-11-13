@@ -1231,7 +1231,7 @@ fn extract_joins(from: &AstFromClause) -> Result<Vec<JoinStep>> {
 fn literal_value(lit: &AstLiteral) -> Value {
     match lit {
         AstLiteral::Integer(v) => Value::Int(*v),
-        AstLiteral::Float(v) => Value::Float(*v),
+        AstLiteral::Float(v, _) => Value::Float(*v),
         AstLiteral::Str(v) => Value::Str(v.clone().into()),
         AstLiteral::True => Value::Bool(true),
         AstLiteral::False => Value::Bool(false),
@@ -1240,13 +1240,17 @@ fn literal_value(lit: &AstLiteral) -> Value {
     }
 }
 
-/// A decimal literal as DuckDB types it (#1016): `1.25` is `DECIMAL(3,2)`,
-/// not a double. The AST keeps only the `f64` magnitude, and its shortest
-/// round-trip text (`Display` never uses an exponent) gives the digits and
-/// the scale. A literal with no point (`2`, `1e3`) and one past 18 digits
-/// stay floats.
-fn decimal_literal(magnitude: f64, negative: bool) -> Option<Value> {
-    let text = magnitude.to_string();
+/// A decimal literal as DuckDB types it (#1016, #1027): `1.25` is
+/// `DECIMAL(3,2)`, `1.50` `DECIMAL(3,2)` and `2.0` `DECIMAL(2,1)`, not
+/// doubles; the digits and the scale are the literal's as written. One
+/// with an exponent (`1e-7`, `1.5e2`) is a DOUBLE, as in DuckDB, and so is
+/// one past 18 digits here. A literal with no text (built, not parsed)
+/// has none.
+fn decimal_literal(text: Option<&str>, negative: bool) -> Option<Value> {
+    let text = text?;
+    if text.contains(['e', 'E']) {
+        return None;
+    }
     let (int, frac) = text.split_once('.')?;
     if int.len().saturating_add(frac.len()) > 18 {
         return None;
@@ -1268,12 +1272,14 @@ fn decimal_literal(magnitude: f64, negative: bool) -> Option<Value> {
 /// is [`compile_expr`]'s.
 fn compile_arith_operand(expr: &AstExpr, exact: bool, ctx: &mut Ctx) -> usize {
     let lit = match &expr.kind {
-        ExprKind::Literal(AstLiteral::Float(v)) if exact => decimal_literal(*v, false),
+        ExprKind::Literal(AstLiteral::Float(_, text)) if exact => {
+            decimal_literal(text.as_deref(), false)
+        }
         ExprKind::Unary {
             op: crate::parser::ast::UnaryOp::Minus,
             expr: inner,
         } if exact => match &inner.kind {
-            ExprKind::Literal(AstLiteral::Float(v)) => decimal_literal(*v, true),
+            ExprKind::Literal(AstLiteral::Float(_, text)) => decimal_literal(text.as_deref(), true),
             _ => None,
         },
         _ => None,
@@ -4253,7 +4259,7 @@ fn window_detail(spec: &WindowSpec) -> String {
 fn literal_to_string(lit: &AstLiteral) -> String {
     match lit {
         AstLiteral::Integer(v) => v.to_string(),
-        AstLiteral::Float(v) => v.to_string(),
+        AstLiteral::Float(v, _) => v.to_string(),
         AstLiteral::Str(v) => format!("'{v}'"),
         AstLiteral::Blob(_) => "x'...'".to_string(),
         AstLiteral::Null => "NULL".to_string(),
@@ -6647,14 +6653,14 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__codegen_batch_decimal_literal_563bb2e8__v1_long_literal_stays_float() {
-        assert_eq!(decimal_literal(0.000_012_345_678_901_234, false), None);
+        assert_eq!(decimal_literal(Some("0.000012345678901234"), false), None);
     }
 
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__codegen_batch_decimal_literal_563bb2e8__v2_short_literal_is_exact() {
         assert_eq!(
-            decimal_literal(0.000_012_345_678_901_23, false),
+            decimal_literal(Some("0.00001234567890123"), false),
             Some(decimal(1_234_567_890_123, 17))
         );
     }
@@ -6662,13 +6668,27 @@ mod tests {
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__codegen_batch_decimal_literal_9eb817f7__v1_negative_literal_is_negated() {
-        assert_eq!(decimal_literal(1.25, true), Some(decimal(-125, 2)));
+        assert_eq!(decimal_literal(Some("1.25"), true), Some(decimal(-125, 2)));
     }
 
     #[test]
     #[allow(non_snake_case)]
     fn mcdc__codegen_batch_decimal_literal_9eb817f7__v2_positive_literal_is_not() {
-        assert_eq!(decimal_literal(1.25, false), Some(decimal(125, 2)));
+        assert_eq!(decimal_literal(Some("1.25"), false), Some(decimal(125, 2)));
+    }
+
+    /// #1027: the scale is the literal's as written, trailing zeros too;
+    /// an exponent makes a double, and a built literal has no text.
+    #[test]
+    fn decimal_literal_takes_its_digits_and_scale_from_the_text() {
+        assert_eq!(decimal_literal(Some("1.50"), false), Some(decimal(150, 2)));
+        assert_eq!(decimal_literal(Some("2.0"), false), Some(decimal(20, 1)));
+        assert_eq!(decimal_literal(Some("1."), false), Some(decimal(1, 0)));
+        assert_eq!(decimal_literal(Some(".5"), false), Some(decimal(5, 1)));
+        assert_eq!(decimal_literal(Some("1e-7"), false), None);
+        assert_eq!(decimal_literal(Some("1.5E2"), false), None);
+        assert_eq!(decimal_literal(Some("9223372036854775808"), false), None);
+        assert_eq!(decimal_literal(None, false), None);
     }
 
     /// #1016: `d * 1.25` is a DECIMAL, `d / 1.25` a float (`/` is always one).

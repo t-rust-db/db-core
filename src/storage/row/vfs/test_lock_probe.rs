@@ -14,26 +14,26 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 
 use super::fcntl::off_t;
 
-/// Locates the `lock_probe` helper binary next to this test binary.
-/// `CARGO_BIN_EXE_lock_probe` isn't available here — Cargo only sets it for
-/// integration tests and benches, not a lib's own `#[cfg(test)]` unit
-/// tests — but `cargo test` still builds `lock_probe` as a plain sibling
-/// artifact at `target/<profile>/lock_probe`, one level up from this test
-/// binary's `target/<profile>/deps/` directory.
+/// Locates the `lock_probe` helper binary. `CARGO_BIN_EXE_lock_probe`
+/// isn't available here -- Cargo only sets it for integration tests and
+/// benches, not a lib's own `#[cfg(test)]` unit tests -- but `cargo test`
+/// still builds `lock_probe` as a plain artifact at
+/// `target/<profile>/lock_probe`. Where this test binary sits under that
+/// directory depends on Cargo's layout: `target/<profile>/deps/` until Rust
+/// 1.99, `target/<profile>/build/<pkg>/<hash>/out/` from 1.100 -- so the
+/// helper is looked for in each ancestor directory, nearest first.
 fn helper_path() -> std::path::PathBuf {
     let exe = std::env::current_exe().expect("current_exe");
-    let deps_dir = exe.parent().expect("test binary has a parent dir");
-    let profile_dir = if deps_dir.file_name().and_then(|n| n.to_str()) == Some("deps") {
-        deps_dir.parent().expect("deps dir has a parent dir")
-    } else {
-        deps_dir
-    };
-    let path = profile_dir.join("lock_probe");
-    assert!(
-        path.exists(),
-        "lock_probe helper binary not found at {path:?} — is it declared as a [[bin]] in Cargo.toml?"
-    );
-    path
+    let found = exe
+        .ancestors()
+        .skip(1)
+        .map(|dir| dir.join("lock_probe"))
+        .find(|path| path.is_file());
+    found.unwrap_or_else(|| {
+        panic!(
+            "lock_probe helper binary not found above {exe:?} -- is it declared as a [[bin]] in Cargo.toml?"
+        )
+    })
 }
 
 /// Spawns the helper for a one-shot, non-blocking lock attempt on
