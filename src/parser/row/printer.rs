@@ -488,7 +488,7 @@ impl fmt::Display for Literal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Literal::Integer(v) => write!(f, "{v}"),
-            Literal::Float(v) => write!(f, "{v}"),
+            Literal::Float(v, _) => write!(f, "{v}"),
             Literal::Str(s) => write!(f, "'{}'", s.replace('\'', "''")),
             Literal::Blob(bytes) => {
                 write!(f, "X'")?;

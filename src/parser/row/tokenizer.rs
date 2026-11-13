@@ -53,8 +53,8 @@ pub enum TokenKind {
     // Literals
     /// Integer literal.
     Integer(i64),
-    /// Floating-point literal.
-    Float(f64),
+    /// Floating-point literal and its source text (#1027).
+    Float(f64, Box<str>),
     /// String literal (quotes stripped, escapes resolved).
     String(String),
     /// `X'...'` blob literal, decoded to raw bytes.
@@ -1232,14 +1232,14 @@ impl Tokenizer {
         let text = src.get(start..self.pos).unwrap_or("");
         if is_float {
             match text.parse::<f64>() {
-                Ok(f) => TokenKind::Float(f),
+                Ok(f) => TokenKind::Float(f, text.into()),
                 Err(e) => TokenKind::Error(format!("invalid float literal {text:?}: {e}")),
             }
         } else {
             match text.parse::<i64>() {
                 Ok(n) => TokenKind::Integer(n),
                 Err(_) => match text.parse::<f64>() {
-                    Ok(f) => TokenKind::Float(f),
+                    Ok(f) => TokenKind::Float(f, text.into()),
                     Err(e) => TokenKind::Error(format!("invalid integer literal {text:?}: {e}")),
                 },
             }
@@ -1634,12 +1634,21 @@ mod tests {
 
     #[test]
     fn test_float_forms() {
-        assert_eq!(kinds("1e5"), vec![TokenKind::Float(1e5), TokenKind::Eof]);
-        assert_eq!(kinds(".5"), vec![TokenKind::Float(0.5), TokenKind::Eof]);
-        assert_eq!(kinds("1."), vec![TokenKind::Float(1.0), TokenKind::Eof]);
+        assert_eq!(
+            kinds("1e5"),
+            vec![TokenKind::Float(1e5, "1e5".into()), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds(".5"),
+            vec![TokenKind::Float(0.5, ".5".into()), TokenKind::Eof]
+        );
+        assert_eq!(
+            kinds("1."),
+            vec![TokenKind::Float(1.0, "1.".into()), TokenKind::Eof]
+        );
         assert_eq!(
             kinds("1.5e-3"),
-            vec![TokenKind::Float(1.5e-3), TokenKind::Eof]
+            vec![TokenKind::Float(1.5e-3, "1.5e-3".into()), TokenKind::Eof]
         );
     }
 

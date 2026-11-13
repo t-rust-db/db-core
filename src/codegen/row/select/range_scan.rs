@@ -147,7 +147,7 @@ pub(super) fn is_supported_operand(expr: &Expr) -> bool {
     matches!(
         &expr.kind,
         ExprKind::Literal(
-            Literal::Integer(_) | Literal::Float(_) | Literal::Str(_) | Literal::Blob(_)
+            Literal::Integer(_) | Literal::Float(..) | Literal::Str(_) | Literal::Blob(_)
         ) | ExprKind::Param(ParamKind::Anonymous | ParamKind::Numbered(_))
     )
 }
@@ -189,7 +189,7 @@ pub(super) fn is_constant_operand(expr: &Expr, scope: &Scope) -> bool {
 /// See [`is_supported_operand`]'s doc for why this check exists.
 pub(super) fn operand_matches_column_affinity(expr: &Expr, column_affinity: Affinity) -> bool {
     match &expr.kind {
-        ExprKind::Literal(Literal::Integer(_) | Literal::Float(_)) => matches!(
+        ExprKind::Literal(Literal::Integer(_) | Literal::Float(..)) => matches!(
             column_affinity,
             Affinity::Integer | Affinity::Real | Affinity::Numeric
         ),
@@ -1115,7 +1115,7 @@ fn as_forward_comparison(expr: &Expr) -> Option<(&str, &Expr, bool, bool)> {
 fn bound_value(expr: &Expr, affinity: Affinity) -> Option<Value> {
     let mut value = match &expr.kind {
         ExprKind::Literal(Literal::Integer(i)) => Value::Integer(*i),
-        ExprKind::Literal(Literal::Float(f)) => Value::Real(*f),
+        ExprKind::Literal(Literal::Float(f, _)) => Value::Real(*f),
         ExprKind::Literal(Literal::Str(s)) => Value::Text(s.as_str().into()),
         ExprKind::Literal(Literal::Blob(b)) => Value::Blob(b.as_slice().into()),
         ExprKind::Paren(inner) => return bound_value(inner, affinity),
@@ -1124,7 +1124,7 @@ fn bound_value(expr: &Expr, affinity: Affinity) -> Option<Value> {
             expr: inner,
         } => match &inner.kind {
             ExprKind::Literal(Literal::Integer(i)) => Value::Integer(i.checked_neg()?),
-            ExprKind::Literal(Literal::Float(f)) => Value::Real(-f),
+            ExprKind::Literal(Literal::Float(f, _)) => Value::Real(-f),
             _ => return None,
         },
         _ => return None,

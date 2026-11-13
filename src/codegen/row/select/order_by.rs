@@ -84,7 +84,7 @@ fn folded_null_test(inner: &Expr, negated: bool) -> Option<i64> {
     let literal = folded_integer(inner).is_some()
         || matches!(
             &strip_parens(inner).kind,
-            ExprKind::Literal(Literal::Float(_) | Literal::Str(_) | Literal::Blob(_))
+            ExprKind::Literal(Literal::Float(..) | Literal::Str(_) | Literal::Blob(_))
         );
     literal.then_some(i64::from(negated))
 }

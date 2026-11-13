@@ -1355,6 +1355,70 @@ fn exact_abs_round(name: &str, args: &[&[Value]], row: usize) -> Option<Value> {
     }
 }
 
+/// `round(integer, n)` and `round(double, n)` with `n < 0`, for one row, as
+/// DuckDB gives them (#1027): rounded to tens, hundreds, ... half away from
+/// zero, in the argument's type. The row function is sqlite3's, which takes
+/// a negative `n` as 0 and so returned the value unrounded. `None` for any
+/// other call; an integer rounded past BIGINT is DuckDB's error.
+fn round_to_tens(
+    name: &str,
+    args: &[&[Value]],
+    row: usize,
+) -> Option<std::result::Result<Value, String>> {
+    if !name.eq_ignore_ascii_case("round") || args.len() != 2 {
+        return None;
+    }
+    let places = match args.get(1)?.get(row)? {
+        Value::Int(n) if *n < 0 => n.unsigned_abs(),
+        _ => return None,
+    };
+    match args.first()?.get(row)? {
+        Value::Int(n) => Some(round_int_to_tens(*n, places)),
+        Value::Float(f) => Some(Ok(Value::Float(round_float_to_tens(*f, places)))),
+        _ => None,
+    }
+}
+
+/// `n` rounded half away from zero to a multiple of `10^places`.
+fn round_int_to_tens(n: i64, places: u64) -> std::result::Result<Value, String> {
+    let overflow = || "Out of Range Error: Overflow in ROUND of integer".to_string();
+    // Past 10^38 the power leaves i128; every BIGINT is under half of it.
+    let Some(p) = u32::try_from(places)
+        .ok()
+        .and_then(|e| 10i128.checked_pow(e))
+    else {
+        return Ok(Value::Int(0));
+    };
+    let n = i128::from(n);
+    let (q, r) = (
+        n.checked_div(p).ok_or_else(overflow)?,
+        n.checked_rem(p).ok_or_else(overflow)?,
+    );
+    let half_or_more = r
+        .checked_abs()
+        .and_then(|r| r.checked_mul(2))
+        .is_none_or(|r2| r2 >= p);
+    let q = if half_or_more {
+        q.checked_add(n.signum()).ok_or_else(overflow)?
+    } else {
+        q
+    };
+    let rounded = q.checked_mul(p).ok_or_else(overflow)?;
+    i64::try_from(rounded)
+        .map(Value::Int)
+        .map_err(|_| overflow())
+}
+
+/// `f` rounded half away from zero to a multiple of `10^places`; a power
+/// past `f64` (`10^309`) leaves every finite double under half of it.
+fn round_float_to_tens(f: f64, places: u64) -> f64 {
+    let p = 10f64.powi(i32::try_from(places).unwrap_or(i32::MAX));
+    if !p.is_finite() {
+        return if f.is_finite() { 0.0 } else { f };
+    }
+    (f / p).round() * p
+}
+
 /// [`crate::value::Value`] -> [`Value`], the reverse of
 /// [`to_scalar_value`].
 fn from_scalar_value(v: crate::value::Value) -> Value {
@@ -6749,6 +6813,13 @@ impl Vm {
                             result.push(exact);
                             continue;
                         }
+                        // #1027: `round(x, n)` with `n < 0` rounds to tens.
+                        if let Some(rounded) = round_to_tens(name, &arg_regs, row) {
+                            result.push(
+                                rounded.map_err(|message| VmError::Function { opcode, message })?,
+                            );
+                            continue;
+                        }
                         if length_list {
                             if let Value::List(items) = &arg_regs[0][row] {
                                 result.push(Value::Int(
@@ -9552,6 +9623,89 @@ mod tests {
         assert_eq!(
             exact_abs_round("round", &[&col, &digits], 0),
             Some(dec(13, 1))
+        );
+    }
+
+    // vm_batch_round_to_tens_51a53006 (#1027): `!name == "round" ||
+    // args.len() != 2` -- only `round(x, n)` rounds to tens.
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_round_to_tens_51a53006__v1_another_function_is_not_rounded() {
+        let (col, digits) = ([Value::Int(7)], [Value::Int(-1)]);
+        assert_eq!(round_to_tens("abs", &[&col, &digits], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_round_to_tens_51a53006__v2_round_without_digits_is_not() {
+        let col = [Value::Int(7)];
+        assert_eq!(round_to_tens("round", &[&col], 0), None);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn mcdc__vm_batch_round_to_tens_51a53006__v3_round_with_digits_is() {
+        let (col, digits) = ([Value::Int(7)], [Value::Int(-1)]);
+        assert_eq!(
+            round_to_tens("ROUND", &[&col, &digits], 0),
+            Some(Ok(Value::Int(10)))
+        );
+    }
+
+    /// #1027: DuckDB's `round(bigint, n < 0)`: half away from zero, a
+    /// BIGINT still, 0 once the power passes every BIGINT, and an error
+    /// when the rounded value leaves BIGINT.
+    #[test]
+    fn round_int_to_tens_rounds_half_away_from_zero_in_bigint() {
+        let r = |n: i64, places: u64| round_int_to_tens(n, places);
+        assert_eq!(r(7, 1), Ok(Value::Int(10)));
+        assert_eq!(r(15, 1), Ok(Value::Int(20)));
+        assert_eq!(r(14, 1), Ok(Value::Int(10)));
+        assert_eq!(r(-15, 1), Ok(Value::Int(-20)));
+        assert_eq!(r(-14, 1), Ok(Value::Int(-10)));
+        assert_eq!(r(0, 25), Ok(Value::Int(0)));
+        assert_eq!(r(7, 100), Ok(Value::Int(0)));
+        assert_eq!(r(4_999_999_999_999_999_999, 19), Ok(Value::Int(0)));
+        assert_eq!(r(i64::MAX, 18), Ok(Value::Int(9_000_000_000_000_000_000)));
+        assert_eq!(r(-i64::MAX, 18), Ok(Value::Int(-9_000_000_000_000_000_000)));
+        let overflow = Err("Out of Range Error: Overflow in ROUND of integer".to_string());
+        assert_eq!(r(i64::MAX, 1), overflow);
+        assert_eq!(r(5_000_000_000_000_000_000, 19), overflow);
+        assert_eq!(r(i64::MIN, 1), overflow);
+    }
+
+    /// #1027: `round(double, n < 0)`, and a power past `f64` rounds every
+    /// finite double to 0.
+    #[test]
+    fn round_float_to_tens_rounds_half_away_from_zero() {
+        assert_eq!(round_float_to_tens(15.0, 1), 20.0);
+        assert_eq!(round_float_to_tens(-15.0, 1), -20.0);
+        assert_eq!(round_float_to_tens(1234.5678, 2), 1200.0);
+        assert_eq!(round_float_to_tens(7.0, 400), 0.0);
+        assert!(round_float_to_tens(f64::NAN, 400).is_nan());
+        assert_eq!(round_float_to_tens(f64::INFINITY, 1), f64::INFINITY);
+    }
+
+    /// #1027: only a negative digit count of an integer or a double takes
+    /// this path; a decimal's is `exact_abs_round`'s.
+    #[test]
+    fn round_to_tens_takes_only_negative_digits_of_an_integer_or_a_double() {
+        let digits = [Value::Int(-1)];
+        let positive = [Value::Int(1)];
+        let int = [Value::Int(15)];
+        let float = [Value::Float(15.0)];
+        assert_eq!(
+            round_to_tens("round", &[&float, &digits], 0),
+            Some(Ok(Value::Float(20.0)))
+        );
+        assert_eq!(round_to_tens("round", &[&int, &positive], 0), None);
+        assert_eq!(
+            round_to_tens("round", &[&[dec(125, 2)][..], &digits], 0),
+            None
+        );
+        assert_eq!(
+            round_to_tens("round", &[&[Value::Null][..], &digits], 0),
+            None
         );
     }
 

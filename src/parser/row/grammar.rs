@@ -1074,10 +1074,10 @@ impl Parser {
                     span: tok.span,
                 })
             }
-            TokenKind::Float(v) => {
+            TokenKind::Float(v, text) => {
                 self.advance();
                 Ok(Expr {
-                    kind: ExprKind::Literal(Literal::Float(v)),
+                    kind: ExprKind::Literal(Literal::Float(v, Some(text))),
                     span: tok.span,
                 })
             }
@@ -3058,7 +3058,7 @@ impl Parser {
                 // `-9223372036854775808` as an INTEGER literal, not a
                 // REAL (spike #59 finding).
                 if matches!(op, UnaryOp::Minus) {
-                    if let ExprKind::Literal(Literal::Float(f)) = inner.kind {
+                    if let ExprKind::Literal(Literal::Float(f, _)) = inner.kind {
                         if f == 9_223_372_036_854_775_808.0 {
                             return Ok(Expr {
                                 kind: ExprKind::Literal(Literal::Integer(i64::MIN)),
@@ -3117,6 +3117,26 @@ impl Parser {
     // speculative caller) can rewind `self.pos` back over this token on
     // a failed parse, so `self.tokens[pos]`'s payload must stay intact
     // for a retry; moving it out in place would corrupt that retry.
+    /// The float literal at the cursor, with its source text (#1027).
+    /// Out of line so [`Self::primary_expr`]'s frame, which every nesting
+    /// level holds, does not grow by the text.
+    #[inline(never)]
+    fn float_literal(&mut self) -> PResult<Expr> {
+        let tok = self.peek();
+        let TokenKind::Float(v, text) = &tok.kind else {
+            return Err(ParseFail::Invalid {
+                message: format!("expected a float literal, found {:?}", tok.kind),
+                span: tok.span,
+            });
+        };
+        let (v, text) = (*v, Some(text.clone()));
+        let span = self.advance_span();
+        Ok(Expr {
+            kind: ExprKind::Literal(Literal::Float(v, text)),
+            span,
+        })
+    }
+
     fn primary_expr(&mut self) -> PResult<Expr> {
         match &self.peek().kind {
             TokenKind::Integer(v) => {
@@ -3127,14 +3147,7 @@ impl Parser {
                     span,
                 })
             }
-            TokenKind::Float(v) => {
-                let v = *v;
-                let span = self.advance_span();
-                Ok(Expr {
-                    kind: ExprKind::Literal(Literal::Float(v)),
-                    span,
-                })
-            }
+            TokenKind::Float(..) => self.float_literal(),
             TokenKind::String(s) => {
                 let s = s.clone();
                 let span = self.advance_span();
@@ -4713,7 +4726,7 @@ mod tests {
         assert!(matches!(int.kind, ExprKind::Literal(Literal::Integer(42))));
 
         let float = parser("1.5").primary_expr().unwrap();
-        assert!(matches!(float.kind, ExprKind::Literal(Literal::Float(v)) if v == 1.5));
+        assert!(matches!(float.kind, ExprKind::Literal(Literal::Float(v, _)) if v == 1.5));
 
         let s = parser("'hi'").primary_expr().unwrap();
         assert!(matches!(s.kind, ExprKind::Literal(Literal::Str(ref v)) if v == "hi"));

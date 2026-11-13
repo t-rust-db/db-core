@@ -33,6 +33,7 @@
     {"file": "order_by_ordinal_752.test", "pass": 9, "skip": 0, "fail": 0},
     {"file": "predicate_truth_886.test", "pass": 16, "skip": 0, "fail": 0},
     {"file": "regexp_929.test", "pass": 12, "skip": 0, "fail": 0},
+    {"file": "round_literals_1027.test", "pass": 10, "skip": 0, "fail": 0},
     {"file": "string_split_803.test", "pass": 9, "skip": 0, "fail": 0},
     {"file": "topn_big_int_890.test", "pass": 4, "skip": 0, "fail": 0},
     {"file": "types.test", "pass": 23, "skip": 4, "fail": 0},
@@ -40,5 +41,5 @@
     {"file": "unnest_filters_812.test", "pass": 7, "skip": 2, "fail": 0},
     {"file": "wrong_answers_679.test", "pass": 37, "skip": 0, "fail": 0}
   ],
-  "total": {"pass": 4732, "skip": 7, "fail": 0}
+  "total": {"pass": 4742, "skip": 7, "fail": 0}
 }

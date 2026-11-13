@@ -1499,7 +1499,7 @@ mod prune {
             (Literal::Integer(i), PhysicalType::Float | PhysicalType::Double) => {
                 Some(StatValue::Float(*i as f64))
             }
-            (Literal::Float(f), PhysicalType::Float | PhysicalType::Double) => {
+            (Literal::Float(f, _), PhysicalType::Float | PhysicalType::Double) => {
                 Some(StatValue::Float(*f))
             }
             (Literal::Str(s), PhysicalType::ByteArray) => Some(StatValue::Str(s.clone())),

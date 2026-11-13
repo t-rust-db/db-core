@@ -205,6 +205,20 @@ TS_EDGES_QUERIES=(
   "SELECT date_trunc('month', ts) AS m, count(*) FROM __TABLE__ GROUP BY m ORDER BY m|SELECT date_trunc('month', ts) AS m, count(*) FROM __TABLE__ GROUP BY m ORDER BY m"
 )
 
+# #1027: round with negative digits (rounded to tens, in the argument's
+# type) and decimal literals typed from their text (`1.50` is
+# DECIMAL(3,2), `2.0` DECIMAL(2,1); an exponent literal is a DOUBLE), over
+# `typed_nulls` (an INTEGER, a DOUBLE and a DECIMAL(9,2), with NULLs).
+TYPED_NULLS=tests/fixtures/parquet/typed_nulls.parquet
+TYPED_NULLS_QUERIES=(
+  "SELECT id, round(n, -1), round(n, -2), round(n * 1000, -3), round(n, -25) FROM __TABLE__ ORDER BY id|SELECT id, round(n, -1), round(n, -2), round(n * 1000, -3), round(n, -25) FROM __TABLE__ ORDER BY id"
+  "SELECT id, round(f, -1), round(f, -400) FROM __TABLE__ ORDER BY id|SELECT id, round(f, -1)::DECIMAL(18,2), round(f, -400)::DECIMAL(18,2) FROM __TABLE__ ORDER BY id"
+  "SELECT id, round(d, -1), round(d, 1) FROM __TABLE__ ORDER BY id|SELECT id, round(d, -1), round(d, 1) FROM __TABLE__ ORDER BY id"
+  "SELECT sum(round(n, -1)), min(round(n, -2)), max(round(n, -2)) FROM __TABLE__|SELECT sum(round(n, -1)), min(round(n, -2)), max(round(n, -2)) FROM __TABLE__"
+  "SELECT id, d * 2.0, d * 1.50, n * 1.50, d - 1.250, d + .5, n * 1. FROM __TABLE__ ORDER BY id|SELECT id, d * 2.0, d * 1.50, n * 1.50, d - 1.250, d + .5, n * 1. FROM __TABLE__ ORDER BY id"
+  "SELECT id, n * 1.5e2, d + 1e-1 FROM __TABLE__ ORDER BY id|SELECT id, (n * 1.5e2)::DECIMAL(18,2), (d + 1e-1)::DECIMAL(18,2) FROM __TABLE__ ORDER BY id"
+)
+
 cargo build --release --example column_oracle -q
 
 fail=0
@@ -243,12 +257,14 @@ for q in "${NULL_TYPES_QUERIES[@]}"; do
   fi
 done
 
-for fixture in "$STRTIME" "$TS_EDGES"; do
+for fixture in "$STRTIME" "$TS_EDGES" "$TYPED_NULLS"; do
   table="$(basename "$fixture" .parquet)"
   if [[ "$fixture" == "$STRTIME" ]]; then
     pairs=("${STRTIME_QUERIES[@]}")
-  else
+  elif [[ "$fixture" == "$TS_EDGES" ]]; then
     pairs=("${TS_EDGES_QUERIES[@]}")
+  else
+    pairs=("${TYPED_NULLS_QUERIES[@]}")
   fi
   for pair in "${pairs[@]}"; do
     db_core_q="${pair%%|*}"

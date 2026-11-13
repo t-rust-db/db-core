@@ -1606,7 +1606,7 @@ impl core::marker::StructuralPartialEq for db_core::parser::ast::JoinOp
 pub enum db_core::parser::ast::Literal
 pub db_core::parser::ast::Literal::Blob(alloc::vec::Vec<u8>)
 pub db_core::parser::ast::Literal::False
-pub db_core::parser::ast::Literal::Float(f64)
+pub db_core::parser::ast::Literal::Float(f64, core::option::Option<alloc::boxed::Box<str>>)
 pub db_core::parser::ast::Literal::Integer(i64)
 pub db_core::parser::ast::Literal::Null
 pub db_core::parser::ast::Literal::Str(alloc::string::String)
@@ -2521,7 +2521,7 @@ pub db_core::parser::row::tokenizer::TokenKind::Eq
 pub db_core::parser::row::tokenizer::TokenKind::Error(alloc::string::String)
 pub db_core::parser::row::tokenizer::TokenKind::Extract
 pub db_core::parser::row::tokenizer::TokenKind::False
-pub db_core::parser::row::tokenizer::TokenKind::Float(f64)
+pub db_core::parser::row::tokenizer::TokenKind::Float(f64, alloc::boxed::Box<str>)
 pub db_core::parser::row::tokenizer::TokenKind::Ge
 pub db_core::parser::row::tokenizer::TokenKind::Gt
 pub db_core::parser::row::tokenizer::TokenKind::Identifier(alloc::string::String)
