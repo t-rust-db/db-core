@@ -4,6 +4,13 @@ All notable changes to db-core. Format follows [Keep a Changelog](https://keepac
 
 **Versioning policy:** one crate, one version, one tag per release.
 
+## [0.241.0] - 2026-11-14
+
+### Added
+
+- Object-store tables: a cold query reads each file's footer in one request (a file up to 64 KiB entirely), fetches a row group's column chunks together, and reads footers and chunks in parallel, bounded per file and per store (`S3Config::prefetch_gap`, `prefetch_per_file`, `max_in_flight`): 10–46× fewer requests and 6–62× shorter chains of requests on a 30-day table (#1059)
+- New `VfsFile::prefetch` (default: nothing) and `RowGroupReader::prefetch` (#1059)
+
 ## [0.240.1] - 2026-11-13
 
 ### Fixed
