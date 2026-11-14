@@ -967,19 +967,95 @@ fn reads<T>(fake: &FakeS3, f: impl FnOnce() -> T) -> (T, usize, u64) {
     )
 }
 
+/// Like [`wide_table`], with files well past the 64 KiB tail read: `pad`
+/// is 512 pseudo-random hex digits a row, which zstd cannot shrink much,
+/// beside a small `k` and `id`. `cfg` adjusts the store's settings.
+fn big_table(
+    fake: &Arc<FakeS3>,
+    tag: &str,
+    cfg: impl FnOnce(&mut S3Config),
+) -> (std::path::PathBuf, S3Store, TableWriter) {
+    let mut config = config(CommitMode::SingleWriter);
+    cfg(&mut config);
+    let s3 = S3Store::with_transport(config, Arc::clone(fake) as Arc<dyn Transport>).unwrap();
+    let local = std::env::temp_dir().join(format!("db-core-s3-big-{tag}-{}", std::process::id()));
+    std::fs::remove_dir_all(&local).ok();
+    let mut w =
+        TableWriter::open_in(&local, Store::S3(s3.clone()), TableOptions::default()).unwrap();
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    for file in 0..3 {
+        for i in 0..400 {
+            let pad: String = (0..32)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    format!("{x:016x}")
+                })
+                .collect();
+            let line = format!(r#"{{"id":{},"k":{},"pad":"{pad}"}}"#, file * 400 + i, i % 5);
+            w.append(line.as_bytes(), Ack::Memory).unwrap();
+        }
+        w.flush_all().unwrap();
+    }
+    (local, s3, w)
+}
+
 #[test]
 fn a_query_reads_only_the_footers_and_the_chunks_it_needs() {
     let fake = FakeS3::new(false);
-    let (local, _, w) = wide_table(&fake, 256 << 20, "needs");
+    let (local, _, w) = big_table(&fake, "needs", |_| {});
     let snapshot = w.snapshot().unwrap();
     let whole: u64 = snapshot.manifest().files.iter().map(|f| f.bytes).sum();
+    assert!(
+        snapshot.manifest().files.iter().all(|f| f.bytes > 64 << 10),
+        "every file is larger than the tail read"
+    );
     let (result, gets, sent) = reads(&fake, || count_k1(&snapshot));
-    assert_eq!(result.rows, vec![vec![Cell::Int(120)]]);
-    // Per file: the footer's tail, the footer, and the `k` chunk; never
-    // the whole object.
-    assert!((3..=3 * 3).contains(&gets), "{gets} GETs");
+    assert_eq!(result.rows, vec![vec![Cell::Int(240)]]);
+    // Per file: one read of its end, which holds the footer (#1059), and
+    // the `k` chunk; never the whole object.
+    assert!((3..=3 * 2).contains(&gets), "{gets} GETs");
     assert!(sent * 4 < whole, "{sent} of {whole} bytes");
     std::fs::remove_dir_all(&local).ok();
+}
+
+#[test]
+fn a_file_no_larger_than_the_tail_read_costs_one_get() {
+    let fake = FakeS3::new(false);
+    let (local, _, w) = wide_table(&fake, 256 << 20, "small");
+    let snapshot = w.snapshot().unwrap();
+    assert!(snapshot
+        .manifest()
+        .files
+        .iter()
+        .all(|f| f.bytes <= 64 << 10));
+    // The tail read holds the whole file; its chunks are read from it.
+    let (result, gets, _) = reads(&fake, || count_k1(&snapshot));
+    assert_eq!(result.rows, vec![vec![Cell::Int(120)]]);
+    assert_eq!(gets, 3, "one GET per file");
+    std::fs::remove_dir_all(&local).ok();
+}
+
+#[test]
+fn a_row_groups_chunks_are_fetched_together() {
+    // `id` and `pad`, with `k`'s chunk between them: one span with a gap
+    // allowed, two without (adjacent chunks merge either way).
+    let sql = "SELECT sum(id), min(length(pad)), count(*) FROM t";
+    let run = |gap: u64, tag: &str| {
+        let fake = FakeS3::new(false);
+        let (local, _, w) = big_table(&fake, tag, |c| c.prefetch_gap = gap);
+        let snapshot = w.snapshot().unwrap();
+        let (result, gets, _) = reads(&fake, || query_snapshot(&snapshot, "t", sql).unwrap());
+        std::fs::remove_dir_all(&local).ok();
+        (result.rows, gets)
+    };
+    let (coalesced, fewer) = run(1 << 20, "coalesced");
+    let (apart, more) = run(0, "apart");
+    assert_eq!(coalesced, apart, "the same answer either way");
+    // Three files of one row group: a read of each file's end, then one
+    // span a file, or two.
+    assert_eq!((fewer, more), (3 + 3, 3 + 3 * 2));
 }
 
 #[test]
@@ -1100,4 +1176,203 @@ fn mcdc__storage_ingest_store_s3_read_at_aacbeb34__v3_a_short_read_is_not_kept()
     // Held as 12 bytes, the object has 10: the range 8..12 comes back
     // with 2, which is not the range asked for.
     assert_eq!(kept_after_read(true, 12), 0);
+}
+
+// ---- Coalesced, parallel prefetch (#1059) ------------------------------
+
+/// A held file of 1000 bytes on a store with `gap` and `budget`.
+fn held_file(fake: &Arc<FakeS3>, gap: u64, budget: u64) -> (S3Store, S3File) {
+    let mut cfg = config(CommitMode::SingleWriter);
+    cfg.prefetch_gap = gap;
+    cfg.read_cache_bytes = budget;
+    let s = S3Store::with_transport(cfg, Arc::clone(fake) as Arc<dyn Transport>).unwrap();
+    s.put("o", &[7u8; 1000]).unwrap();
+    let f = s.open_held("o", 1000).unwrap();
+    (s, f)
+}
+
+#[test]
+fn spans_merge_neighbours_within_the_gap_and_skip_what_is_held() {
+    let fake = FakeS3::new(false);
+    let (_s, f) = held_file(&fake, 10, 1 << 20);
+    // Sorted, merged across a gap of at most 10, adjacent ones joined.
+    assert_eq!(
+        f.spans(&[(100, 10), (0, 10), (15, 5), (20, 5), (200, 50)]),
+        vec![(0, 24), (100, 109), (200, 249)]
+    );
+    // Clipped at the object's end; empty and past-the-end ranges dropped.
+    assert_eq!(f.spans(&[(990, 50), (5, 0), (1000, 5)]), vec![(990, 999)]);
+    // A range already held is not fetched again.
+    f.prefetch(&[(0, 100)]);
+    assert_eq!(f.spans(&[(10, 20), (500, 10)]), vec![(500, 509)]);
+}
+
+#[test]
+fn a_span_the_cache_could_not_hold_is_not_fetched() {
+    let fake = FakeS3::new(false);
+    let (_s, f) = held_file(&fake, 1 << 20, 100);
+    // Two chunks close together but over the budget together stay apart;
+    // one over the budget alone is dropped.
+    assert_eq!(f.spans(&[(0, 60), (70, 60)]), vec![(0, 59), (70, 129)]);
+    assert_eq!(f.spans(&[(0, 200)]), Vec::<(u64, u64)>::new());
+}
+
+#[test]
+fn prefetched_spans_answer_the_reads_that_follow() {
+    for per_file in [1, 8] {
+        let fake = FakeS3::new(false);
+        let mut cfg = config(CommitMode::SingleWriter);
+        cfg.prefetch_gap = 0;
+        cfg.prefetch_per_file = per_file;
+        let s = S3Store::with_transport(cfg, Arc::clone(&fake) as Arc<dyn Transport>).unwrap();
+        let bytes: Vec<u8> = (0..=255).cycle().take(1000).collect();
+        s.put("o", &bytes).unwrap();
+        let f = s.open_held("o", 1000).unwrap();
+        let before = fake.count("GET");
+        f.prefetch(&[(0, 10), (100, 10), (500, 10), (900, 100)]);
+        assert_eq!(fake.count("GET") - before, 4, "per_file {per_file}");
+        let mut buf = [0u8; 10];
+        for at in [0u64, 100, 500, 990] {
+            assert_eq!(f.read_at(at, &mut buf).unwrap(), 10);
+            assert_eq!(&buf[..], &bytes[at as usize..at as usize + 10]);
+        }
+        assert_eq!(fake.count("GET") - before, 4, "no GET after the prefetch");
+    }
+}
+
+#[test]
+fn a_file_read_once_does_not_prefetch() {
+    let fake = FakeS3::new(false);
+    let s = store(&fake, CommitMode::SingleWriter);
+    s.put("o", &[1u8; 100]).unwrap();
+    let f = s.open("o").unwrap();
+    let before = fake.count("GET");
+    f.prefetch(&[(0, 10), (50, 10)]);
+    assert_eq!(fake.count("GET"), before);
+}
+
+#[test]
+fn a_failed_prefetch_leaves_the_error_to_the_read() {
+    let fake = FakeS3::new(false);
+    let s = store(&fake, CommitMode::SingleWriter);
+    // Held as an object that is not there: the prefetch fails quietly,
+    // the read reports it.
+    let f = s.open_held("missing", 100).unwrap();
+    f.prefetch(&[(0, 10), (50, 10)]);
+    let mut buf = [0u8; 10];
+    assert_eq!(
+        f.read_at(0, &mut buf).unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+}
+
+#[test]
+fn requests_in_flight_stay_within_the_bound() {
+    let bound = InFlight::new(3);
+    let now = AtomicUsize::new(0);
+    let peak = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..16 {
+            scope.spawn(|| {
+                let _slot = bound.enter();
+                let n = now.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(n, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                now.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    });
+    let peak = peak.load(Ordering::SeqCst);
+    assert!((1..=3).contains(&peak), "peak {peak}");
+    // A bound of 0 is taken as 1, never a deadlock.
+    let one = InFlight::new(0);
+    drop(one.enter());
+    drop(one.enter());
+}
+
+// storage_ingest_store_s3_spans_5d745da0: `start <= end + gap + 1 &&
+// merged size < budget` -- a neighbour joins the span.
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_spans_5d745da0__v1_a_close_neighbour_joins() {
+    let fake = FakeS3::new(false);
+    let (_s, f) = held_file(&fake, 10, 1 << 20);
+    assert_eq!(f.spans(&[(0, 10), (15, 10)]), vec![(0, 24)]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_spans_5d745da0__v2_a_far_neighbour_stays_apart() {
+    let fake = FakeS3::new(false);
+    let (_s, f) = held_file(&fake, 10, 1 << 20);
+    assert_eq!(f.spans(&[(0, 10), (50, 10)]), vec![(0, 9), (50, 59)]);
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_spans_5d745da0__v3_a_close_neighbour_too_big_together_stays_apart()
+{
+    let fake = FakeS3::new(false);
+    let (_s, f) = held_file(&fake, 10, 30);
+    assert_eq!(f.spans(&[(0, 20), (25, 20)]), vec![(0, 19), (25, 44)]);
+}
+
+// storage_ingest_store_s3_prefetch_890a9d60: `spans.len() <= 1 || width
+// == 1` -- fetched on this thread, else on scoped threads; held either way.
+fn prefetch_holds(per_file: usize, ranges: &[(u64, u64)]) -> bool {
+    let fake = FakeS3::new(false);
+    let mut cfg = config(CommitMode::SingleWriter);
+    cfg.prefetch_gap = 0;
+    cfg.prefetch_per_file = per_file;
+    let s = S3Store::with_transport(cfg, Arc::clone(&fake) as Arc<dyn Transport>).unwrap();
+    s.put("o", &[3u8; 1000]).unwrap();
+    let f = s.open_held("o", 1000).unwrap();
+    f.prefetch(ranges);
+    ranges
+        .iter()
+        .all(|&(start, len)| s.client.ranges.holds("o", start, len))
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_prefetch_890a9d60__v1_one_span_is_fetched_here() {
+    assert!(prefetch_holds(8, &[(0, 10)]));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_prefetch_890a9d60__v2_a_width_of_one_is_fetched_here() {
+    assert!(prefetch_holds(1, &[(0, 10), (500, 10)]));
+}
+
+#[test]
+#[allow(non_snake_case)]
+fn mcdc__storage_ingest_store_s3_prefetch_890a9d60__v3_several_spans_are_fetched_in_parallel() {
+    assert!(prefetch_holds(8, &[(0, 10), (300, 10), (600, 10)]));
+}
+
+#[test]
+fn a_snapshots_footers_are_read_at_once_and_kept() {
+    let fake = FakeS3::new(false);
+    let (local, _, w) = big_table(&fake, "footers", |_| {});
+    let snapshot = w.snapshot().unwrap();
+    // One read of each file's end, together.
+    let ((), gets, _) = reads(&fake, || {
+        crate::storage::ingest::snapshot::read_footers(
+            &snapshot.held_files().map(|(_, h)| h).collect::<Vec<_>>(),
+        );
+    });
+    assert_eq!(gets, 3);
+    // Parsed and kept: a second call reads nothing, and the query reads
+    // only its chunks (one span per file).
+    let ((), again, _) = reads(&fake, || {
+        crate::storage::ingest::snapshot::read_footers(
+            &snapshot.held_files().map(|(_, h)| h).collect::<Vec<_>>(),
+        );
+    });
+    assert_eq!(again, 0);
+    let (result, query, _) = reads(&fake, || count_k1(&snapshot));
+    assert_eq!(result.rows, vec![vec![Cell::Int(240)]]);
+    assert_eq!(query, 3);
+    std::fs::remove_dir_all(&local).ok();
 }

@@ -137,3 +137,93 @@ fn open_file_refuses_a_footer_longer_than_the_file() {
     let handle = PosixVfs.open(&temp.0).unwrap();
     assert!(ParquetFile::open_file(&handle).is_err());
 }
+
+/// A file in memory that counts its reads (#1059).
+struct CountingFile {
+    bytes: Vec<u8>,
+    reads: std::sync::atomic::AtomicUsize,
+}
+
+impl CountingFile {
+    fn new(bytes: Vec<u8>) -> Self {
+        CountingFile {
+            bytes,
+            reads: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn reads(&self) -> usize {
+        self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl db_core::storage::column::vfs::VfsFile for CountingFile {
+    fn size(&self) -> std::io::Result<u64> {
+        Ok(self.bytes.len() as u64)
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let from = usize::try_from(offset).unwrap().min(self.bytes.len());
+        let n = buf.len().min(self.bytes.len() - from);
+        buf[..n].copy_from_slice(&self.bytes[from..from + n]);
+        Ok(n)
+    }
+
+    fn mmap(&self) -> std::io::Result<db_core::storage::column::MmapRegion> {
+        Ok(db_core::storage::column::MmapRegion::Owned(
+            self.bytes.clone().into(),
+        ))
+    }
+}
+
+/// A one-column file whose footer carries `pad` bytes of key-value
+/// metadata, so its size is the footer's.
+fn file_with_footer_padding(pad: usize) -> Vec<u8> {
+    use db_core::storage::parquet::writer::{
+        ColumnSpec, ColumnType, ColumnValues, ParquetWriter, WriterOptions,
+    };
+    let options = WriterOptions {
+        key_value_metadata: vec![("pad".to_string(), "x".repeat(pad))],
+        ..WriterOptions::default()
+    };
+    let schema = vec![ColumnSpec::new("n", ColumnType::Int64, false)];
+    let mut w = ParquetWriter::new(Vec::new(), schema, options).unwrap();
+    w.write_columns(vec![ColumnValues::Int64((0..10).map(Some).collect())])
+        .unwrap();
+    w.finish().unwrap().0
+}
+
+/// #1059: the end of the file is read at once, so a footer within 64 KiB
+/// costs one read and a larger one a second; either way the file opens
+/// as `open` does.
+#[test]
+fn open_file_reads_a_footer_within_the_tail_in_one_read() {
+    for (pad, reads) in [(0, 1), (100 << 10, 2)] {
+        let bytes = file_with_footer_padding(pad);
+        let file = CountingFile::new(bytes.clone());
+        let opened = ParquetFile::open_file(&file).unwrap();
+        assert_eq!(file.reads(), reads, "footer padded by {pad}");
+        assert_eq!(
+            read_all(&opened),
+            read_all(&ParquetFile::open(&bytes).unwrap())
+        );
+    }
+    // A fixture smaller than the tail read: one read of the whole file.
+    let bytes = fixture("production.parquet");
+    assert!(bytes.len() < 64 << 10);
+    let file = CountingFile::new(bytes);
+    ParquetFile::open_file(&file).unwrap();
+    assert_eq!(file.reads(), 1);
+}
+
+#[test]
+fn open_file_refuses_a_file_shorter_than_its_length_and_magic() {
+    for bytes in [Vec::new(), b"PAR1".to_vec(), b"1234PAR".to_vec()] {
+        let file = CountingFile::new(bytes.clone());
+        assert!(ParquetFile::open_file(&file).is_err(), "{bytes:?}");
+    }
+    // Eight bytes that end in no magic.
+    let file = CountingFile::new(b"\0\0\0\0PAR2".to_vec());
+    assert!(ParquetFile::open_file(&file).is_err());
+}

@@ -571,6 +571,9 @@ impl RowGroupSegment<'_, '_> {
         num_rows: usize,
         leaves: &[Leaf],
     ) -> Result<Batch, VmError> {
+        // #1059: a remote file fetches these chunks now, coalesced and in
+        // parallel; the reads below then answer locally.
+        rg.prefetch(leaves.iter().map(|(_, index, _)| *index));
         let list_reads = ListReads::of(self.program);
         // #800: the typed leaves decode on the spare threads; a `Value`
         // column holds `Rc`s and is not `Send`, so it decodes in order
@@ -645,7 +648,9 @@ impl RowGroupSegment<'_, '_> {
         let rg = self.row_group()?;
         let list_reads = ListReads::of(self.program);
         let mut batch = Batch::new(positions.len());
-        for (name, index, physical_type) in self.leaves_named(columns)? {
+        let leaves = self.leaves_named(columns)?;
+        rg.prefetch(leaves.iter().map(|(_, index, _)| *index));
+        for (name, index, physical_type) in leaves {
             let levels_only = list_reads.get(&name);
             let decoded = load_leaf_at(
                 &rg,
@@ -729,6 +734,7 @@ impl Segment for RowGroupSegment<'_, '_> {
             .collect();
         let list_reads = ListReads::of(self.program);
         let mut predicate_batch = Batch::new(num_rows);
+        rg.prefetch(predicate_leaves.iter().map(|(_, index, _)| *index));
         for (name, index, physical_type) in &predicate_leaves {
             let levels_only = list_reads.get(name);
             let decoded = load_leaf(&rg, *index, *physical_type, self.bits(name), levels_only)
@@ -775,6 +781,11 @@ impl Segment for RowGroupSegment<'_, '_> {
             .iter()
             .filter(|(name, ..)| !predicate_names.iter().any(|n| n == name))
             .collect();
+        // #704: with no surviving row these pages are never read, so they
+        // are not fetched either.
+        if !indices.is_empty() {
+            rg.prefetch(projection_leaves.iter().map(|(_, index, _)| *index));
+        }
         for (name, index, physical_type) in &projection_leaves {
             // #704: no row survived, so the column is empty: its pages
             // are never read. It stays in the batch for `LoadColumn`.
@@ -1246,7 +1257,12 @@ fn open_files<'s>(
         ),
     >,
 ) -> Result<Vec<ParquetFile<'s>>, EngineError> {
+    let files: Vec<_> = files.collect();
+    // #1059: their footers fetched at once, not one file after another.
+    let held: Vec<_> = files.iter().map(|(_, held)| *held).collect();
+    crate::storage::ingest::snapshot::read_footers(&held);
     files
+        .into_iter()
         .map(|(entry, held)| {
             held.parquet()
                 .map_err(|e| EngineError::new(ErrorKind::Open, format!("{}: {e}", entry.path)))

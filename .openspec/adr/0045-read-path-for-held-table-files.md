@@ -56,11 +56,26 @@ evict what queries read. Local files stay on `mmap`.
 - The unit is the whole column chunk, as `column_chunk_bytes` reads it
   today. There is no page index or bloom filter yet (#590), so nothing finer
   could be pruned, and a Snappy page cannot be partly decompressed.
-- No prefetch or coalescing of ranges at first. Chunks are loaded lazily by
-  the segment workers, and late materialization (ADR 0026) skips columns a
-  `WHERE` rejects, so fetching a precomputed list would fetch more. A
-  request costs 20-100 ms before its first byte; coalescing is the next
-  step if the request count shows in the probe.
+- **Fewer, wider requests (#1059).** A request costs 20-100 ms before its
+  first byte, so the request count is what a cold query pays:
+  - `open_file` reads the last 64 KiB at once: the footer's length, and the
+    footer itself when it fits, so a footer costs one GET, not two. A file
+    no larger than that is read whole by it, and its chunks then come
+    from the cache.
+  - A segment tells the file which chunks it is about to read
+    (`RowGroupReader::prefetch` -> `VfsFile::prefetch`, a no-op unless
+    remote) in each load: the eager load, both phases of a late
+    materialization (ADR 0026: the projection's only when a row survived)
+    and a top-N gather. Late materialization still decides which columns;
+    only the GET is wider. The S3 file merges chunks at most
+    `S3Config::prefetch_gap` apart (1 MiB) into one span, skips what is
+    held, and fetches up to `prefetch_per_file` spans at once (8). The
+    read cache answers a read from any held range that contains it.
+  - A query reads the footers of the files it kept (after key-range
+    pruning) 16 at a time, not one file after another.
+  - Every ranged GET counts against `S3Config::max_in_flight` (64) for the
+    store. A failed prefetch is not an error: the read that wants the
+    bytes fetches them and reports one.
 
 ## Consequences
 
@@ -71,10 +86,14 @@ evict what queries read. Local files stay on `mmap`.
   the bytes it already held whole, and it goes with the file.
 - On the S3 test transport, a filtered `count(*)` over three files of a
   wide table read 7.6 KB in 9 GETs where the whole objects are 45.8 KB in
-  3; the same query again read nothing. The request count is the cost: a
-  footer read is two GETs per file once per reader, a chunk one per column
-  per row group. Fetching the tail and the footer in one speculative read,
-  and coalescing adjacent chunks, are the next steps if it shows.
+  3; the same query again read nothing.
+- On a 30-day, 33-file table of 19 columns behind a fake bucket that counts
+  requests (1 ms each), the cold requests of five API calls fell from
+  1506/356/666/40/906 to 33/10/33/4/33, and the longest chain of requests
+  one after another from 518/132/435/28/493 to 42/11/9/5/8 (#1059). Those
+  files are smaller than the tail read, so each is now read whole in one
+  GET: more bytes (306 KB instead of 253 KB for the largest call) for far
+  fewer requests.
 - `snapshot_files` and `snapshot_segments*` keep their signatures: they
   already return `ParquetFile`, so a caller that plans and runs itself gets
   the cached footers and the ranged reads without a change.

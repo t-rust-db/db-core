@@ -362,6 +362,11 @@ impl Chunk<'_> {
     }
 }
 
+/// How much of a file's end [`ParquetFile::open_file`] reads at once
+/// (#1059): the length and magic, and the footer itself when it is no
+/// larger, so a footer usually costs one read; a larger one, a second.
+const TAIL_READ: u64 = 64 * 1024;
+
 /// Where a [`ParquetFile`]'s column chunks come from.
 enum Source<'a> {
     /// The whole file, mapped or held in memory: chunks are slices of it.
@@ -491,15 +496,28 @@ impl<'a> ParquetFile<'a> {
     /// mapping keeps every page it touched resident until the mapping is
     /// dropped. A scan of one column then peaks at the chunks in flight,
     /// not at that column's size in the file.
+    ///
+    /// The end of the file is read at once, up to [`TAIL_READ`] bytes
+    /// (#1059): the footer's length and magic, and for most files the
+    /// whole footer, so a remote file's footer costs one request, not two.
     pub fn open_file(file: &'a dyn VfsFile) -> Result<Self> {
         let len = file.size().map_err(FileError::Io)?;
-        let mut tail = [0u8; footer::FOOTER_LEN];
-        let tail_at = len
-            .checked_sub(footer::FOOTER_LEN as u64)
-            .ok_or(FooterError::FileTooShort)?;
+        let tail_len = len.min(TAIL_READ);
+        if tail_len < footer::FOOTER_LEN as u64 {
+            return Err(FooterError::FileTooShort.into());
+        }
+        let tail_at = len.checked_sub(tail_len).ok_or(FooterError::FileTooShort)?;
+        let mut tail = vec![0u8; usize::try_from(tail_len).map_err(|_| FooterError::FileTooShort)?];
         read_exact_at(file, tail_at, &mut tail)?;
-        let [l0, l1, l2, l3, magic @ ..] = tail;
-        if magic != *footer::MAGIC {
+        let last = tail
+            .len()
+            .checked_sub(footer::FOOTER_LEN)
+            .and_then(|at| tail.get(at..))
+            .ok_or(FooterError::FileTooShort)?;
+        let &[l0, l1, l2, l3, m0, m1, m2, m3] = last else {
+            return Err(FooterError::FileTooShort.into());
+        };
+        if [m0, m1, m2, m3] != *footer::MAGIC {
             return Err(FooterError::BadMagic.into());
         }
         let footer_len = u64::from(u32::from_le_bytes([l0, l1, l2, l3]))
@@ -509,10 +527,17 @@ impl<'a> ParquetFile<'a> {
         let footer_at = len
             .checked_sub(footer_len)
             .ok_or(FooterError::FileTooShort)?;
-        let mut bytes =
-            vec![0u8; usize::try_from(footer_len).map_err(|_| FooterError::FileTooShort)?];
-        read_exact_at(file, footer_at, &mut bytes)?;
-        let metadata = footer::parse_footer(&bytes)?;
+        let metadata = if footer_len <= tail_len {
+            // Already read: the footer is the end of the tail.
+            let from = usize::try_from(tail_len.saturating_sub(footer_len))
+                .map_err(|_| FooterError::FileTooShort)?;
+            footer::parse_footer(tail.get(from..).ok_or(FooterError::FileTooShort)?)?
+        } else {
+            let mut bytes =
+                vec![0u8; usize::try_from(footer_len).map_err(|_| FooterError::FileTooShort)?];
+            read_exact_at(file, footer_at, &mut bytes)?;
+            footer::parse_footer(&bytes)?
+        };
         Ok(Self::with_metadata(metadata, Source::File { file, len }))
     }
 
@@ -791,18 +816,7 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
     /// adding it to `data_page_offset` instead over-extends the slice into
     /// the next column's bytes whenever a dictionary page precedes.
     fn column_chunk_bytes(&self, column_index: usize) -> Result<Chunk<'a>> {
-        let meta = self.column_meta(column_index)?;
-        let start_i64 = meta.dictionary_page_offset.unwrap_or(meta.data_page_offset);
-        let start = usize::try_from(start_i64).map_err(|_| FileError::InvalidMetadata {
-            field: "column_chunk.page_offset",
-            value: start_i64,
-        })?;
-        let size = usize::try_from(meta.total_compressed_size).map_err(|_| {
-            FileError::InvalidMetadata {
-                field: "column_chunk.total_compressed_size",
-                value: meta.total_compressed_size,
-            }
-        })?;
+        let (start, size) = self.chunk_span(column_index)?;
         let end = start.checked_add(size).ok_or(FileError::ChunkOutOfBounds)?;
         match self.file.source {
             Source::Bytes(data) => data
@@ -820,6 +834,44 @@ impl<'a, 'm> RowGroupReader<'a, 'm> {
                 read_exact_at(file, at, &mut buf)?;
                 Ok(Chunk::Read(buf))
             }
+        }
+    }
+
+    /// Where column chunk `column_index` lies in the file: its first page
+    /// (the dictionary page when there is one) and its compressed size.
+    fn chunk_span(&self, column_index: usize) -> Result<(usize, usize)> {
+        let meta = self.column_meta(column_index)?;
+        let start_i64 = meta.dictionary_page_offset.unwrap_or(meta.data_page_offset);
+        let start = usize::try_from(start_i64).map_err(|_| FileError::InvalidMetadata {
+            field: "column_chunk.page_offset",
+            value: start_i64,
+        })?;
+        let size = usize::try_from(meta.total_compressed_size).map_err(|_| {
+            FileError::InvalidMetadata {
+                field: "column_chunk.total_compressed_size",
+                value: meta.total_compressed_size,
+            }
+        })?;
+        Ok((start, size))
+    }
+
+    /// Tells the file that the chunks of `leaves` are about to be read
+    /// (#1059), so a remote one fetches them now, coalesced and in
+    /// parallel. Nothing for a file held in memory; a chunk whose span is
+    /// invalid is left to the read that follows, which reports it.
+    pub fn prefetch(&self, leaves: impl IntoIterator<Item = usize>) {
+        let Source::File { file, .. } = self.file.source else {
+            return;
+        };
+        let ranges: Vec<(u64, u64)> = leaves
+            .into_iter()
+            .filter_map(|leaf| self.chunk_span(leaf).ok())
+            .filter_map(|(start, size)| {
+                Some((u64::try_from(start).ok()?, u64::try_from(size).ok()?))
+            })
+            .collect();
+        if !ranges.is_empty() {
+            file.prefetch(&ranges);
         }
     }
 
