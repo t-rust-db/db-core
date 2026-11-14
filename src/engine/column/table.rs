@@ -262,11 +262,17 @@ pub fn query_snapshot(
     .map_err(plan_err)?;
     let requests = resolve(&schema, &program.columns_to_load(), &[])?;
     let keep = file_flags(snapshot, &schema, select.where_clause.as_ref());
-    let files = snapshot
+    let kept: Vec<_> = snapshot
         .held_files()
         .zip(keep)
         .filter(|(_, keep)| *keep)
         .map(|(file, _)| file)
+        .collect();
+    // #1059: the footers of the files the query reads, fetched at once.
+    let held: Vec<_> = kept.iter().map(|(_, held)| *held).collect();
+    crate::storage::ingest::snapshot::read_footers(&held);
+    let files = kept
+        .into_iter()
         .map(|(entry, held)| {
             held.parquet()
                 .map_err(|e| open_error(format!("{}: {e}", entry.path)))

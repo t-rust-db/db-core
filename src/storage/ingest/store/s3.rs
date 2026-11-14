@@ -84,6 +84,15 @@ pub struct S3Config {
     /// 0 keeps none). A table's files never change, so a kept range never
     /// goes stale (#1052, ADR 0045).
     pub read_cache_bytes: u64,
+    /// Column chunks a query is about to read are fetched together when
+    /// the gap between them is at most this many bytes (1 MiB): one GET
+    /// over the span instead of one per chunk (#1059).
+    pub prefetch_gap: u64,
+    /// How many of one file's coalesced spans are fetched at once (8).
+    pub prefetch_per_file: usize,
+    /// How many ranged GETs the store has in flight at most, over every
+    /// file and query (64).
+    pub max_in_flight: usize,
 }
 
 impl S3Config {
@@ -106,6 +115,9 @@ impl S3Config {
             multipart_threshold: 64 << 20,
             part_size: 16 << 20,
             read_cache_bytes: 256 << 20,
+            prefetch_gap: 1 << 20,
+            prefetch_per_file: 8,
+            max_in_flight: 64,
         }
     }
 }
@@ -218,6 +230,54 @@ struct Client {
     fence: ManifestFence,
     /// What held files read, for the next query (#1052).
     ranges: RangeCache,
+    /// Ranged GETs in flight, at most `cfg.max_in_flight` (#1059).
+    in_flight: InFlight,
+}
+
+/// A counting bound on concurrent requests (#1059): `enter` waits while
+/// `max` are in flight; the guard it returns leaves on drop.
+#[derive(Debug)]
+struct InFlight {
+    max: usize,
+    count: std::sync::Mutex<usize>,
+    freed: std::sync::Condvar,
+}
+
+impl InFlight {
+    fn new(max: usize) -> InFlight {
+        InFlight {
+            max: max.max(1),
+            count: std::sync::Mutex::new(0),
+            freed: std::sync::Condvar::new(),
+        }
+    }
+
+    fn enter(&self) -> InFlightGuard<'_> {
+        let poisoned = std::sync::PoisonError::into_inner;
+        let mut count = self.count.lock().unwrap_or_else(poisoned);
+        while *count >= self.max {
+            count = self.freed.wait(count).unwrap_or_else(poisoned);
+        }
+        *count = count.saturating_add(1);
+        InFlightGuard { bound: self }
+    }
+}
+
+/// One request in flight; leaves its [`InFlight`] on drop.
+struct InFlightGuard<'a> {
+    bound: &'a InFlight,
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        let mut count = self
+            .bound
+            .count
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *count = count.saturating_sub(1);
+        self.bound.freed.notify_one();
+    }
 }
 
 impl std::fmt::Debug for Client {
@@ -573,12 +633,14 @@ impl S3Store {
         let endpoint = Endpoint::parse(&cfg.endpoint)?;
         let mode = cfg.commit;
         let ranges = RangeCache::new(cfg.read_cache_bytes);
+        let in_flight = InFlight::new(cfg.max_in_flight);
         let client = Arc::new(Client {
             cfg,
             endpoint,
             transport,
             fence: ManifestFence::default(),
             ranges,
+            in_flight,
         });
         let conditional = match mode {
             CommitMode::SingleWriter => false,
@@ -659,6 +721,84 @@ fn copy_into(buf: &mut [u8], from: &[u8]) -> usize {
     n
 }
 
+impl S3File {
+    /// The bytes `offset..=last` by one ranged GET (fewer at the object's
+    /// end), within the store's bound on requests in flight.
+    fn fetch(&self, offset: u64, last: u64) -> io::Result<Vec<u8>> {
+        let len = usize::try_from(last.saturating_sub(offset).saturating_add(1)).unwrap_or(0);
+        let range = format!("bytes={offset}-{last}");
+        let resp = {
+            let _slot = self.client.in_flight.enter();
+            Client::expect(
+                self.client.call_retrying(
+                    "GET",
+                    Some(&self.key),
+                    &[],
+                    &[("range".to_string(), range)],
+                    &[],
+                )?,
+                &[],
+            )?
+        };
+        // A server that ignores Range sends the whole object.
+        let mut body = if resp.status == 206 {
+            resp.body
+        } else {
+            usize::try_from(offset)
+                .ok()
+                .and_then(|o| resp.body.get(o..))
+                .unwrap_or_default()
+                .to_vec()
+        };
+        body.truncate(len);
+        Ok(body)
+    }
+
+    /// The `(start, last)` spans to fetch for `ranges`: within the object,
+    /// not held yet, sorted and merged across gaps of at most
+    /// `prefetch_gap`; a span the cache could not hold is not fetched.
+    fn spans(&self, ranges: &[(u64, u64)]) -> Vec<(u64, u64)> {
+        let mut wanted: Vec<(u64, u64)> = ranges
+            .iter()
+            .filter(|&&(start, len)| len > 0 && start < self.size)
+            .filter(|&&(start, len)| !self.client.ranges.holds(&self.key, start, len))
+            .map(|&(start, len)| {
+                (
+                    start,
+                    start.saturating_add(len).min(self.size).saturating_sub(1),
+                )
+            })
+            .collect();
+        wanted.sort_unstable();
+        let gap = self.client.cfg.prefetch_gap;
+        let budget = self.client.ranges.budget();
+        let mut spans: Vec<(u64, u64)> = Vec::new();
+        for (start, last) in wanted {
+            match spans.last_mut() {
+                Some(span)
+                    if start <= span.1.saturating_add(gap).saturating_add(1)
+                        && last.max(span.1).saturating_sub(span.0) < budget =>
+                {
+                    span.1 = span.1.max(last);
+                }
+                _ => spans.push((start, last)),
+            }
+        }
+        spans.retain(|&(start, last)| last.saturating_sub(start) < budget);
+        spans
+    }
+
+    /// Fetches one span into the read cache; an error is left to the read
+    /// that wants the bytes.
+    fn prefetch_span(&self, start: u64, last: u64) {
+        if let Ok(body) = self.fetch(start, last) {
+            if !body.is_empty() {
+                self.client.ranges.insert(&self.key, start, Arc::from(body));
+            }
+        }
+    }
+}
+
 impl VfsFile for S3File {
     fn size(&self) -> io::Result<u64> {
         Ok(self.size)
@@ -672,37 +812,50 @@ impl VfsFile for S3File {
         let last = offset.saturating_add(want).min(self.size).saturating_sub(1);
         let len = usize::try_from(last.saturating_sub(offset).saturating_add(1)).unwrap_or(0);
         if self.cached {
-            if let Some(held) = self.client.ranges.get(&self.key, offset, len) {
-                return Ok(copy_into(buf, &held));
+            if let Some(to) = buf.get_mut(..len) {
+                if self.client.ranges.read_into(&self.key, offset, to) {
+                    return Ok(len);
+                }
             }
         }
-        let range = format!("bytes={offset}-{last}");
-        let resp = Client::expect(
-            self.client.call_retrying(
-                "GET",
-                Some(&self.key),
-                &[],
-                &[("range".to_string(), range)],
-                &[],
-            )?,
-            &[],
-        )?;
-        // A server that ignores Range sends the whole object.
-        let body = if resp.status == 206 {
-            resp.body.as_slice()
-        } else {
-            usize::try_from(offset)
-                .ok()
-                .and_then(|o| resp.body.get(o..))
-                .unwrap_or_default()
-        };
-        let body = body.get(..len).unwrap_or(body);
+        let body = self.fetch(offset, last)?;
         if self.cached && body.len() == len {
             self.client
                 .ranges
-                .insert(&self.key, offset, Arc::from(body));
+                .insert(&self.key, offset, Arc::from(body.as_slice()));
         }
-        Ok(copy_into(buf, body))
+        Ok(copy_into(buf, &body))
+    }
+
+    /// Fetches `ranges` (`(offset, len)` each) into the read cache now
+    /// (#1059): the ones not held yet, sorted, merged with a neighbour at
+    /// most `prefetch_gap` bytes away, and `prefetch_per_file` spans at a
+    /// time. A file read once (not held) does nothing; a span that fails
+    /// is left to the read that follows, which reports the error.
+    fn prefetch(&self, ranges: &[(u64, u64)]) {
+        if !self.cached {
+            return;
+        }
+        let spans = self.spans(ranges);
+        let width = self.client.cfg.prefetch_per_file.max(1);
+        if spans.len() <= 1 || width == 1 {
+            for &(start, last) in &spans {
+                self.prefetch_span(start, last);
+            }
+            return;
+        }
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..width.min(spans.len()) {
+                scope.spawn(|| {
+                    while let Some(&(start, last)) =
+                        spans.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                    {
+                        self.prefetch_span(start, last);
+                    }
+                });
+            }
+        });
     }
 
     fn mmap(&self) -> io::Result<MmapRegion> {

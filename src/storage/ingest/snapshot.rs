@@ -106,6 +106,15 @@ impl HeldFile {
         }
     }
 
+    /// Whether this file is read by range (an object store's).
+    fn is_ranged(&self) -> bool {
+        match &self.body {
+            Body::Mapped(_) => false,
+            #[cfg(any(feature = "storage-s3", test))]
+            Body::Ranged { .. } => true,
+        }
+    }
+
     /// The whole file. An object read by range is fetched whole the first
     /// time (one GET), and kept.
     pub(crate) fn bytes(&self) -> io::Result<&[u8]> {
@@ -148,6 +157,40 @@ impl HeldFile {
             }
         }
     }
+}
+
+/// How many held files' footers [`read_footers`] fetches at once.
+const FOOTERS_AT_ONCE: usize = 16;
+
+/// Parses the footers of `files` that are read by range and not parsed
+/// yet, [`FOOTERS_AT_ONCE`] at a time (#1059): opening them one after
+/// another would wait a request's latency per file before a query reads
+/// anything. A mapped file's footer is parsed when it is opened, as
+/// before. A footer that fails here fails again, with its error, when the
+/// file is opened.
+pub(crate) fn read_footers(files: &[&HeldFile]) {
+    let pending: Vec<&HeldFile> = files
+        .iter()
+        .copied()
+        .filter(|f| f.is_ranged() && f.footer.get().is_none())
+        .collect();
+    if pending.len() < 2 {
+        return;
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..pending.len().min(FOOTERS_AT_ONCE) {
+            scope.spawn(|| {
+                while let Some(file) =
+                    pending.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                {
+                    // Parsed into the file's footer cell; an error is the
+                    // later open's to report.
+                    drop(file.parquet());
+                }
+            });
+        }
+    });
 }
 
 /// How often [`Snapshot::open`] re-reads after a flush moved on.
@@ -337,6 +380,8 @@ impl Snapshot {
     /// footer and every page.
     fn compute_schema(&self) -> Result<Vec<ColumnSpec>, IngestError> {
         let mut specs = predefined_specs();
+        let held: Vec<&HeldFile> = self.held_files().map(|(_, held)| held).collect();
+        read_footers(&held);
         for (entry, held) in self.held_files() {
             let file = held
                 .parquet()

@@ -31,6 +31,15 @@ pub trait VfsFile: Send + Sync {
     /// in-memory VFS) return a region that simply wraps the buffer they
     /// already hold.
     fn mmap(&self) -> io::Result<MmapRegion>;
+
+    /// A hint that `ranges` (`(offset, len)` each) are about to be read
+    /// (#1059): a remote file fetches them now, coalesced and in parallel,
+    /// so the reads that follow are answered locally. Nothing by default;
+    /// a range that fails here is fetched, and its error reported, by the
+    /// read that follows.
+    fn prefetch(&self, ranges: &[(u64, u64)]) {
+        let _ = ranges;
+    }
 }
 
 /// A read-only view over a whole file's bytes, however the backend

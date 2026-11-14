@@ -166,6 +166,16 @@ impl VfsFile for StoreFile {
             StoreFile::Memory(f) => f.mmap(),
         }
     }
+
+    fn prefetch(&self, ranges: &[(u64, u64)]) {
+        match self {
+            StoreFile::Local(f) => f.prefetch(ranges),
+            #[cfg(feature = "storage-s3")]
+            StoreFile::S3(f) => f.prefetch(ranges),
+            #[cfg(test)]
+            StoreFile::Memory(f) => f.prefetch(ranges),
+        }
+    }
 }
 
 impl Store {

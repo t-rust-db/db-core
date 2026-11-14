@@ -2769,6 +2769,7 @@ pub mod db_core::storage::column::memory
 pub struct db_core::storage::column::memory::MemoryFile
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::memory::MemoryFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::memory::MemoryFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::memory::MemoryFile::size(&self) -> core::io::error::Result<u64>
 pub struct db_core::storage::column::memory::MemoryVfs
@@ -3271,6 +3272,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_s
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::prefetch(&self, impl core::iter::traits::collect::IntoIterator<Item = usize>)
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -3786,6 +3788,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_s
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::prefetch(&self, impl core::iter::traits::collect::IntoIterator<Item = usize>)
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -3823,6 +3826,7 @@ pub mod db_core::storage::column::posix
 pub struct db_core::storage::column::posix::PosixFile
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::posix::PosixFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
 pub struct db_core::storage::column::posix::PosixVfs
@@ -3849,22 +3853,27 @@ pub type db_core::storage::column::posix::PosixVfs::File = db_core::storage::col
 pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub trait db_core::storage::column::vfs::VfsFile: core::marker::Send + core::marker::Sync
 pub fn db_core::storage::column::vfs::VfsFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::vfs::VfsFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::vfs::VfsFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::vfs::VfsFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::memory::MemoryFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::memory::MemoryFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::memory::MemoryFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::posix::PosixFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::s3::S3File
 pub fn db_core::storage::ingest::store::s3::S3File::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::s3::S3File::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::s3::S3File::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::s3::S3File::size(&self) -> core::io::error::Result<u64>
 pub enum db_core::storage::column::Annotation
@@ -3972,6 +3981,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_s
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::prefetch(&self, impl core::iter::traits::collect::IntoIterator<Item = usize>)
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -4015,22 +4025,27 @@ pub type db_core::storage::column::posix::PosixVfs::File = db_core::storage::col
 pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub trait db_core::storage::column::VfsFile: core::marker::Send + core::marker::Sync
 pub fn db_core::storage::column::VfsFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::VfsFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::VfsFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::VfsFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::memory::MemoryFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::memory::MemoryFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::memory::MemoryFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::posix::PosixFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::s3::S3File
 pub fn db_core::storage::ingest::store::s3::S3File::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::s3::S3File::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::s3::S3File::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::s3::S3File::size(&self) -> core::io::error::Result<u64>
 pub fn db_core::storage::column::annotation(&db_core::storage::parquet::parquet_file::RowGroupReader<'_, '_>, usize) -> db_core::storage::column::decode::Annotation
@@ -4507,9 +4522,12 @@ pub db_core::storage::ingest::store::s3::S3Config::commit: db_core::storage::ing
 pub db_core::storage::ingest::store::s3::S3Config::credentials: db_core::storage::ingest::store::s3::CredentialSource
 pub db_core::storage::ingest::store::s3::S3Config::endpoint: alloc::string::String
 pub db_core::storage::ingest::store::s3::S3Config::lease_ttl: core::time::Duration
+pub db_core::storage::ingest::store::s3::S3Config::max_in_flight: usize
 pub db_core::storage::ingest::store::s3::S3Config::multipart_threshold: u64
 pub db_core::storage::ingest::store::s3::S3Config::part_size: usize
 pub db_core::storage::ingest::store::s3::S3Config::path_style: bool
+pub db_core::storage::ingest::store::s3::S3Config::prefetch_gap: u64
+pub db_core::storage::ingest::store::s3::S3Config::prefetch_per_file: usize
 pub db_core::storage::ingest::store::s3::S3Config::prefix: alloc::string::String
 pub db_core::storage::ingest::store::s3::S3Config::read_cache_bytes: u64
 pub db_core::storage::ingest::store::s3::S3Config::region: alloc::string::String
@@ -4527,6 +4545,7 @@ impl core::fmt::Debug for db_core::storage::ingest::store::s3::S3File
 pub fn db_core::storage::ingest::store::s3::S3File::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::s3::S3File
 pub fn db_core::storage::ingest::store::s3::S3File::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::s3::S3File::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::s3::S3File::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::s3::S3File::size(&self) -> core::io::error::Result<u64>
 pub struct db_core::storage::ingest::store::s3::S3Store
@@ -4583,6 +4602,7 @@ pub db_core::storage::ingest::store::StoreFile::Local(db_core::storage::column::
 pub db_core::storage::ingest::store::StoreFile::S3(db_core::storage::ingest::store::s3::S3File)
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 pub struct db_core::storage::ingest::store::LocalFs
@@ -4991,6 +5011,7 @@ pub db_core::storage::ingest::StoreFile::Local(db_core::storage::column::posix::
 pub db_core::storage::ingest::StoreFile::S3(db_core::storage::ingest::store::s3::S3File)
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 pub enum db_core::storage::ingest::WalError
@@ -5860,6 +5881,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_s
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::prefetch(&self, impl core::iter::traits::collect::IntoIterator<Item = usize>)
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -6375,6 +6397,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_s
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::prefetch(&self, impl core::iter::traits::collect::IntoIterator<Item = usize>)
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -8693,6 +8716,7 @@ pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::column_s
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::nested_field_at(&self, usize) -> core::option::Option<db_core::storage::parquet::parquet_file::Field>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_columns(&self) -> usize
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::num_rows(&self) -> i64
+pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::prefetch(&self, impl core::iter::traits::collect::IntoIterator<Item = usize>)
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_binary_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<alloc::vec::Vec<u8>>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column(&self, usize) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
 pub fn db_core::storage::parquet::parquet_file::RowGroupReader<'a, 'm>::read_boolean_column_at(&self, usize, &[u32]) -> db_core::storage::parquet::parquet_file::Result<alloc::vec::Vec<core::option::Option<bool>>>
@@ -8759,22 +8783,27 @@ pub type db_core::storage::column::posix::PosixVfs::File = db_core::storage::col
 pub fn db_core::storage::column::posix::PosixVfs::open(&self, &std::path::Path) -> core::io::error::Result<Self::File>
 pub trait db_core::storage::VfsFile: core::marker::Send + core::marker::Sync
 pub fn db_core::storage::VfsFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::VfsFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::VfsFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::VfsFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::memory::MemoryFile
 pub fn db_core::storage::column::memory::MemoryFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::memory::MemoryFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::memory::MemoryFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::memory::MemoryFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::column::posix::PosixFile
 pub fn db_core::storage::column::posix::PosixFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::column::posix::PosixFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::column::posix::PosixFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::column::posix::PosixFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::StoreFile
 pub fn db_core::storage::ingest::store::StoreFile::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::StoreFile::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::StoreFile::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::StoreFile::size(&self) -> core::io::error::Result<u64>
 impl db_core::storage::column::vfs::VfsFile for db_core::storage::ingest::store::s3::S3File
 pub fn db_core::storage::ingest::store::s3::S3File::mmap(&self) -> core::io::error::Result<db_core::storage::column::vfs::MmapRegion>
+pub fn db_core::storage::ingest::store::s3::S3File::prefetch(&self, &[(u64, u64)])
 pub fn db_core::storage::ingest::store::s3::S3File::read_at(&self, u64, &mut [u8]) -> core::io::error::Result<usize>
 pub fn db_core::storage::ingest::store::s3::S3File::size(&self) -> core::io::error::Result<u64>
 pub type db_core::storage::DictionaryIndices<T> = (alloc::vec::Vec<T>, alloc::vec::Vec<core::option::Option<u32>>)
